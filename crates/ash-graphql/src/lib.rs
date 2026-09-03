@@ -7,7 +7,11 @@ pub mod object;
 pub mod pagination;
 pub mod query;
 pub mod sort;
+pub mod subscription;
 pub mod types;
+
+#[cfg(feature = "axum")]
+pub mod axum;
 
 pub use builder::AshGraphQLBuilder;
 pub use dataloader::{AshBatchLoader, BelongsToKey, HasManyKey, ManyToManyKey};
@@ -26,6 +30,7 @@ pub use pagination::{
 };
 pub use query::{build_resource_queries, get_query_name, list_query_name};
 pub use sort::{parse_resource_sort, register_resource_sort_inputs};
+pub use subscription::build_resource_subscriptions;
 pub use types::{
     ash_value_to_graphql_value, ash_value_to_graphql_value_typed, attr_type_to_type_ref,
     enum_type_name, graphql_value_to_ash_value,

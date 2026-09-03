@@ -237,9 +237,13 @@ fn parse_scalar_value(
             let b = acc.boolean()?;
             Ok(Value::Bool(b))
         }
-        AttrType::Atom { .. } => {
+        AttrType::Atom { one_of } => {
             let name = acc.enum_name()?;
-            Ok(Value::String(name.to_lowercase()))
+            if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
+                Ok(Value::String((*matched).to_string()))
+            } else {
+                Ok(Value::String(name.to_string()))
+            }
         }
         _ => Ok(Value::Null),
     }

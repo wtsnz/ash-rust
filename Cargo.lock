@@ -114,9 +114,11 @@ dependencies = [
  "async-stream",
  "axum",
  "futures-util",
+ "http-body-util",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "uuid",
 ]
 

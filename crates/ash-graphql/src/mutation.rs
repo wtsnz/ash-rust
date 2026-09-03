@@ -2,7 +2,7 @@ use ash_core::create_dynamic;
 use ash_core::destroy_dynamic;
 use ash_core::redact_fields;
 use ash_core::update_dynamic;
-use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, Context, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
+use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, Context, DataLayer, Error as AshError, FieldMap, Filter, Notification, ResourceDef, Value};
 use async_graphql::dynamic::*;
 use async_graphql::Value as GqlValue;
 use uuid::Uuid;
@@ -182,6 +182,23 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 ActionKind::Create => {
                     match create_dynamic(ctx_ash, resource, action, input_map).await {
                         Ok(mut stored) => {
+                            if let Some(pubsub) = ctx.data_opt::<ash_pubsub::PubSub>() {
+                                let rec_id = stored.get("id").and_then(|v| v.as_uuid()).unwrap_or_else(Uuid::new_v4);
+                                let notif = Notification::new(
+                                    resource.name,
+                                    action.name,
+                                    ActionKind::Create,
+                                    rec_id,
+                                    stored.clone(),
+                                    None,
+                                    ctx_ash.actor.clone(),
+                                    FieldMap::new(),
+                                );
+                                let topic = format!("{}:{}", resource.name.to_lowercase(), action.name);
+                                pubsub.publish(&topic, notif.clone());
+                                pubsub.publish(&format!("{}:*", resource.name.to_lowercase()), notif);
+                            }
+
                             let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut stored);
                             Ok(Some(FieldValue::owned_any(MutationPayload {
                                 result: Some(stored),
@@ -244,6 +261,22 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
 
                     match update_dynamic(ctx_ash, resource, action, id, input_map).await {
                         Ok(mut updated) => {
+                            if let Some(pubsub) = ctx.data_opt::<ash_pubsub::PubSub>() {
+                                let notif = Notification::new(
+                                    resource.name,
+                                    action.name,
+                                    ActionKind::Update,
+                                    id,
+                                    updated.clone(),
+                                    None,
+                                    ctx_ash.actor.clone(),
+                                    FieldMap::new(),
+                                );
+                                let topic = format!("{}:{}", resource.name.to_lowercase(), action.name);
+                                pubsub.publish(&topic, notif.clone());
+                                pubsub.publish(&format!("{}:*", resource.name.to_lowercase()), notif);
+                            }
+
                             let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut updated);
                             Ok(Some(FieldValue::owned_any(MutationPayload {
                                 result: Some(updated),
@@ -313,11 +346,29 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     }
 
                     match destroy_dynamic(ctx_ash, resource, action, id, &existing_field_map).await {
-                        Ok(_) => Ok(Some(FieldValue::owned_any(MutationPayload {
-                            result: None,
-                            errors: Vec::new(),
-                            success: true,
-                        }))),
+                        Ok(_) => {
+                            if let Some(pubsub) = ctx.data_opt::<ash_pubsub::PubSub>() {
+                                let notif = Notification::new(
+                                    resource.name,
+                                    action.name,
+                                    ActionKind::Destroy,
+                                    id,
+                                    existing_field_map.clone(),
+                                    Some(existing_field_map),
+                                    ctx_ash.actor.clone(),
+                                    FieldMap::new(),
+                                );
+                                let topic = format!("{}:{}", resource.name.to_lowercase(), action.name);
+                                pubsub.publish(&topic, notif.clone());
+                                pubsub.publish(&format!("{}:*", resource.name.to_lowercase()), notif);
+                            }
+
+                            Ok(Some(FieldValue::owned_any(MutationPayload {
+                                result: None,
+                                errors: Vec::new(),
+                                success: true,
+                            })))
+                        }
                         Err(e) => Ok(Some(FieldValue::owned_any(MutationPayload {
                             result: None,
                             errors: vec![UserError::from_ash_error(&e)],
@@ -363,9 +414,13 @@ fn parse_input_val(
             let b = acc.boolean()?;
             Ok(Value::Bool(b))
         }
-        AttrType::Atom { .. } => {
+        AttrType::Atom { one_of } => {
             let name = acc.enum_name()?;
-            Ok(Value::String(name.to_lowercase()))
+            if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
+                Ok(Value::String((*matched).to_string()))
+            } else {
+                Ok(Value::String(name.to_string()))
+            }
         }
         _ => Ok(Value::Null),
     }
