@@ -93,7 +93,7 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
 
     let mut builder = Schema::build("Query", None, None).register(query);
     builder = builder.register(Scalar::new("JSON"));
-    builder = builder.register(ash_graphql::build_resource_object(&TICKET_DEF));
+    builder = builder.register(ash_graphql::build_resource_object::<ash_memory::Memory>(&TICKET_DEF));
     for e in ash_graphql::collect_enums_for_resource(&TICKET_DEF) {
         builder = builder.register(e);
     }
