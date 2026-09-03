@@ -1,0 +1,25 @@
+[package]
+name = "ash-postgres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "PostgreSQL data layer for ash-rust powered by sqlx"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+ash-sql = { path = "../ash-sql", features = ["postgres"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "postgres",
+    "uuid",
+    "json",
+] }
+tokio = { version = "1", features = ["sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+ash-macros = { path = "../ash-macros" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
