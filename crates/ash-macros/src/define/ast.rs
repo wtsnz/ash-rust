@@ -54,6 +54,15 @@ pub enum RelType {
     ManyToMany,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnDeleteSpec {
+    #[default]
+    Nothing,
+    Cascade,
+    Nilify,
+    Restrict,
+}
+
 pub struct RelationshipSpec {
     pub outer_attrs: Vec<syn::Attribute>,
     pub kind: RelType,
@@ -64,6 +73,7 @@ pub struct RelationshipSpec {
     pub through: Option<Ident>,
     pub source_attribute_on_join_resource: Option<String>,
     pub destination_attribute_on_join_resource: Option<String>,
+    pub on_delete: OnDeleteSpec,
 }
 
 pub struct CalculationSpec {

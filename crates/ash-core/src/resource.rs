@@ -303,6 +303,15 @@ impl AttrType {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnDelete {
+    #[default]
+    Nothing,
+    Cascade,
+    Nilify,
+    Restrict,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RelationshipDef {
     pub name: &'static str,
@@ -313,6 +322,7 @@ pub struct RelationshipDef {
     pub through: Option<fn() -> &'static ResourceDef>,
     pub source_attribute_on_join_resource: Option<&'static str>,
     pub destination_attribute_on_join_resource: Option<&'static str>,
+    pub on_delete: OnDelete,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,6 +333,11 @@ pub enum RelKind {
 }
 
 impl RelationshipDef {
+    pub const fn with_on_delete(mut self, on_delete: OnDelete) -> Self {
+        self.on_delete = on_delete;
+        self
+    }
+
     pub const fn belongs_to(
         name: &'static str,
         destination: fn() -> &'static ResourceDef,
@@ -337,6 +352,7 @@ impl RelationshipDef {
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
+            on_delete: OnDelete::Nothing,
         }
     }
 
@@ -354,6 +370,7 @@ impl RelationshipDef {
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
+            on_delete: OnDelete::Nothing,
         }
     }
 
@@ -373,6 +390,7 @@ impl RelationshipDef {
             through: Some(through),
             source_attribute_on_join_resource: Some(source_attribute_on_join_resource),
             destination_attribute_on_join_resource: Some(destination_attribute_on_join_resource),
+            on_delete: OnDelete::Nothing,
         }
     }
 }

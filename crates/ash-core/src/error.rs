@@ -59,6 +59,11 @@ pub enum Error {
         step: String,
         source: Box<Error>,
     },
+    DeleteRestricted {
+        resource: &'static str,
+        relationship: &'static str,
+        count: usize,
+    },
 }
 
 impl Error {
@@ -138,6 +143,16 @@ impl fmt::Display for Error {
             }
             Self::Multi { step, source } => {
                 write!(f, "multi step `{step}` failed: {source}")
+            }
+            Self::DeleteRestricted {
+                resource,
+                relationship,
+                count,
+            } => {
+                write!(
+                    f,
+                    "cannot delete {resource} because relationship `{relationship}` has {count} dependent record(s) and specifies on_delete: restrict"
+                )
             }
         }
     }

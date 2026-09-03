@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use uuid::Uuid;
 
-use crate::action::{ActionKind, PersistKind};
+use crate::action::{ActionDef, ActionKind, PersistKind};
 use crate::changeset::{self, Changeset};
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, Sort};
@@ -13,7 +13,7 @@ use crate::filter::Filter;
 use crate::keys::{AggregateName, CalcName, FieldName, RelName};
 use crate::pipeline::{action_named, expect_kind, expect_persist, pk_name, read_action};
 use crate::policy::{authorize_write, compile_read_filter};
-use crate::resource::{RelKind, Resource, ResourceDef};
+use crate::resource::{OnDelete, RelKind, Resource, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
 pub struct Query<'a, R, D> {
@@ -672,27 +672,7 @@ pub async fn destroy<R: Resource, D: DataLayer>(
 
     let existing = get::<R, D>(ctx, id).await?;
     let existing_fields = existing.to_fields();
-    authorize_write(
-        &R::DEF,
-        action_def,
-        ctx.actor.as_ref(),
-        Some(&existing_fields),
-    )?;
-    ctx.data.destroy(&R::DEF, id).await?;
-
-    let notification = crate::notifier::Notification::new(
-        R::DEF.name,
-        action_def.name,
-        ActionKind::Destroy,
-        id,
-        existing_fields.clone(),
-        Some(existing_fields),
-        ctx.actor.clone(),
-        crate::value::FieldMap::new(),
-    );
-    crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
-
-    Ok(())
+    destroy_dynamic(ctx, &R::DEF, action_def, id, &existing_fields).await
 }
 
 pub async fn destroy_existing<R: Resource, D: DataLayer>(
@@ -706,26 +686,216 @@ pub async fn destroy_existing<R: Resource, D: DataLayer>(
 
     let id = existing.id();
     let existing_fields = existing.to_fields();
+    destroy_dynamic(ctx, &R::DEF, action_def, id, &existing_fields).await
+}
+
+pub async fn destroy_dynamic<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+    id: Uuid,
+    existing_fields: &FieldMap,
+) -> Result<()> {
     authorize_write(
-        &R::DEF,
-        action_def,
+        resource,
+        action,
         ctx.actor.as_ref(),
-        Some(&existing_fields),
+        Some(existing_fields),
     )?;
-    ctx.data.destroy(&R::DEF, id).await?;
+
+    handle_cascading_deletes(ctx, resource, id, existing_fields).await?;
+
+    ctx.data.destroy(resource, id).await?;
 
     let notification = crate::notifier::Notification::new(
-        R::DEF.name,
-        action_def.name,
+        resource.name,
+        action.name,
         ActionKind::Destroy,
         id,
         existing_fields.clone(),
-        Some(existing_fields),
+        Some(existing_fields.clone()),
         ctx.actor.clone(),
         crate::value::FieldMap::new(),
     );
-    crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
+    crate::notifier::dispatch_notification(ctx, resource, notification).await?;
 
+    Ok(())
+}
+
+pub async fn handle_cascading_deletes<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    parent_id: Uuid,
+    parent_fields: &FieldMap,
+) -> Result<()> {
+    for rel in resource.relationships {
+        match rel.kind {
+            RelKind::HasMany => {
+                match rel.on_delete {
+                    OnDelete::Nothing => {}
+                    OnDelete::Restrict => {
+                        let dest_def = (rel.destination)();
+                        let parent_val = parent_fields
+                            .get(rel.source_attribute)
+                            .cloned()
+                            .unwrap_or_else(|| Value::from(parent_id));
+                        let filter = Filter::eq(rel.destination_attribute, parent_val);
+                        let rows = ctx
+                            .data
+                            .run_query(
+                                dest_def,
+                                &CompiledQuery {
+                                    filter: Some(filter),
+                                    ..CompiledQuery::default()
+                                },
+                            )
+                            .await?;
+                        if !rows.is_empty() {
+                            return Err(Error::DeleteRestricted {
+                                resource: resource.name,
+                                relationship: rel.name,
+                                count: rows.len(),
+                            });
+                        }
+                    }
+                    OnDelete::Cascade => {
+                        let dest_def = (rel.destination)();
+                        let parent_val = parent_fields
+                            .get(rel.source_attribute)
+                            .cloned()
+                            .unwrap_or_else(|| Value::from(parent_id));
+                        let filter = Filter::eq(rel.destination_attribute, parent_val);
+                        let rows = ctx
+                            .data
+                            .run_query(
+                                dest_def,
+                                &CompiledQuery {
+                                    filter: Some(filter),
+                                    ..CompiledQuery::default()
+                                },
+                            )
+                            .await?;
+                        let child_pk = pk_name(dest_def)?;
+                        let child_destroy_action = dest_def
+                            .actions
+                            .iter()
+                            .find(|a| a.kind == ActionKind::Destroy && a.primary)
+                            .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Destroy));
+
+                        for child_row in rows {
+                            let child_id = required_uuid(&child_row, child_pk)?;
+                            if let Some(destroy_act) = child_destroy_action {
+                                Box::pin(destroy_dynamic(
+                                    ctx,
+                                    dest_def,
+                                    destroy_act,
+                                    child_id,
+                                    &child_row,
+                                ))
+                                .await?;
+                            } else {
+                                ctx.data.destroy(dest_def, child_id).await?;
+                            }
+                        }
+                    }
+                    OnDelete::Nilify => {
+                        let dest_def = (rel.destination)();
+                        let parent_val = parent_fields
+                            .get(rel.source_attribute)
+                            .cloned()
+                            .unwrap_or_else(|| Value::from(parent_id));
+                        let filter = Filter::eq(rel.destination_attribute, parent_val);
+                        let rows = ctx
+                            .data
+                            .run_query(
+                                dest_def,
+                                &CompiledQuery {
+                                    filter: Some(filter),
+                                    ..CompiledQuery::default()
+                                },
+                            )
+                            .await?;
+                        let child_pk = pk_name(dest_def)?;
+                        for child_row in rows {
+                            let child_id = required_uuid(&child_row, child_pk)?;
+                            let mut patch = FieldMap::new();
+                            patch.insert(rel.destination_attribute.to_string(), Value::Null);
+                            ctx.data.update(dest_def, child_id, patch).await?;
+                        }
+                    }
+                }
+            }
+            RelKind::ManyToMany => {
+                if let Some(through_fn) = rel.through {
+                    let through_def = through_fn();
+                    let source_fk = rel.source_attribute_on_join_resource.unwrap_or("source_id");
+                    let parent_val = parent_fields
+                        .get(rel.source_attribute)
+                        .cloned()
+                        .unwrap_or_else(|| Value::from(parent_id));
+                    let filter = Filter::eq(source_fk, parent_val);
+                    match rel.on_delete {
+                        OnDelete::Nothing => {}
+                        OnDelete::Restrict => {
+                            let rows = ctx
+                                .data
+                                .run_query(
+                                    through_def,
+                                    &CompiledQuery {
+                                        filter: Some(filter),
+                                        ..CompiledQuery::default()
+                                    },
+                                )
+                                .await?;
+                            if !rows.is_empty() {
+                                return Err(Error::DeleteRestricted {
+                                    resource: resource.name,
+                                    relationship: rel.name,
+                                    count: rows.len(),
+                                });
+                            }
+                        }
+                        OnDelete::Cascade => {
+                            let rows = ctx
+                                .data
+                                .run_query(
+                                    through_def,
+                                    &CompiledQuery {
+                                        filter: Some(filter),
+                                        ..CompiledQuery::default()
+                                    },
+                                )
+                                .await?;
+                            let join_pk = pk_name(through_def)?;
+                            let join_destroy_action = through_def
+                                .actions
+                                .iter()
+                                .find(|a| a.kind == ActionKind::Destroy && a.primary)
+                                .or_else(|| through_def.actions.iter().find(|a| a.kind == ActionKind::Destroy));
+
+                            for join_row in rows {
+                                let join_id = required_uuid(&join_row, join_pk)?;
+                                if let Some(destroy_act) = join_destroy_action {
+                                    Box::pin(destroy_dynamic(
+                                        ctx,
+                                        through_def,
+                                        destroy_act,
+                                        join_id,
+                                        &join_row,
+                                    ))
+                                    .await?;
+                                } else {
+                                    ctx.data.destroy(through_def, join_id).await?;
+                                }
+                            }
+                        }
+                        OnDelete::Nilify => {}
+                    }
+                }
+            }
+            RelKind::BelongsTo => {}
+        }
+    }
     Ok(())
 }
 

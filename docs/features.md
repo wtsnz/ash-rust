@@ -696,5 +696,79 @@ cs = cs.before_action(|cs| {
 let article = cs.commit(&ctx).await?;
 ```
 
+---
+
+## 15. Cascading Relationship Deletes (`on_delete: cascade | nilify | restrict`)
+
+Relationships declare delete behavior. When a parent entity is destroyed via an Ash destroy action, Ash executes application-layer cascading actions for all dependent child records (ensuring child policies, validations, and notifiers are triggered rather than solely relying on raw database foreign key cascades):
+
+- **`cascade`**: Recursively finds and destroys all matching child records using their primary destroy actions. Also cascades across join resources in `many_to_many` relationships.
+- **`nilify`**: Updates all dependent child records to set their foreign key attribute to `null`.
+- **`restrict`**: If any dependent records exist when attempting to delete the parent, immediately aborts with `Error::DeleteRestricted { resource, relationship, count }`.
+
+### Resource Definition
+```rust
+resource! {
+    resource Author;
+    table "authors";
+
+    attributes {
+        id: Uuid [pk],
+        name: String,
+    }
+
+    relationships {
+        // Multi-level recursive cascade
+        has_many posts: Post [fk: "author_id", on_delete: cascade],
+    }
+
+    actions {
+        create create { accept [name]; }
+        destroy destroy { primary; }
+    }
+}
+
+resource! {
+    resource Department;
+    table "departments";
+
+    attributes {
+        id: Uuid [pk],
+        name: String,
+    }
+
+    relationships {
+        // Aborts parent deletion if employees still exist
+        has_many employees: Employee [fk: "dept_id", on_delete: restrict],
+    }
+
+    actions {
+        create create { accept [name]; }
+        destroy destroy { primary; }
+    }
+}
+
+resource! {
+    resource Team;
+    table "teams";
+
+    attributes {
+        id: Uuid [pk],
+        name: String,
+    }
+
+    relationships {
+        // Sets player.team_id = null when team is deleted
+        has_many players: Player [fk: "team_id", on_delete: nilify],
+    }
+
+    actions {
+        create create { accept [name]; }
+        destroy destroy { primary; }
+    }
+}
+```
+
+
 
 

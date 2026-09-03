@@ -183,6 +183,12 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     for r in &def.relationships {
         let name_str = r.ident.to_string();
         let dest = &r.dest;
+        let on_delete_tok = match r.on_delete {
+            crate::define::ast::OnDeleteSpec::Nothing => quote! { ::ash_core::OnDelete::Nothing },
+            crate::define::ast::OnDeleteSpec::Cascade => quote! { ::ash_core::OnDelete::Cascade },
+            crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnDelete::Nilify },
+            crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnDelete::Restrict },
+        };
         match r.kind {
             RelType::BelongsTo => {
                 let fk_str = r
@@ -194,7 +200,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    )
+                    ).with_on_delete(#on_delete_tok)
                 });
             }
             RelType::HasMany => {
@@ -207,7 +213,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    )
+                    ).with_on_delete(#on_delete_tok)
                 });
             }
             RelType::ManyToMany => {
@@ -229,7 +235,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         || &<#through_ident as ::ash_core::Resource>::DEF,
                         #source_on_join,
                         #dest_on_join,
-                    )
+                    ).with_on_delete(#on_delete_tok)
                 });
             }
         }

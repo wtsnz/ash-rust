@@ -453,6 +453,7 @@ fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> {
         let mut through = None;
         let mut source_attribute_on_join_resource = None;
         let mut destination_attribute_on_join_resource = None;
+        let mut on_delete = OnDeleteSpec::Nothing;
 
         if input.peek(syn::token::Bracket) {
             let flags_content;
@@ -496,10 +497,36 @@ fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> {
                         let s: syn::LitStr = flags_content.parse()?;
                         destination_attribute_on_join_resource = Some(s.value());
                     }
+                    "on_delete" => {
+                        if flags_content.peek(Token![:]) {
+                            let _: Token![:] = flags_content.parse()?;
+                        } else if flags_content.peek(Token![=]) {
+                            let _: Token![=] = flags_content.parse()?;
+                        }
+                        let val_str = if flags_content.peek(syn::LitStr) {
+                            let s: syn::LitStr = flags_content.parse()?;
+                            s.value()
+                        } else {
+                            let id: Ident = flags_content.parse()?;
+                            id.to_string()
+                        };
+                        on_delete = match val_str.as_str() {
+                            "cascade" => OnDeleteSpec::Cascade,
+                            "nilify" => OnDeleteSpec::Nilify,
+                            "restrict" => OnDeleteSpec::Restrict,
+                            "nothing" => OnDeleteSpec::Nothing,
+                            other => {
+                                return Err(Error::new_spanned(
+                                    flag_ident,
+                                    format!("unknown on_delete value `{other}`, expected `cascade`, `nilify`, `restrict`, or `nothing`"),
+                                ));
+                            }
+                        };
+                    }
                     other => {
                         return Err(Error::new_spanned(
                             flag_ident,
-                            format!("unknown relationship option `{other}`, expected `fk`, `through`, `source_fk`, or `dest_fk`"),
+                            format!("unknown relationship option `{other}`, expected `fk`, `through`, `source_fk`, `dest_fk`, or `on_delete`"),
                         ));
                     }
                 }
@@ -568,6 +595,7 @@ fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> {
             through,
             source_attribute_on_join_resource,
             destination_attribute_on_join_resource,
+            on_delete,
         });
     }
     Ok(rels)
