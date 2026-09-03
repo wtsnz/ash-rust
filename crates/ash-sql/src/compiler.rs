@@ -18,6 +18,10 @@ impl CompiledSql {
     pub fn new(sql: String, params: Vec<SqlParam>) -> Self {
         Self { sql, params }
     }
+
+    pub fn sql(&self) -> &str {
+        &self.sql
+    }
 }
 
 /// Validates that an identifier contains only ASCII alphanumeric characters or underscores,
