@@ -1,8 +1,12 @@
-use ash_core::{DataLayer, DomainDef, ResourceDef};
+use ash_core::{ActionKind, DataLayer, DomainDef, ResourceDef};
 use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 
+use crate::error::register_user_error;
 use crate::filter::{register_primitive_filter_inputs, register_resource_filter_inputs};
+use crate::mutation::{
+    build_action_mutation, register_action_input, register_action_payload,
+};
 use crate::object::{build_resource_object, collect_enums_for_resource};
 use crate::pagination::{
     build_resource_connection_query, register_page_info, register_resource_connection_types,
@@ -70,18 +74,36 @@ impl AshGraphQLBuilder {
             query = query.field(get_field).field(list_field).field(conn_field);
         }
 
-        let mut builder = Schema::build("Query", None, None);
+        let mut mutation = Object::new("Mutation");
+        let mut has_mutations = false;
+
+        for res in &self.resources {
+            for action in res.actions {
+                if matches!(
+                    action.kind,
+                    ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+                ) {
+                    has_mutations = true;
+                    let m_field = build_action_mutation::<D>(action, res);
+                    mutation = mutation.field(m_field);
+                }
+            }
+        }
+
+        let mutation_root = if has_mutations { Some("Mutation") } else { None };
+        let mut builder = Schema::build("Query", mutation_root, None);
 
         // Register JSON scalar for arbitrary map values
         builder = builder.register(Scalar::new("JSON"));
 
-        // Register shared PageInfo
+        // Register shared UserError and PageInfo
+        builder = register_user_error(builder);
         builder = register_page_info(builder);
 
         // Register primitive filters
         builder = register_primitive_filter_inputs(builder);
 
-        // Register all resources, connections, filters, sorts, and enums
+        // Register all resources, connections, filters, sorts, mutations, and enums
         for res in &self.resources {
             let obj = build_resource_object(res);
             builder = builder.register(obj);
@@ -90,9 +112,23 @@ impl AshGraphQLBuilder {
             builder = register_resource_filter_inputs(builder, res);
             builder = register_resource_sort_inputs(builder, res);
 
+            for action in res.actions {
+                if matches!(
+                    action.kind,
+                    ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+                ) {
+                    builder = register_action_input(builder, action, res);
+                    builder = register_action_payload(builder, action, res);
+                }
+            }
+
             for e in collect_enums_for_resource(res) {
                 builder = builder.register(e);
             }
+        }
+
+        if has_mutations {
+            builder = builder.register(mutation);
         }
 
         builder.register(query).finish()
