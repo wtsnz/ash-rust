@@ -20,6 +20,11 @@ impl StoreTag for DefaultStore {}
 pub struct SqliteStore;
 impl StoreTag for SqliteStore {}
 
+/// Built-in convenience store tag for PostgreSQL-backed storage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PostgresStore;
+impl StoreTag for PostgresStore {}
+
 /// Built-in convenience store tag for in-memory storage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct MemoryStore;

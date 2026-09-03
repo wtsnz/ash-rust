@@ -67,7 +67,8 @@ pub use resource::{
     RelationshipDef, Resource, ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
 };
 pub use store::{
-    default_store_type_id, DefaultStore, HasStore, MemoryStore, SqliteStore, StoreTag,
+    default_store_type_id, DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore,
+    StoreTag,
 };
 pub use types::{AshEnum, AshType};
 pub use value::{
