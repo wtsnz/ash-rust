@@ -812,6 +812,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     } else if let Some(dl) = &def.data_layer {
         let s = dl.to_string();
         match s.as_str() {
+            "postgres" => quote! { ::ash_core::DataLayerKind::Postgres },
             "sqlite" => quote! { ::ash_core::DataLayerKind::Sqlite },
             "memory" => quote! { ::ash_core::DataLayerKind::Memory },
             "embedded" => quote! { ::ash_core::DataLayerKind::Embedded },
@@ -894,6 +895,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     } else if let Some(dl) = &def.data_layer {
         let s = dl.to_string();
         match s.as_str() {
+            "postgres" => (quote! { ::ash_core::PostgresStore }, quote! { "PostgresStore" }),
             "sqlite" => (quote! { ::ash_core::SqliteStore }, quote! { "SqliteStore" }),
             "memory" => (quote! { ::ash_core::MemoryStore }, quote! { "MemoryStore" }),
             _ => (quote! { ::ash_core::DefaultStore }, quote! { "DefaultStore" }),

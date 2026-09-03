@@ -53,6 +53,7 @@ pub trait Domain: Sized + 'static {
 pub enum DataLayerKind {
     Memory,
     Sqlite,
+    Postgres,
     Embedded,
     Custom(&'static str),
 }
