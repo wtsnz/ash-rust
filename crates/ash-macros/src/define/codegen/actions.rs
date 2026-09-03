@@ -494,6 +494,7 @@ pub fn expand_action_builders(
                     builders.push(quote! {
                         pub struct #builder_name<'a, D> {
                             ctx: &'a ::ash_core::Context<D>,
+                            tenant_override: ::std::option::Option<::std::string::String>,
                             upsert_spec: ::std::option::Option<(&'static str, ::std::vec::Vec<::std::string::String>)>,
                             before_actions: ::std::vec::Vec<::ash_core::BeforeActionHook<#resource>>,
                             after_actions: ::std::vec::Vec<::ash_core::AfterActionHook<#resource>>,
@@ -506,6 +507,7 @@ pub fn expand_action_builders(
                             pub fn new(ctx: &'a ::ash_core::Context<D>) -> Self {
                                 Self {
                                     ctx,
+                                    tenant_override: ::std::option::Option::None,
                                     upsert_spec: ::std::option::Option::None,
                                     before_actions: ::std::vec::Vec::new(),
                                     after_actions: ::std::vec::Vec::new(),
@@ -513,6 +515,18 @@ pub fn expand_action_builders(
                                     managed_relationships: ::std::vec::Vec::new(),
                                     #(#field_inits,)*
                                 }
+                            }
+
+                            /// Explicitly override the tenant on this action builder.
+                            pub fn tenant(mut self, tenant: impl ::std::convert::Into<::std::string::String>) -> Self {
+                                self.tenant_override = ::std::option::Option::Some(tenant.into());
+                                self
+                            }
+
+                            /// Clear any tenant override on this action builder.
+                            pub fn without_tenant(mut self) -> Self {
+                                self.tenant_override = ::std::option::Option::None;
+                                self
                             }
 
                             pub fn upsert(mut self, identity: &'static str, update_fields: &[&str]) -> Self {
@@ -590,7 +604,13 @@ pub fn expand_action_builders(
                             }
 
                             pub fn changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
-                                let ctx = self.ctx;
+                                let ctx_owned;
+                                let ctx = if let ::std::option::Option::Some(ref t) = self.tenant_override {
+                                    ctx_owned = self.ctx.with_tenant(t.clone());
+                                    &ctx_owned
+                                } else {
+                                    self.ctx
+                                };
                                 let fields = self.into_fields();
                                 let upsert_spec = self.upsert_spec;
                                 let before_actions = self.before_actions;
@@ -623,7 +643,13 @@ pub fn expand_action_builders(
                             }
 
                             pub async fn call(self) -> ::ash_core::Result<#resource> {
-                                let ctx = self.ctx;
+                                let ctx_owned;
+                                let ctx = if let ::std::option::Option::Some(ref t) = self.tenant_override {
+                                    ctx_owned = self.ctx.with_tenant(t.clone());
+                                    &ctx_owned
+                                } else {
+                                    self.ctx
+                                };
                                 self.changeset()?.commit(ctx).await
                             }
                         }
@@ -733,6 +759,7 @@ pub fn expand_action_builders(
                     pub struct #builder_name<'a, D> {
                         ctx: &'a ::ash_core::Context<D>,
                         target: #target_enum,
+                        tenant_override: ::std::option::Option<::std::string::String>,
                         before_actions: ::std::vec::Vec<::ash_core::BeforeActionHook<#resource>>,
                         after_actions: ::std::vec::Vec<::ash_core::AfterActionHook<#resource>>,
                         after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
@@ -745,6 +772,7 @@ pub fn expand_action_builders(
                             Self {
                                 ctx,
                                 target: #target_enum::Id(id),
+                                tenant_override: ::std::option::Option::None,
                                 before_actions: ::std::vec::Vec::new(),
                                 after_actions: ::std::vec::Vec::new(),
                                 after_transactions: ::std::vec::Vec::new(),
@@ -757,12 +785,25 @@ pub fn expand_action_builders(
                             Self {
                                 ctx,
                                 target: #target_enum::Existing(existing),
+                                tenant_override: ::std::option::Option::None,
                                 before_actions: ::std::vec::Vec::new(),
                                 after_actions: ::std::vec::Vec::new(),
                                 after_transactions: ::std::vec::Vec::new(),
                                 managed_relationships: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
                             }
+                        }
+
+                        /// Explicitly override the tenant on this action builder.
+                        pub fn tenant(mut self, tenant: impl ::std::convert::Into<::std::string::String>) -> Self {
+                            self.tenant_override = ::std::option::Option::Some(tenant.into());
+                            self
+                        }
+
+                        /// Clear any tenant override on this action builder.
+                        pub fn without_tenant(mut self) -> Self {
+                            self.tenant_override = ::std::option::Option::None;
+                            self
                         }
 
                         pub fn before_action<F>(mut self, hook: F) -> Self
@@ -828,15 +869,25 @@ pub fn expand_action_builders(
                         }
 
                         pub fn changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
-                            let ctx = self.ctx;
+                            let ctx_owned;
+                            let ctx = if let ::std::option::Option::Some(ref t) = self.tenant_override {
+                                ctx_owned = self.ctx.with_tenant(t.clone());
+                                &ctx_owned
+                            } else {
+                                self.ctx
+                            };
                             let fields = self.into_fields();
                             let before_actions = self.before_actions;
                             let after_actions = self.after_actions;
                             let after_transactions = self.after_transactions;
                             let managed_relationships = self.managed_relationships;
+                            let tenant_override = self.tenant_override;
                             match self.target {
                                 #target_enum::Existing(record) => {
                                     let mut cs = ::ash_core::Changeset::<#resource>::for_update_on(ctx, #act_name_str, record, fields)?;
+                                    if let ::std::option::Option::Some(t) = tenant_override {
+                                        cs = cs.with_tenant(t);
+                                    }
                                     for hook in before_actions {
                                         cs = cs.before_action(hook);
                                     }
@@ -872,17 +923,27 @@ pub fn expand_action_builders(
                         }
 
                         pub async fn call(self) -> ::ash_core::Result<#resource> {
-                            let ctx = self.ctx;
+                            let ctx_owned;
+                            let ctx = if let ::std::option::Option::Some(ref t) = self.tenant_override {
+                                ctx_owned = self.ctx.with_tenant(t.clone());
+                                &ctx_owned
+                            } else {
+                                self.ctx
+                            };
                             let fields = self.into_fields();
                             let before_actions = self.before_actions;
                             let after_actions = self.after_actions;
                             let after_transactions = self.after_transactions;
                             let managed_relationships = self.managed_relationships;
+                            let tenant_override = self.tenant_override;
                             let existing = match self.target {
                                 #target_enum::Id(id) => ::ash_core::get::<#resource, D>(ctx, id).await?,
                                 #target_enum::Existing(record) => record,
                             };
                             let mut cs = ::ash_core::Changeset::<#resource>::for_update_on(ctx, #act_name_str, existing, fields)?;
+                            if let ::std::option::Option::Some(t) = tenant_override {
+                                cs = cs.with_tenant(t);
+                            }
                             for hook in before_actions {
                                 cs = cs.before_action(hook);
                             }
@@ -1049,6 +1110,14 @@ pub fn expand_action_builders(
                     impl<'a, D: ::ash_core::DataLayer> #input_struct_name<'a, D> {
                         pub fn actor(&self) -> ::std::option::Option<&::ash_core::Actor> {
                             self.ctx.actor.as_ref()
+                        }
+
+                        pub fn tenant(&self) -> ::std::option::Option<&str> {
+                            self.ctx.tenant()
+                        }
+
+                        pub fn metadata(&self) -> &::ash_core::FieldMap {
+                            self.ctx.metadata()
                         }
                     }
 

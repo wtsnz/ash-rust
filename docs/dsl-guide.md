@@ -15,6 +15,7 @@ use uuid::Uuid;
 resource! {
     resource Post;
     table "posts";
+    store PrimaryDb; // Optional: type-safe StoreTag binding (or data_layer sqlite;)
 
     attributes {
         id: Uuid [pk],
@@ -317,10 +318,13 @@ Optional fields (`Option<T>`) generated setters accept:
 - `validation func(|ctx| { ... });`
 
 ### Built-in Changes
-- `change set_attribute(field, value);`
+- `change set_attribute(field, value);` (or `set(field = value);`)
+- `change set_new_attribute(field, value);` (sets value only if not already supplied)
+- `change relate_actor(field);` (sets foreign key to `ctx.actor.id`)
 - `change set_from_arg(field, argument_name);`
-- `change custom(&MyChange);`
-- `change func(|ctx| { ... });`
+- `change manage_relationship(rel);`
+- `change func(my_fn);` (or `change func(|ctx| { ... });`) — zero boilerplate function receiving `&mut ChangeContext`.
+- `change custom(&MyChange);` — unit struct reference or static implementing `CustomChange`. Direct unit structs like `&AuditLogger` promote to `'static` without needing a separate `const`.
 
 ### Notifiers Block
 Resources can declare static notifiers directly in the DSL:
@@ -428,31 +432,105 @@ Post::query(&ctx)
 
 ## 9. Declarative Action Hooks
 
-Attach lifecycle callbacks directly in resource actions or via reusable `CustomChange` plugins:
+Attach lifecycle callbacks directly in resource actions, via reusable `CustomChange` plugins, as lightweight functions, or at runtime via action builders:
 
 ```rust
-actions {
-    create publish {
-        primary;
-        accept [title, body];
-
-        // 1. Shorthand action hooks:
-        before_action normalize_title;
-        after_action index_in_search;
-        after_transaction emit_metrics;
-
-        // 2. Ash Elixir change wrapper syntax:
-        change before_action(validate_title_format);
-
-        // 3. Custom changes registering hooks:
-        change custom(&AUDIT_LOGGER);
+// 1. Standalone hook functions:
+fn normalize_title(fields: &mut FieldMap) -> Result<()> {
+    if let Some(Value::String(s)) = fields.get("title") {
+        fields.insert("title".into(), Value::String(s.trim().to_string()));
     }
+    Ok(())
+}
 
-    destroy archive {
-        primary;
-        before_action prevent_locked_deletion;
+fn emit_metrics(res: std::result::Result<&FieldMap, &Error>) {
+    if res.is_ok() {
+        println!("Action committed successfully");
     }
 }
+
+// 2. Reusable change function (no struct needed):
+fn audit_logger(ctx: &mut ChangeContext<'_>) -> Result<()> {
+    ctx.after_action(|fields| {
+        println!("Saved record: {:?}", fields.get("id"));
+        Ok(())
+    });
+    Ok(())
+}
+
+// 3. Or a reusable CustomChange struct (promotes to 'static directly with &AuditLogger):
+struct AuditLogger;
+impl CustomChange for AuditLogger {
+    fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()> {
+        ctx.after_transaction(|res| {
+            if res.is_ok() { /* log commit */ }
+        });
+        Ok(())
+    }
+}
+
+resource! {
+    resource Article;
+    table "articles";
+
+    attributes {
+        id: Uuid [pk],
+        title: String,
+        body: String,
+    }
+
+    actions {
+        create publish {
+            primary;
+            accept [title, body];
+
+            // Shorthand action hooks (function pointers or inline closures):
+            before_action normalize_title;
+            after_action |fields| {
+                println!("Saved article: {:?}", fields.get("title"));
+                Ok(())
+            };
+            after_transaction emit_metrics;
+
+            // Ash Elixir change wrapper syntax:
+            change before_action(normalize_title);
+
+            // Lightweight function change (zero struct boilerplate):
+            change func(audit_logger);
+
+            // Reusable CustomChange plugin (direct unit struct reference, no separate const needed):
+            change custom(&AuditLogger);
+        }
+
+        destroy archive {
+            primary;
+            before_action |fields| {
+                // Abort if deletion condition fails
+                Ok(())
+            };
+        }
+    }
+}
+```
+
+### Runtime Call-Site Hooks (Capturing Local Variables)
+While DSL hooks are compile-time functions, action builders also support runtime hooks that capture request-scoped variables (HTTP request IDs, client references, traces):
+
+```rust
+let article = Article::create(&ctx)
+    .title("Hello World")
+    .body("...")
+    .after_action(move |record| {
+        // Captures request_id from local scope!
+        telemetry.record("article_created", record.id, request_id);
+        Ok(())
+    })
+    .after_transaction(move |res| {
+        if res.is_ok() {
+            metrics.increment("articles.published");
+        }
+    })
+    .await?;
 ```
 
 ---
@@ -488,6 +566,74 @@ let response = CommunicationService::send_notification(&ctx)
     .priority("high")
     .call()
     .await?;
+```
+
+---
+
+## 11. Type-Safe Store Tagging (`store <Type>;` & `StoreRegistry`)
+
+Resources can explicitly bind to a storage target via `store <Type>;`, allowing multiple databases of the same kind (e.g. primary vs audit SQLite) or third-party engines:
+
+```rust
+pub struct PrimaryDb;
+impl StoreTag for PrimaryDb {}
+
+pub struct AuditDb;
+impl StoreTag for AuditDb {}
+
+resource! {
+    resource Order;
+    table "orders";
+    store PrimaryDb;
+    // ...
+}
+
+resource! {
+    resource AuditEvent;
+    table "audit_events";
+    store AuditDb;
+    // ...
+}
+
+// In application setup:
+let registry = StoreRegistry::new()
+    .with_store::<PrimaryDb, _>(primary_sqlite)
+    .with_store::<AuditDb, _>(audit_sqlite);
+
+let ctx = Context::new(registry);
+```
+
+---
+
+## 12. Tenant & Request Metadata (`Context`, `ValidationContext`, `ChangeContext`)
+
+`ash-rust` contexts seamlessly support multi-tenancy and distributed tracing metadata:
+
+```rust
+// 1. Configure context with tenant and metadata
+let ctx = Context::new(data_layer)
+    .with_tenant("tenant_acme")
+    .with_metadata("trace_id", "trace-12345");
+
+// 2. Action builders inherit tenant, or can override it
+let post = Post::create(&ctx)
+    .title("Tenant Post")
+    .call()
+    .await?;
+
+// Override tenant on a specific query or mutation:
+let alt_posts = Post::query(&ctx).tenant("tenant_beta").all().await?;
+
+// 3. Custom Validations and Changes access tenant and metadata directly:
+pub struct CheckTenant;
+impl CustomValidation for CheckTenant {
+    fn validate(&self, ctx: &ValidationContext<'_>) -> Result<()> {
+        if let Some(tenant) = ctx.tenant {
+            // validate tenant constraints
+        }
+        Ok(())
+    }
+}
 ```
 
 

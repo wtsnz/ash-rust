@@ -24,7 +24,8 @@ It provides the abstractions for static resource metadata, action pipelines, val
 - **Query & Filter Engine**: Composable, type-safe query builder (`Query<R, D>`) supporting relational joins, aggregations, keyset (`page_keyset`), and offset (`page_offset`) pagination.
 - **Preparations Engine**: Query preparations on read actions that inject default filters, sorting, limits, and offsets.
 - **Expressions & Calculations**: Rich AST (`Expr`) supporting arithmetic, SQL string functions, coalesce, conditionals, and custom functions.
-- **Multi-Store Routing (`DataLayerRegistry`)**: Type-erased multi-backend registry routing operations to SQLite, Memory, or custom stores based on resource declaration.
+- **Type-Safe Multi-Store Routing (`StoreRegistry` / `StoreTag`)**: Route operations across multiple instances of the same database engine (e.g. primary vs audit SQLite) or 3rd-party data layers with zero core changes and optional compile-time presence verification (`HasStore`).
+- **Tenant & Context Metadata**: First-class tenant isolation (`ctx.with_tenant(...)`, `query.tenant(...)`, `action.tenant(...)`) and arbitrary request metadata propagation to `ValidationContext`, `ChangeContext`, generic actions, and `Notification` payloads.
 - **Transactional Pipelines (`Multi`)**: Composable atomic batches inspired by `Ash.Multi`. Steps can create, update, destroy, or compute derived data, guaranteeing all-or-nothing rollback on failure.
 - **Bulk & Batch Operations**: High-throughput `bulk_create` and `bulk_destroy` with chunking, upserting, cascading deletes, and chunked query streaming.
 - **Declarative Action Lifecycle Hooks**: `before_action`, `after_action`, and `after_transaction` hooks at the action level, via `Change`, and inside `CustomChange` plugins.

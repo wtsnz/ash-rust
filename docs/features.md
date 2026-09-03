@@ -491,60 +491,86 @@ assert_eq!(products[0].badge, Some("Popular".into()));
 
 ---
 
-## 10. Multi-Store Context Routing (`DataLayerRegistry`)
+## 10. Type-Safe Multi-Store Context Routing (`StoreRegistry` / `StoreTag`)
 
-Declare the target data layer per resource directly in the DSL, and let a single `Context` route operations across multiple backends:
+Resources can explicitly declare a type-level storage target via `store <Type>;` using zero-sized marker structs implementing `StoreTag`. This allows:
+1. **Multiple instances of the same database engine** (e.g. `PrimarySqlite` vs. `AuditSqlite`, or primary write database vs. read replica).
+2. **First-class third-party data layers** with zero changes to `ash-core`.
+3. **Optional compile-time verification** via `HasStore<T>` markers.
+4. **Storage-agnostic testing** where a unit test can route everything to `Memory` via `.with_default(memory)` without changing resource code.
 
 ```rust
+use ash_core::{resource, Context, HasStore, StoreRegistry, StoreTag};
+
+// 1. Define type-level store marker tags
+pub struct PrimaryDb;
+impl StoreTag for PrimaryDb {}
+
+pub struct AuditDb;
+impl StoreTag for AuditDb {}
+
+// 2. Tag resources with their target store
 resource! {
     resource User;
     table "users";
-    data_layer sqlite; // persistent SQL store
+    store PrimaryDb; // <--- Type-level store binding
 
     attributes {
         id: Uuid [pk],
         email: String,
     }
+
+    actions {
+        create create { primary; accept [email]; }
+        read read { primary; }
+    }
 }
 
 resource! {
-    resource Session;
-    table "sessions";
-    data_layer memory; // ephemeral in-memory cache
+    resource AuditLog;
+    table "audit_logs";
+    store AuditDb; // <--- Separate SQLite instance or external store
 
     attributes {
         id: Uuid [pk],
-        token: String,
-        user_id: Uuid,
+        action: String,
+    }
+
+    actions {
+        create create { primary; accept [action]; }
+        read read { primary; }
     }
 }
 ```
 
 ### Context Setup & Multi-Store Transactions
 ```rust
-use ash_core::{Context, DataLayerKind, DataLayerRegistry};
+// 1. Configure type-safe StoreRegistry
+let primary_sqlite = Sqlite::memory().await?;
+let audit_sqlite = Sqlite::memory().await?;
 
-// 1. Configure registry
-let registry = DataLayerRegistry::new()
-    .register_kind(DataLayerKind::Sqlite, sqlite)
-    .register_kind(DataLayerKind::Memory, memory);
+let registry = StoreRegistry::new()
+    .with_store::<PrimaryDb, _>(primary_sqlite)
+    .with_store::<AuditDb, _>(audit_sqlite);
 
 let ctx = Context::new(registry);
 
 // 2. Operations automatically route to the right store!
-let user = User::create(&ctx).email("alice@example.com").await?;    // writes to SQLite
-let session = Session::create(&ctx).token("tok_123").user_id(user.id).await?; // writes to Memory
+let user = User::create(&ctx).email("alice@example.com").call().await?; // writes to PrimaryDb
+let log = AuditLog::create(&ctx).action("UserRegistered").call().await?; // writes to AuditDb
 
 // 3. Multi pipeline crossing stores seamlessly
 ctx.multi()
     .create("user", User::create(&ctx).email("bob@example.com"))
-    .create_from("session", |ctx, res| {
+    .create_from("log", |ctx, res| {
         let u: &User = res.get("user").unwrap();
-        Session::create(ctx).token("tok_bob").user_id(u.id).changeset()
+        AuditLog::create(ctx).action(format!("Created user {}", u.id)).changeset()
     })
     .commit()
     .await?;
 ```
+
+*(Note: Legacy `data_layer sqlite;` and `data_layer memory;` directives remain fully supported as aliases to `SqliteStore` and `MemoryStore`, and `DataLayerRegistry` is a type alias to `StoreRegistry`.)*
 
 ---
 
@@ -917,6 +943,18 @@ Mirrors Ash Elixir's lifecycle hooks (`before_action`, `after_action`, `after_tr
 - **Dual Syntax**: Available both as direct action statements (`before_action my_fn;`) and wrapped inside Ash-style changes (`change before_action(my_fn);`).
 - **Dynamic Hook Registration in `CustomChange`**: Reusable change plugins can attach hooks directly to `ChangeContext` (`ctx.before_action(...)`, `ctx.after_action(...)`, `ctx.after_transaction(...)`).
 
+### Design Tradeoffs & Definition Options
+
+| Approach | Definition Syntax | Needs Struct? | Captures Env? | Best For |
+| :--- | :--- | :--- | :--- | :--- |
+| **Action DSL hook** | `after_action my_fn;` or `after_action \|fields\| ...;` | No | No (fn pointer) | Simple action-level lifecycle triggers |
+| **`change func(...)`** | `change func(my_fn)` or `change func(\|ctx\| ...)` | No | No (fn pointer) | Lightweight changes needing `ChangeContext` without struct ceremony |
+| **`change custom(...)`** | `change custom(&MyPlugin)` | Yes (`CustomChange`) | No (`'static`) | Reusable change plugins shared across crates or resources |
+| **Builder hooks** | `Post::create(&ctx).after_action(move \|rec\| ...)` | No | Yes (closures) | Request-scoped callbacks capturing HTTP headers, traces, or client handles |
+| **Notifiers / PubSub** | `ctx.with_notifier(...)` or `Resource::subscribe_all(...)` | No | Yes (cross-cutting) | Global audit logs, event broadcast, or webhooks across all actions |
+
+> **Note on `const` vs direct reference**: Unit structs like `struct AuditLogger;` can be passed directly as `change custom(&AuditLogger)` without defining a separate `const AUDIT: AuditLogger = AuditLogger;`, as unit struct references promote directly to `'static` in Rust.
+
 ### Example Usage
 ```rust
 fn normalize_email(fields: &mut FieldMap) -> Result<()> {
@@ -1033,6 +1071,68 @@ let custom_result = Messenger::dynamic_operation(&ctx)
     })
     .await?;
 ```
+
+---
+
+## 20. Tenant & Context Metadata (`with_tenant`, `with_metadata`)
+
+Multi-tenant systems and distributed tracing require carrying contextual request metadata (e.g. current tenant, trace ID, client IP) alongside the actor throughout queries, changesets, validations, generic actions, and event notifications.
+
+### Capabilities
+- **Fluent Tenant Management on `Context`**:
+  - `ctx.with_tenant("org_123")` binds a tenant to the context.
+  - `ctx.without_tenant()` clears the tenant.
+  - `ctx.tenant()` reads `Option<&str>`.
+- **Arbitrary Request Metadata**:
+  - `ctx.with_metadata("trace_id", "abc")` stores typed `Value` in `ctx.metadata`.
+  - `ctx.get_metadata("trace_id")` provides convenient lookup.
+- **Tenant Inheritance & Overrides**:
+  - `Resource::create(&ctx)` automatically inherits the tenant from `ctx`.
+  - Action builders support explicit overrides: `Resource::create(&ctx).tenant("org_custom")`.
+  - Queries inherit `ctx.tenant()` and support overrides: `Resource::query(&ctx).tenant("org_custom")`.
+- **ValidationContext & ChangeContext Integration**:
+  - `ValidationContext` and `ChangeContext` expose `ctx.tenant: Option<&str>` and `ctx.metadata: &FieldMap`.
+  - Custom validations and changes can enforce tenant isolation or automatically populate tenant foreign keys.
+- **Notification & Generic Action Propagation**:
+  - Committed `Notification` payloads include `.tenant: Option<String>` and merge request metadata.
+  - Generic action input structs expose `input.tenant()` and `input.metadata()`.
+
+### Example Usage
+```rust
+// 1. Build an execution context with tenant and metadata
+let ctx = Context::new(data_layer)
+    .with_tenant("tenant_acme")
+    .with_metadata("request_id", "req-xyz-987")
+    .with_metadata("client_ip", "192.168.1.1");
+
+// 2. Resource mutations inherit tenant and metadata
+let doc = Document::create(&ctx)
+    .title("Quarterly Report")
+    .call()
+    .await?;
+
+// 3. Or override tenant on the action builder directly
+let doc_alt = Document::create(&ctx)
+    .tenant("tenant_beta")
+    .title("Partner Overview")
+    .call()
+    .await?;
+
+// 4. Custom validation inspecting tenant
+pub struct RequireTenant;
+impl CustomValidation for RequireTenant {
+    fn validate(&self, ctx: &ValidationContext<'_>) -> Result<()> {
+        if ctx.tenant.is_none() {
+            return Err(Error::Validation {
+                field: "tenant".into(),
+                message: "tenant context required".into(),
+            });
+        }
+        Ok(())
+    }
+}
+```
+
 
 
 

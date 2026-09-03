@@ -7,8 +7,8 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    action_named, apply_changes, expect_kind, expect_persist, generate_pk, pk_name,
-    run_validations, split_input, validate,
+    action_named, apply_changes_with_context, expect_kind, expect_persist, generate_pk, pk_name,
+    run_validations_with_context, split_input, validate,
 };
 use crate::policy::{authorize_field_writes, authorize_write, redact_fields};
 use crate::resource::Resource;
@@ -208,9 +208,28 @@ where
                 }
             }
 
-            apply_changes(&mut fields, action_def, ctx.actor.as_ref(), &arguments)?;
+            apply_changes_with_context(
+                &mut fields,
+                action_def,
+                ctx.actor.as_ref(),
+                ctx.tenant(),
+                ctx.metadata(),
+                &arguments,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )?;
             validate(&R::DEF, &fields)?;
-            run_validations(&R::DEF, action_def, None, &fields, &arguments)?;
+            run_validations_with_context(
+                &R::DEF,
+                action_def,
+                None,
+                &fields,
+                ctx.actor.as_ref(),
+                ctx.tenant(),
+                ctx.metadata(),
+                &arguments,
+            )?;
             authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
             authorize_write(&R::DEF, action_def, ctx.actor.as_ref(), Some(&fields))?;
 
@@ -248,6 +267,8 @@ where
                 match ctx.data.upsert(&R::DEF, *id, fields.clone(), identity, u_fields).await {
                     Ok(mut stored) => {
                         if opts.notify {
+                            let mut notif_metadata = ctx.metadata.clone();
+                            notif_metadata.extend(arguments.clone());
                             let notification = crate::notifier::Notification::new(
                                 R::DEF.name,
                                 action_def.name,
@@ -256,8 +277,8 @@ where
                                 stored.clone(),
                                 None,
                                 ctx.actor.clone(),
-                                arguments.clone(),
-                            );
+                                notif_metadata,
+                            ).with_tenant(ctx.tenant.clone());
                             crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
                         }
                         if opts.return_records {
@@ -282,6 +303,8 @@ where
                 Ok(stored_rows) => {
                     for (mut stored, (id, _, arguments)) in stored_rows.into_iter().zip(chunk) {
                         if opts.notify {
+                            let mut notif_metadata = ctx.metadata.clone();
+                            notif_metadata.extend(arguments.clone());
                             let notification = crate::notifier::Notification::new(
                                 R::DEF.name,
                                 action_def.name,
@@ -290,8 +313,8 @@ where
                                 stored.clone(),
                                 None,
                                 ctx.actor.clone(),
-                                arguments.clone(),
-                            );
+                                notif_metadata,
+                            ).with_tenant(ctx.tenant.clone());
                             crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
                         }
                         if opts.return_records {
@@ -346,6 +369,7 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
             &R::DEF,
             &CompiledQuery {
                 filter: Some(filter),
+                tenant: ctx.tenant.clone(),
                 ..CompiledQuery::default()
             },
         )
@@ -407,8 +431,8 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
                             row.clone(),
                             Some(row.clone()),
                             ctx.actor.clone(),
-                            FieldMap::new(),
-                        );
+                            ctx.metadata.clone(),
+                        ).with_tenant(ctx.tenant.clone());
                         crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
                     }
                     if opts.return_records {

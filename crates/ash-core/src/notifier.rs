@@ -26,6 +26,8 @@ pub struct Notification {
     pub previous_fields: Option<FieldMap>,
     /// Actor who performed the action, if present.
     pub actor: Option<Actor>,
+    /// Tenant under which the action was executed, if any.
+    pub tenant: Option<String>,
     /// Additional context or action arguments passed during invocation.
     pub metadata: FieldMap,
 }
@@ -51,8 +53,15 @@ impl Notification {
             record_fields,
             previous_fields,
             actor,
+            tenant: None,
             metadata,
         }
+    }
+
+    /// Set the tenant for this notification.
+    pub fn with_tenant(mut self, tenant: Option<String>) -> Self {
+        self.tenant = tenant;
+        self
     }
 
     /// Read an attribute value from the committed record.

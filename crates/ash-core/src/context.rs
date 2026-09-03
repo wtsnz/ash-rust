@@ -6,6 +6,7 @@ use crate::data_layer::{SchemaSupport, TransactionSupport};
 use crate::error::Result;
 use crate::notifier::{Notification, Notifier};
 use crate::resource::ResourceDef;
+use crate::value::{FieldMap, Value};
 
 /// Notification queued during an atomic transaction buffer.
 #[derive(Clone, Debug)]
@@ -17,6 +18,8 @@ pub struct QueuedNotification {
 #[derive(Debug)]
 pub struct Context<D> {
     pub actor: Option<Actor>,
+    pub tenant: Option<String>,
+    pub metadata: FieldMap,
     pub data: Arc<D>,
     pub notifiers: Vec<Arc<dyn Notifier>>,
     pub(crate) notification_queue: Option<Arc<Mutex<Vec<QueuedNotification>>>>,
@@ -26,6 +29,8 @@ impl<D> Clone for Context<D> {
     fn clone(&self) -> Self {
         Self {
             actor: self.actor.clone(),
+            tenant: self.tenant.clone(),
+            metadata: self.metadata.clone(),
             data: Arc::clone(&self.data),
             notifiers: self.notifiers.clone(),
             notification_queue: self.notification_queue.clone(),
@@ -37,6 +42,8 @@ impl<D> Context<D> {
     pub fn new(data: D) -> Self {
         Self {
             actor: None,
+            tenant: None,
+            metadata: FieldMap::new(),
             data: Arc::new(data),
             notifiers: Vec::new(),
             notification_queue: None,
@@ -46,6 +53,8 @@ impl<D> Context<D> {
     pub fn from_arc(data: Arc<D>) -> Self {
         Self {
             actor: None,
+            tenant: None,
+            metadata: FieldMap::new(),
             data,
             notifiers: Vec::new(),
             notification_queue: None,
@@ -55,6 +64,8 @@ impl<D> Context<D> {
     pub fn with_actor(&self, actor: Actor) -> Self {
         Self {
             actor: Some(actor),
+            tenant: self.tenant.clone(),
+            metadata: self.metadata.clone(),
             data: Arc::clone(&self.data),
             notifiers: self.notifiers.clone(),
             notification_queue: self.notification_queue.clone(),
@@ -64,10 +75,79 @@ impl<D> Context<D> {
     pub fn without_actor(&self) -> Self {
         Self {
             actor: None,
+            tenant: self.tenant.clone(),
+            metadata: self.metadata.clone(),
             data: Arc::clone(&self.data),
             notifiers: self.notifiers.clone(),
             notification_queue: self.notification_queue.clone(),
         }
+    }
+
+    /// Set the tenant for this execution context.
+    pub fn with_tenant(&self, tenant: impl Into<String>) -> Self {
+        Self {
+            actor: self.actor.clone(),
+            tenant: Some(tenant.into()),
+            metadata: self.metadata.clone(),
+            data: Arc::clone(&self.data),
+            notifiers: self.notifiers.clone(),
+            notification_queue: self.notification_queue.clone(),
+        }
+    }
+
+    /// Clear the tenant on this execution context.
+    pub fn without_tenant(&self) -> Self {
+        Self {
+            actor: self.actor.clone(),
+            tenant: None,
+            metadata: self.metadata.clone(),
+            data: Arc::clone(&self.data),
+            notifiers: self.notifiers.clone(),
+            notification_queue: self.notification_queue.clone(),
+        }
+    }
+
+    /// Get the current tenant, if set.
+    pub fn tenant(&self) -> Option<&str> {
+        self.tenant.as_deref()
+    }
+
+    /// Set a metadata entry on this execution context.
+    pub fn with_metadata(&self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        let mut metadata = self.metadata.clone();
+        metadata.insert(key.into(), value.into());
+        Self {
+            actor: self.actor.clone(),
+            tenant: self.tenant.clone(),
+            metadata,
+            data: Arc::clone(&self.data),
+            notifiers: self.notifiers.clone(),
+            notification_queue: self.notification_queue.clone(),
+        }
+    }
+
+    /// Merge additional metadata entries into this execution context.
+    pub fn with_all_metadata(&self, extra: FieldMap) -> Self {
+        let mut metadata = self.metadata.clone();
+        metadata.extend(extra);
+        Self {
+            actor: self.actor.clone(),
+            tenant: self.tenant.clone(),
+            metadata,
+            data: Arc::clone(&self.data),
+            notifiers: self.notifiers.clone(),
+            notification_queue: self.notification_queue.clone(),
+        }
+    }
+
+    /// Access the metadata bag on this execution context.
+    pub fn metadata(&self) -> &FieldMap {
+        &self.metadata
+    }
+
+    /// Retrieve a specific metadata value by key.
+    pub fn get_metadata(&self, key: &str) -> Option<&Value> {
+        self.metadata.get(key)
     }
 
     /// Attach a [`Notifier`] to this execution context.
@@ -87,6 +167,8 @@ impl<D> Context<D> {
         let queue = Arc::new(Mutex::new(Vec::new()));
         let ctx = Self {
             actor: self.actor.clone(),
+            tenant: self.tenant.clone(),
+            metadata: self.metadata.clone(),
             data: Arc::clone(&self.data),
             notifiers: self.notifiers.clone(),
             notification_queue: Some(Arc::clone(&queue)),
@@ -101,6 +183,8 @@ impl<D> Context<D> {
     ) -> Self {
         Self {
             actor: self.actor.clone(),
+            tenant: self.tenant.clone(),
+            metadata: self.metadata.clone(),
             data: Arc::clone(&self.data),
             notifiers: self.notifiers.clone(),
             notification_queue: Some(queue),
@@ -129,12 +213,16 @@ impl<D: TransactionSupport> Context<D> {
         T: Send,
     {
         let actor = self.actor.clone();
+        let tenant = self.tenant.clone();
+        let metadata = self.metadata.clone();
         let notifiers = self.notifiers.clone();
         let notification_queue = self.notification_queue.clone();
         self.data
             .transaction(move |tx_data| {
                 let tx_ctx = Context {
                     actor,
+                    tenant,
+                    metadata,
                     data: Arc::new(tx_data.clone()),
                     notifiers,
                     notification_queue,

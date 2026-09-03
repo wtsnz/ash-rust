@@ -12,8 +12,8 @@ use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::keys::{AggregateName, CalcName, FieldName, RelName};
 use crate::pipeline::{
-    action_named, expect_kind, expect_persist, generate_pk, pk_name, read_action, run_validations,
-    validate,
+    action_named, expect_kind, expect_persist, generate_pk, pk_name, read_action,
+    run_validations_with_context, validate,
 };
 use crate::policy::{authorize_write, compile_read_filter};
 use crate::resource::{OnDelete, RelKind, Resource, ResourceDef};
@@ -29,6 +29,7 @@ pub struct Query<'a, R, D> {
     loads: Vec<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    tenant: Option<String>,
     _resource: PhantomData<R>,
 }
 
@@ -44,6 +45,7 @@ impl<'a, R, D> Clone for Query<'a, R, D> {
             loads: self.loads.clone(),
             limit: self.limit,
             offset: self.offset,
+            tenant: self.tenant.clone(),
             _resource: PhantomData,
         }
     }
@@ -53,6 +55,23 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     pub fn action(mut self, name: &'static str) -> Self {
         self.action = Some(name);
         self
+    }
+
+    /// Set or override the tenant on this query.
+    pub fn tenant(mut self, tenant: impl Into<String>) -> Self {
+        self.tenant = Some(tenant.into());
+        self
+    }
+
+    /// Clear the tenant on this query.
+    pub fn without_tenant(mut self) -> Self {
+        self.tenant = None;
+        self
+    }
+
+    /// Retrieve the current tenant on this query, if set.
+    pub fn get_tenant(&self) -> Option<&str> {
+        self.tenant.as_deref()
     }
 
     pub fn filter(mut self, filter: Filter) -> Self {
@@ -185,6 +204,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                     aggregates: this.aggregates,
                     limit: this.limit,
                     offset: this.offset,
+                    tenant: this.tenant,
                 },
             )
             .await?;
@@ -238,6 +258,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                     aggregates: Vec::new(),
                     limit: None,
                     offset: None,
+                    tenant: this.tenant,
                 },
             )
             .await?;
@@ -261,6 +282,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 loads: Vec::new(),
                 limit: None,
                 offset: None,
+                tenant: self.tenant.clone(),
                 _resource: PhantomData::<R>,
             };
             Some(count_query.count().await?)
@@ -606,6 +628,7 @@ pub fn query<R: Resource, D: DataLayer>(ctx: &Context<D>) -> Query<'_, R, D> {
         loads: Vec::new(),
         limit: None,
         offset: None,
+        tenant: ctx.tenant.clone(),
         _resource: PhantomData,
     }
 }
@@ -741,6 +764,7 @@ async fn fetch_related<D: DataLayer>(
             dest,
             &CompiledQuery {
                 filter: Some(filter),
+                tenant: ctx.tenant.clone(),
                 ..CompiledQuery::default()
             },
         )
@@ -825,10 +849,12 @@ pub async fn destroy_dynamic<D: DataLayer>(
     let mut dynamic_after_actions = Vec::new();
     let mut dynamic_after_transactions = Vec::new();
 
-    crate::pipeline::apply_changes_with_hooks(
+    crate::pipeline::apply_changes_with_context(
         &mut fields,
         action,
         ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
         &crate::value::FieldMap::new(),
         &mut dynamic_before_actions,
         &mut dynamic_after_actions,
@@ -862,8 +888,8 @@ pub async fn destroy_dynamic<D: DataLayer>(
                 fields.clone(),
                 Some(fields.clone()),
                 ctx.actor.clone(),
-                crate::value::FieldMap::new(),
-            );
+                ctx.metadata.clone(),
+            ).with_tenant(ctx.tenant.clone());
             crate::notifier::dispatch_notification(ctx, resource, notification).await?;
 
             for hook in dynamic_after_transactions {
@@ -904,6 +930,7 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                                 dest_def,
                                 &CompiledQuery {
                                     filter: Some(filter),
+                                    tenant: ctx.tenant.clone(),
                                     ..CompiledQuery::default()
                                 },
                             )
@@ -929,6 +956,7 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                                 dest_def,
                                 &CompiledQuery {
                                     filter: Some(filter),
+                                    tenant: ctx.tenant.clone(),
                                     ..CompiledQuery::default()
                                 },
                             )
@@ -969,6 +997,7 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                                 dest_def,
                                 &CompiledQuery {
                                     filter: Some(filter),
+                                    tenant: ctx.tenant.clone(),
                                     ..CompiledQuery::default()
                                 },
                             )
@@ -1001,6 +1030,7 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                                     through_def,
                                     &CompiledQuery {
                                         filter: Some(filter),
+                                        tenant: ctx.tenant.clone(),
                                         ..CompiledQuery::default()
                                     },
                                 )
@@ -1020,6 +1050,7 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                                     through_def,
                                     &CompiledQuery {
                                         filter: Some(filter),
+                                        tenant: ctx.tenant.clone(),
                                         ..CompiledQuery::default()
                                     },
                                 )
@@ -1079,7 +1110,16 @@ pub async fn create_dynamic<D: DataLayer>(
     }
 
     validate(resource, &fields)?;
-    run_validations(resource, action, None, &fields, &FieldMap::new())?;
+    run_validations_with_context(
+        resource,
+        action,
+        None,
+        &fields,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &FieldMap::new(),
+    )?;
     authorize_write(resource, action, ctx.actor.as_ref(), Some(&fields))?;
 
     let stored = ctx.data.create(resource, id, fields).await?;
@@ -1092,8 +1132,8 @@ pub async fn create_dynamic<D: DataLayer>(
         stored.clone(),
         None,
         ctx.actor.clone(),
-        FieldMap::new(),
-    );
+        ctx.metadata.clone(),
+    ).with_tenant(ctx.tenant.clone());
     crate::notifier::dispatch_notification(ctx, resource, notification).await?;
 
     Ok(stored)
@@ -1113,6 +1153,7 @@ pub async fn update_dynamic<D: DataLayer>(
             resource,
             &CompiledQuery {
                 filter: Some(Filter::eq(pk, Value::Uuid(id))),
+                tenant: ctx.tenant.clone(),
                 ..CompiledQuery::default()
             },
         )
@@ -1141,7 +1182,16 @@ pub async fn update_dynamic<D: DataLayer>(
     }
 
     validate(resource, &fields)?;
-    run_validations(resource, action, Some(&existing_fields), &fields, &FieldMap::new())?;
+    run_validations_with_context(
+        resource,
+        action,
+        Some(&existing_fields),
+        &fields,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &FieldMap::new(),
+    )?;
     authorize_write(resource, action, ctx.actor.as_ref(), Some(&fields))?;
 
     let stored = ctx.data.update(resource, id, fields).await?;
@@ -1154,8 +1204,8 @@ pub async fn update_dynamic<D: DataLayer>(
         stored.clone(),
         Some(existing_fields),
         ctx.actor.clone(),
-        FieldMap::new(),
-    );
+        ctx.metadata.clone(),
+    ).with_tenant(ctx.tenant.clone());
     crate::notifier::dispatch_notification(ctx, resource, notification).await?;
 
     Ok(stored)
@@ -1214,6 +1264,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                 dest_def,
                                 &CompiledQuery {
                                     filter: Some(filter),
+                                    tenant: ctx.tenant.clone(),
                                     ..CompiledQuery::default()
                                 },
                             )
@@ -1297,6 +1348,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     through_def,
                                     &CompiledQuery {
                                         filter: Some(join_filter),
+                                        tenant: ctx.tenant.clone(),
                                         ..CompiledQuery::default()
                                     },
                                 )
@@ -1424,8 +1476,8 @@ where
         crate::value::FieldMap::new(),
         None,
         ctx.actor.clone(),
-        crate::value::FieldMap::new(),
-    );
+        ctx.metadata.clone(),
+    ).with_tenant(ctx.tenant.clone());
     crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 
     Ok(result)

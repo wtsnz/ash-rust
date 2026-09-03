@@ -25,6 +25,8 @@ pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
 pub struct ChangeContext<'a> {
     pub fields: &'a mut FieldMap,
     pub actor: Option<&'a Actor>,
+    pub tenant: Option<&'a str>,
+    pub metadata: &'a FieldMap,
     pub arguments: &'a FieldMap,
     pub before_actions: &'a mut Vec<DynamicBeforeActionHook>,
     pub after_actions: &'a mut Vec<DynamicAfterActionHook>,
@@ -67,6 +69,9 @@ pub trait CustomChange: Send + Sync + 'static {
 pub struct ValidationContext<'a> {
     pub record: Option<&'a FieldMap>,
     pub fields: &'a FieldMap,
+    pub actor: Option<&'a Actor>,
+    pub tenant: Option<&'a str>,
+    pub metadata: &'a FieldMap,
     pub arguments: &'a FieldMap,
 }
 

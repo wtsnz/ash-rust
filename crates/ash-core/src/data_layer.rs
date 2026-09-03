@@ -19,6 +19,7 @@ pub struct CompiledQuery {
     pub aggregates: Vec<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    pub tenant: Option<String>,
 }
 
 pub trait DataLayer: Send + Sync {

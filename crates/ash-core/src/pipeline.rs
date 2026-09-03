@@ -103,10 +103,12 @@ pub fn apply_changes(
     let mut before_actions = Vec::new();
     let mut after_actions = Vec::new();
     let mut after_transactions = Vec::new();
-    apply_changes_with_hooks(
+    apply_changes_with_context(
         fields,
         action,
         actor,
+        None,
+        &FieldMap::new(),
         arguments,
         &mut before_actions,
         &mut after_actions,
@@ -114,10 +116,36 @@ pub fn apply_changes(
     )
 }
 
+#[allow(dead_code)]
 pub fn apply_changes_with_hooks(
     fields: &mut FieldMap,
     action: &ActionDef,
     actor: Option<&Actor>,
+    arguments: &FieldMap,
+    before_actions: &mut Vec<crate::action::DynamicBeforeActionHook>,
+    after_actions: &mut Vec<crate::action::DynamicAfterActionHook>,
+    after_transactions: &mut Vec<crate::action::DynamicAfterTransactionHook>,
+) -> Result<()> {
+    apply_changes_with_context(
+        fields,
+        action,
+        actor,
+        None,
+        &FieldMap::new(),
+        arguments,
+        before_actions,
+        after_actions,
+        after_transactions,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_changes_with_context(
+    fields: &mut FieldMap,
+    action: &ActionDef,
+    actor: Option<&Actor>,
+    tenant: Option<&str>,
+    metadata: &FieldMap,
     arguments: &FieldMap,
     before_actions: &mut Vec<crate::action::DynamicBeforeActionHook>,
     after_actions: &mut Vec<crate::action::DynamicAfterActionHook>,
@@ -158,6 +186,8 @@ pub fn apply_changes_with_hooks(
                 let mut ctx = crate::action::ChangeContext {
                     fields,
                     actor,
+                    tenant,
+                    metadata,
                     arguments,
                     before_actions,
                     after_actions,
@@ -170,6 +200,8 @@ pub fn apply_changes_with_hooks(
                 let mut ctx = crate::action::ChangeContext {
                     fields,
                     actor,
+                    tenant,
+                    metadata,
                     arguments,
                     before_actions,
                     after_actions,
@@ -183,10 +215,33 @@ pub fn apply_changes_with_hooks(
 }
 
 pub fn run_validations(
+    def: &ResourceDef,
+    action: &ActionDef,
+    record: Option<&FieldMap>,
+    fields: &FieldMap,
+    arguments: &FieldMap,
+) -> Result<()> {
+    run_validations_with_context(
+        def,
+        action,
+        record,
+        fields,
+        None,
+        None,
+        &FieldMap::new(),
+        arguments,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_validations_with_context(
     _def: &ResourceDef,
     action: &ActionDef,
     record: Option<&FieldMap>,
     fields: &FieldMap,
+    actor: Option<&Actor>,
+    tenant: Option<&str>,
+    metadata: &FieldMap,
     arguments: &FieldMap,
 ) -> Result<()> {
     let get_val = |f: &str| fields.get(f).or_else(|| arguments.get(f));
@@ -262,6 +317,9 @@ pub fn run_validations(
                 let ctx = crate::action::ValidationContext {
                     record,
                     fields,
+                    actor,
+                    tenant,
+                    metadata,
                     arguments,
                 };
                 c.validate(&ctx)?;
@@ -270,6 +328,9 @@ pub fn run_validations(
                 let ctx = crate::action::ValidationContext {
                     record,
                     fields,
+                    actor,
+                    tenant,
+                    metadata,
                     arguments,
                 };
                 f(&ctx)?;

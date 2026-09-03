@@ -6,8 +6,8 @@ use crate::context::Context;
 use crate::data_layer::DataLayer;
 use crate::error::{Error, Result};
 use crate::pipeline::{
-    action_named, apply_changes, apply_changes_with_hooks, expect_kind, expect_persist,
-    generate_pk, pk_name, run_validations, split_input, validate,
+    action_named, apply_changes, apply_changes_with_context, expect_kind, expect_persist,
+    generate_pk, pk_name, run_validations, run_validations_with_context, split_input, validate,
 };
 use crate::policy::authorize_write;
 use crate::resource::Resource;
@@ -82,6 +82,8 @@ pub struct Changeset<R: Resource> {
     action: &'static ActionDef,
     fields: FieldMap,
     arguments: FieldMap,
+    pub tenant: Option<String>,
+    pub metadata: FieldMap,
     existing: Option<R>,
     upsert: Option<(&'static str, Vec<String>)>,
     before_actions: Vec<BeforeActionHook<R>>,
@@ -95,6 +97,29 @@ pub struct Changeset<R: Resource> {
 impl<R: Resource> Changeset<R> {
     pub fn action(&self) -> &'static ActionDef {
         self.action
+    }
+
+    pub fn tenant(&self) -> Option<&str> {
+        self.tenant.as_deref()
+    }
+
+    pub fn with_tenant(mut self, tenant: impl Into<String>) -> Self {
+        self.tenant = Some(tenant.into());
+        self
+    }
+
+    pub fn without_tenant(mut self) -> Self {
+        self.tenant = None;
+        self
+    }
+
+    pub fn metadata(&self) -> &FieldMap {
+        &self.metadata
+    }
+
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
     }
 
     pub fn attributes(&self) -> &FieldMap {
@@ -229,10 +254,12 @@ impl<R: Resource> Changeset<R> {
         let mut dynamic_after_transactions = Vec::new();
         let mut dynamic_before_actions = Vec::new();
 
-        apply_changes_with_hooks(
+        apply_changes_with_context(
             &mut fields,
             action,
             ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
             &arguments,
             &mut dynamic_before_actions,
             &mut dynamic_after_actions,
@@ -245,14 +272,25 @@ impl<R: Resource> Changeset<R> {
             }));
         }
 
+        run_validations_with_context(
+            &R::DEF,
+            action,
+            None,
+            &fields,
+            ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
+            &arguments,
+        )?;
         validate(&R::DEF, &fields)?;
-        run_validations(&R::DEF, action, None, &fields, &arguments)?;
         crate::policy::authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
         let managed_relationships = extract_managed_relationships::<R>(action, &arguments);
         Ok(Self {
             action,
             fields,
             arguments,
+            tenant: ctx.tenant.clone(),
+            metadata: ctx.metadata.clone(),
             existing: None,
             upsert: None,
             before_actions,
@@ -306,10 +344,12 @@ impl<R: Resource> Changeset<R> {
         let mut dynamic_after_transactions = Vec::new();
         let mut dynamic_before_actions = Vec::new();
 
-        apply_changes_with_hooks(
+        apply_changes_with_context(
             &mut fields,
             action,
             ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
             &arguments,
             &mut dynamic_before_actions,
             &mut dynamic_after_actions,
@@ -322,8 +362,17 @@ impl<R: Resource> Changeset<R> {
             }));
         }
 
+        run_validations_with_context(
+            &R::DEF,
+            action,
+            Some(&existing_fields),
+            &fields,
+            ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
+            &arguments,
+        )?;
         validate(&R::DEF, &fields)?;
-        run_validations(&R::DEF, action, Some(&existing_fields), &fields, &arguments)?;
         crate::policy::authorize_field_writes(
             &R::DEF,
             ctx.actor.as_ref(),
@@ -348,6 +397,8 @@ impl<R: Resource> Changeset<R> {
             action,
             fields,
             arguments,
+            tenant: ctx.tenant.clone(),
+            metadata: ctx.metadata.clone(),
             existing: Some(existing),
             upsert: None,
             before_actions,
@@ -422,10 +473,12 @@ impl<R: Resource> Changeset<R> {
         let mut dynamic_after_transactions = Vec::new();
         let mut dynamic_before_actions = Vec::new();
 
-        apply_changes_with_hooks(
+        apply_changes_with_context(
             &mut fields,
             action,
             ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
             &FieldMap::new(),
             &mut dynamic_before_actions,
             &mut dynamic_after_actions,
@@ -438,12 +491,23 @@ impl<R: Resource> Changeset<R> {
             }));
         }
 
-        run_validations(&R::DEF, action, Some(&existing_fields), &fields, &FieldMap::new())?;
+        run_validations_with_context(
+            &R::DEF,
+            action,
+            Some(&existing_fields),
+            &fields,
+            ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
+            &FieldMap::new(),
+        )?;
 
         Ok(Self {
             action,
             fields,
             arguments: FieldMap::new(),
+            tenant: ctx.tenant.clone(),
+            metadata: ctx.metadata.clone(),
             existing: Some(existing),
             upsert: None,
             before_actions,
@@ -605,6 +669,9 @@ impl<R: Resource> Changeset<R> {
         }
 
         let arguments = std::mem::take(&mut self.arguments);
+        let mut notif_metadata = ctx.metadata.clone();
+        notif_metadata.extend(self.metadata.clone());
+        notif_metadata.extend(arguments);
         let notification = crate::notifier::Notification::new(
             R::DEF.name,
             self.action.name,
@@ -613,8 +680,8 @@ impl<R: Resource> Changeset<R> {
             stored,
             previous_fields,
             ctx.actor.clone(),
-            arguments,
-        );
+            notif_metadata,
+        ).with_tenant(self.tenant.clone().or_else(|| ctx.tenant.clone()));
         crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 
         Ok(record)
