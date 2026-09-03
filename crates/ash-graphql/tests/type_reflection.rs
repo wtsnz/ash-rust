@@ -53,7 +53,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
 #[tokio::test]
 async fn test_phase1_type_reflection_and_schema_assembly() {
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
-        .finish()
+        .finish::<ash_memory::Memory>()
         .expect("Failed to build dynamic schema");
 
     // Introspect the schema to verify Ticket type and enum existence
