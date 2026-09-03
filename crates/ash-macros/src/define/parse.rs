@@ -1389,36 +1389,61 @@ fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
     }
 }
 
+fn parse_policy_effect(checks_block: ParseStream) -> Result<PolicyEffectSpec> {
+    let auth_ident: Ident = checks_block.parse()?;
+    let auth_str = auth_ident.to_string();
+    let check_expr: Expr = checks_block.parse()?;
+    let check = parse_check_expr(&check_expr)?;
+    if checks_block.peek(Token![;]) {
+        let _: Token![;] = checks_block.parse()?;
+    }
+    match auth_str.as_str() {
+        "authorize_if" => Ok(PolicyEffectSpec::AuthorizeIf(check)),
+        "authorize_unless" => Ok(PolicyEffectSpec::AuthorizeUnless(check)),
+        "forbid_if" => Ok(PolicyEffectSpec::ForbidIf(check)),
+        "forbid_unless" => Ok(PolicyEffectSpec::ForbidUnless(check)),
+        _ => Err(Error::new_spanned(
+            auth_ident,
+            "expected `authorize_if`, `authorize_unless`, `forbid_if`, or `forbid_unless` statement",
+        )),
+    }
+}
+
 fn parse_policies(input: ParseStream) -> Result<Vec<PolicySpec>> {
     let mut policies = Vec::new();
 
     while !input.is_empty() {
         let policy_kw: Ident = input.parse()?;
-        if policy_kw != "policy" {
-            return Err(Error::new_spanned(policy_kw, "expected `policy`"));
-        }
-
-        let whens = parse_whens(input)?;
+        let (bypass, whens) = if policy_kw == "policy" {
+            let whens = if input.peek(syn::token::Brace) {
+                vec![PolicyWhenSpec::Always]
+            } else {
+                parse_whens(input)?
+            };
+            (false, whens)
+        } else if policy_kw == "bypass" {
+            let whens = if input.peek(syn::token::Brace) {
+                vec![PolicyWhenSpec::Always]
+            } else {
+                parse_whens(input)?
+            };
+            (true, whens)
+        } else {
+            return Err(Error::new_spanned(policy_kw, "expected `policy` or `bypass`"));
+        };
 
         parse_braced!(input, checks_block);
         let mut checks = Vec::new();
 
         while !checks_block.is_empty() {
-            let auth_ident: Ident = checks_block.parse()?;
-            if auth_ident != "authorize_if" {
-                return Err(Error::new_spanned(
-                    auth_ident,
-                    "expected `authorize_if` statement",
-                ));
-            }
-            let check_expr: Expr = checks_block.parse()?;
-            checks.push(parse_check_expr(&check_expr)?);
-            if checks_block.peek(Token![;]) {
-                let _: Token![;] = checks_block.parse()?;
-            }
+            checks.push(parse_policy_effect(&checks_block)?);
         }
 
-        policies.push(PolicySpec { whens, checks });
+        policies.push(PolicySpec {
+            bypass,
+            whens,
+            checks,
+        });
     }
 
     Ok(policies)
@@ -1436,18 +1461,7 @@ fn parse_field_policies(input: ParseStream) -> Result<Vec<FieldPolicySpec>> {
         parse_braced!(input, checks_block);
         let mut checks = Vec::new();
         while !checks_block.is_empty() {
-            let auth_ident: Ident = checks_block.parse()?;
-            if auth_ident != "authorize_if" {
-                return Err(Error::new_spanned(
-                    auth_ident,
-                    "expected `authorize_if` statement",
-                ));
-            }
-            let check_expr: Expr = checks_block.parse()?;
-            checks.push(parse_check_expr(&check_expr)?);
-            if checks_block.peek(Token![;]) {
-                let _: Token![;] = checks_block.parse()?;
-            }
+            checks.push(parse_policy_effect(&checks_block)?);
         }
         fps.push(FieldPolicySpec { field, checks });
     }

@@ -228,14 +228,22 @@ pub enum ValidationSpec {
 }
 
 pub struct PolicySpec {
+    pub bypass: bool,
     pub whens: Vec<PolicyWhenSpec>,
-    pub checks: Vec<PolicyCheckExpr>,
+    pub checks: Vec<PolicyEffectSpec>,
 }
 
 pub enum PolicyWhenSpec {
     Always,
     ActionName(String),
     ActionKind(ActionKind),
+}
+
+pub enum PolicyEffectSpec {
+    AuthorizeIf(PolicyCheckExpr),
+    AuthorizeUnless(PolicyCheckExpr),
+    ForbidIf(PolicyCheckExpr),
+    ForbidUnless(PolicyCheckExpr),
 }
 
 pub enum PolicyCheckExpr {
@@ -251,7 +259,7 @@ pub enum PolicyCheckExpr {
 
 pub struct FieldPolicySpec {
     pub field: Ident,
-    pub checks: Vec<PolicyCheckExpr>,
+    pub checks: Vec<PolicyEffectSpec>,
 }
 
 pub struct ExtendSpec {

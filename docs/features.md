@@ -612,3 +612,36 @@ let active = Ticket::query(&ctx)
     .await?;
 ```
 
+---
+
+## 13. Extended Policy Primitives (`bypass`, `forbid_if`, `authorize_unless`, `forbid_unless`)
+
+Ash policies support expressive negative conditions and bypass blocks that allow privileged actors to skip authorization ladders completely.
+
+### Bypass Policies
+Bypass blocks run first. If a bypass condition succeeds (such as an admin actor check), all subsequent policies are bypassed and the request is immediately authorized:
+
+```rust
+policies {
+    // Admins skip all subsequent checks unconditionally
+    bypass {
+        authorize_if actor_attribute_equals(role, "admin");
+    }
+
+    // Normal policy ladder
+    policy {
+        forbid_if actor_attribute_equals(status, "banned");
+        authorize_if relates_to_actor(author_id);
+    }
+}
+```
+
+### Expressive Negative Primitives
+- `forbid_if(check)`: Immediately denies authorization if the check evaluates to `true`.
+- `forbid_unless(check)`: Immediately denies authorization if the check evaluates to `false`.
+- `authorize_unless(check)`: Authorizes if the check evaluates to `false`.
+- `authorize_if(check)`: Authorizes if the check evaluates to `true`.
+
+Applicable across both resource policies and `field_policies` for fine-grained column redaction and field write controls.
+
+

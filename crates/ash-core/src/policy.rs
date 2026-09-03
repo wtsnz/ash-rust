@@ -7,13 +7,26 @@ use crate::value::{ConstValue, FieldMap};
 
 #[derive(Clone, Copy, Debug)]
 pub struct PolicyDef {
+    pub bypass: bool,
     pub when: PolicyWhen,
     pub checks: &'static [PolicyEffect],
 }
 
 impl PolicyDef {
     pub const fn when(when: PolicyWhen, checks: &'static [PolicyEffect]) -> Self {
-        Self { when, checks }
+        Self {
+            bypass: false,
+            when,
+            checks,
+        }
+    }
+
+    pub const fn bypass(when: PolicyWhen, checks: &'static [PolicyEffect]) -> Self {
+        Self {
+            bypass: true,
+            when,
+            checks,
+        }
     }
 
     pub fn applies(&self, action: &ActionDef) -> bool {
@@ -53,6 +66,9 @@ impl FieldPolicyDef {
 #[derive(Clone, Copy, Debug)]
 pub enum PolicyEffect {
     AuthorizeIf(Check),
+    AuthorizeUnless(Check),
+    ForbidIf(Check),
+    ForbidUnless(Check),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -95,11 +111,37 @@ pub fn compile_read_filter(
         return Err(Error::Forbidden);
     }
 
+    let (bypass_policies, normal_policies): (Vec<_>, Vec<_>) =
+        applicable.into_iter().partition(|p| p.bypass);
+
+    let mut bypass_filters = Vec::new();
+    for bp in bypass_policies {
+        let f = policy_to_filter(bp, actor)?;
+        if f == Filter::True {
+            return Ok(None);
+        }
+        bypass_filters.push(f);
+    }
+
+    if normal_policies.is_empty() {
+        if bypass_filters.is_empty() {
+            return Err(Error::Forbidden);
+        }
+        return Ok(Some(Filter::or(bypass_filters)));
+    }
+
     let mut parts = Vec::new();
-    for policy in applicable {
+    for policy in normal_policies {
         parts.push(policy_to_filter(policy, actor)?);
     }
-    Ok(Some(Filter::and(parts)))
+    let normal_filter = Filter::and(parts);
+
+    if bypass_filters.is_empty() {
+        Ok(Some(normal_filter))
+    } else {
+        let combined_bypass = Filter::or(bypass_filters);
+        Ok(Some(Filter::or([combined_bypass, normal_filter])))
+    }
 }
 
 pub fn authorize_write(
@@ -121,7 +163,20 @@ pub fn authorize_write(
         return Err(Error::Forbidden);
     }
 
-    for policy in applicable {
+    let (bypass_policies, normal_policies): (Vec<_>, Vec<_>) =
+        applicable.into_iter().partition(|p| p.bypass);
+
+    for bypass in bypass_policies {
+        if eval_policy(bypass, actor, record)? {
+            return Ok(());
+        }
+    }
+
+    if normal_policies.is_empty() {
+        return Err(Error::Forbidden);
+    }
+
+    for policy in normal_policies {
         if !eval_policy(policy, actor, record)? {
             return Err(Error::Forbidden);
         }
@@ -130,13 +185,43 @@ pub fn authorize_write(
 }
 
 fn policy_to_filter(policy: &PolicyDef, actor: Option<&Actor>) -> Result<Filter> {
-    let mut allow = Vec::new();
+    let mut forbids = Vec::new();
+    let mut authorizes = Vec::new();
+
     for effect in policy.checks {
         match effect {
-            PolicyEffect::AuthorizeIf(check) => allow.push(check_to_filter(check, actor)?),
+            PolicyEffect::ForbidIf(check) => {
+                let f = check_to_filter(check, actor)?;
+                forbids.push(!f);
+            }
+            PolicyEffect::ForbidUnless(check) => {
+                let f = check_to_filter(check, actor)?;
+                forbids.push(f);
+            }
+            PolicyEffect::AuthorizeIf(check) => {
+                let f = check_to_filter(check, actor)?;
+                authorizes.push(f);
+            }
+            PolicyEffect::AuthorizeUnless(check) => {
+                let f = check_to_filter(check, actor)?;
+                authorizes.push(!f);
+            }
         }
     }
-    Ok(Filter::or(allow))
+
+    let auth_filter = if authorizes.is_empty() {
+        Filter::True
+    } else {
+        Filter::or(authorizes)
+    };
+
+    if forbids.is_empty() {
+        Ok(auth_filter)
+    } else {
+        let mut all = forbids;
+        all.push(auth_filter);
+        Ok(Filter::and(all))
+    }
 }
 
 pub fn eval_policy_effects(
@@ -146,13 +231,39 @@ pub fn eval_policy_effects(
 ) -> Result<bool> {
     for effect in effects {
         match effect {
+            PolicyEffect::ForbidIf(check) if eval_check(check, actor, record)? => {
+                return Ok(false);
+            }
+            PolicyEffect::ForbidUnless(check) if !eval_check(check, actor, record)? => {
+                return Ok(false);
+            }
+            _ => {}
+        }
+    }
+
+    let mut has_authorizes = false;
+    for effect in effects {
+        match effect {
             PolicyEffect::AuthorizeIf(check) => {
+                has_authorizes = true;
                 if eval_check(check, actor, record)? {
                     return Ok(true);
                 }
             }
+            PolicyEffect::AuthorizeUnless(check) => {
+                has_authorizes = true;
+                if !eval_check(check, actor, record)? {
+                    return Ok(true);
+                }
+            }
+            _ => {}
         }
     }
+
+    if !has_authorizes {
+        return Ok(true);
+    }
+
     Ok(false)
 }
 

@@ -23,6 +23,10 @@ impl Actor {
         self
     }
 
+    pub fn with_attr(self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.with(key, value)
+    }
+
     pub fn with_role(self, role: impl Into<String>) -> Self {
         self.with("role", Value::String(role.into()))
     }

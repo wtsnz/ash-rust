@@ -51,17 +51,41 @@ pub fn check_to_tokens(check: &PolicyCheckExpr) -> Result<TokenStream> {
     }
 }
 
+pub fn effect_to_tokens(effect: &crate::define::ast::PolicyEffectSpec) -> Result<TokenStream> {
+    match effect {
+        crate::define::ast::PolicyEffectSpec::AuthorizeIf(ch) => {
+            let tok = check_to_tokens(ch)?;
+            Ok(quote! { ::ash_core::PolicyEffect::AuthorizeIf(#tok) })
+        }
+        crate::define::ast::PolicyEffectSpec::AuthorizeUnless(ch) => {
+            let tok = check_to_tokens(ch)?;
+            Ok(quote! { ::ash_core::PolicyEffect::AuthorizeUnless(#tok) })
+        }
+        crate::define::ast::PolicyEffectSpec::ForbidIf(ch) => {
+            let tok = check_to_tokens(ch)?;
+            Ok(quote! { ::ash_core::PolicyEffect::ForbidIf(#tok) })
+        }
+        crate::define::ast::PolicyEffectSpec::ForbidUnless(ch) => {
+            let tok = check_to_tokens(ch)?;
+            Ok(quote! { ::ash_core::PolicyEffect::ForbidUnless(#tok) })
+        }
+    }
+}
+
 pub fn expand_policy_defs(policies: &[PolicySpec]) -> Result<Vec<TokenStream>> {
     let mut policy_defs = Vec::new();
     for pol in policies {
         let check_tokens = pol
             .checks
             .iter()
-            .map(|ch| {
-                let tok = check_to_tokens(ch)?;
-                Ok(quote! { ::ash_core::PolicyEffect::AuthorizeIf(#tok) })
-            })
+            .map(effect_to_tokens)
             .collect::<Result<Vec<_>>>()?;
+
+        let constructor = if pol.bypass {
+            quote! { ::ash_core::PolicyDef::bypass }
+        } else {
+            quote! { ::ash_core::PolicyDef::when }
+        };
 
         for when in &pol.whens {
             let when_tok = match when {
@@ -73,7 +97,7 @@ pub fn expand_policy_defs(policies: &[PolicySpec]) -> Result<Vec<TokenStream>> {
                 }
             };
             policy_defs.push(quote! {
-                ::ash_core::PolicyDef::when(#when_tok, &[#(#check_tokens),*])
+                #constructor(#when_tok, &[#(#check_tokens),*])
             });
         }
     }
@@ -89,10 +113,7 @@ pub fn expand_field_policy_defs(
         let check_tokens = fp
             .checks
             .iter()
-            .map(|ch| {
-                let tok = check_to_tokens(ch)?;
-                Ok(quote! { ::ash_core::PolicyEffect::AuthorizeIf(#tok) })
-            })
+            .map(effect_to_tokens)
             .collect::<Result<Vec<_>>>()?;
         fp_defs.push(quote! {
             ::ash_core::FieldPolicyDef::new(#field_str, &[#(#check_tokens),*])
