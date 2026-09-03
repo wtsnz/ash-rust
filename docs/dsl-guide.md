@@ -455,4 +455,40 @@ actions {
 }
 ```
 
+---
+
+## 10. Generic Actions
+
+Generic actions allow resources to declare first-class domain operations that execute business logic without requiring database persistence:
+
+```rust
+resource! {
+    resource CommunicationService;
+
+    actions {
+        // Syntax: action <name>, <return_type>
+        action send_notification, String {
+            argument recipient: String;
+            argument body: String;
+            argument priority: Option<String>;
+
+            run |input| async move {
+                let priority = input.priority.unwrap_or_else(|| "normal".into());
+                let sender = input.actor().map(|a| a.id.to_string()).unwrap_or_else(|| "system".into());
+                Ok(format!("{}: [{}] sent '{}' to {}", sender, priority, input.body, input.recipient))
+            }
+        }
+    }
+}
+
+// Caller API:
+let response = CommunicationService::send_notification(&ctx)
+    .recipient("alice@example.com")
+    .body("Hello, World!")
+    .priority("high")
+    .call()
+    .await?;
+```
+
+
 

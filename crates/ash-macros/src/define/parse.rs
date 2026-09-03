@@ -4,7 +4,7 @@ use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
-    BinOp, Error, Expr, ExprBinary, ExprCall, ExprClosure, ExprParen, ExprPath, Ident, Lit, Result,
+    BinOp, Error, Expr, ExprBinary, ExprCall, ExprParen, ExprPath, Ident, Lit, Result,
     Token, Type,
 };
 
@@ -898,16 +898,22 @@ fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
             "read" => ActionKind::Read,
             "update" => ActionKind::Update,
             "destroy" => ActionKind::Destroy,
-            "generic" => ActionKind::Generic,
+            "generic" | "action" => ActionKind::Generic,
             _ => {
                 return Err(Error::new_spanned(
                     kind_ident,
-                    "expected action kind: create, read, update, destroy, or generic",
+                    "expected action kind: create, read, update, destroy, generic, or action",
                 ));
             }
         };
 
         let name: Ident = input.parse()?;
+        let mut returns = None;
+        if input.peek(Token![,]) {
+            let _: Token![,] = input.parse()?;
+            let ret_ty: Type = input.parse()?;
+            returns = Some(ret_ty);
+        }
 
         let mut primary = false;
         let mut accept = Vec::new();
@@ -916,8 +922,7 @@ fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
         let mut validations = Vec::new();
         let mut preparations = Vec::new();
         let mut persist_manual = false;
-        let mut returns = None;
-        let mut run_closure = None;
+        let mut run_expr = None;
 
         if input.peek(Token![;]) {
             let _: Token![;] = input.parse()?;
@@ -1140,6 +1145,9 @@ fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                         }
                     }
                     "returns" => {
+                        if body.peek(Token![:]) {
+                            let _: Token![:] = body.parse()?;
+                        }
                         let ret_ty: Type = body.parse()?;
                         returns = Some(ret_ty);
                         if body.peek(Token![;]) {
@@ -1147,8 +1155,8 @@ fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                         }
                     }
                     "run" => {
-                        let closure: ExprClosure = body.parse()?;
-                        run_closure = Some(closure);
+                        let expr: Expr = body.parse()?;
+                        run_expr = Some(expr);
                         if body.peek(Token![;]) {
                             let _: Token![;] = body.parse()?;
                         }
@@ -1174,7 +1182,7 @@ fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
             preparations,
             persist_manual,
             returns,
-            run_closure,
+            run_expr,
         });
     }
 

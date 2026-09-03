@@ -1411,10 +1411,24 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let action = action_named(&R::DEF, action)?;
-    expect_kind(action, ActionKind::Generic)?;
-    authorize_write(&R::DEF, action, ctx.actor.as_ref(), None)?;
-    f().await
+    let action_def = action_named(&R::DEF, action)?;
+    expect_kind(action_def, ActionKind::Generic)?;
+    authorize_write(&R::DEF, action_def, ctx.actor.as_ref(), None)?;
+    let result = f().await?;
+
+    let notification = crate::notifier::Notification::new(
+        R::DEF.name,
+        action_def.name,
+        ActionKind::Generic,
+        Uuid::nil(),
+        crate::value::FieldMap::new(),
+        None,
+        ctx.actor.clone(),
+        crate::value::FieldMap::new(),
+    );
+    crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
+
+    Ok(result)
 }
 
 /// Create that runs the changeset pipeline, then a persist callback instead of the data layer.

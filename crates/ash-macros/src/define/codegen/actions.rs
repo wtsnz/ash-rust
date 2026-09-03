@@ -1005,38 +1005,51 @@ pub fn expand_action_builders(
                     input_struct_fields.push(quote! { pub #name: #ty });
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
-                    field_setters.push(quote! {
-                        pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
-                            self.#name = ::std::option::Option::Some(value.into());
-                            self
-                        }
-                    });
-                    input_extracts.push(quote! {
-                        #name: self.#name.ok_or_else(|| ::ash_core::Error::Missing { field: #s.into() })?
-                    });
+
+                    if let Some(inner) = option_inner(ty) {
+                        field_setters.push(quote! {
+                            pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
+                                self.#name = ::std::option::Option::Some(value.into_option());
+                                self
+                            }
+                        });
+                        input_extracts.push(quote! {
+                            #name: self.#name.unwrap_or(::std::option::Option::None)
+                        });
+                    } else {
+                        field_setters.push(quote! {
+                            pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
+                                self.#name = ::std::option::Option::Some(value.into());
+                                self
+                            }
+                        });
+                        input_extracts.push(quote! {
+                            #name: self.#name.ok_or_else(|| ::ash_core::Error::Missing { field: #s.into() })?
+                        });
+                    }
                 }
 
-                let run_impl = if let Some(closure) = &act.run_closure {
+                let run_impl = if let Some(expr) = &act.run_expr {
                     quote! {
-                        fn __run_helper<F, Fut>(f: F, input: #input_struct_name) -> Fut
-                        where
-                            F: ::std::ops::FnOnce(#input_struct_name) -> Fut,
-                            Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>>,
-                        {
-                            f(input)
-                        }
-                        let fut = __run_helper(#closure, input);
-                        ::ash_core::run::<#resource, D, #returns_ty, _, _>(self.ctx, #act_name_str, move || fut).await
+                        let fut = Self::__run_action(#expr, input);
+                        ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
                     }
                 } else {
                     quote! {
-                        Err(::ash_core::Error::Invalid("generic action has no run closure".into()))
+                        Err(::ash_core::Error::Invalid("generic action has no run closure or runner; provide one via `.run(...)`".into()))
                     }
                 };
 
                 builders.push(quote! {
-                    pub struct #input_struct_name {
+                    pub struct #input_struct_name<'a, D> {
+                        pub ctx: &'a ::ash_core::Context<D>,
                         #(#input_struct_fields,)*
+                    }
+
+                    impl<'a, D: ::ash_core::DataLayer> #input_struct_name<'a, D> {
+                        pub fn actor(&self) -> ::std::option::Option<&::ash_core::Actor> {
+                            self.ctx.actor.as_ref()
+                        }
                     }
 
                     pub struct #builder_name<'a, D> {
@@ -1054,8 +1067,32 @@ pub fn expand_action_builders(
 
                         #(#field_setters)*
 
-                        pub async fn call(self) -> ::ash_core::Result<#returns_ty> {
+                        fn __run_action<F, Fut>(f: F, input: #input_struct_name<'a, D>) -> Fut
+                        where
+                            F: ::std::ops::FnOnce(#input_struct_name<'a, D>) -> Fut,
+                            Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>> + ::std::marker::Send,
+                        {
+                            f(input)
+                        }
+
+                        pub async fn run<F, Fut>(self, runner: F) -> ::ash_core::Result<#returns_ty>
+                        where
+                            F: ::std::ops::FnOnce(#input_struct_name<'a, D>) -> Fut,
+                            Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>> + ::std::marker::Send,
+                        {
+                            let ctx = self.ctx;
                             let input = #input_struct_name {
+                                ctx,
+                                #(#input_extracts,)*
+                            };
+                            let fut = runner(input);
+                            ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
+                        }
+
+                        pub async fn call(self) -> ::ash_core::Result<#returns_ty> {
+                            let ctx = self.ctx;
+                            let input = #input_struct_name {
+                                ctx,
                                 #(#input_extracts,)*
                             };
                             #run_impl

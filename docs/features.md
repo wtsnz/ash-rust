@@ -980,6 +980,61 @@ resource! {
 }
 ```
 
+---
+
+## 19. Generic Actions (`action <name>, <return_type>` / `run |input|`)
+
+In Ash Elixir, not all actions correspond to database CRUD operations. Generic actions represent arbitrary business workflows, computations, remote API calls, or email dispatches that benefit from the Ash action machinery: strongly-typed arguments, actor policies, input validation, and event notifications.
+
+### Capabilities
+- **Declarative Signature**: Defined using `action <name>, <return_type> { ... }` or `generic <name>, <return_type> { ... }`.
+- **Strongly Typed Arguments**: Supports `argument <name>: <type>;`, with automatic inference for optional (`Option<T>`) parameters via `IntoOption`.
+- **Auto-Generated Input Struct**: Generates a typed `ActionInput<'a, D>` struct giving clean field access (`input.arg`), actor extraction (`input.actor()`), and execution context (`input.context()`).
+- **Inline or Dynamic Runner**: Provide business logic inline with `run |input| async move { ... }` or pass a custom runner dynamically using `.run(|input| async move { ... })`.
+- **Policy Authorization**: Integrates directly with the resource policy engine; policies are checked against the actor prior to action execution.
+- **Event Notifications**: Automatically creates and dispatches a lifecycle `Notification` with `ActionKind::Generic` to all registered notifiers upon completion.
+
+### Example Usage
+```rust
+resource! {
+    resource Messenger;
+
+    actions {
+        action send_message, String {
+            argument recipient: String;
+            argument content: String;
+            argument priority: Option<String>;
+
+            run |input| async move {
+                let prio = input.priority.unwrap_or_else(|| "normal".into());
+                let sender = match input.actor() {
+                    Some(actor) => format!("user-{}", actor.id),
+                    None => "anonymous".into(),
+                };
+                Ok(format!("[{}] From {}: '{}' to {}", prio, sender, input.content, input.recipient))
+            }
+        }
+    }
+}
+
+// 1. Fluent Builder Invocation:
+let result = Messenger::send_message(&ctx)
+    .recipient("alice@example.com")
+    .content("System reboot in 5m")
+    .priority("high")
+    .call()
+    .await?;
+
+// 2. Dynamic runner injection (when no inline runner is defined):
+let custom_result = Messenger::dynamic_operation(&ctx)
+    .argument_x("value")
+    .run(|input| async move {
+        Ok(42)
+    })
+    .await?;
+```
+
+
 
 
 

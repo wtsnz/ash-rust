@@ -1,5 +1,5 @@
 use quote::format_ident;
-use syn::{Expr, ExprClosure, Ident, Lit, Type};
+use syn::{Expr, Ident, Lit, Type};
 
 pub struct ResourceDefinition {
     pub outer_attrs: Vec<syn::Attribute>,
@@ -156,7 +156,7 @@ pub struct ActionSpec {
     pub preparations: Vec<PreparationSpec>,
     pub persist_manual: bool,
     pub returns: Option<Type>,
-    pub run_closure: Option<ExprClosure>,
+    pub run_expr: Option<Expr>,
 }
 
 pub struct ArgumentSpec {
