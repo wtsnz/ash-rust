@@ -189,6 +189,61 @@ impl Postgres {
         }
         Ok(())
     }
+
+    /// Run pending declarative migrations from a directory.
+    pub async fn migrate(&self, migrations_dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        migrate(pool, migrations_dir).await
+    }
+
+    /// Rollback the latest applied migration.
+    pub async fn rollback(&self, migrations_dir: impl AsRef<Path>) -> Result<Option<String>> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let migrator = Migrator::new(PostgresDialect, migrations_dir);
+        let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
+        executor.init().await?;
+        migrator.rollback(&executor).await
+    }
+}
+
+impl MigrationExecutor for Postgres {
+    async fn execute_script(&self, sql: &str) -> Result<()> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let executor = PgMigrationExecutor::new(pool.clone(), "");
+        executor.execute_script(sql).await
+    }
+
+    async fn applied_versions(&self) -> Result<Vec<String>> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let migrator = Migrator::new(PostgresDialect, ".");
+        let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
+        executor.init().await?;
+        executor.applied_versions().await
+    }
+
+    async fn record_migration(&self, version: &str, name: &str) -> Result<()> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let executor = PgMigrationExecutor::new(pool.clone(), "");
+        executor.record_migration(version, name).await
+    }
+
+    async fn remove_migration(&self, version: &str) -> Result<()> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let executor = PgMigrationExecutor::new(pool.clone(), "");
+        executor.remove_migration(version).await
+    }
 }
 
 impl SchemaSupport for Postgres {
