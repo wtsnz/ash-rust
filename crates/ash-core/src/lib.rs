@@ -28,17 +28,21 @@ mod value;
 
 pub use action::{
     ActionDef, ActionKind, ArgumentDef, Change, ChangeContext, CustomChange, CustomValidation,
-    PersistKind, PreparationDef, Validation, ValidationContext,
+    ManagedRelType, PersistKind, PreparationDef, Validation, ValidationContext,
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
-pub use changeset::{AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset};
+pub use changeset::{
+    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, IntoFieldMap,
+    ManagedRelationshipSpec,
+};
 pub use context::Context;
 pub use data_layer::{CompiledQuery, DataLayer, SchemaSupport, Sort, TransactionSupport};
 pub use engine::{
-    KeysetCursor, Page, Query, create, destroy, destroy_existing, get, insert, manual_create, query, run,
-    update, update_existing,
+    KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
+    get, handle_managed_relationships, insert, manual_create, query, run, update, update_dynamic,
+    update_existing,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, eval};

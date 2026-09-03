@@ -1,4 +1,4 @@
-use crate::action::{ActionDef, ActionKind, PersistKind};
+use crate::action::{ActionDef, ActionKind, Change, ManagedRelType, PersistKind};
 use crate::context::Context;
 use crate::data_layer::DataLayer;
 use crate::error::{Error, Result};
@@ -9,6 +9,60 @@ use crate::pipeline::{
 use crate::policy::authorize_write;
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value, required_uuid};
+
+/// Converts a type into a [`FieldMap`] for relationship mutations or nested inputs.
+pub trait IntoFieldMap {
+    fn into_field_map(self) -> FieldMap;
+}
+
+impl IntoFieldMap for FieldMap {
+    fn into_field_map(self) -> FieldMap {
+        self
+    }
+}
+
+impl IntoFieldMap for &FieldMap {
+    fn into_field_map(self) -> FieldMap {
+        self.clone()
+    }
+}
+
+impl IntoFieldMap for Value {
+    fn into_field_map(self) -> FieldMap {
+        match self {
+            Value::Map(m) => m,
+            _ => FieldMap::new(),
+        }
+    }
+}
+
+impl<K, V> IntoFieldMap for Vec<(K, V)>
+where
+    K: Into<String>,
+    V: Into<Value>,
+{
+    fn into_field_map(self) -> FieldMap {
+        self.into_iter().map(|(k, v)| (k.into(), v.into())).collect()
+    }
+}
+
+impl<K, V, const N: usize> IntoFieldMap for [(K, V); N]
+where
+    K: Into<String> + Clone,
+    V: Into<Value> + Clone,
+{
+    fn into_field_map(self) -> FieldMap {
+        self.into_iter().map(|(k, v)| (k.into(), v.into())).collect()
+    }
+}
+
+/// Specifications for mutating or synchronizing a child relationship within a changeset.
+#[derive(Clone, Debug)]
+pub struct ManagedRelationshipSpec {
+    pub relationship: &'static str,
+    pub rel_type: ManagedRelType,
+    pub inputs: Vec<FieldMap>,
+}
 
 /// Hook running before persistence with mutable access to the changeset.
 pub type BeforeActionHook<R> = Box<dyn FnOnce(&mut Changeset<R>) -> Result<()> + Send + 'static>;
@@ -30,6 +84,7 @@ pub struct Changeset<R: Resource> {
     before_actions: Vec<BeforeActionHook<R>>,
     after_actions: Vec<AfterActionHook<R>>,
     after_transactions: Vec<AfterTransactionHook<R>>,
+    managed_relationships: Vec<ManagedRelationshipSpec>,
 }
 
 impl<R: Resource> Changeset<R> {
@@ -84,6 +139,40 @@ impl<R: Resource> Changeset<R> {
         self
     }
 
+    /// Register a nested child relationship mutation to execute alongside the changeset.
+    pub fn manage_relationship<I, F>(
+        mut self,
+        relationship: &'static str,
+        inputs: I,
+        rel_type: ManagedRelType,
+    ) -> Self
+    where
+        I: IntoIterator<Item = F>,
+        F: IntoFieldMap,
+    {
+        let field_maps: Vec<FieldMap> = inputs.into_iter().map(|f| f.into_field_map()).collect();
+        self.managed_relationships.push(ManagedRelationshipSpec {
+            relationship,
+            rel_type,
+            inputs: field_maps,
+        });
+        self
+    }
+
+    /// Register a single nested child relationship mutation.
+    pub fn manage_relationship_one(
+        self,
+        relationship: &'static str,
+        input: impl IntoFieldMap,
+        rel_type: ManagedRelType,
+    ) -> Self {
+        self.manage_relationship(relationship, vec![input.into_field_map()], rel_type)
+    }
+
+    pub fn managed_relationships(&self) -> &[ManagedRelationshipSpec] {
+        &self.managed_relationships
+    }
+
     pub fn arguments(&self) -> &FieldMap {
         &self.arguments
     }
@@ -134,6 +223,7 @@ impl<R: Resource> Changeset<R> {
         validate(&R::DEF, &fields)?;
         run_validations(&R::DEF, action, None, &fields, &arguments)?;
         crate::policy::authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
+        let managed_relationships = extract_managed_relationships::<R>(action, &arguments);
         Ok(Self {
             action,
             fields,
@@ -143,6 +233,7 @@ impl<R: Resource> Changeset<R> {
             before_actions: Vec::new(),
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
+            managed_relationships,
         })
     }
 
@@ -205,6 +296,7 @@ impl<R: Resource> Changeset<R> {
             }
         }
 
+        let managed_relationships = extract_managed_relationships::<R>(action, &arguments);
         Ok(Self {
             action,
             fields,
@@ -214,6 +306,7 @@ impl<R: Resource> Changeset<R> {
             before_actions: Vec::new(),
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
+            managed_relationships,
         })
     }
 
@@ -291,6 +384,66 @@ impl<R: Resource> Changeset<R> {
         expect_persist(self.action, PersistKind::DataLayer)?;
         authorize(self, ctx)?;
 
+        // Pre-validate managed relationships before any persistence
+        for managed in &self.managed_relationships {
+            if let Some(rel) = R::DEF.relationship(managed.relationship) {
+                let dest_def = (rel.destination)();
+                let child_create_action = dest_def
+                    .actions
+                    .iter()
+                    .find(|a| a.kind == ActionKind::Create && a.primary)
+                    .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Create));
+                let child_update_action = dest_def
+                    .actions
+                    .iter()
+                    .find(|a| a.kind == ActionKind::Update && a.primary)
+                    .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Update));
+
+                let child_pk = pk_name(dest_def)?;
+                for child_fields in &managed.inputs {
+                    let is_update = child_fields.contains_key(child_pk) && managed.rel_type == ManagedRelType::DirectControl;
+                    if is_update {
+                        if let Some(act) = child_update_action {
+                            run_validations(dest_def, act, None, child_fields, &FieldMap::new())?;
+                        }
+                    } else if let Some(act) = child_create_action {
+                        run_validations(dest_def, act, None, child_fields, &FieldMap::new())?;
+                    }
+                }
+            }
+        }
+
+        // Handle belongs_to relationships before creating/updating parent
+        for managed in &mut self.managed_relationships {
+            if let Some(rel) = R::DEF.relationship(managed.relationship)
+                && rel.kind == crate::resource::RelKind::BelongsTo
+            {
+                let dest_def = (rel.destination)();
+                let dest_pk = pk_name(dest_def)?;
+                if let Some(mut child_fields) = managed.inputs.pop() {
+                    let child_id = if let Ok(cid) = required_uuid(&child_fields, dest_pk) {
+                        cid
+                    } else {
+                        let create_act = dest_def
+                            .actions
+                            .iter()
+                            .find(|a| a.kind == ActionKind::Create && a.primary)
+                            .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Create));
+                        if let Some(create_act) = create_act {
+                            let stored = Box::pin(crate::engine::create_dynamic(ctx, dest_def, create_act, child_fields)).await?;
+                            required_uuid(&stored, dest_pk)?
+                        } else {
+                            generate_pk(dest_def, &mut child_fields);
+                            let cid = required_uuid(&child_fields, dest_pk)?;
+                            ctx.data.create(dest_def, cid, child_fields).await?;
+                            cid
+                        }
+                    };
+                    self.fields.insert(rel.source_attribute.to_string(), Value::from(child_id));
+                }
+            }
+        }
+
         let id = required_uuid(&self.fields, pk_name(&R::DEF)?)?;
         let previous_fields = self.existing.as_ref().map(Resource::to_fields);
         let fields = std::mem::take(&mut self.fields);
@@ -319,6 +472,15 @@ impl<R: Resource> Changeset<R> {
                 });
             }
         };
+
+        let managed_list = std::mem::take(&mut self.managed_relationships);
+        if let Err(err) = crate::engine::handle_managed_relationships(ctx, &R::DEF, id, managed_list).await {
+            if self.action.kind == ActionKind::Create {
+                let _ = ctx.data.destroy(&R::DEF, id).await;
+            }
+            return Err(err);
+        }
+
         crate::policy::redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
         let mut record = R::from_fields(&stored)?;
 
@@ -345,6 +507,66 @@ impl<R: Resource> Changeset<R> {
     pub fn into_record(self) -> Result<R> {
         R::from_fields(&self.fields)
     }
+}
+
+fn extract_managed_relationships<R: Resource>(
+    action: &ActionDef,
+    arguments: &FieldMap,
+) -> Vec<ManagedRelationshipSpec> {
+    let mut managed_relationships = Vec::new();
+    for change in action.changes {
+        if let Change::ManageRelationship { relationship, rel_type } = change
+            && let Some(val) = arguments.get(*relationship)
+        {
+            let mut inputs = Vec::new();
+            match val {
+                Value::Array(items) => {
+                    for it in items {
+                        if let Value::Map(m) = it {
+                            inputs.push(m.clone());
+                        }
+                    }
+                }
+                Value::Map(m) => {
+                    inputs.push(m.clone());
+                }
+                _ => {}
+            }
+            managed_relationships.push(ManagedRelationshipSpec {
+                relationship,
+                rel_type: *rel_type,
+                inputs,
+            });
+        }
+    }
+    for rel in R::DEF.relationships {
+        if !managed_relationships.iter().any(|m| m.relationship == rel.name)
+            && let Some(val) = arguments.get(rel.name)
+        {
+            let mut inputs = Vec::new();
+            match val {
+                Value::Array(items) => {
+                    for it in items {
+                        if let Value::Map(m) = it {
+                            inputs.push(m.clone());
+                        }
+                    }
+                }
+                Value::Map(m) => {
+                    inputs.push(m.clone());
+                }
+                _ => {}
+            }
+            if !inputs.is_empty() {
+                managed_relationships.push(ManagedRelationshipSpec {
+                    relationship: rel.name,
+                    rel_type: crate::action::ManagedRelType::DirectControl,
+                    inputs,
+                });
+            }
+        }
+    }
+    managed_relationships
 }
 
 pub(crate) fn authorize<R: Resource, D>(changeset: &Changeset<R>, ctx: &Context<D>) -> Result<()> {

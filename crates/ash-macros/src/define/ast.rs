@@ -211,6 +211,7 @@ pub enum ChangeSpec {
     SetNew { field: Ident, value: Lit },
     RelateActor { field: Ident },
     SetFromArg { field: Ident, argument: Ident },
+    ManageRelationship { relationship: Ident, rel_type: Ident },
     Custom(Expr),
     Func(Expr),
 }

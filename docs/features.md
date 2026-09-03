@@ -769,6 +769,91 @@ resource! {
 }
 ```
 
+---
+
+## 16. Managed Relationships (`manage_relationship` / Nested Writes)
+
+Ash allows executing nested writes directly inside create and update actions without manually orchestrating multi-step pipelines. Managed relationships handle inserting children, populating foreign keys, updating existing records, and removing/disassociating omitted records atomically within the action transaction.
+
+### Mutation Modes (`ManagedRelType`)
+- **`Create`**: Creates child records with their foreign key pointing to the parent.
+- **`Append`**: Adds new child records or links existing ones without removing omitted records.
+- **`DirectControl`**: Full synchronization. Matches child inputs against existing records by primary key (`id`):
+  - Items matching existing records are updated.
+  - Items without an `id` (or with a new `id`) are created.
+  - Existing records for this parent omitted from the inputs are deleted (or foreign keys set to `null` if the relationship specifies `on_delete: nilify`).
+
+### Usage on Fluent Action Builders
+Action builders generate strongly typed `manage_<rel>` methods as well as generic `.manage_relationship(...)` and `.manage_relationship_one(...)`:
+
+```rust
+// 1. Create Order with nested LineItems
+let order = Order::create(&ctx)
+    .customer("Alice")
+    .manage_items(
+        vec![
+            LineItem::create(&ctx).item("Book").price(25),
+            LineItem::create(&ctx).item("Pen").price(5),
+        ],
+        ManagedRelType::Create,
+    )
+    .await?;
+
+// 2. Synchronize existing Order via DirectControl
+let updated_order = Order::update(&ctx, order.id)
+    .customer("Alice Cooper")
+    .manage_items(
+        vec![
+            // Keep and update existing item
+            [("id", Value::Uuid(item1.id)), ("price", Value::Int(30))].into_field_map(),
+            // Add new item
+            LineItem::create(&ctx).item("Bookmark").price(2).into_fields(),
+            // Omitted items are destroyed automatically!
+        ],
+        ManagedRelType::DirectControl,
+    )
+    .await?;
+
+// 3. Create parent with belongs_to child
+let user = User::create(&ctx)
+    .username("will")
+    .manage_relationship_one(
+        "profile",
+        Profile::create(&ctx).bio("Software Engineer"),
+        ManagedRelType::Create,
+    )
+    .await?;
+```
+
+### Declarative DSL via `change manage_relationship(...)`
+Actions can accept arguments and declaratively manage the relationship:
+
+```rust
+resource! {
+    resource Order;
+    table "orders";
+
+    attributes {
+        id: Uuid [pk],
+        customer: String,
+    }
+
+    relationships {
+        has_many items: LineItem [fk: "order_id"],
+    }
+
+    actions {
+        create create_with_items {
+            primary;
+            accept [customer];
+            argument items: Vec<FieldMap>;
+            change manage_relationship(items, create);
+        }
+    }
+}
+```
+
+
 
 
 

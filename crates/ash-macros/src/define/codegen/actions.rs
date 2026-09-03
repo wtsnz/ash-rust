@@ -125,6 +125,21 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                         let arg_str = argument.to_string();
                         Ok(quote! { ::ash_core::Change::SetFromArgument { field: #field_str, argument: #arg_str } })
                     }
+                    ChangeSpec::ManageRelationship { relationship, rel_type } => {
+                        let rel_str = relationship.to_string();
+                        let type_str = rel_type.to_string().to_lowercase();
+                        let type_tokens = match type_str.as_str() {
+                            "create" => quote! { ::ash_core::ManagedRelType::Create },
+                            "append" => quote! { ::ash_core::ManagedRelType::Append },
+                            _ => quote! { ::ash_core::ManagedRelType::DirectControl },
+                        };
+                        Ok(quote! {
+                            ::ash_core::Change::ManageRelationship {
+                                relationship: #rel_str,
+                                rel_type: #type_tokens,
+                            }
+                        })
+                    }
                     ChangeSpec::Custom(expr) => {
                         Ok(quote! { ::ash_core::Change::Custom(#expr) })
                     }
@@ -297,6 +312,22 @@ pub fn expand_action_builders(
 
     let actions_trait_ident = format_ident!("{}Actions", resource);
 
+    let mut rel_methods = Vec::new();
+    for rel in &def.relationships {
+        let rel_ident = &rel.ident;
+        let rel_str = rel_ident.to_string();
+        let manage_method_name = format_ident!("manage_{}", rel_ident);
+        rel_methods.push(quote! {
+            pub fn #manage_method_name<I, F>(self, inputs: I, rel_type: ::ash_core::ManagedRelType) -> Self
+            where
+                I: ::std::iter::IntoIterator<Item = F>,
+                F: ::ash_core::IntoFieldMap,
+            {
+                self.manage_relationship(#rel_str, inputs, rel_type)
+            }
+        });
+    }
+
     for act in actions {
         let act_name = &act.name;
         let act_name_str = act_name.to_string();
@@ -387,6 +418,18 @@ pub fn expand_action_builders(
                                 ::ash_core::manual_create(self.ctx, #act_name_str, fields, f).await
                             }
                         }
+
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
+
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
                     });
                 } else {
                     builders.push(quote! {
@@ -396,6 +439,7 @@ pub fn expand_action_builders(
                             before_actions: ::std::vec::Vec<::ash_core::BeforeActionHook<#resource>>,
                             after_actions: ::std::vec::Vec<::ash_core::AfterActionHook<#resource>>,
                             after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
+                            managed_relationships: ::std::vec::Vec<::ash_core::ManagedRelationshipSpec>,
                             #(#field_members,)*
                         }
 
@@ -407,6 +451,7 @@ pub fn expand_action_builders(
                                     before_actions: ::std::vec::Vec::new(),
                                     after_actions: ::std::vec::Vec::new(),
                                     after_transactions: ::std::vec::Vec::new(),
+                                    managed_relationships: ::std::vec::Vec::new(),
                                     #(#field_inits,)*
                                 }
                             }
@@ -447,6 +492,36 @@ pub fn expand_action_builders(
                                 self
                             }
 
+                            pub fn manage_relationship<I, F>(
+                                mut self,
+                                relationship: &'static str,
+                                inputs: I,
+                                rel_type: ::ash_core::ManagedRelType,
+                            ) -> Self
+                            where
+                                I: ::std::iter::IntoIterator<Item = F>,
+                                F: ::ash_core::IntoFieldMap,
+                            {
+                                let field_maps: ::std::vec::Vec<::ash_core::FieldMap> = inputs.into_iter().map(|f| f.into_field_map()).collect();
+                                self.managed_relationships.push(::ash_core::ManagedRelationshipSpec {
+                                    relationship,
+                                    rel_type,
+                                    inputs: field_maps,
+                                });
+                                self
+                            }
+
+                            pub fn manage_relationship_one(
+                                self,
+                                relationship: &'static str,
+                                input: impl ::ash_core::IntoFieldMap,
+                                rel_type: ::ash_core::ManagedRelType,
+                            ) -> Self {
+                                self.manage_relationship(relationship, ::std::vec![input.into_field_map()], rel_type)
+                            }
+
+                            #(#rel_methods)*
+
                             #(#field_setters)*
 
                             pub fn into_fields(&self) -> ::ash_core::FieldMap {
@@ -462,6 +537,7 @@ pub fn expand_action_builders(
                                 let before_actions = self.before_actions;
                                 let after_actions = self.after_actions;
                                 let after_transactions = self.after_transactions;
+                                let managed_relationships = self.managed_relationships;
                                 let mut cs = ::ash_core::Changeset::<#resource>::for_create(ctx, #act_name_str, fields)?;
                                 if let ::std::option::Option::Some((ident, ref u_fields)) = upsert_spec {
                                     let field_strs: ::std::vec::Vec<&str> = u_fields.iter().map(|s| s.as_str()).collect();
@@ -476,6 +552,9 @@ pub fn expand_action_builders(
                                 for hook in after_transactions {
                                     cs = cs.after_transaction(hook);
                                 }
+                                for managed in managed_relationships {
+                                    cs = cs.manage_relationship(managed.relationship, managed.inputs, managed.rel_type);
+                                }
                                 Ok(cs)
                             }
 
@@ -487,6 +566,18 @@ pub fn expand_action_builders(
                             pub async fn call(self) -> ::ash_core::Result<#resource> {
                                 let ctx = self.ctx;
                                 self.changeset()?.commit(ctx).await
+                            }
+                        }
+
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
+
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
                             }
                         }
 
@@ -586,6 +677,7 @@ pub fn expand_action_builders(
                         before_actions: ::std::vec::Vec<::ash_core::BeforeActionHook<#resource>>,
                         after_actions: ::std::vec::Vec<::ash_core::AfterActionHook<#resource>>,
                         after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
+                        managed_relationships: ::std::vec::Vec<::ash_core::ManagedRelationshipSpec>,
                         #(#field_members,)*
                     }
 
@@ -597,6 +689,7 @@ pub fn expand_action_builders(
                                 before_actions: ::std::vec::Vec::new(),
                                 after_actions: ::std::vec::Vec::new(),
                                 after_transactions: ::std::vec::Vec::new(),
+                                managed_relationships: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
                             }
                         }
@@ -608,6 +701,7 @@ pub fn expand_action_builders(
                                 before_actions: ::std::vec::Vec::new(),
                                 after_actions: ::std::vec::Vec::new(),
                                 after_transactions: ::std::vec::Vec::new(),
+                                managed_relationships: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
                             }
                         }
@@ -636,6 +730,36 @@ pub fn expand_action_builders(
                             self
                         }
 
+                        pub fn manage_relationship<I, F>(
+                            mut self,
+                            relationship: &'static str,
+                            inputs: I,
+                            rel_type: ::ash_core::ManagedRelType,
+                        ) -> Self
+                        where
+                            I: ::std::iter::IntoIterator<Item = F>,
+                            F: ::ash_core::IntoFieldMap,
+                        {
+                            let field_maps: ::std::vec::Vec<::ash_core::FieldMap> = inputs.into_iter().map(|f| f.into_field_map()).collect();
+                            self.managed_relationships.push(::ash_core::ManagedRelationshipSpec {
+                                relationship,
+                                rel_type,
+                                inputs: field_maps,
+                            });
+                            self
+                        }
+
+                        pub fn manage_relationship_one(
+                            self,
+                            relationship: &'static str,
+                            input: impl ::ash_core::IntoFieldMap,
+                            rel_type: ::ash_core::ManagedRelType,
+                        ) -> Self {
+                            self.manage_relationship(relationship, ::std::vec![input.into_field_map()], rel_type)
+                        }
+
+                        #(#rel_methods)*
+
                         #(#field_setters)*
 
                         pub fn into_fields(&self) -> ::ash_core::FieldMap {
@@ -650,6 +774,7 @@ pub fn expand_action_builders(
                             let before_actions = self.before_actions;
                             let after_actions = self.after_actions;
                             let after_transactions = self.after_transactions;
+                            let managed_relationships = self.managed_relationships;
                             match self.target {
                                 #target_enum::Existing(record) => {
                                     let mut cs = ::ash_core::Changeset::<#resource>::for_update_on(ctx, #act_name_str, record, fields)?;
@@ -661,6 +786,9 @@ pub fn expand_action_builders(
                                     }
                                     for hook in after_transactions {
                                         cs = cs.after_transaction(hook);
+                                    }
+                                    for managed in managed_relationships {
+                                        cs = cs.manage_relationship(managed.relationship, managed.inputs, managed.rel_type);
                                     }
                                     Ok(cs)
                                 }
@@ -690,6 +818,7 @@ pub fn expand_action_builders(
                             let before_actions = self.before_actions;
                             let after_actions = self.after_actions;
                             let after_transactions = self.after_transactions;
+                            let managed_relationships = self.managed_relationships;
                             let existing = match self.target {
                                 #target_enum::Id(id) => ::ash_core::get::<#resource, D>(ctx, id).await?,
                                 #target_enum::Existing(record) => record,
@@ -704,7 +833,22 @@ pub fn expand_action_builders(
                             for hook in after_transactions {
                                 cs = cs.after_transaction(hook);
                             }
+                            for managed in managed_relationships {
+                                cs = cs.manage_relationship(managed.relationship, managed.inputs, managed.rel_type);
+                            }
                             cs.commit(ctx).await
+                        }
+                    }
+
+                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
+                        fn into_field_map(self) -> ::ash_core::FieldMap {
+                            self.into_fields()
+                        }
+                    }
+
+                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
+                        fn into_field_map(self) -> ::ash_core::FieldMap {
+                            self.into_fields()
                         }
                     }
 

@@ -244,6 +244,14 @@ impl ActionDef {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ManagedRelType {
+    #[default]
+    Create,
+    DirectControl,
+    Append,
+}
+
 #[derive(Clone, Copy)]
 pub enum Change {
     SetAttribute {
@@ -261,8 +269,24 @@ pub enum Change {
         field: &'static str,
         argument: &'static str,
     },
+    ManageRelationship {
+        relationship: &'static str,
+        rel_type: ManagedRelType,
+    },
     Custom(&'static dyn CustomChange),
     Func(fn(&mut ChangeContext<'_>) -> Result<()>),
+}
+
+impl Change {
+    pub const fn manage_relationship(
+        relationship: &'static str,
+        rel_type: ManagedRelType,
+    ) -> Self {
+        Self::ManageRelationship {
+            relationship,
+            rel_type,
+        }
+    }
 }
 
 impl std::fmt::Debug for Change {
@@ -285,6 +309,14 @@ impl std::fmt::Debug for Change {
                 .debug_struct("SetFromArgument")
                 .field("field", field)
                 .field("argument", argument)
+                .finish(),
+            Self::ManageRelationship {
+                relationship,
+                rel_type,
+            } => f
+                .debug_struct("ManageRelationship")
+                .field("relationship", relationship)
+                .field("rel_type", rel_type)
                 .finish(),
             Self::Custom(_) => write!(f, "Custom(<dyn CustomChange>)"),
             Self::Func(_) => write!(f, "Func(<fn>)"),

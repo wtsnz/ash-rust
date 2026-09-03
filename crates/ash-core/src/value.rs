@@ -145,6 +145,18 @@ impl From<FieldMap> for Value {
     }
 }
 
+impl From<Vec<FieldMap>> for Value {
+    fn from(value: Vec<FieldMap>) -> Self {
+        Self::Array(value.into_iter().map(Value::Map).collect())
+    }
+}
+
+impl From<Vec<Value>> for Value {
+    fn from(value: Vec<Value>) -> Self {
+        Self::Array(value)
+    }
+}
+
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Self::String(value)

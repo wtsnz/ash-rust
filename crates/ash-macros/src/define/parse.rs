@@ -1230,6 +1230,29 @@ fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
                 "expected `set_from_arg(field, argument)`",
             ))
         }
+        "manage_relationship" => {
+            if call.args.len() == 1 {
+                let relationship = expr_to_ident(&call.args[0])?;
+                return Ok(ChangeSpec::ManageRelationship {
+                    relationship,
+                    rel_type: syn::Ident::new("direct_control", proc_macro2::Span::call_site()),
+                });
+            } else if call.args.len() == 2 {
+                let relationship = expr_to_ident(&call.args[0])?;
+                let rel_type = match &call.args[1] {
+                    Expr::Assign(assign) => expr_to_ident(&assign.right)?,
+                    other => expr_to_ident(other)?,
+                };
+                return Ok(ChangeSpec::ManageRelationship {
+                    relationship,
+                    rel_type,
+                });
+            }
+            Err(Error::new_spanned(
+                call,
+                "expected `manage_relationship(rel)` or `manage_relationship(rel, type: create)`",
+            ))
+        }
         "custom" => {
             if call.args.len() == 1 {
                 let expr = call.args[0].clone();

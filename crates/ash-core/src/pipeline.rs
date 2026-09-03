@@ -130,6 +130,7 @@ pub fn apply_changes(
                 };
                 c.apply(&mut ctx)?;
             }
+            Change::ManageRelationship { .. } => {}
             Change::Func(f) => {
                 let mut ctx = crate::action::ChangeContext {
                     fields,
