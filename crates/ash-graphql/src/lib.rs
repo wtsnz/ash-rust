@@ -1,5 +1,7 @@
 pub mod builder;
+pub mod error;
 pub mod filter;
+pub mod mutation;
 pub mod object;
 pub mod pagination;
 pub mod query;
@@ -7,8 +9,13 @@ pub mod sort;
 pub mod types;
 
 pub use builder::AshGraphQLBuilder;
+pub use error::{register_user_error, UserError};
 pub use filter::{
     parse_resource_filter, register_primitive_filter_inputs, register_resource_filter_inputs,
+};
+pub use mutation::{
+    build_action_mutation, mutation_input_name, mutation_name, mutation_payload_name,
+    register_action_input, register_action_payload, MutationPayload,
 };
 pub use object::{build_resource_object, collect_enums_for_resource};
 pub use pagination::{
