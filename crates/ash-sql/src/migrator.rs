@@ -158,6 +158,30 @@ impl<D: SqlDialect> Migrator<D> {
         Ok(Some(migration.version))
     }
 
+    /// Rolls back applied migrations down to (and not including) the target version.
+    pub async fn rollback_to<E: MigrationExecutor>(
+        &self,
+        executor: &E,
+        target_version: &str,
+    ) -> Result<Vec<String>> {
+        let mut rolled_back = Vec::new();
+        loop {
+            let mut applied = executor.applied_versions().await?;
+            applied.sort();
+            match applied.last() {
+                Some(latest) if latest.as_str() > target_version => {
+                    if let Some(v) = self.rollback(executor).await? {
+                        rolled_back.push(v);
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok(rolled_back)
+    }
+
     /// Returns SQL statement for creating the `_ash_schema_migrations` tracking table.
     pub fn create_tracking_table_sql(&self) -> &'static str {
         "CREATE TABLE IF NOT EXISTS _ash_schema_migrations (

@@ -36,6 +36,9 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 | **`ash-pubsub`** | `crates/ash-pubsub` | Pattern-based PubSub event broker and action notifier for resource broadcasts. |
 | **`ash-state-machine`** | `crates/ash-state-machine` | Declarative state machine extension with `#[state_machine]` transformer macro. |
 | **`ash-graphql`** | `crates/ash-graphql` | Automatic GraphQL server engine powered by `async-graphql` with dynamic schemas, DataLoader, Relay pagination, and subscriptions. |
+| **`ash-sql`** | `crates/ash-sql` | Shared relational query compiler, dialect abstraction, snapshot diffing, and migration engine. |
+| **`ash-postgres`** | `crates/ash-postgres` | High-performance PostgreSQL data layer with `RETURNING *` writes, error code mapping, and multitenancy. |
+| **`cargo-ash`** | `crates/cargo-ash` | Developer CLI tool for declarative migrations, snapshot dumping, and database management. |
 
 ### Examples
 
