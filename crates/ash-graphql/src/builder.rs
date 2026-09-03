@@ -105,7 +105,7 @@ impl AshGraphQLBuilder {
 
         // Register all resources, connections, filters, sorts, mutations, and enums
         for res in &self.resources {
-            let obj = build_resource_object(res);
+            let obj = build_resource_object::<D>(res);
             builder = builder.register(obj);
 
             builder = register_resource_connection_types(builder, res);

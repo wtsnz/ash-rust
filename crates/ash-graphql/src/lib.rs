@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod dataloader;
 pub mod error;
 pub mod filter;
 pub mod mutation;
@@ -9,6 +10,7 @@ pub mod sort;
 pub mod types;
 
 pub use builder::AshGraphQLBuilder;
+pub use dataloader::{AshBatchLoader, BelongsToKey, HasManyKey, ManyToManyKey};
 pub use error::{register_user_error, UserError};
 pub use filter::{
     parse_resource_filter, register_primitive_filter_inputs, register_resource_filter_inputs,
@@ -41,5 +43,14 @@ impl AshGraphQL {
     /// Creates a schema builder from a slice of [`ResourceDef`](ash_core::ResourceDef)s.
     pub fn from_resources(resources: &[&'static ash_core::ResourceDef]) -> AshGraphQLBuilder {
         AshGraphQLBuilder::from_resources(resources)
+    }
+
+    /// Creates an `async-graphql` [`DataLoader`](async_graphql::dataloader::DataLoader) backed by [`AshBatchLoader`].
+    pub fn create_dataloader<D: ash_core::DataLayer + Clone + 'static>(
+        ctx: ash_core::Context<D>,
+        resources: &[&'static ash_core::ResourceDef],
+    ) -> async_graphql::dataloader::DataLoader<AshBatchLoader<D>> {
+        let loader = AshBatchLoader::new(ctx, resources);
+        async_graphql::dataloader::DataLoader::new(loader, tokio::spawn)
     }
 }
