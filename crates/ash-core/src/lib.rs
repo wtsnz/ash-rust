@@ -57,8 +57,8 @@ pub use keys::{Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelNam
 pub use multi::{BoundMulti, IntoChangeset, Multi, MultiResult};
 pub use notifier::{Notification, Notifier, SyncFnNotifier};
 pub use policy::{
-    Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_write, check_to_filter,
-    compile_read_filter,
+    Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_field_writes,
+    authorize_write, check_to_filter, compile_read_filter, redact_fields,
 };
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
