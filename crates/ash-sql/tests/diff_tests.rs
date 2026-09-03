@@ -174,7 +174,9 @@ fn test_diff_tables_multiple() {
     let t1 = TableSnapshot::from_resource(&RES_V1, &PostgresDialect);
     let t2 = TableSnapshot::from_resource(&RES_V2, &PostgresDialect);
 
-    let ops = diff_tables(&[t1.clone()], &[t1, t2]);
+    let old_tables = vec![t1.clone()];
+    let new_tables = vec![t1, t2];
+    let ops = diff_tables(&old_tables, &new_tables);
     // The second table was created
     assert_eq!(ops.len(), 1);
     assert!(matches!(&ops[0], SchemaOperation::CreateTable(_)));
