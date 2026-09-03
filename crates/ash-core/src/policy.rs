@@ -385,6 +385,8 @@ mod tests {
         embedded: false,
         data_layer: DataLayerKind::Memory,
         timestamps: None,
+        store_type_id: crate::store::default_store_type_id,
+        store_name: "DefaultStore",
     };
 
     const QUEUE: ResourceDef = ResourceDef {
@@ -414,6 +416,8 @@ mod tests {
         embedded: false,
         data_layer: DataLayerKind::Memory,
         timestamps: None,
+        store_type_id: crate::store::default_store_type_id,
+        store_name: "DefaultStore",
     };
 
     #[test]

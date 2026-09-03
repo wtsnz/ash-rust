@@ -53,6 +53,7 @@ impl Parse for ResourceDefinition {
         let mut optimistic_lock = None;
         let mut identities = Vec::new();
         let mut data_layer = None;
+        let mut store = None;
         let mut timestamps = None;
 
         while !input.is_empty() {
@@ -174,6 +175,15 @@ impl Parse for ResourceDefinition {
                 if input.peek(Token![;]) {
                     let _: Token![;] = input.parse()?;
                 }
+            } else if section_ident == "store" {
+                if input.peek(Token![:]) {
+                    let _: Token![:] = input.parse()?;
+                }
+                let store_ty: Type = input.parse()?;
+                store = Some(store_ty);
+                if input.peek(Token![;]) {
+                    let _: Token![;] = input.parse()?;
+                }
             } else if section_ident == "timestamps" {
                 let mut created_at = syn::Ident::new("created_at", proc_macro2::Span::call_site());
                 let mut updated_at = syn::Ident::new("updated_at", proc_macro2::Span::call_site());
@@ -197,7 +207,7 @@ impl Parse for ResourceDefinition {
             } else {
                 return Err(Error::new_spanned(
                     section_ident,
-                    "expected `table`, `attributes`, `relationships`, `calculations`, `aggregates`, `actions`, `policies`, `field_policies`, `extensions`, `notifiers`, `extend`, `optimistic_lock`, `identities`, `embedded`, `data_layer`, or `timestamps`",
+                    "expected `table`, `attributes`, `relationships`, `calculations`, `aggregates`, `actions`, `policies`, `field_policies`, `extensions`, `notifiers`, `extend`, `optimistic_lock`, `identities`, `embedded`, `data_layer`, `store`, or `timestamps`",
                 ));
             }
         }
@@ -255,6 +265,7 @@ impl Parse for ResourceDefinition {
             identities,
             embedded,
             data_layer,
+            store,
             timestamps,
         })
     }

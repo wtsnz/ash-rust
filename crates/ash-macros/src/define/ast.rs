@@ -19,6 +19,7 @@ pub struct ResourceDefinition {
     pub identities: Vec<IdentitySpec>,
     pub embedded: bool,
     pub data_layer: Option<Ident>,
+    pub store: Option<Type>,
     pub timestamps: Option<TimestampsSpec>,
 }
 

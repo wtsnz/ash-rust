@@ -103,6 +103,8 @@ pub struct ResourceDef {
     pub embedded: bool,
     pub data_layer: DataLayerKind,
     pub timestamps: Option<(&'static str, &'static str)>,
+    pub store_type_id: fn() -> std::any::TypeId,
+    pub store_name: &'static str,
 }
 
 impl ResourceDef {
@@ -128,6 +130,14 @@ impl ResourceDef {
 
     pub fn has_timestamps(&self) -> bool {
         self.timestamps.is_some()
+    }
+
+    pub fn store_type_id(&self) -> std::any::TypeId {
+        (self.store_type_id)()
+    }
+
+    pub fn store_name(&self) -> &'static str {
+        self.store_name
     }
 
     pub fn attribute(&self, name: &str) -> Option<&AttributeDef> {
@@ -396,6 +406,7 @@ impl RelationshipDef {
 }
 
 pub trait Resource: Sized + Clone + Send + Sync + 'static {
+    type Store: crate::store::StoreTag;
     const DEF: ResourceDef;
 
     fn id(&self) -> Uuid;

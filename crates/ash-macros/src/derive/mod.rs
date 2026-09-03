@@ -45,6 +45,7 @@ pub fn expand(input: DeriveInput) -> Result<TokenStream> {
 
     Ok(quote! {
         impl ::ash_core::Resource for #name {
+            type Store = ::ash_core::DefaultStore;
             const DEF: ::ash_core::ResourceDef = ::ash_core::ResourceDef {
                 name: #name_str,
                 table: #table,
@@ -61,6 +62,8 @@ pub fn expand(input: DeriveInput) -> Result<TokenStream> {
                 embedded: false,
                 data_layer: ::ash_core::DataLayerKind::Memory,
                 timestamps: None,
+                store_type_id: ::ash_core::default_store_type_id,
+                store_name: "DefaultStore",
             };
 
             fn id(&self) -> ::uuid::Uuid {

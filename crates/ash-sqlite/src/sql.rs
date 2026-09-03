@@ -1026,6 +1026,8 @@ mod tests {
         embedded: false,
         data_layer: ash_core::DataLayerKind::Sqlite,
         timestamps: None,
+        store_type_id: ash_core::default_store_type_id,
+        store_name: "DefaultStore",
     };
 
     fn sql(filter: Filter) -> String {

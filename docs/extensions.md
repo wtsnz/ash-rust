@@ -34,8 +34,8 @@ The `ValidationContext` exposes:
 - `ctx.fields`: Proposed mutated fields.
 - `ctx.arguments`: Action arguments passed by the caller.
 
-### 2. `CustomChange`
-Allows external crates to mutate fields during action execution:
+### 2. `CustomChange` & `change func(...)`
+Allows external crates or local modules to mutate fields and attach dynamic lifecycle hooks during action execution:
 
 ```rust
 pub trait CustomChange: Send + Sync + 'static {
@@ -43,13 +43,55 @@ pub trait CustomChange: Send + Sync + 'static {
 }
 
 // In your resource action:
+// 1. Using a CustomChange struct (promotes to 'static directly with &MyStateChange):
 change custom(&MyStateChange);
+
+// 2. Or using a lightweight function (no struct or trait implementation needed):
+change func(my_change_fn);
+change func(|ctx| {
+    ctx.fields.insert("updated_at".into(), Value::String(utc_now_iso8601()));
+    Ok(())
+});
 ```
 
 The `ChangeContext` exposes:
-- `ctx.fields`: Mutable reference to the field map.
-- `ctx.actor`: The executing actor.
+- `ctx.fields`: Mutable reference to the proposed attribute field map.
+- `ctx.actor`: The executing actor (`Option<&Actor>`).
 - `ctx.arguments`: Read-only arguments passed to the action.
+- `ctx.before_action(|fields| ...)`: Dynamically attach a pre-persistence hook.
+- `ctx.after_action(|fields| ...)`: Dynamically attach a post-persistence hook.
+- `ctx.after_transaction(|res| ...)`: Dynamically attach a post-transaction hook.
+
+#### Example: Dynamic Lifecycle Hooks in a Reusable Plugin
+```rust
+struct AuditTracker;
+
+impl CustomChange for AuditTracker {
+    fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()> {
+        // Run before DB write:
+        ctx.before_action(|fields| {
+            fields.insert("version".into(), Value::Int(1));
+            Ok(())
+        });
+
+        // Run after DB write:
+        ctx.after_action(|fields| {
+            println!("Record saved: {:?}", fields.get("id"));
+            Ok(())
+        });
+
+        // Run when transaction commits or aborts:
+        ctx.after_transaction(|res| {
+            match res {
+                Ok(fields) => println!("Committed {:?}", fields.get("id")),
+                Err(err) => eprintln!("Transaction aborted: {err:?}"),
+            }
+        });
+
+        Ok(())
+    }
+}
+```
 
 ### 3. `ResourceExtension` & Open Error Handling
 Allows third-party crates to store typed metadata on `ResourceDef` and return typed domain errors:

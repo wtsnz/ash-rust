@@ -888,6 +888,19 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         None => quote! { ::std::option::Option::None },
     };
 
+    let (store_type_tokens, store_name_tokens) = if let Some(store_ty) = &def.store {
+        (quote! { #store_ty }, quote! { stringify!(#store_ty) })
+    } else if let Some(dl) = &def.data_layer {
+        let s = dl.to_string();
+        match s.as_str() {
+            "sqlite" => (quote! { ::ash_core::SqliteStore }, quote! { "SqliteStore" }),
+            "memory" => (quote! { ::ash_core::MemoryStore }, quote! { "MemoryStore" }),
+            _ => (quote! { ::ash_core::DefaultStore }, quote! { "DefaultStore" }),
+        }
+    } else {
+        (quote! { ::ash_core::DefaultStore }, quote! { "DefaultStore" })
+    };
+
     Ok(quote! {
         #[derive(Clone, Debug, PartialEq, Eq)]
         #(#outer_attrs)*
@@ -896,10 +909,15 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         }
 
         impl ::ash_core::Resource for #resource {
+            type Store = #store_type_tokens;
+
             const DEF: ::ash_core::ResourceDef = {
                 #(#helper_default_fns)*
                 const EXTENSIONS: &'static [&'static dyn ::ash_core::ResourceExtension] = &[#(#ext_tokens),*];
                 const NOTIFIERS: &'static [&'static dyn ::ash_core::Notifier] = &[#(#notifier_tokens),*];
+                fn __ash_store_type_id() -> ::std::any::TypeId {
+                    ::std::any::TypeId::of::<#store_type_tokens>()
+                }
                 ::ash_core::ResourceDef {
                     name: #resource_str,
                     table: #table_str,
@@ -916,6 +934,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     embedded: #embedded_lit,
                     data_layer: #data_layer_tokens,
                     timestamps: #timestamps_tokens,
+                    store_type_id: __ash_store_type_id,
+                    store_name: #store_name_tokens,
                 }
             };
 

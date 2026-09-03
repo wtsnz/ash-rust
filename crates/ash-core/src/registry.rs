@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -6,7 +7,8 @@ use uuid::Uuid;
 
 use crate::data_layer::{CompiledQuery, DataLayer, SchemaSupport, TransactionSupport};
 use crate::error::{Error, Result};
-use crate::resource::{DataLayerKind, IdentityDef, ResourceDef};
+use crate::resource::{DataLayerKind, IdentityDef, Resource, ResourceDef};
+use crate::store::{HasStore, StoreTag};
 use crate::value::FieldMap;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -141,19 +143,35 @@ impl<T: SchemaSupport> DynSchemaSupport for T {
     }
 }
 
-/// A multi-store data layer registry that routes operations to the appropriate
-/// backend based on resource configuration or explicit registration.
+/// A type-safe multi-store data layer registry that routes operations to the appropriate
+/// backend based on static [`StoreTag`] types, resource configuration, or explicit registration.
 #[derive(Clone, Default)]
-pub struct DataLayerRegistry {
+pub struct StoreRegistry {
+    stores: HashMap<TypeId, Arc<dyn DynDataLayer>>,
     default: Option<Arc<dyn DynDataLayer>>,
     by_kind: HashMap<DataLayerKind, Arc<dyn DynDataLayer>>,
     by_resource: HashMap<String, Arc<dyn DynDataLayer>>,
     schema_supporters: Vec<Arc<dyn DynSchemaSupport>>,
 }
 
-impl DataLayerRegistry {
+/// Backward-compatible alias for [`StoreRegistry`].
+pub type DataLayerRegistry = StoreRegistry;
+
+impl StoreRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Register a data layer for a specific [`StoreTag`].
+    pub fn with_store<T: StoreTag, D: DataLayer + 'static>(mut self, data: D) -> Self {
+        self.stores.insert(TypeId::of::<T>(), Arc::new(data));
+        self
+    }
+
+    /// Register a type-erased data layer for a specific [`StoreTag`].
+    pub fn with_store_arc<T: StoreTag>(mut self, data: Arc<dyn DynDataLayer>) -> Self {
+        self.stores.insert(TypeId::of::<T>(), data);
+        self
     }
 
     /// Set the fallback data layer for resources without a specific mapping.
@@ -190,9 +208,18 @@ impl DataLayerRegistry {
         self
     }
 
+    /// Retrieve the data layer for a specific [`Resource`] type.
+    pub fn get_layer_for<R: Resource>(&self) -> Result<&dyn DynDataLayer> {
+        self.get_layer(&R::DEF)
+    }
+
     /// Look up the data layer responsible for the given resource.
     pub fn get_layer<'a>(&'a self, resource: &ResourceDef) -> Result<&'a dyn DynDataLayer> {
         if let Some(layer) = self.by_resource.get(resource.name) {
+            return Ok(&**layer);
+        }
+        let store_tid = resource.store_type_id();
+        if let Some(layer) = self.stores.get(&store_tid) {
             return Ok(&**layer);
         }
         if let Some(layer) = self.by_kind.get(&resource.data_layer) {
@@ -202,23 +229,40 @@ impl DataLayerRegistry {
             return Ok(&**layer);
         }
         Err(Error::Invalid(format!(
-            "no data layer registered for resource `{}` with data layer {:?}",
-            resource.name, resource.data_layer
+            "no data layer registered for store `{}` on resource `{}`",
+            resource.store_name, resource.name
         )))
     }
 }
 
-impl std::fmt::Debug for DataLayerRegistry {
+impl<T: StoreTag> HasStore<T> for StoreRegistry {
+    fn get_store(&self) -> &dyn DynDataLayer {
+        let tid = TypeId::of::<T>();
+        if let Some(layer) = self.stores.get(&tid) {
+            return &**layer;
+        }
+        if let Some(layer) = &self.default {
+            return &**layer;
+        }
+        panic!(
+            "no data layer registered for store `{}`",
+            std::any::type_name::<T>()
+        );
+    }
+}
+
+impl std::fmt::Debug for StoreRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DataLayerRegistry")
+        f.debug_struct("StoreRegistry")
             .field("has_default", &self.default.is_some())
+            .field("stores_count", &self.stores.len())
             .field("by_kind_count", &self.by_kind.len())
             .field("by_resource_count", &self.by_resource.len())
             .finish()
     }
 }
 
-impl DataLayer for DataLayerRegistry {
+impl DataLayer for StoreRegistry {
     async fn create(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
         let layer = self.get_layer(resource)?;
         layer.create_dyn(resource, id, fields).await
@@ -272,7 +316,7 @@ impl DataLayer for DataLayerRegistry {
     }
 }
 
-impl SchemaSupport for DataLayerRegistry {
+impl SchemaSupport for StoreRegistry {
     async fn install_resources(&self, resources: &[&ResourceDef]) -> Result<()> {
         for supporter in &self.schema_supporters {
             supporter.install_resources_dyn(resources).await?;
@@ -281,7 +325,7 @@ impl SchemaSupport for DataLayerRegistry {
     }
 }
 
-impl TransactionSupport for DataLayerRegistry {
+impl TransactionSupport for StoreRegistry {
     async fn transaction<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&Self) -> Fut + Send,

@@ -24,6 +24,7 @@ mod policy;
 mod registry;
 mod rel;
 mod resource;
+pub mod store;
 mod types;
 mod value;
 
@@ -59,11 +60,14 @@ pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_write, check_to_filter,
     compile_read_filter,
 };
-pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport};
+pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
     AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, OnDelete, RelKind,
     RelationshipDef, Resource, ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
+};
+pub use store::{
+    default_store_type_id, DefaultStore, HasStore, MemoryStore, SqliteStore, StoreTag,
 };
 pub use types::{AshEnum, AshType};
 pub use value::{
