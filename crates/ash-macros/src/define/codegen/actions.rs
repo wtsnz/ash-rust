@@ -393,6 +393,9 @@ pub fn expand_action_builders(
                         pub struct #builder_name<'a, D> {
                             ctx: &'a ::ash_core::Context<D>,
                             upsert_spec: ::std::option::Option<(&'static str, ::std::vec::Vec<::std::string::String>)>,
+                            before_actions: ::std::vec::Vec<::ash_core::BeforeActionHook<#resource>>,
+                            after_actions: ::std::vec::Vec<::ash_core::AfterActionHook<#resource>>,
+                            after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
                             #(#field_members,)*
                         }
 
@@ -401,6 +404,9 @@ pub fn expand_action_builders(
                                 Self {
                                     ctx,
                                     upsert_spec: ::std::option::Option::None,
+                                    before_actions: ::std::vec::Vec::new(),
+                                    after_actions: ::std::vec::Vec::new(),
+                                    after_transactions: ::std::vec::Vec::new(),
                                     #(#field_inits,)*
                                 }
                             }
@@ -417,6 +423,30 @@ pub fn expand_action_builders(
                                 self.upsert(identity, update_fields)
                             }
 
+                            pub fn before_action<F>(mut self, hook: F) -> Self
+                            where
+                                F: ::std::ops::FnOnce(&mut ::ash_core::Changeset<#resource>) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
+                            {
+                                self.before_actions.push(::std::boxed::Box::new(hook));
+                                self
+                            }
+
+                            pub fn after_action<F>(mut self, hook: F) -> Self
+                            where
+                                F: ::std::ops::FnOnce(&mut #resource) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
+                            {
+                                self.after_actions.push(::std::boxed::Box::new(hook));
+                                self
+                            }
+
+                            pub fn after_transaction<F>(mut self, hook: F) -> Self
+                            where
+                                F: ::std::ops::FnOnce(::std::result::Result<&#resource, &::ash_core::Error>) + ::std::marker::Send + 'static,
+                            {
+                                self.after_transactions.push(::std::boxed::Box::new(hook));
+                                self
+                            }
+
                             #(#field_setters)*
 
                             pub fn into_fields(&self) -> ::ash_core::FieldMap {
@@ -425,12 +455,26 @@ pub fn expand_action_builders(
                                 map
                             }
 
-                            pub fn changeset(&self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
+                            pub fn changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
+                                let ctx = self.ctx;
                                 let fields = self.into_fields();
-                                let mut cs = ::ash_core::Changeset::<#resource>::for_create(self.ctx, #act_name_str, fields)?;
-                                if let ::std::option::Option::Some((ident, ref u_fields)) = self.upsert_spec {
+                                let upsert_spec = self.upsert_spec;
+                                let before_actions = self.before_actions;
+                                let after_actions = self.after_actions;
+                                let after_transactions = self.after_transactions;
+                                let mut cs = ::ash_core::Changeset::<#resource>::for_create(ctx, #act_name_str, fields)?;
+                                if let ::std::option::Option::Some((ident, ref u_fields)) = upsert_spec {
                                     let field_strs: ::std::vec::Vec<&str> = u_fields.iter().map(|s| s.as_str()).collect();
                                     cs = cs.with_upsert(ident, &field_strs);
+                                }
+                                for hook in before_actions {
+                                    cs = cs.before_action(hook);
+                                }
+                                for hook in after_actions {
+                                    cs = cs.after_action(hook);
+                                }
+                                for hook in after_transactions {
+                                    cs = cs.after_transaction(hook);
                                 }
                                 Ok(cs)
                             }
@@ -441,7 +485,8 @@ pub fn expand_action_builders(
                             }
 
                             pub async fn call(self) -> ::ash_core::Result<#resource> {
-                                self.changeset()?.commit(self.ctx).await
+                                let ctx = self.ctx;
+                                self.changeset()?.commit(ctx).await
                             }
                         }
 
@@ -538,6 +583,9 @@ pub fn expand_action_builders(
                     pub struct #builder_name<'a, D> {
                         ctx: &'a ::ash_core::Context<D>,
                         target: #target_enum,
+                        before_actions: ::std::vec::Vec<::ash_core::BeforeActionHook<#resource>>,
+                        after_actions: ::std::vec::Vec<::ash_core::AfterActionHook<#resource>>,
+                        after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
                         #(#field_members,)*
                     }
 
@@ -546,6 +594,9 @@ pub fn expand_action_builders(
                             Self {
                                 ctx,
                                 target: #target_enum::Id(id),
+                                before_actions: ::std::vec::Vec::new(),
+                                after_actions: ::std::vec::Vec::new(),
+                                after_transactions: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
                             }
                         }
@@ -554,8 +605,35 @@ pub fn expand_action_builders(
                             Self {
                                 ctx,
                                 target: #target_enum::Existing(existing),
+                                before_actions: ::std::vec::Vec::new(),
+                                after_actions: ::std::vec::Vec::new(),
+                                after_transactions: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
                             }
+                        }
+
+                        pub fn before_action<F>(mut self, hook: F) -> Self
+                        where
+                            F: ::std::ops::FnOnce(&mut ::ash_core::Changeset<#resource>) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
+                        {
+                            self.before_actions.push(::std::boxed::Box::new(hook));
+                            self
+                        }
+
+                        pub fn after_action<F>(mut self, hook: F) -> Self
+                        where
+                            F: ::std::ops::FnOnce(&mut #resource) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
+                        {
+                            self.after_actions.push(::std::boxed::Box::new(hook));
+                            self
+                        }
+
+                        pub fn after_transaction<F>(mut self, hook: F) -> Self
+                        where
+                            F: ::std::ops::FnOnce(::std::result::Result<&#resource, &::ash_core::Error>) + ::std::marker::Send + 'static,
+                        {
+                            self.after_transactions.push(::std::boxed::Box::new(hook));
+                            self
                         }
 
                         #(#field_setters)*
@@ -566,11 +644,25 @@ pub fn expand_action_builders(
                             map
                         }
 
-                        pub fn changeset(&self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
-                            match &self.target {
+                        pub fn changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
+                            let ctx = self.ctx;
+                            let fields = self.into_fields();
+                            let before_actions = self.before_actions;
+                            let after_actions = self.after_actions;
+                            let after_transactions = self.after_transactions;
+                            match self.target {
                                 #target_enum::Existing(record) => {
-                                    let fields = self.into_fields();
-                                    ::ash_core::Changeset::<#resource>::for_update_on(self.ctx, #act_name_str, record.clone(), fields)
+                                    let mut cs = ::ash_core::Changeset::<#resource>::for_update_on(ctx, #act_name_str, record, fields)?;
+                                    for hook in before_actions {
+                                        cs = cs.before_action(hook);
+                                    }
+                                    for hook in after_actions {
+                                        cs = cs.after_action(hook);
+                                    }
+                                    for hook in after_transactions {
+                                        cs = cs.after_transaction(hook);
+                                    }
+                                    Ok(cs)
                                 }
                                 #target_enum::Id(_) => {
                                     Err(::ash_core::Error::Invalid(
@@ -593,15 +685,26 @@ pub fn expand_action_builders(
                         }
 
                         pub async fn call(self) -> ::ash_core::Result<#resource> {
+                            let ctx = self.ctx;
                             let fields = self.into_fields();
-                            match self.target {
-                                #target_enum::Id(id) => {
-                                    ::ash_core::update::<#resource, D>(self.ctx, #act_name_str, id, fields).await
-                                }
-                                #target_enum::Existing(record) => {
-                                    ::ash_core::update_existing::<#resource, D>(self.ctx, #act_name_str, record, fields).await
-                                }
+                            let before_actions = self.before_actions;
+                            let after_actions = self.after_actions;
+                            let after_transactions = self.after_transactions;
+                            let existing = match self.target {
+                                #target_enum::Id(id) => ::ash_core::get::<#resource, D>(ctx, id).await?,
+                                #target_enum::Existing(record) => record,
+                            };
+                            let mut cs = ::ash_core::Changeset::<#resource>::for_update_on(ctx, #act_name_str, existing, fields)?;
+                            for hook in before_actions {
+                                cs = cs.before_action(hook);
                             }
+                            for hook in after_actions {
+                                cs = cs.after_action(hook);
+                            }
+                            for hook in after_transactions {
+                                cs = cs.after_transaction(hook);
+                            }
+                            cs.commit(ctx).await
                         }
                     }
 

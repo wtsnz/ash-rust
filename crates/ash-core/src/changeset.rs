@@ -10,6 +10,15 @@ use crate::policy::authorize_write;
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value, required_uuid};
 
+/// Hook running before persistence with mutable access to the changeset.
+pub type BeforeActionHook<R> = Box<dyn FnOnce(&mut Changeset<R>) -> Result<()> + Send + 'static>;
+
+/// Hook running immediately after persistence with mutable access to the newly saved record.
+pub type AfterActionHook<R> = Box<dyn FnOnce(&mut R) -> Result<()> + Send + 'static>;
+
+/// Hook running after transaction completion (commit or rollback), receiving the result.
+pub type AfterTransactionHook<R> = Box<dyn FnOnce(std::result::Result<&R, &Error>) + Send + 'static>;
+
 /// Prepared write. Accept, changes, and validation have already run.
 /// Persist happens on [`commit`](Self::commit).
 pub struct Changeset<R: Resource> {
@@ -18,6 +27,9 @@ pub struct Changeset<R: Resource> {
     arguments: FieldMap,
     existing: Option<R>,
     upsert: Option<(&'static str, Vec<String>)>,
+    before_actions: Vec<BeforeActionHook<R>>,
+    after_actions: Vec<AfterActionHook<R>>,
+    after_transactions: Vec<AfterTransactionHook<R>>,
 }
 
 impl<R: Resource> Changeset<R> {
@@ -27,6 +39,49 @@ impl<R: Resource> Changeset<R> {
 
     pub fn attributes(&self) -> &FieldMap {
         &self.fields
+    }
+
+    pub fn attributes_mut(&mut self) -> &mut FieldMap {
+        &mut self.fields
+    }
+
+    pub fn get_attribute(&self, name: &str) -> Option<&Value> {
+        self.fields.get(name)
+    }
+
+    pub fn change_attribute(&mut self, key: impl Into<String>, val: impl Into<Value>) -> &mut Self {
+        self.fields.insert(key.into(), val.into());
+        self
+    }
+
+    /// Register a hook to run immediately before persistence.
+    /// May inspect or mutate changeset attributes, or return an error to abort the write.
+    pub fn before_action<F>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(&mut Changeset<R>) -> Result<()> + Send + 'static,
+    {
+        self.before_actions.push(Box::new(hook));
+        self
+    }
+
+    /// Register a hook to run immediately after persistence within the transaction.
+    /// Receives mutable access to the newly saved record.
+    pub fn after_action<F>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(&mut R) -> Result<()> + Send + 'static,
+    {
+        self.after_actions.push(Box::new(hook));
+        self
+    }
+
+    /// Register a hook to run after the transaction finishes (or immediately if not transactional).
+    /// Receives the final result (`Ok(&record)` or `Err(&error)`).
+    pub fn after_transaction<F>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(std::result::Result<&R, &Error>) + Send + 'static,
+    {
+        self.after_transactions.push(Box::new(hook));
+        self
     }
 
     pub fn arguments(&self) -> &FieldMap {
@@ -85,6 +140,9 @@ impl<R: Resource> Changeset<R> {
             arguments,
             existing: None,
             upsert: None,
+            before_actions: Vec::new(),
+            after_actions: Vec::new(),
+            after_transactions: Vec::new(),
         })
     }
 
@@ -153,6 +211,9 @@ impl<R: Resource> Changeset<R> {
             arguments,
             existing: Some(existing),
             upsert: None,
+            before_actions: Vec::new(),
+            after_actions: Vec::new(),
+            after_transactions: Vec::new(),
         })
     }
 
@@ -204,12 +265,35 @@ impl<R: Resource> Changeset<R> {
         R::from_fields(&fields)
     }
 
-    pub async fn commit<D: DataLayer>(self, ctx: &Context<D>) -> Result<R> {
+    pub async fn commit<D: DataLayer>(mut self, ctx: &Context<D>) -> Result<R> {
+        let after_tx_hooks = std::mem::take(&mut self.after_transactions);
+        let res = self.commit_inner(ctx).await;
+        match &res {
+            Ok(record) => {
+                for hook in after_tx_hooks {
+                    hook(Ok(record));
+                }
+            }
+            Err(err) => {
+                for hook in after_tx_hooks {
+                    hook(Err(err));
+                }
+            }
+        }
+        res
+    }
+
+    async fn commit_inner<D: DataLayer>(&mut self, ctx: &Context<D>) -> Result<R> {
+        for hook in std::mem::take(&mut self.before_actions) {
+            hook(self)?;
+        }
+
         expect_persist(self.action, PersistKind::DataLayer)?;
-        authorize(&self, ctx)?;
+        authorize(self, ctx)?;
 
         let id = required_uuid(&self.fields, pk_name(&R::DEF)?)?;
         let previous_fields = self.existing.as_ref().map(Resource::to_fields);
+        let fields = std::mem::take(&mut self.fields);
         let mut stored = match self.action.kind {
             ActionKind::Create => {
                 if let Some((ident_name, ref update_fields)) = self.upsert {
@@ -220,13 +304,13 @@ impl<R: Resource> Changeset<R> {
                         ))
                     })?;
                     ctx.data
-                        .upsert(&R::DEF, id, self.fields, identity, update_fields)
+                        .upsert(&R::DEF, id, fields, identity, update_fields)
                         .await?
                 } else {
-                    ctx.data.create(&R::DEF, id, self.fields).await?
+                    ctx.data.create(&R::DEF, id, fields).await?
                 }
             }
-            ActionKind::Update => ctx.data.update(&R::DEF, id, self.fields).await?,
+            ActionKind::Update => ctx.data.update(&R::DEF, id, fields).await?,
             kind => {
                 return Err(Error::WrongActionKind {
                     action: self.action.name,
@@ -236,8 +320,13 @@ impl<R: Resource> Changeset<R> {
             }
         };
         crate::policy::redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
-        let record = R::from_fields(&stored)?;
+        let mut record = R::from_fields(&stored)?;
 
+        for hook in std::mem::take(&mut self.after_actions) {
+            hook(&mut record)?;
+        }
+
+        let arguments = std::mem::take(&mut self.arguments);
         let notification = crate::notifier::Notification::new(
             R::DEF.name,
             self.action.name,
@@ -246,7 +335,7 @@ impl<R: Resource> Changeset<R> {
             stored,
             previous_fields,
             ctx.actor.clone(),
-            self.arguments,
+            arguments,
         );
         crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 

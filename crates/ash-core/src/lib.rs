@@ -33,7 +33,7 @@ pub use action::{
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
-pub use changeset::Changeset;
+pub use changeset::{AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset};
 pub use context::Context;
 pub use data_layer::{CompiledQuery, DataLayer, SchemaSupport, Sort, TransactionSupport};
 pub use engine::{

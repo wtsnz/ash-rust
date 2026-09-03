@@ -644,4 +644,57 @@ policies {
 
 Applicable across both resource policies and `field_policies` for fine-grained column redaction and field write controls.
 
+---
+
+## 14. Changeset Lifecycle Hooks (`before_action`, `after_action`, `after_transaction`)
+
+Ash changesets support granular lifecycle closure hooks directly on `Changeset<R>` and on action invocation builders:
+
+- **`before_action`**: Executes right before data layer persistence. Receives mutable access to `&mut Changeset<R>`, allowing attribute modifications (`cs.change_attribute(...)`, sanitization, slug computation) or aborting the action by returning `Err(Error)`.
+- **`after_action`**: Executes immediately after persistence within the transaction. Receives mutable access to the newly saved record `&mut R` (for audit logging, child associations, or in-memory enrichment).
+- **`after_transaction`**: Executes after transaction completion (commit or rollback), receiving `Result<&R, &Error>`.
+
+### Usage on Action Builders
+Hooks can be chained directly onto fluent action builders:
+
+```rust
+let article = Article::create(&ctx)
+    .title("Ash Framework in Rust")
+    .body("Ad-hoc lifecycle hooks")
+    // 1. Run right before database write
+    .before_action(|cs| {
+        if let Some(Value::String(title)) = cs.get_attribute("title") {
+            let slug = title.to_lowercase().replace(' ', "-");
+            cs.change_attribute("slug", slug);
+        }
+        Ok(())
+    })
+    // 2. Run right after persistence
+    .after_action(|record| {
+        println!("Persisted article with ID: {}", record.id);
+        Ok(())
+    })
+    // 3. Run after transaction commit or rollback
+    .after_transaction(|res| {
+        match res {
+            Ok(record) => println!("Transaction committed: {}", record.id),
+            Err(err) => eprintln!("Transaction rolled back: {err}"),
+        }
+    })
+    .await?;
+```
+
+### Usage on `Changeset<R>` Directly
+Hooks can also be attached when constructing changesets manually or inside `Multi` pipelines:
+
+```rust
+let mut cs = Article::create(&ctx).title("Manual CS").changeset()?;
+cs = cs.before_action(|cs| {
+    cs.change_attribute("view_count", 0);
+    Ok(())
+});
+let article = cs.commit(&ctx).await?;
+```
+
+
 
