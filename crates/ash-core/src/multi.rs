@@ -4,12 +4,15 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use uuid::Uuid;
 
-use crate::changeset::Changeset;
+use crate::bulk::{BulkCreateOptions, BulkDestroyOptions};
+use crate::changeset::{Changeset, IntoFieldMap};
 use crate::context::Context;
 use crate::data_layer::{DataLayer, TransactionSupport};
 use crate::error::{Error, Result};
 use crate::resource::Resource;
+use crate::value::FieldMap;
 
 /// Container for results produced by named steps in a [`Multi`] pipeline.
 #[derive(Clone, Default)]
@@ -365,6 +368,60 @@ impl<D: DataLayer + 'static> Step<D> for RunAsyncStep<D> {
     }
 }
 
+struct BulkCreateStep<R: Resource> {
+    name: String,
+    action: &'static str,
+    inputs: Vec<FieldMap>,
+    opts: BulkCreateOptions,
+    _phantom: PhantomData<R>,
+}
+
+impl<D: DataLayer, R: Resource> Step<D> for BulkCreateStep<R> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        ctx: &'a Context<D>,
+        results: &'a mut MultiResult,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let inputs = std::mem::take(&mut self.inputs);
+            let res = crate::bulk::bulk_create::<R, D, _, _>(ctx, self.action, inputs, self.opts.clone()).await?;
+            results.insert(self.name.clone(), res);
+            Ok(())
+        })
+    }
+}
+
+struct BulkDestroyStep<R: Resource> {
+    name: String,
+    action: &'static str,
+    ids: Vec<Uuid>,
+    opts: BulkDestroyOptions,
+    _phantom: PhantomData<R>,
+}
+
+impl<D: DataLayer, R: Resource> Step<D> for BulkDestroyStep<R> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        ctx: &'a Context<D>,
+        results: &'a mut MultiResult,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let ids = std::mem::take(&mut self.ids);
+            let res = crate::bulk::bulk_destroy::<R, D>(ctx, self.action, &ids, self.opts.clone()).await?;
+            results.insert(self.name.clone(), res);
+            Ok(())
+        })
+    }
+}
+
 /// A pipeline of named operations that execute atomically.
 ///
 /// In the spirit of `Ash.Multi`, operations are defined sequentially and,
@@ -516,6 +573,47 @@ impl<D: DataLayer + 'static> Multi<D> {
                 })
                     as Pin<Box<dyn Future<Output = Result<Arc<dyn Any + Send + Sync>>> + Send>>
             })),
+            _phantom: PhantomData,
+        }));
+        self
+    }
+
+    /// Add a bulk create operation.
+    pub fn bulk_create<R: Resource, I, F>(
+        mut self,
+        name: impl Into<String>,
+        action: &'static str,
+        inputs: I,
+        opts: BulkCreateOptions,
+    ) -> Self
+    where
+        I: IntoIterator<Item = F> + Send + 'static,
+        F: IntoFieldMap,
+    {
+        let field_maps: Vec<FieldMap> = inputs.into_iter().map(IntoFieldMap::into_field_map).collect();
+        self.steps.push(Box::new(BulkCreateStep::<R> {
+            name: name.into(),
+            action,
+            inputs: field_maps,
+            opts,
+            _phantom: PhantomData,
+        }));
+        self
+    }
+
+    /// Add a bulk destroy operation.
+    pub fn bulk_destroy<R: Resource>(
+        mut self,
+        name: impl Into<String>,
+        action: &'static str,
+        ids: impl IntoIterator<Item = Uuid>,
+        opts: BulkDestroyOptions,
+    ) -> Self {
+        self.steps.push(Box::new(BulkDestroyStep::<R> {
+            name: name.into(),
+            action,
+            ids: ids.into_iter().collect(),
+            opts,
             _phantom: PhantomData,
         }));
         self
@@ -674,6 +772,34 @@ impl<D: DataLayer + 'static> BoundMulti<D> {
         F: FnOnce(&Context<D>, &MultiResult) -> Result<R> + Send + 'static,
     {
         self.multi = self.multi.destroy_from(name, action, func);
+        self
+    }
+
+    /// Add a bulk create operation.
+    pub fn bulk_create<R: Resource, I, F>(
+        mut self,
+        name: impl Into<String>,
+        action: &'static str,
+        inputs: I,
+        opts: BulkCreateOptions,
+    ) -> Self
+    where
+        I: IntoIterator<Item = F> + Send + 'static,
+        F: IntoFieldMap,
+    {
+        self.multi = self.multi.bulk_create::<R, I, F>(name, action, inputs, opts);
+        self
+    }
+
+    /// Add a bulk destroy operation.
+    pub fn bulk_destroy<R: Resource>(
+        mut self,
+        name: impl Into<String>,
+        action: &'static str,
+        ids: impl IntoIterator<Item = Uuid>,
+        opts: BulkDestroyOptions,
+    ) -> Self {
+        self.multi = self.multi.bulk_destroy::<R>(name, action, ids, opts);
         self
     }
 

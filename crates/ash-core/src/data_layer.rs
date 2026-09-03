@@ -57,6 +57,33 @@ pub trait DataLayer: Send + Sync {
             resource.name
         ))))
     }
+
+    fn bulk_create(
+        &self,
+        resource: &ResourceDef,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        async move {
+            let mut results = Vec::with_capacity(rows.len());
+            for (id, fields) in rows {
+                results.push(self.create(resource, id, fields).await?);
+            }
+            Ok(results)
+        }
+    }
+
+    fn bulk_destroy(
+        &self,
+        resource: &ResourceDef,
+        ids: &[Uuid],
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            for id in ids {
+                self.destroy(resource, *id).await?;
+            }
+            Ok(())
+        }
+    }
 }
 
 pub trait SchemaSupport: Send + Sync {

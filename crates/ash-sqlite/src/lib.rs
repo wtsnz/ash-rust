@@ -255,6 +255,38 @@ impl DataLayer for Sqlite {
         let row = rows.first().ok_or(Error::NotFound)?;
         sql::row_to_fields(row, resource, &[], &[])
     }
+
+    async fn bulk_create(
+        &self,
+        resource: &ResourceDef,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> Result<Vec<FieldMap>> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.transaction(|tx| {
+            let tx = tx.clone();
+            async move {
+                let mut results = Vec::with_capacity(rows.len());
+                for (id, fields) in rows {
+                    results.push(tx.create(resource, id, fields).await?);
+                }
+                Ok(results)
+            }
+        })
+        .await
+    }
+
+    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        for chunk in ids.chunks(500) {
+            let qb = sql::bulk_delete_query(resource, chunk)?;
+            self.execute_query_resource(qb, resource).await?;
+        }
+        Ok(())
+    }
 }
 
 impl TransactionSupport for Sqlite {

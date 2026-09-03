@@ -394,3 +394,33 @@ blog.install_schema().await?;
 // Run queries through domain:
 let posts = blog.query::<Post>().await?;
 ```
+
+---
+
+## 8. Bulk Operations & Streaming
+
+Ash provides first-class bulk operations and chunked result streaming:
+
+```rust
+// 1. Bulk creation
+let items = vec![
+    [("title", "Post 1".into()), ("content", "...".into())],
+    [("title", "Post 2".into()), ("content", "...".into())],
+];
+let res = Post::bulk_create(&ctx, items).await?;
+
+// 2. Query bulk destruction
+let del_res = Post::query(&ctx)
+    .filter(Post::archived.eq(true))
+    .bulk_destroy("destroy", BulkDestroyOptions::default())
+    .await?;
+
+// 3. Chunked query streaming
+Post::query(&ctx)
+    .chunked(100, |batch| async move {
+        // process batch of 100 posts
+        Ok(())
+    })
+    .await?;
+```
+

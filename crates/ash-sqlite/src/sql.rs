@@ -267,6 +267,28 @@ pub fn delete_query<'a>(
     Ok(qb)
 }
 
+pub fn bulk_delete_query<'a>(
+    resource: &'a ResourceDef,
+    ids: &[uuid::Uuid],
+) -> Result<QueryBuilder<'a, Sqlite>> {
+    let pk = resource
+        .primary_key()
+        .ok_or(Error::NoPrimaryKey(resource.name))?;
+    let mut qb = QueryBuilder::new("DELETE FROM ");
+    qb.push(ident(resource.table_name())?);
+    qb.push(" WHERE ");
+    qb.push(ident(pk.name)?);
+    qb.push(" IN (");
+    for (i, id) in ids.iter().enumerate() {
+        if i > 0 {
+            qb.push(", ");
+        }
+        qb.push_bind(id.to_string());
+    }
+    qb.push(")");
+    Ok(qb)
+}
+
 pub fn row_to_fields(
     row: &SqliteRow,
     resource: &ResourceDef,

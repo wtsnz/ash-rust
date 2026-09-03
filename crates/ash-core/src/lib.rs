@@ -7,6 +7,7 @@
 mod action;
 mod actor;
 mod aggregate;
+mod bulk;
 mod changeset;
 mod context;
 mod data_layer;
@@ -33,6 +34,7 @@ pub use action::{
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
+pub use bulk::{BulkCreateOptions, BulkDestroyOptions, BulkResult, bulk_create, bulk_destroy};
 pub use changeset::{
     AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, IntoFieldMap,
     ManagedRelationshipSpec,

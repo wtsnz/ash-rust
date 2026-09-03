@@ -32,6 +32,23 @@ pub struct Query<'a, R, D> {
     _resource: PhantomData<R>,
 }
 
+impl<'a, R, D> Clone for Query<'a, R, D> {
+    fn clone(&self) -> Self {
+        Self {
+            ctx: self.ctx,
+            action: self.action,
+            filter: self.filter.clone(),
+            sort: self.sort.clone(),
+            calculations: self.calculations.clone(),
+            aggregates: self.aggregates.clone(),
+            loads: self.loads.clone(),
+            limit: self.limit,
+            offset: self.offset,
+            _resource: PhantomData,
+        }
+    }
+}
+
 impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     pub fn action(mut self, name: &'static str) -> Self {
         self.action = Some(name);
@@ -359,6 +376,114 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             after: after_cursor,
             before: before_cursor,
         })
+    }
+
+    /// Bulk destroy all records matching this query.
+    pub async fn bulk_destroy(
+        self,
+        action: &str,
+        opts: crate::bulk::BulkDestroyOptions,
+    ) -> Result<crate::bulk::BulkResult<R>> {
+        let records = self.clone().load().await?;
+        let ids: Vec<Uuid> = records.iter().map(|r| r.id()).collect();
+        crate::bulk::bulk_destroy::<R, D>(self.ctx, action, &ids, opts).await
+    }
+
+    /// Process query results in chunks of `chunk_size` without loading all records into memory at once.
+    ///
+    /// The handler closure is called sequentially for each chunk. If the handler returns an error,
+    /// iteration halts and the error is returned.
+    ///
+    /// Returns the total number of records processed.
+    pub async fn chunked<F, Fut>(
+        self,
+        chunk_size: usize,
+        mut handler: F,
+    ) -> Result<usize>
+    where
+        F: FnMut(Vec<R>) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        if chunk_size == 0 {
+            return Err(Error::Invalid("chunk_size must be greater than 0".into()));
+        }
+        let mut total = 0;
+        let mut current_offset = self.offset.unwrap_or(0);
+        let original_limit = self.limit;
+
+        loop {
+            let this_chunk_size = match original_limit {
+                Some(max_limit) => {
+                    let remaining = max_limit.saturating_sub(total);
+                    if remaining == 0 {
+                        break;
+                    }
+                    chunk_size.min(remaining)
+                }
+                None => chunk_size,
+            };
+
+            let mut chunk_query = self.clone();
+            chunk_query.limit = Some(this_chunk_size);
+            chunk_query.offset = Some(current_offset);
+
+            let rows = chunk_query.load().await?;
+            let count = rows.len();
+            if count == 0 {
+                break;
+            }
+
+            total += count;
+            handler(rows).await?;
+
+            if count < this_chunk_size {
+                break;
+            }
+            current_offset += count;
+        }
+
+        Ok(total)
+    }
+
+    /// Keyset-based chunking for high-performance iteration over ordered large datasets.
+    pub async fn chunked_keyset<F, Fut>(
+        self,
+        chunk_size: usize,
+        mut handler: F,
+    ) -> Result<usize>
+    where
+        F: FnMut(Vec<R>) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        if chunk_size == 0 {
+            return Err(Error::Invalid("chunk_size must be greater than 0".into()));
+        }
+        let mut total = 0;
+        let mut after_cursor: Option<String> = None;
+
+        loop {
+            let page = self
+                .clone()
+                .page_keyset(chunk_size, after_cursor.as_deref(), None)
+                .await?;
+
+            let count = page.results.len();
+            if count == 0 {
+                break;
+            }
+
+            total += count;
+            after_cursor = page.after;
+            let has_more = page.has_more;
+
+            handler(page.results).await?;
+
+            if !has_more || after_cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(total)
     }
 }
 

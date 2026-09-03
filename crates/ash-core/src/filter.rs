@@ -48,6 +48,10 @@ impl Filter {
         Self::Lte(field.into(), value.into())
     }
 
+    pub fn in_list(field: impl Into<String>, values: impl IntoIterator<Item = impl Into<Value>>) -> Self {
+        Self::In(field.into(), values.into_iter().map(Into::into).collect())
+    }
+
     pub fn collect_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
             Self::True | Self::False => {}

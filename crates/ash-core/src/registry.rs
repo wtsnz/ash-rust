@@ -47,6 +47,18 @@ pub trait DynDataLayer: Send + Sync {
         identity: &'a IdentityDef,
         update_fields: &'a [String],
     ) -> BoxFuture<'a, Result<FieldMap>>;
+
+    fn bulk_create_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
+
+    fn bulk_destroy_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        ids: &'a [Uuid],
+    ) -> BoxFuture<'a, Result<()>>;
 }
 
 impl<T: DataLayer> DynDataLayer for T {
@@ -93,6 +105,22 @@ impl<T: DataLayer> DynDataLayer for T {
         update_fields: &'a [String],
     ) -> BoxFuture<'a, Result<FieldMap>> {
         Box::pin(self.upsert(resource, id, fields, identity, update_fields))
+    }
+
+    fn bulk_create_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.bulk_create(resource, rows))
+    }
+
+    fn bulk_destroy_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        ids: &'a [Uuid],
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(self.bulk_destroy(resource, ids))
     }
 }
 
@@ -227,6 +255,20 @@ impl DataLayer for DataLayerRegistry {
         layer
             .upsert_dyn(resource, id, fields, identity, update_fields)
             .await
+    }
+
+    async fn bulk_create(
+        &self,
+        resource: &ResourceDef,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> Result<Vec<FieldMap>> {
+        let layer = self.get_layer(resource)?;
+        layer.bulk_create_dyn(resource, rows).await
+    }
+
+    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+        let layer = self.get_layer(resource)?;
+        layer.bulk_destroy_dyn(resource, ids).await
     }
 }
 

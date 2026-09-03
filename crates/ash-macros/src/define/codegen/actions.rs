@@ -310,6 +310,56 @@ pub fn expand_action_builders(
         });
     }
 
+    if let Some(create_act) = actions.iter().find(|a| a.kind == ActionKind::Create && a.primary).or_else(|| actions.iter().find(|a| a.kind == ActionKind::Create)) {
+        let act_name_str = create_act.name.to_string();
+        resource_methods.push(quote! {
+            pub async fn bulk_create<D: ::ash_core::DataLayer, I, F>(
+                ctx: &::ash_core::Context<D>,
+                inputs: I,
+            ) -> ::ash_core::Result<::ash_core::BulkResult<Self>>
+            where
+                I: ::std::iter::IntoIterator<Item = F>,
+                F: ::ash_core::IntoFieldMap,
+            {
+                ::ash_core::bulk_create(ctx, #act_name_str, inputs, ::ash_core::BulkCreateOptions::default()).await
+            }
+
+            pub async fn bulk_create_with_opts<D: ::ash_core::DataLayer, I, F>(
+                ctx: &::ash_core::Context<D>,
+                action: &str,
+                inputs: I,
+                opts: ::ash_core::BulkCreateOptions,
+            ) -> ::ash_core::Result<::ash_core::BulkResult<Self>>
+            where
+                I: ::std::iter::IntoIterator<Item = F>,
+                F: ::ash_core::IntoFieldMap,
+            {
+                ::ash_core::bulk_create(ctx, action, inputs, opts).await
+            }
+        });
+    }
+
+    if let Some(destroy_act) = actions.iter().find(|a| a.kind == ActionKind::Destroy && a.primary).or_else(|| actions.iter().find(|a| a.kind == ActionKind::Destroy)) {
+        let act_name_str = destroy_act.name.to_string();
+        resource_methods.push(quote! {
+            pub async fn bulk_destroy<D: ::ash_core::DataLayer>(
+                ctx: &::ash_core::Context<D>,
+                ids: &[::uuid::Uuid],
+            ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
+                ::ash_core::bulk_destroy(ctx, #act_name_str, ids, ::ash_core::BulkDestroyOptions::default()).await
+            }
+
+            pub async fn bulk_destroy_with_opts<D: ::ash_core::DataLayer>(
+                ctx: &::ash_core::Context<D>,
+                action: &str,
+                ids: &[::uuid::Uuid],
+                opts: ::ash_core::BulkDestroyOptions,
+            ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
+                ::ash_core::bulk_destroy(ctx, action, ids, opts).await
+            }
+        });
+    }
+
     let actions_trait_ident = format_ident!("{}Actions", resource);
 
     let mut rel_methods = Vec::new();

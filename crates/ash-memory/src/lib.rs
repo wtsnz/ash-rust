@@ -188,6 +188,45 @@ impl DataLayer for Memory {
         })())
     }
 
+    fn bulk_create(
+        &self,
+        resource: &ResourceDef,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        ready((|| {
+            let mut tables = self.lock()?;
+            let table = tables.entry(resource.name.to_string()).or_default();
+            let mut results = Vec::with_capacity(rows.len());
+            for (id, fields) in rows {
+                if table.contains_key(&id) {
+                    return Err(Error::DataLayer(format!(
+                        "duplicate id {id} in {}",
+                        resource.name
+                    )));
+                }
+                check_identities(resource, table, id, &fields)?;
+                table.insert(id, fields.clone());
+                results.push(fields);
+            }
+            Ok(results)
+        })())
+    }
+
+    fn bulk_destroy(
+        &self,
+        resource: &ResourceDef,
+        ids: &[Uuid],
+    ) -> impl Future<Output = Result<()>> + Send {
+        ready((|| {
+            let mut tables = self.lock()?;
+            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            for id in ids {
+                table.remove(id);
+            }
+            Ok(())
+        })())
+    }
+
     fn run_query(
         &self,
         resource: &ResourceDef,
