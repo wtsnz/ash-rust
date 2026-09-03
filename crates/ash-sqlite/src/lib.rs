@@ -1,5 +1,6 @@
 //! SQLite data layer. Filters compile to bound SQL instead of scanning HashMaps.
 
+use std::future::Future;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -7,8 +8,9 @@ use std::time::Duration;
 
 use ash_core::{
     CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
-    TransactionSupport,
+    TransactionSupport, Value,
 };
+use ash_sql::{CompiledSql, MigrationExecutor, Migrator, SqlParam, SqliteDialect};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteQueryResult,
     SqliteRow,
@@ -16,7 +18,7 @@ use sqlx::sqlite::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-mod sql;
+pub mod sql;
 
 pub use sql::create_table_sql;
 
@@ -73,33 +75,40 @@ impl Sqlite {
         }
     }
 
-    async fn execute_query<'a>(
+    async fn execute_query(
         &self,
-        mut qb: sqlx::QueryBuilder<'a, sqlx::Sqlite>,
+        compiled: &CompiledSql,
     ) -> Result<SqliteQueryResult> {
         match &self.source {
-            SqliteSource::Pool(pool) => qb.build().execute(pool).await.map_err(map_sqlx),
+            SqliteSource::Pool(pool) => {
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.execute(pool).await.map_err(map_sqlx)
+            }
             SqliteSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
-                qb.build().execute(&mut **guard).await.map_err(map_sqlx)
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.execute(&mut **guard).await.map_err(map_sqlx)
             }
         }
     }
 
-    async fn execute_query_resource<'a>(
+    async fn execute_query_resource(
         &self,
-        mut qb: sqlx::QueryBuilder<'a, sqlx::Sqlite>,
+        compiled: &CompiledSql,
         resource: &ResourceDef,
     ) -> Result<SqliteQueryResult> {
         match &self.source {
-            SqliteSource::Pool(pool) => qb
-                .build()
-                .execute(pool)
-                .await
-                .map_err(|e| map_sqlx_resource(e, resource)),
+            SqliteSource::Pool(pool) => {
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query
+                    .execute(pool)
+                    .await
+                    .map_err(|e| map_sqlx_resource(e, resource))
+            }
             SqliteSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
-                qb.build()
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query
                     .execute(&mut **guard)
                     .await
                     .map_err(|e| map_sqlx_resource(e, resource))
@@ -107,15 +116,19 @@ impl Sqlite {
         }
     }
 
-    async fn fetch_all<'a>(
+    async fn fetch_all(
         &self,
-        mut qb: sqlx::QueryBuilder<'a, sqlx::Sqlite>,
+        compiled: &CompiledSql,
     ) -> Result<Vec<SqliteRow>> {
         match &self.source {
-            SqliteSource::Pool(pool) => qb.build().fetch_all(pool).await.map_err(map_sqlx),
+            SqliteSource::Pool(pool) => {
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.fetch_all(pool).await.map_err(map_sqlx)
+            }
             SqliteSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
-                qb.build().fetch_all(&mut **guard).await.map_err(map_sqlx)
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.fetch_all(&mut **guard).await.map_err(map_sqlx)
             }
         }
     }
@@ -140,6 +153,108 @@ impl Sqlite {
         }
         Ok(())
     }
+
+    /// Run pending declarative migrations from a directory.
+    pub async fn migrate(&self, migrations_dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        let migrator = Migrator::new(SqliteDialect, migrations_dir);
+        migrator.run(self).await
+    }
+
+    /// Rollback the latest applied migration.
+    pub async fn rollback(
+        &self,
+        migrations_dir: impl AsRef<Path>,
+    ) -> Result<Option<String>> {
+        let migrator = Migrator::new(SqliteDialect, migrations_dir);
+        migrator.rollback(self).await
+    }
+}
+
+fn bind_compiled<'q>(
+    mut query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    params: &'q [SqlParam],
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    for p in params {
+        match &p.value {
+            Value::Null => {
+                query = query.bind(None::<String>);
+            }
+            Value::Bool(b) => {
+                query = query.bind(if *b { 1i64 } else { 0i64 });
+            }
+            Value::Int(i) => {
+                query = query.bind(*i);
+            }
+            Value::Uuid(u) => {
+                query = query.bind(u.to_string());
+            }
+            Value::String(s) => {
+                query = query.bind(s.as_str());
+            }
+            Value::Map(m) => {
+                let json = serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string());
+                query = query.bind(json);
+            }
+            Value::Array(a) => {
+                let json = serde_json::to_string(a).unwrap_or_else(|_| "[]".to_string());
+                query = query.bind(json);
+            }
+        }
+    }
+    query
+}
+
+impl MigrationExecutor for Sqlite {
+    async fn execute_script(&self, sql: &str) -> Result<()> {
+        self.execute_raw(sql).await?;
+        Ok(())
+    }
+
+    async fn applied_versions(&self) -> Result<Vec<String>> {
+        self.execute_raw(
+            "CREATE TABLE IF NOT EXISTS _ash_schema_migrations (
+                version TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );",
+        )
+        .await?;
+
+        let compiled = CompiledSql::new(
+            "SELECT version FROM _ash_schema_migrations ORDER BY version ASC".to_string(),
+            vec![],
+        );
+        let rows = self.fetch_all(&compiled).await?;
+        let mut versions = Vec::new();
+        for row in rows {
+            use sqlx::Row;
+            let v: String = row.try_get("version").map_err(map_sqlx)?;
+            versions.push(v);
+        }
+        Ok(versions)
+    }
+
+    async fn record_migration(&self, version: &str, name: &str) -> Result<()> {
+        let compiled = CompiledSql::new(
+            "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)"
+                .to_string(),
+            vec![
+                SqlParam::new(Value::String(version.to_string())),
+                SqlParam::new(Value::String(name.to_string())),
+            ],
+        );
+        self.execute_query(&compiled).await?;
+        Ok(())
+    }
+
+    async fn remove_migration(&self, version: &str) -> Result<()> {
+        let compiled = CompiledSql::new(
+            "DELETE FROM _ash_schema_migrations WHERE version = ?".to_string(),
+            vec![SqlParam::new(Value::String(version.to_string()))],
+        );
+        self.execute_query(&compiled).await?;
+        Ok(())
+    }
 }
 
 impl SchemaSupport for Sqlite {
@@ -156,25 +271,28 @@ impl DataLayer for Sqlite {
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let qb = sql::insert_query(resource, &fields)?;
-        self.execute_query_resource(qb, resource).await?;
+        self.execute_query_resource(&qb, resource).await?;
         Ok(fields)
     }
 
     async fn update(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
         let qb = sql::update_query(resource, id, &fields)?;
-        let result = self.execute_query_resource(qb, resource).await?;
+        let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
             if resource.optimistic_lock_attribute().is_some() {
                 let pk = resource
                     .primary_key()
                     .ok_or(Error::NoPrimaryKey(resource.name))?;
-                let mut check_qb = sqlx::QueryBuilder::new("SELECT 1 FROM ");
-                check_qb.push(sql::ident(resource.table_name())?);
-                check_qb.push(" WHERE ");
-                check_qb.push(sql::ident(pk.name)?);
-                check_qb.push(" = ");
-                check_qb.push_bind(id.to_string());
-                if self.fetch_all(check_qb).await?.is_empty() {
+                let check_sql = format!(
+                    "SELECT 1 FROM \"{}\" WHERE \"{}\" = ?",
+                    resource.table_name(),
+                    pk.name
+                );
+                let check_compiled = CompiledSql::new(
+                    check_sql,
+                    vec![SqlParam::new(Value::Uuid(id))],
+                );
+                if self.fetch_all(&check_compiled).await?.is_empty() {
                     return Err(Error::NotFound);
                 } else {
                     return Err(Error::StaleRecord {
@@ -190,13 +308,16 @@ impl DataLayer for Sqlite {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let mut fetch_qb = sqlx::QueryBuilder::new("SELECT * FROM ");
-        fetch_qb.push(sql::ident(resource.table_name())?);
-        fetch_qb.push(" WHERE ");
-        fetch_qb.push(sql::ident(pk.name)?);
-        fetch_qb.push(" = ");
-        fetch_qb.push_bind(id.to_string());
-        let mut fetched = self.fetch_all(fetch_qb).await?;
+        let fetch_sql = format!(
+            "SELECT * FROM \"{}\" WHERE \"{}\" = ?",
+            resource.table_name(),
+            pk.name
+        );
+        let fetch_compiled = CompiledSql::new(
+            fetch_sql,
+            vec![SqlParam::new(Value::Uuid(id))],
+        );
+        let mut fetched = self.fetch_all(&fetch_compiled).await?;
         if let Some(row) = fetched.pop() {
             sql::row_to_fields(&row, resource, &[], &[])
         } else {
@@ -206,7 +327,7 @@ impl DataLayer for Sqlite {
 
     async fn destroy(&self, resource: &ResourceDef, id: Uuid) -> Result<()> {
         let qb = sql::delete_query(resource, id)?;
-        let result = self.execute_query(qb).await?;
+        let result = self.execute_query(&qb).await?;
         if result.rows_affected() == 0 {
             return Err(Error::NotFound);
         }
@@ -219,7 +340,7 @@ impl DataLayer for Sqlite {
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
         let qb = sql::select_query(resource, query)?;
-        let rows = self.fetch_all(qb).await?;
+        let rows = self.fetch_all(&qb).await?;
         rows.iter()
             .map(|row| sql::row_to_fields(row, resource, &query.calculations, &query.aggregates))
             .collect()
@@ -234,24 +355,25 @@ impl DataLayer for Sqlite {
         update_fields: &[String],
     ) -> Result<FieldMap> {
         let qb = sql::upsert_query(resource, &fields, identity, update_fields)?;
-        self.execute_query_resource(qb, resource).await?;
+        self.execute_query_resource(&qb, resource).await?;
 
-        let mut fetch_qb = sqlx::QueryBuilder::new("SELECT * FROM ");
-        fetch_qb.push(sql::ident(resource.table_name())?);
-        fetch_qb.push(" WHERE ");
-        for (i, key) in identity.keys.iter().enumerate() {
-            if i > 0 {
-                fetch_qb.push(" AND ");
-            }
-            fetch_qb.push(sql::ident(key)?);
-            fetch_qb.push(" = ");
+        let mut where_parts = Vec::new();
+        let mut params = Vec::new();
+        for key in identity.keys {
             if let Some(val) = fields.get(*key) {
-                sql::push_sql_value(&mut fetch_qb, val);
+                where_parts.push(format!("\"{}\" = ?", key));
+                params.push(SqlParam::new(val.clone()));
             } else {
-                fetch_qb.push("NULL");
+                where_parts.push(format!("\"{}\" IS NULL", key));
             }
         }
-        let rows = self.fetch_all(fetch_qb).await?;
+        let fetch_sql = format!(
+            "SELECT * FROM \"{}\" WHERE {}",
+            resource.table_name(),
+            where_parts.join(" AND ")
+        );
+        let fetch_compiled = CompiledSql::new(fetch_sql, params);
+        let rows = self.fetch_all(&fetch_compiled).await?;
         let row = rows.first().ok_or(Error::NotFound)?;
         sql::row_to_fields(row, resource, &[], &[])
     }
@@ -283,7 +405,7 @@ impl DataLayer for Sqlite {
         }
         for chunk in ids.chunks(500) {
             let qb = sql::bulk_delete_query(resource, chunk)?;
-            self.execute_query_resource(qb, resource).await?;
+            self.execute_query_resource(&qb, resource).await?;
         }
         Ok(())
     }
