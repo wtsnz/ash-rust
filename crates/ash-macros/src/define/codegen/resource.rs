@@ -81,6 +81,37 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             attr_defs.push(quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) });
         } else if a.version || def.optimistic_lock.as_ref() == Some(&a.ident) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::version(#name_str) });
+        } else if a.is_enum {
+            let inner_ty = option_inner(ty).unwrap_or(ty);
+            if let Some(default_expr) = &a.default {
+                let fn_name = format_ident!("__default_{}", name_str);
+                helper_default_fns.push(quote! {
+                    fn #fn_name() -> ::ash_core::Value {
+                        ::ash_core::Value::from(#default_expr)
+                    }
+                });
+                attr_defs.push(quote! {
+                    ::ash_core::AttributeDef::with_default(
+                        #name_str,
+                        <#inner_ty as ::ash_core::AshType>::ATTR_TYPE,
+                        #fn_name
+                    )
+                });
+            } else if option_inner(ty).is_some() {
+                attr_defs.push(quote! {
+                    ::ash_core::AttributeDef::optional(
+                        #name_str,
+                        <#inner_ty as ::ash_core::AshType>::ATTR_TYPE
+                    )
+                });
+            } else {
+                attr_defs.push(quote! {
+                    ::ash_core::AttributeDef::required(
+                        #name_str,
+                        <#inner_ty as ::ash_core::AshType>::ATTR_TYPE
+                    )
+                });
+            }
         } else if let Some(default_expr) = &a.default {
             let fn_name = format_ident!("__default_{}", name_str);
             let attr_ty = if is_string(ty) {
@@ -306,7 +337,30 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
-        if a.atom.is_some() {
+        if a.is_enum {
+            if option_inner(ty).is_some() {
+                to_inserts.push(quote! {
+                    if let ::std::option::Option::Some(val) = &self.#id {
+                        map.insert(
+                            ::std::string::String::from(#name_str),
+                            ::ash_core::AshType::to_value(val),
+                        );
+                    } else {
+                        map.insert(
+                            ::std::string::String::from(#name_str),
+                            ::ash_core::Value::Null,
+                        );
+                    }
+                });
+            } else {
+                to_inserts.push(quote! {
+                    map.insert(
+                        ::std::string::String::from(#name_str),
+                        ::ash_core::AshType::to_value(&self.#id),
+                    );
+                });
+            }
+        } else if a.atom.is_some() {
             to_inserts.push(quote! {
                 map.insert(
                     ::std::string::String::from(#name_str),
@@ -362,6 +416,48 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
+
+        if a.is_enum {
+            let inner_ty = option_inner(ty).unwrap_or(ty);
+            if option_inner(ty).is_some() {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(val) if !val.is_null() => {
+                            ::std::option::Option::Some(<#inner_ty as ::ash_core::AshType>::from_value(val)?)
+                        }
+                        _ => ::std::option::Option::None,
+                    }
+                });
+            } else if let Some(default_expr) = &a.default {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(val) if !val.is_null() => {
+                            <#inner_ty as ::ash_core::AshType>::from_value(val)?
+                        }
+                        _ => #default_expr,
+                    }
+                });
+            } else if let Some(default_fn) = &a.default_fn {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(val) if !val.is_null() => {
+                            <#inner_ty as ::ash_core::AshType>::from_value(val)?
+                        }
+                        _ => <#inner_ty as ::ash_core::AshType>::from_value(&(#default_fn)())?,
+                    }
+                });
+            } else {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(val) if !val.is_null() => {
+                            <#inner_ty as ::ash_core::AshType>::from_value(val)?
+                        }
+                        _ => return Err(::ash_core::Error::Missing { field: #name_str.into() }),
+                    }
+                });
+            }
+            continue;
+        }
 
         if let Some(ts) = &def.timestamps
             && (id == &ts.created_at || id == &ts.updated_at)
@@ -570,7 +666,19 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let ty = &a.ty;
         let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
 
-        if a.pk || is_uuid(ty) || option_inner(ty).is_some_and(is_uuid) {
+        if a.is_enum {
+            let inner_ty = option_inner(ty).unwrap_or(ty);
+            field_consts.push(quote! {
+                pub const #id: ::ash_core::Attr<super::#resource, #inner_ty> =
+                    ::ash_core::Attr::new(#name_str);
+            });
+            if !has_action_conflict {
+                associated_field_consts.push(quote! {
+                    pub const #id: ::ash_core::Attr<Self, #inner_ty> =
+                        ::ash_core::Attr::new(#name_str);
+                });
+            }
+        } else if a.pk || is_uuid(ty) || option_inner(ty).is_some_and(is_uuid) {
             field_consts.push(quote! {
                 pub const #id: ::ash_core::Attr<super::#resource, ::uuid::Uuid> =
                     ::ash_core::Attr::new(#name_str);

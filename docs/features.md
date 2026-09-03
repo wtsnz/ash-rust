@@ -546,3 +546,69 @@ ctx.multi()
     .await?;
 ```
 
+---
+
+## 12. Native Rust Enum Types (`#[derive(AshEnum)]` / `AshType`)
+
+Eliminates stringly-typed attributes for status, category, and state columns. Native enums compile down to strings for SQL / in-memory storage, while giving callers 100% compile-time type safety, exhaustive pattern matching, and typed filter operators.
+
+### Defining an Enum
+```rust
+use ash_core::AshEnum;
+
+#[derive(AshEnum, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TicketStatus {
+    Draft,                       // serializes to "draft" by default
+    #[ash(string = "in_progress")]
+    InProgress,                  // custom serialized name
+    #[ash(rename = "resolved")]
+    Resolved,
+    Closed,
+}
+```
+
+### Resource Definition
+Mark attributes with `[enum]` or `[enum, default: ...]`:
+```rust
+resource! {
+    resource Ticket;
+    table "tickets";
+
+    attributes {
+        id: Uuid [pk],
+        subject: String,
+        status: TicketStatus [enum, default: TicketStatus::Draft],
+        priority: Option<Priority> [enum],
+    }
+
+    actions {
+        create create {
+            accept [subject, status, priority];
+        }
+    }
+}
+```
+
+### Type-Safe Queries & Matching
+```rust
+// Create with typed enum:
+let ticket = Ticket::create(&ctx)
+    .subject("Network Issue")
+    .status(TicketStatus::InProgress)
+    .await?;
+
+// Exhaustive pattern matching without string parsing or wildcard fallback:
+match ticket.status {
+    TicketStatus::Draft => println!("Draft"),
+    TicketStatus::InProgress => println!("Active"),
+    TicketStatus::Resolved => println!("Done"),
+    TicketStatus::Closed => println!("Archived"),
+}
+
+// Type-safe filter expressions:
+let active = Ticket::query(&ctx)
+    .filter(Ticket::status.eq(TicketStatus::InProgress))
+    .all()
+    .await?;
+```
+

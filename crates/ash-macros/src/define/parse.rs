@@ -1,5 +1,6 @@
 use super::ast::*;
 use crate::ast_helpers::{last_ident, option_inner, vec_inner};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
@@ -213,6 +214,7 @@ impl Parse for ResourceDefinition {
                     version: false,
                     generated: true,
                     atom: None,
+                    is_enum: false,
                     default: None,
                     default_fn: None,
                 });
@@ -228,6 +230,7 @@ impl Parse for ResourceDefinition {
                     version: false,
                     generated: true,
                     atom: None,
+                    is_enum: false,
                     default: None,
                     default_fn: None,
                 });
@@ -343,6 +346,7 @@ fn parse_attributes(
         let mut default = None;
         let mut default_fn = None;
         let mut atom = None;
+        let mut is_enum = false;
 
         if input.peek(Token![=]) {
             let _: Token![=] = input.parse()?;
@@ -354,7 +358,7 @@ fn parse_attributes(
             let flags_content;
             syn::bracketed!(flags_content in input);
             while !flags_content.is_empty() {
-                let flag_ident: Ident = flags_content.parse()?;
+                let flag_ident = flags_content.call(Ident::parse_any)?;
                 if flag_ident == "pk" {
                     pk = true;
                     generated = true;
@@ -362,6 +366,8 @@ fn parse_attributes(
                     version = true;
                 } else if flag_ident == "generated" {
                     generated = true;
+                } else if flag_ident == "enum" || flag_ident == "ash_enum" {
+                    is_enum = true;
                 } else if flag_ident == "default" {
                     if flags_content.peek(Token![:]) || flags_content.peek(Token![=]) {
                         let _ = flags_content.parse::<proc_macro2::TokenTree>()?;
@@ -391,7 +397,7 @@ fn parse_attributes(
                 } else {
                     return Err(Error::new_spanned(
                         flag_ident,
-                        "expected `pk`, `version`, `generated`, `default`, `default_fn`, or `atom`",
+                        "expected `pk`, `version`, `generated`, `default`, `default_fn`, `atom`, or `enum`",
                     ));
                 }
                 if flags_content.peek(Token![,]) {
@@ -414,6 +420,7 @@ fn parse_attributes(
             version,
             generated,
             atom,
+            is_enum,
             default,
             default_fn,
         });

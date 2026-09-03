@@ -1,3 +1,4 @@
+pub mod ash_enum;
 mod field;
 
 use crate::ast_helpers::{lit_string, screaming_snake};

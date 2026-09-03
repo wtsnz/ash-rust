@@ -23,6 +23,7 @@ mod policy;
 mod registry;
 mod rel;
 mod resource;
+mod types;
 mod value;
 
 pub use action::{
@@ -31,7 +32,7 @@ pub use action::{
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
-pub use ash_macros::{Resource, define, domain, resource};
+pub use ash_macros::{AshEnum, Resource, define, domain, resource};
 pub use changeset::Changeset;
 pub use context::Context;
 pub use data_layer::{CompiledQuery, DataLayer, SchemaSupport, Sort, TransactionSupport};
@@ -56,6 +57,7 @@ pub use resource::{
     AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, RelKind,
     RelationshipDef, Resource, ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
 };
+pub use types::{AshEnum, AshType};
 pub use value::{
     ConstValue, FieldMap, IntoOption, Value, optional_int, optional_uuid, required_string,
     required_uuid,

@@ -17,6 +17,7 @@ pub enum Kind {
     Stored {
         optional: bool,
         atom: Option<Vec<String>>,
+        is_enum: bool,
     },
     Calc {
         source: String,
@@ -62,6 +63,7 @@ impl FieldSpec {
             Kind::Stored {
                 optional: option_inner(&ty).is_some(),
                 atom: args.atom,
+                is_enum: args.is_enum,
             }
         };
 
@@ -72,8 +74,11 @@ impl FieldSpec {
         let name = self.ident.to_string();
         match &self.kind {
             Kind::Pk => Some(quote! { ::ash_core::AttributeDef::uuid_pk(#name) }),
-            Kind::Stored { optional, atom } => {
-                let ty = if let Some(atoms) = atom {
+            Kind::Stored { optional, atom, is_enum } => {
+                let ty = if *is_enum {
+                    let inner = option_inner(&self.ty).unwrap_or(&self.ty);
+                    quote! { <#inner as ::ash_core::AshType>::ATTR_TYPE }
+                } else if let Some(atoms) = atom {
                     quote! { ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*] } }
                 } else if is_uuid(&self.ty) || option_inner(&self.ty).is_some_and(is_uuid) {
                     quote! { ::ash_core::AttrType::Uuid }
@@ -133,6 +138,25 @@ impl FieldSpec {
         let ident = &self.ident;
         let name = ident.to_string();
         match &self.kind {
+            Kind::Stored { is_enum: true, optional: true, .. } => Some(quote! {
+                if let ::std::option::Option::Some(ref val) = self.#ident {
+                    map.insert(
+                        ::std::string::String::from(#name),
+                        ::ash_core::AshType::to_value(val),
+                    );
+                } else {
+                    map.insert(
+                        ::std::string::String::from(#name),
+                        ::ash_core::Value::Null,
+                    );
+                }
+            }),
+            Kind::Stored { is_enum: true, optional: false, .. } => Some(quote! {
+                map.insert(
+                    ::std::string::String::from(#name),
+                    ::ash_core::AshType::to_value(&self.#ident),
+                );
+            }),
             Kind::Stored { atom: Some(_), .. } => Some(quote! {
                 map.insert(
                     ::std::string::String::from(#name),
@@ -164,26 +188,59 @@ impl FieldSpec {
                 #ident: ::ash_core::required_uuid(fields, #name)?
             },
             Kind::Stored {
+                is_enum: true,
+                optional: true,
+                ..
+            } => {
+                let inner = option_inner(&self.ty).unwrap_or(&self.ty);
+                quote! {
+                    #ident: match fields.get(#name) {
+                        ::std::option::Option::Some(val) if !val.is_null() => {
+                            ::std::option::Option::Some(<#inner as ::ash_core::AshType>::from_value(val)?)
+                        }
+                        _ => ::std::option::Option::None,
+                    }
+                }
+            }
+            Kind::Stored {
+                is_enum: true,
+                optional: false,
+                ..
+            } => {
+                quote! {
+                    #ident: match fields.get(#name) {
+                        ::std::option::Option::Some(val) if !val.is_null() => {
+                            <#ty as ::ash_core::AshType>::from_value(val)?
+                        }
+                        _ => return Err(::ash_core::Error::Missing { field: #name.into() }),
+                    }
+                }
+            }
+            Kind::Stored {
                 optional: false,
                 atom: None,
+                ..
             } if is_uuid(&self.ty) => quote! {
                 #ident: ::ash_core::required_uuid(fields, #name)?
             },
             Kind::Stored {
                 optional: true,
                 atom: None,
+                ..
             } if option_inner(&self.ty).is_some_and(is_uuid) => {
                 quote! { #ident: ::ash_core::optional_uuid(fields, #name)? }
             }
             Kind::Stored {
                 optional: false,
                 atom: None,
+                ..
             } if is_string(&self.ty) => quote! {
                 #ident: ::ash_core::required_string(fields, #name)?
             },
             Kind::Stored {
                 optional: false,
                 atom: Some(_),
+                ..
             } => quote! {
                 #ident: #ty::parse(&::ash_core::required_string(fields, #name)?)?
             },
@@ -235,6 +292,13 @@ impl FieldSpec {
                 pub const #ident: ::ash_core::Attr<super::#owner, ::uuid::Uuid> =
                     ::ash_core::Attr::new(#name);
             },
+            Kind::Stored { is_enum: true, .. } => {
+                let inner = option_inner(&self.ty).unwrap_or(&self.ty);
+                quote! {
+                    pub const #ident: ::ash_core::Attr<super::#owner, #inner> =
+                        ::ash_core::Attr::new(#name);
+                }
+            },
             Kind::Stored { atom: Some(_), .. } => quote! {
                 pub const #ident: ::ash_core::Attr<super::#owner, ::std::string::String> =
                     ::ash_core::Attr::new(#name);
@@ -281,6 +345,7 @@ pub struct AshArgs {
     pub calc: Option<String>,
     pub fk: Option<String>,
     pub atom: Option<Vec<String>>,
+    pub is_enum: bool,
 }
 
 impl AshArgs {
@@ -292,6 +357,7 @@ impl AshArgs {
             calc: None,
             fk: None,
             atom: None,
+            is_enum: false,
         };
         for attr in attrs.iter().filter(|a| a.path().is_ident("ash")) {
             for meta in attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
@@ -299,6 +365,9 @@ impl AshArgs {
                     Meta::Path(path) if path.is_ident("pk") => args.pk = true,
                     Meta::Path(path) if path.is_ident("belongs_to") => args.belongs_to = true,
                     Meta::Path(path) if path.is_ident("has_many") => args.has_many = true,
+                    Meta::Path(path) if path.is_ident("enum") || path.is_ident("ash_enum") => {
+                        args.is_enum = true;
+                    }
                     Meta::NameValue(nv) if nv.path.is_ident("fk") => {
                         args.fk = Some(lit_string(&nv.value)?);
                     }

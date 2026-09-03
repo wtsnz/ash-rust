@@ -42,6 +42,7 @@ pub struct AttributeSpec {
     pub version: bool,
     pub generated: bool,
     pub atom: Option<Vec<String>>,
+    pub is_enum: bool,
     pub default: Option<syn::Expr>,
     pub default_fn: Option<syn::Path>,
 }
