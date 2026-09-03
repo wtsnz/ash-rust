@@ -1,13 +1,20 @@
 pub mod builder;
 pub mod filter;
 pub mod object;
+pub mod pagination;
 pub mod query;
 pub mod sort;
 pub mod types;
 
 pub use builder::AshGraphQLBuilder;
-pub use filter::{parse_resource_filter, register_primitive_filter_inputs, register_resource_filter_inputs};
+pub use filter::{
+    parse_resource_filter, register_primitive_filter_inputs, register_resource_filter_inputs,
+};
 pub use object::{build_resource_object, collect_enums_for_resource};
+pub use pagination::{
+    build_resource_connection_query, register_page_info, register_resource_connection_types,
+    resource_connection_field_name, resource_connection_type_name, resource_edge_type_name,
+};
 pub use query::{build_resource_queries, get_query_name, list_query_name};
 pub use sort::{parse_resource_sort, register_resource_sort_inputs};
 pub use types::{

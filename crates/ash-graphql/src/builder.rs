@@ -4,6 +4,9 @@ use async_graphql::dynamic::*;
 
 use crate::filter::{register_primitive_filter_inputs, register_resource_filter_inputs};
 use crate::object::{build_resource_object, collect_enums_for_resource};
+use crate::pagination::{
+    build_resource_connection_query, register_page_info, register_resource_connection_types,
+};
 use crate::query::build_resource_queries;
 use crate::sort::register_resource_sort_inputs;
 
@@ -60,10 +63,11 @@ impl AshGraphQLBuilder {
             },
         ));
 
-        // Connect read queries for each resource
+        // Connect read queries and Relay connection queries for each resource
         for res in &self.resources {
             let (get_field, list_field) = build_resource_queries::<D>(res);
-            query = query.field(get_field).field(list_field);
+            let conn_field = build_resource_connection_query::<D>(res);
+            query = query.field(get_field).field(list_field).field(conn_field);
         }
 
         let mut builder = Schema::build("Query", None, None);
@@ -71,14 +75,18 @@ impl AshGraphQLBuilder {
         // Register JSON scalar for arbitrary map values
         builder = builder.register(Scalar::new("JSON"));
 
+        // Register shared PageInfo
+        builder = register_page_info(builder);
+
         // Register primitive filters
         builder = register_primitive_filter_inputs(builder);
 
-        // Register all resources, filters, sorts, and enums
+        // Register all resources, connections, filters, sorts, and enums
         for res in &self.resources {
             let obj = build_resource_object(res);
             builder = builder.register(obj);
 
+            builder = register_resource_connection_types(builder, res);
             builder = register_resource_filter_inputs(builder, res);
             builder = register_resource_sort_inputs(builder, res);
 
