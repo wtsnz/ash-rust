@@ -1018,6 +1018,27 @@ fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                             let _: Token![;] = body.parse()?;
                         }
                     }
+                    "before_action" => {
+                        let expr: Expr = body.parse()?;
+                        changes.push(ChangeSpec::BeforeAction(expr));
+                        if body.peek(Token![;]) {
+                            let _: Token![;] = body.parse()?;
+                        }
+                    }
+                    "after_action" => {
+                        let expr: Expr = body.parse()?;
+                        changes.push(ChangeSpec::AfterAction(expr));
+                        if body.peek(Token![;]) {
+                            let _: Token![;] = body.parse()?;
+                        }
+                    }
+                    "after_transaction" => {
+                        let expr: Expr = body.parse()?;
+                        changes.push(ChangeSpec::AfterTransaction(expr));
+                        if body.peek(Token![;]) {
+                            let _: Token![;] = body.parse()?;
+                        }
+                    }
                     "changes" => {
                         if body.peek(Token![:]) {
                             let _: Token![:] = body.parse()?;
@@ -1267,9 +1288,30 @@ fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
             }
             Err(Error::new_spanned(call, "expected `func(expr)`"))
         }
+        "before_action" => {
+            if call.args.len() == 1 {
+                let expr = call.args[0].clone();
+                return Ok(ChangeSpec::BeforeAction(expr));
+            }
+            Err(Error::new_spanned(call, "expected `before_action(expr)`"))
+        }
+        "after_action" => {
+            if call.args.len() == 1 {
+                let expr = call.args[0].clone();
+                return Ok(ChangeSpec::AfterAction(expr));
+            }
+            Err(Error::new_spanned(call, "expected `after_action(expr)`"))
+        }
+        "after_transaction" => {
+            if call.args.len() == 1 {
+                let expr = call.args[0].clone();
+                return Ok(ChangeSpec::AfterTransaction(expr));
+            }
+            Err(Error::new_spanned(call, "expected `after_transaction(expr)`"))
+        }
         other => Err(Error::new_spanned(
             func,
-            format!("unknown change `{other}`, expected `set`, `set_new`, `relate_actor`, `set_from_arg`, `custom`, or `func`"),
+            format!("unknown change `{other}`, expected `set`, `set_new`, `relate_actor`, `set_from_arg`, `before_action`, `after_action`, `after_transaction`, `custom`, or `func`"),
         )),
     }
 }

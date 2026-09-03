@@ -903,6 +903,84 @@ Product::query(&ctx)
     .await?;
 ```
 
+---
+
+## 18. Declarative Action Hooks & CustomChange Hook Registration
+
+Mirrors Ash Elixir's lifecycle hooks (`before_action`, `after_action`, `after_transaction`), supporting both declarative action-level DSL syntax and runtime registration from `CustomChange` modules:
+
+### Capabilities
+- **`before_action`**: Runs before persistence with mutable access to attributes (`&mut FieldMap`). Can mutate attributes, set computed values, or return `Err` to abort the action.
+- **`after_action`**: Runs immediately after database persistence with mutable access to persisted attributes. Perfect for triggering dependent workflows, audit entries, or post-save field stamping.
+- **`after_transaction`**: Runs once the database transaction commits (`Ok(&FieldMap)`) or rolls back (`Err(&Error)`).
+- **Supports all Action Kinds**: Create, Update, and Destroy actions.
+- **Dual Syntax**: Available both as direct action statements (`before_action my_fn;`) and wrapped inside Ash-style changes (`change before_action(my_fn);`).
+- **Dynamic Hook Registration in `CustomChange`**: Reusable change plugins can attach hooks directly to `ChangeContext` (`ctx.before_action(...)`, `ctx.after_action(...)`, `ctx.after_transaction(...)`).
+
+### Example Usage
+```rust
+fn normalize_email(fields: &mut FieldMap) -> Result<()> {
+    if let Some(Value::String(email)) = fields.get("email") {
+        fields.insert("email".into(), Value::String(email.trim().to_lowercase()));
+    }
+    Ok(())
+}
+
+fn send_welcome_email(fields: &mut FieldMap) -> Result<()> {
+    println!("Account created for: {:?}", fields.get("email"));
+    Ok(())
+}
+
+resource! {
+    resource User;
+    table "users";
+
+    attributes {
+        id: Uuid [pk],
+        email: String,
+        status: String = "active",
+    }
+
+    actions {
+        create register {
+            primary;
+            accept [email];
+
+            // Shorthand syntax:
+            before_action normalize_email;
+            after_action send_welcome_email;
+            after_transaction |res| {
+                if res.is_ok() {
+                    metrics::increment("user.registered");
+                }
+            };
+        }
+
+        update update {
+            primary;
+            accept [email];
+
+            // Ash Elixir change wrapper syntax:
+            change before_action(normalize_email);
+        }
+
+        destroy destroy {
+            primary;
+            before_action |fields| {
+                if fields.get("status") == Some(&Value::String("protected".into())) {
+                    return Err(Error::Constraint {
+                        field: "status".into(),
+                        message: "protected users cannot be deleted".into(),
+                    });
+                }
+                Ok(())
+            };
+        }
+    }
+}
+```
+
+
 
 
 

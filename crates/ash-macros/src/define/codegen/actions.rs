@@ -140,6 +140,15 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                             }
                         })
                     }
+                    ChangeSpec::BeforeAction(expr) => {
+                        Ok(quote! { ::ash_core::Change::BeforeAction(#expr) })
+                    }
+                    ChangeSpec::AfterAction(expr) => {
+                        Ok(quote! { ::ash_core::Change::AfterAction(#expr) })
+                    }
+                    ChangeSpec::AfterTransaction(expr) => {
+                        Ok(quote! { ::ash_core::Change::AfterTransaction(#expr) })
+                    }
                     ChangeSpec::Custom(expr) => {
                         Ok(quote! { ::ash_core::Change::Custom(#expr) })
                     }

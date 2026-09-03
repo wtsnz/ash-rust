@@ -1,12 +1,63 @@
 use crate::actor::Actor;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::resource::AttrType;
 use crate::value::{ConstValue, FieldMap};
+
+/// Dynamic hook running before persistence with mutable access to attributes.
+pub type DynamicBeforeActionHook = Box<dyn FnOnce(&mut FieldMap) -> Result<()> + Send + 'static>;
+
+/// Dynamic hook running immediately after persistence with mutable access to persisted attributes.
+pub type DynamicAfterActionHook = Box<dyn FnOnce(&mut FieldMap) -> Result<()> + Send + 'static>;
+
+/// Dynamic hook running after transaction completion (commit or rollback), receiving the result.
+pub type DynamicAfterTransactionHook =
+    Box<dyn FnOnce(std::result::Result<&FieldMap, &Error>) + Send + 'static>;
+
+/// Static function pointer for a `before_action` hook on an action definition.
+pub type BeforeActionFn = fn(&mut FieldMap) -> Result<()>;
+
+/// Static function pointer for an `after_action` hook on an action definition.
+pub type AfterActionFn = fn(&mut FieldMap) -> Result<()>;
+
+/// Static function pointer for an `after_transaction` hook on an action definition.
+pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
 
 pub struct ChangeContext<'a> {
     pub fields: &'a mut FieldMap,
     pub actor: Option<&'a Actor>,
     pub arguments: &'a FieldMap,
+    pub before_actions: &'a mut Vec<DynamicBeforeActionHook>,
+    pub after_actions: &'a mut Vec<DynamicAfterActionHook>,
+    pub after_transactions: &'a mut Vec<DynamicAfterTransactionHook>,
+}
+
+impl<'a> ChangeContext<'a> {
+    /// Register a hook to run immediately before persistence.
+    /// May inspect or mutate attributes, or return an error to abort the write.
+    pub fn before_action<F>(&mut self, hook: F)
+    where
+        F: FnOnce(&mut FieldMap) -> Result<()> + Send + 'static,
+    {
+        self.before_actions.push(Box::new(hook));
+    }
+
+    /// Register a hook to run immediately after persistence within the transaction.
+    /// Receives mutable access to the newly saved record attributes.
+    pub fn after_action<F>(&mut self, hook: F)
+    where
+        F: FnOnce(&mut FieldMap) -> Result<()> + Send + 'static,
+    {
+        self.after_actions.push(Box::new(hook));
+    }
+
+    /// Register a hook to run after the transaction finishes (or immediately if not transactional).
+    /// Receives the final result (`Ok(&fields)` or `Err(&error)`).
+    pub fn after_transaction<F>(&mut self, hook: F)
+    where
+        F: FnOnce(std::result::Result<&FieldMap, &Error>) + Send + 'static,
+    {
+        self.after_transactions.push(Box::new(hook));
+    }
 }
 
 pub trait CustomChange: Send + Sync + 'static {
@@ -273,11 +324,26 @@ pub enum Change {
         relationship: &'static str,
         rel_type: ManagedRelType,
     },
+    BeforeAction(BeforeActionFn),
+    AfterAction(AfterActionFn),
+    AfterTransaction(AfterTransactionFn),
     Custom(&'static dyn CustomChange),
     Func(fn(&mut ChangeContext<'_>) -> Result<()>),
 }
 
 impl Change {
+    pub const fn before_action(f: BeforeActionFn) -> Self {
+        Self::BeforeAction(f)
+    }
+
+    pub const fn after_action(f: AfterActionFn) -> Self {
+        Self::AfterAction(f)
+    }
+
+    pub const fn after_transaction(f: AfterTransactionFn) -> Self {
+        Self::AfterTransaction(f)
+    }
+
     pub const fn manage_relationship(
         relationship: &'static str,
         rel_type: ManagedRelType,
@@ -318,6 +384,9 @@ impl std::fmt::Debug for Change {
                 .field("relationship", relationship)
                 .field("rel_type", rel_type)
                 .finish(),
+            Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
+            Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
+            Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),
             Self::Custom(_) => write!(f, "Custom(<dyn CustomChange>)"),
             Self::Func(_) => write!(f, "Func(<fn>)"),
         }

@@ -28,8 +28,10 @@ mod types;
 mod value;
 
 pub use action::{
-    ActionDef, ActionKind, ArgumentDef, Change, ChangeContext, CustomChange, CustomValidation,
-    ManagedRelType, PersistKind, PreparationDef, Validation, ValidationContext,
+    ActionDef, ActionKind, AfterActionFn, AfterTransactionFn, ArgumentDef, BeforeActionFn, Change,
+    ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
+    DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, PersistKind,
+    PreparationDef, Validation, ValidationContext,
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};

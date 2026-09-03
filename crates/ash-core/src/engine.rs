@@ -808,13 +808,9 @@ pub async fn destroy_existing<R: Resource, D: DataLayer>(
     action: &str,
     existing: R,
 ) -> Result<()> {
-    let action_def = action_named(&R::DEF, action)?;
-    expect_kind(action_def, ActionKind::Destroy)?;
-    expect_persist(action_def, PersistKind::DataLayer)?;
-
-    let id = existing.id();
-    let existing_fields = existing.to_fields();
-    destroy_dynamic(ctx, &R::DEF, action_def, id, &existing_fields).await
+    let cs = Changeset::for_destroy(ctx, action, existing)?;
+    cs.commit(ctx).await?;
+    Ok(())
 }
 
 pub async fn destroy_dynamic<D: DataLayer>(
@@ -824,30 +820,64 @@ pub async fn destroy_dynamic<D: DataLayer>(
     id: Uuid,
     existing_fields: &FieldMap,
 ) -> Result<()> {
+    let mut fields = existing_fields.clone();
+    let mut dynamic_before_actions = Vec::new();
+    let mut dynamic_after_actions = Vec::new();
+    let mut dynamic_after_transactions = Vec::new();
+
+    crate::pipeline::apply_changes_with_hooks(
+        &mut fields,
+        action,
+        ctx.actor.as_ref(),
+        &crate::value::FieldMap::new(),
+        &mut dynamic_before_actions,
+        &mut dynamic_after_actions,
+        &mut dynamic_after_transactions,
+    )?;
+
+    for hook in dynamic_before_actions {
+        hook(&mut fields)?;
+    }
+
     authorize_write(
         resource,
         action,
         ctx.actor.as_ref(),
-        Some(existing_fields),
+        Some(&fields),
     )?;
 
-    handle_cascading_deletes(ctx, resource, id, existing_fields).await?;
+    handle_cascading_deletes(ctx, resource, id, &fields).await?;
 
-    ctx.data.destroy(resource, id).await?;
+    match ctx.data.destroy(resource, id).await {
+        Ok(()) => {
+            for hook in dynamic_after_actions {
+                hook(&mut fields)?;
+            }
 
-    let notification = crate::notifier::Notification::new(
-        resource.name,
-        action.name,
-        ActionKind::Destroy,
-        id,
-        existing_fields.clone(),
-        Some(existing_fields.clone()),
-        ctx.actor.clone(),
-        crate::value::FieldMap::new(),
-    );
-    crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+            let notification = crate::notifier::Notification::new(
+                resource.name,
+                action.name,
+                ActionKind::Destroy,
+                id,
+                fields.clone(),
+                Some(fields.clone()),
+                ctx.actor.clone(),
+                crate::value::FieldMap::new(),
+            );
+            crate::notifier::dispatch_notification(ctx, resource, notification).await?;
 
-    Ok(())
+            for hook in dynamic_after_transactions {
+                hook(Ok(&fields));
+            }
+            Ok(())
+        }
+        Err(err) => {
+            for hook in dynamic_after_transactions {
+                hook(Err(&err));
+            }
+            Err(err)
+        }
+    }
 }
 
 pub async fn handle_cascading_deletes<D: DataLayer>(

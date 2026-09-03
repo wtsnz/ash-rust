@@ -100,6 +100,29 @@ pub fn apply_changes(
     actor: Option<&Actor>,
     arguments: &FieldMap,
 ) -> Result<()> {
+    let mut before_actions = Vec::new();
+    let mut after_actions = Vec::new();
+    let mut after_transactions = Vec::new();
+    apply_changes_with_hooks(
+        fields,
+        action,
+        actor,
+        arguments,
+        &mut before_actions,
+        &mut after_actions,
+        &mut after_transactions,
+    )
+}
+
+pub fn apply_changes_with_hooks(
+    fields: &mut FieldMap,
+    action: &ActionDef,
+    actor: Option<&Actor>,
+    arguments: &FieldMap,
+    before_actions: &mut Vec<crate::action::DynamicBeforeActionHook>,
+    after_actions: &mut Vec<crate::action::DynamicAfterActionHook>,
+    after_transactions: &mut Vec<crate::action::DynamicAfterTransactionHook>,
+) -> Result<()> {
     for change in action.changes {
         match change {
             Change::SetAttribute { field, value } => {
@@ -122,11 +145,23 @@ pub fn apply_changes(
                     fields.insert((*field).to_string(), val.clone());
                 }
             }
+            Change::BeforeAction(hook) => {
+                before_actions.push(Box::new(*hook));
+            }
+            Change::AfterAction(hook) => {
+                after_actions.push(Box::new(*hook));
+            }
+            Change::AfterTransaction(hook) => {
+                after_transactions.push(Box::new(*hook));
+            }
             Change::Custom(c) => {
                 let mut ctx = crate::action::ChangeContext {
                     fields,
                     actor,
                     arguments,
+                    before_actions,
+                    after_actions,
+                    after_transactions,
                 };
                 c.apply(&mut ctx)?;
             }
@@ -136,6 +171,9 @@ pub fn apply_changes(
                     fields,
                     actor,
                     arguments,
+                    before_actions,
+                    after_actions,
+                    after_transactions,
                 };
                 f(&mut ctx)?;
             }

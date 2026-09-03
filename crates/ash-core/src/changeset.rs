@@ -1,10 +1,13 @@
-use crate::action::{ActionDef, ActionKind, Change, ManagedRelType, PersistKind};
+use crate::action::{
+    ActionDef, ActionKind, Change, DynamicAfterActionHook, DynamicAfterTransactionHook,
+    ManagedRelType, PersistKind,
+};
 use crate::context::Context;
 use crate::data_layer::DataLayer;
 use crate::error::{Error, Result};
 use crate::pipeline::{
-    action_named, apply_changes, expect_kind, expect_persist, generate_pk, pk_name,
-    run_validations, split_input, validate,
+    action_named, apply_changes, apply_changes_with_hooks, expect_kind, expect_persist,
+    generate_pk, pk_name, run_validations, split_input, validate,
 };
 use crate::policy::authorize_write;
 use crate::resource::Resource;
@@ -84,6 +87,8 @@ pub struct Changeset<R: Resource> {
     before_actions: Vec<BeforeActionHook<R>>,
     after_actions: Vec<AfterActionHook<R>>,
     after_transactions: Vec<AfterTransactionHook<R>>,
+    dynamic_after_actions: Vec<DynamicAfterActionHook>,
+    dynamic_after_transactions: Vec<DynamicAfterTransactionHook>,
     managed_relationships: Vec<ManagedRelationshipSpec>,
 }
 
@@ -219,7 +224,27 @@ impl<R: Resource> Changeset<R> {
             }
         }
 
-        apply_changes(&mut fields, action, ctx.actor.as_ref(), &arguments)?;
+        let mut before_actions: Vec<BeforeActionHook<R>> = Vec::new();
+        let mut dynamic_after_actions = Vec::new();
+        let mut dynamic_after_transactions = Vec::new();
+        let mut dynamic_before_actions = Vec::new();
+
+        apply_changes_with_hooks(
+            &mut fields,
+            action,
+            ctx.actor.as_ref(),
+            &arguments,
+            &mut dynamic_before_actions,
+            &mut dynamic_after_actions,
+            &mut dynamic_after_transactions,
+        )?;
+
+        for dyn_hook in dynamic_before_actions {
+            before_actions.push(Box::new(move |cs: &mut Changeset<R>| {
+                dyn_hook(cs.attributes_mut())
+            }));
+        }
+
         validate(&R::DEF, &fields)?;
         run_validations(&R::DEF, action, None, &fields, &arguments)?;
         crate::policy::authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
@@ -230,9 +255,11 @@ impl<R: Resource> Changeset<R> {
             arguments,
             existing: None,
             upsert: None,
-            before_actions: Vec::new(),
+            before_actions,
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
+            dynamic_after_actions,
+            dynamic_after_transactions,
             managed_relationships,
         })
     }
@@ -274,7 +301,27 @@ impl<R: Resource> Changeset<R> {
             fields.insert(updated_at.to_string(), Value::String(now));
         }
 
-        apply_changes(&mut fields, action, ctx.actor.as_ref(), &arguments)?;
+        let mut before_actions: Vec<BeforeActionHook<R>> = Vec::new();
+        let mut dynamic_after_actions = Vec::new();
+        let mut dynamic_after_transactions = Vec::new();
+        let mut dynamic_before_actions = Vec::new();
+
+        apply_changes_with_hooks(
+            &mut fields,
+            action,
+            ctx.actor.as_ref(),
+            &arguments,
+            &mut dynamic_before_actions,
+            &mut dynamic_after_actions,
+            &mut dynamic_after_transactions,
+        )?;
+
+        for dyn_hook in dynamic_before_actions {
+            before_actions.push(Box::new(move |cs: &mut Changeset<R>| {
+                dyn_hook(cs.attributes_mut())
+            }));
+        }
+
         validate(&R::DEF, &fields)?;
         run_validations(&R::DEF, action, Some(&existing_fields), &fields, &arguments)?;
         crate::policy::authorize_field_writes(
@@ -303,9 +350,11 @@ impl<R: Resource> Changeset<R> {
             arguments,
             existing: Some(existing),
             upsert: None,
-            before_actions: Vec::new(),
+            before_actions,
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
+            dynamic_after_actions,
+            dynamic_after_transactions,
             managed_relationships,
         })
     }
@@ -358,16 +407,72 @@ impl<R: Resource> Changeset<R> {
         R::from_fields(&fields)
     }
 
+    pub fn for_destroy<D: DataLayer>(
+        ctx: &Context<D>,
+        action: &str,
+        existing: R,
+    ) -> Result<Self> {
+        let action = action_named(&R::DEF, action)?;
+        expect_kind(action, ActionKind::Destroy)?;
+        let mut fields = existing.to_fields();
+        let existing_fields = fields.clone();
+
+        let mut before_actions: Vec<BeforeActionHook<R>> = Vec::new();
+        let mut dynamic_after_actions = Vec::new();
+        let mut dynamic_after_transactions = Vec::new();
+        let mut dynamic_before_actions = Vec::new();
+
+        apply_changes_with_hooks(
+            &mut fields,
+            action,
+            ctx.actor.as_ref(),
+            &FieldMap::new(),
+            &mut dynamic_before_actions,
+            &mut dynamic_after_actions,
+            &mut dynamic_after_transactions,
+        )?;
+
+        for dyn_hook in dynamic_before_actions {
+            before_actions.push(Box::new(move |cs: &mut Changeset<R>| {
+                dyn_hook(cs.attributes_mut())
+            }));
+        }
+
+        run_validations(&R::DEF, action, Some(&existing_fields), &fields, &FieldMap::new())?;
+
+        Ok(Self {
+            action,
+            fields,
+            arguments: FieldMap::new(),
+            existing: Some(existing),
+            upsert: None,
+            before_actions,
+            after_actions: Vec::new(),
+            after_transactions: Vec::new(),
+            dynamic_after_actions,
+            dynamic_after_transactions,
+            managed_relationships: Vec::new(),
+        })
+    }
+
     pub async fn commit<D: DataLayer>(mut self, ctx: &Context<D>) -> Result<R> {
         let after_tx_hooks = std::mem::take(&mut self.after_transactions);
+        let dynamic_after_tx_hooks = std::mem::take(&mut self.dynamic_after_transactions);
         let res = self.commit_inner(ctx).await;
         match &res {
             Ok(record) => {
+                let fields = record.to_fields();
+                for hook in dynamic_after_tx_hooks {
+                    hook(Ok(&fields));
+                }
                 for hook in after_tx_hooks {
                     hook(Ok(record));
                 }
             }
             Err(err) => {
+                for hook in dynamic_after_tx_hooks {
+                    hook(Err(err));
+                }
                 for hook in after_tx_hooks {
                     hook(Err(err));
                 }
@@ -464,10 +569,16 @@ impl<R: Resource> Changeset<R> {
                 }
             }
             ActionKind::Update => ctx.data.update(&R::DEF, id, fields).await?,
+            ActionKind::Destroy => {
+                let existing_fields = previous_fields.as_ref().unwrap_or(&fields);
+                crate::engine::handle_cascading_deletes(ctx, &R::DEF, id, existing_fields).await?;
+                ctx.data.destroy(&R::DEF, id).await?;
+                existing_fields.clone()
+            }
             kind => {
                 return Err(Error::WrongActionKind {
                     action: self.action.name,
-                    expected: "create or update",
+                    expected: "create, update, or destroy",
                     actual: kind.as_str(),
                 });
             }
@@ -482,6 +593,11 @@ impl<R: Resource> Changeset<R> {
         }
 
         crate::policy::redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
+
+        for hook in std::mem::take(&mut self.dynamic_after_actions) {
+            hook(&mut stored)?;
+        }
+
         let mut record = R::from_fields(&stored)?;
 
         for hook in std::mem::take(&mut self.after_actions) {

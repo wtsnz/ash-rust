@@ -424,3 +424,35 @@ Post::query(&ctx)
     .await?;
 ```
 
+---
+
+## 9. Declarative Action Hooks
+
+Attach lifecycle callbacks directly in resource actions or via reusable `CustomChange` plugins:
+
+```rust
+actions {
+    create publish {
+        primary;
+        accept [title, body];
+
+        // 1. Shorthand action hooks:
+        before_action normalize_title;
+        after_action index_in_search;
+        after_transaction emit_metrics;
+
+        // 2. Ash Elixir change wrapper syntax:
+        change before_action(validate_title_format);
+
+        // 3. Custom changes registering hooks:
+        change custom(&AUDIT_LOGGER);
+    }
+
+    destroy archive {
+        primary;
+        before_action prevent_locked_deletion;
+    }
+}
+```
+
+
