@@ -1,0 +1,17 @@
+[package]
+name = "ash-state-machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Declarative state machine extension for ash-rust"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+ash-state-machine-macros = { path = "../ash-state-machine-macros" }
+
+[dev-dependencies]
+ash-macros = { path = "../ash-macros" }
+ash-memory = { path = "../ash-memory" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "ash-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "SQLite data layer"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+tokio = { version = "1", features = ["sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

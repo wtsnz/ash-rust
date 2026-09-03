@@ -1,0 +1,11 @@
+[package]
+name = "ash-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "In-memory data layer"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+uuid.workspace = true

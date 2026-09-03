@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+    "examples/*",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+rust-version = "1.90"
+
+[workspace.dependencies]
+uuid = { version = "1", features = ["v4", "serde"] }

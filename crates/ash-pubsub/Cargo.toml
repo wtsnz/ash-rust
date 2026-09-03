@@ -1,0 +1,19 @@
+[package]
+name = "ash-pubsub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "PubSub event broker and action notifier for ash-rust"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+tokio = { version = "1", features = ["sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+ash-macros = { path = "../ash-macros" }
+ash-memory = { path = "../ash-memory" }
+ash-sqlite = { path = "../ash-sqlite" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true

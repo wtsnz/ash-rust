@@ -1,0 +1,18 @@
+[package]
+name = "kanban"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Trello-like Kanban example on ash-rust"
+
+[dependencies]
+ash-core = { path = "../../crates/ash-core" }
+ash-memory = { path = "../../crates/ash-memory" }
+ash-sqlite = { path = "../../crates/ash-sqlite" }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

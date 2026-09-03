@@ -1,0 +1,993 @@
+use super::policies::lit_to_const_value;
+use crate::ast_helpers::{
+    is_bool, is_i64, is_string, is_uuid, option_inner, screaming_snake, snake_case,
+};
+use crate::define::ast::{
+    AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition,
+};
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use syn::{Error, Result};
+
+pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
+    if def.attributes.is_empty() {
+        return Ok(quote! {});
+    }
+
+    let resource = &def.resource;
+    let resource_str = resource.to_string();
+
+    let table_str = if def.embedded {
+        def.table.clone().unwrap_or_default()
+    } else {
+        def.table
+            .clone()
+            .unwrap_or_else(|| snake_case(&resource_str))
+    };
+
+    let pk_attr = def.attributes.iter().find(|a| a.pk);
+    let (pk_fn_body, has_pk) = match pk_attr {
+        Some(pk) => {
+            let pk_id = &pk.ident;
+            (quote! { self.#pk_id }, true)
+        }
+        None => {
+            if def.embedded {
+                (quote! { ::uuid::Uuid::nil() }, false)
+            } else {
+                return Err(Error::new_spanned(
+                    resource,
+                    "Resource requires an attribute marked [pk]",
+                ));
+            }
+        }
+    };
+    let _ = has_pk;
+
+    // 1. Struct fields
+    let mut struct_fields = Vec::new();
+    for a in &def.attributes {
+        let o_attrs = &a.outer_attrs;
+        let id = &a.ident;
+        let ty = &a.ty;
+        struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+    }
+    for c in &def.calculations {
+        let o_attrs = &c.outer_attrs;
+        let id = &c.ident;
+        let inner = option_inner(&c.ty).unwrap_or(&c.ty);
+        struct_fields.push(quote! { #(#o_attrs)* pub #id: ::std::option::Option<#inner> });
+    }
+    for agg in &def.aggregates {
+        let o_attrs = &agg.outer_attrs;
+        let id = &agg.ident;
+        let ty = &agg.ty;
+        struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+    }
+    for r in &def.relationships {
+        let o_attrs = &r.outer_attrs;
+        let id = &r.ident;
+        let ty = &r.struct_field_ty;
+        struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+    }
+
+    // 2. AttributeDefs
+    let mut attr_defs = Vec::new();
+    let mut helper_default_fns = Vec::new();
+    for a in &def.attributes {
+        let name_str = a.ident.to_string();
+        let ty = &a.ty;
+        if a.pk {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) });
+        } else if a.version || def.optimistic_lock.as_ref() == Some(&a.ident) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::version(#name_str) });
+        } else if let Some(default_expr) = &a.default {
+            let fn_name = format_ident!("__default_{}", name_str);
+            let attr_ty = if is_string(ty) {
+                quote! { ::ash_core::AttrType::String }
+            } else if is_i64(ty) {
+                quote! { ::ash_core::AttrType::Integer }
+            } else if is_bool(ty) {
+                quote! { ::ash_core::AttrType::Boolean }
+            } else {
+                quote! { ::ash_core::AttrType::Map }
+            };
+            helper_default_fns.push(quote! {
+                fn #fn_name() -> ::ash_core::Value {
+                    ::ash_core::Value::from(#default_expr)
+                }
+            });
+            attr_defs.push(quote! { ::ash_core::AttributeDef::with_default(#name_str, #attr_ty, #fn_name) });
+        } else if let Some(default_fn_path) = &a.default_fn {
+            let fn_name = format_ident!("__default_{}", name_str);
+            let attr_ty = if is_string(ty) {
+                quote! { ::ash_core::AttrType::String }
+            } else if is_i64(ty) {
+                quote! { ::ash_core::AttrType::Integer }
+            } else if is_bool(ty) {
+                quote! { ::ash_core::AttrType::Boolean }
+            } else {
+                quote! { ::ash_core::AttrType::Map }
+            };
+            helper_default_fns.push(quote! {
+                fn #fn_name() -> ::ash_core::Value {
+                    ::ash_core::Value::from((#default_fn_path)())
+                }
+            });
+            attr_defs.push(quote! { ::ash_core::AttributeDef::with_default(#name_str, #attr_ty, #fn_name) });
+        } else if a.generated {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::generated(#name_str, ::ash_core::AttrType::String) });
+        } else if let Some(atoms) = &a.atom {
+            attr_defs.push(quote! {
+                ::ash_core::AttributeDef::required(
+                    #name_str,
+                    ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*] }
+                )
+            });
+        } else if is_uuid(ty) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Uuid) });
+        } else if option_inner(ty).is_some_and(is_uuid) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Uuid) });
+        } else if is_string(ty) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::String) });
+        } else if option_inner(ty).is_some_and(is_string) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::String) });
+        } else if is_i64(ty) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Integer) });
+        } else if option_inner(ty).is_some_and(is_i64) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Integer) });
+        } else if is_bool(ty) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Boolean) });
+        } else if option_inner(ty).is_some_and(is_bool) {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Boolean) });
+        } else if option_inner(ty).is_some() {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Map) });
+        } else {
+            attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Map) });
+        }
+    }
+
+    // 3. RelationshipDefs
+    let mut rel_defs = Vec::new();
+    for r in &def.relationships {
+        let name_str = r.ident.to_string();
+        let dest = &r.dest;
+        match r.kind {
+            RelType::BelongsTo => {
+                let fk_str = r
+                    .fk
+                    .clone()
+                    .unwrap_or_else(|| format!("{name_str}_id"));
+                rel_defs.push(quote! {
+                    ::ash_core::RelationshipDef::belongs_to(
+                        #name_str,
+                        || &<#dest as ::ash_core::Resource>::DEF,
+                        #fk_str,
+                    )
+                });
+            }
+            RelType::HasMany => {
+                let fk_str = r
+                    .fk
+                    .clone()
+                    .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
+                rel_defs.push(quote! {
+                    ::ash_core::RelationshipDef::has_many(
+                        #name_str,
+                        || &<#dest as ::ash_core::Resource>::DEF,
+                        #fk_str,
+                    )
+                });
+            }
+            RelType::ManyToMany => {
+                let through_ident = r.through.as_ref().ok_or_else(|| {
+                    syn::Error::new_spanned(&r.ident, "many_to_many requires `through: JoinResource`")
+                })?;
+                let source_on_join = r
+                    .source_attribute_on_join_resource
+                    .clone()
+                    .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
+                let dest_on_join = r
+                    .destination_attribute_on_join_resource
+                    .clone()
+                    .unwrap_or_else(|| format!("{}_id", snake_case(&dest.to_string())));
+                rel_defs.push(quote! {
+                    ::ash_core::RelationshipDef::many_to_many(
+                        #name_str,
+                        || &<#dest as ::ash_core::Resource>::DEF,
+                        || &<#through_ident as ::ash_core::Resource>::DEF,
+                        #source_on_join,
+                        #dest_on_join,
+                    )
+                });
+            }
+        }
+    }
+
+    // 4. CalculationDefs
+    let mut calc_defs = Vec::new();
+    for c in &def.calculations {
+        let name_str = c.ident.to_string();
+        let inner = option_inner(&c.ty).unwrap_or(&c.ty);
+        let ty_tokens = if is_string(inner) {
+            quote! { ::ash_core::AttrType::String }
+        } else if is_i64(inner) {
+            quote! { ::ash_core::AttrType::Integer }
+        } else if is_bool(inner) {
+            quote! { ::ash_core::AttrType::Boolean }
+        } else if is_uuid(inner) {
+            quote! { ::ash_core::AttrType::Uuid }
+        } else {
+            quote! { ::ash_core::AttrType::String }
+        };
+        let expr_tokens = calc_expr_to_tokens(&c.expr);
+        calc_defs.push(quote! {
+            ::ash_core::CalculationDef::new(
+                #name_str,
+                #ty_tokens,
+                #expr_tokens,
+            )
+        });
+    }
+
+    // 4b. AggregateDefs
+    let mut agg_defs = Vec::new();
+    for agg in &def.aggregates {
+        let name_str = agg.ident.to_string();
+        let rel_str = agg.relationship.to_string();
+        let ty_tokens = match &agg.kind {
+            AggregateKindSpec::Count | AggregateKindSpec::Sum { .. } => {
+                quote! { ::ash_core::AttrType::Integer }
+            }
+            AggregateKindSpec::Exists => {
+                quote! { ::ash_core::AttrType::Boolean }
+            }
+            AggregateKindSpec::First { .. } => {
+                let inner = option_inner(&agg.ty).unwrap_or(&agg.ty);
+                if is_uuid(inner) {
+                    quote! { ::ash_core::AttrType::Uuid }
+                } else if is_string(inner) {
+                    quote! { ::ash_core::AttrType::String }
+                } else if is_i64(inner) {
+                    quote! { ::ash_core::AttrType::Integer }
+                } else if is_bool(inner) {
+                    quote! { ::ash_core::AttrType::Boolean }
+                } else {
+                    quote! { ::ash_core::AttrType::String }
+                }
+            }
+        };
+
+        let kind_tokens = match &agg.kind {
+            AggregateKindSpec::Count => quote! { ::ash_core::AggregateKind::Count },
+            AggregateKindSpec::Exists => quote! { ::ash_core::AggregateKind::Exists },
+            AggregateKindSpec::First { field } => {
+                let f_str = field.to_string();
+                quote! { ::ash_core::AggregateKind::First { field: #f_str } }
+            }
+            AggregateKindSpec::Sum { field } => {
+                let f_str = field.to_string();
+                quote! { ::ash_core::AggregateKind::Sum { field: #f_str } }
+            }
+        };
+
+        let filter_tokens = match &agg.filter {
+            None => quote! { ::std::option::Option::None },
+            Some(AggregateFilterSpec::Eq { field, value }) => {
+                let f_str = field.to_string();
+                let const_val = lit_to_const_value(value)?;
+                quote! {
+                    ::std::option::Option::Some(::ash_core::AggregateFilter::Eq(#f_str, #const_val))
+                }
+            }
+            Some(AggregateFilterSpec::Ne { field, value }) => {
+                let f_str = field.to_string();
+                let const_val = lit_to_const_value(value)?;
+                quote! {
+                    ::std::option::Option::Some(::ash_core::AggregateFilter::Ne(#f_str, #const_val))
+                }
+            }
+        };
+
+        agg_defs.push(quote! {
+            ::ash_core::AggregateDef {
+                name: #name_str,
+                relationship: #rel_str,
+                kind: #kind_tokens,
+                filter: #filter_tokens,
+                ty: #ty_tokens,
+            }
+        });
+    }
+
+    // 5. to_fields inserts
+    let mut to_inserts = Vec::new();
+    for a in &def.attributes {
+        let id = &a.ident;
+        let name_str = id.to_string();
+        let ty = &a.ty;
+        if a.atom.is_some() {
+            to_inserts.push(quote! {
+                map.insert(
+                    ::std::string::String::from(#name_str),
+                    ::ash_core::Value::from(self.#id.as_str()),
+                );
+            });
+        } else if is_string(ty) {
+            to_inserts.push(quote! {
+                map.insert(
+                    ::std::string::String::from(#name_str),
+                    ::ash_core::Value::from(self.#id.clone()),
+                );
+            });
+        } else if option_inner(ty).is_some() {
+            to_inserts.push(quote! {
+                if let ::std::option::Option::Some(val) = &self.#id {
+                    map.insert(
+                        ::std::string::String::from(#name_str),
+                        ::ash_core::Value::from(val.clone()),
+                    );
+                } else {
+                    map.insert(
+                        ::std::string::String::from(#name_str),
+                        ::ash_core::Value::Null,
+                    );
+                }
+            });
+        } else {
+            to_inserts.push(quote! {
+                map.insert(
+                    ::std::string::String::from(#name_str),
+                    ::ash_core::Value::from(self.#id.clone()),
+                );
+            });
+        }
+    }
+    for agg in &def.aggregates {
+        let id = &agg.ident;
+        let name_str = id.to_string();
+        to_inserts.push(quote! {
+            if let ::std::option::Option::Some(val) = &self.#id {
+                map.insert(
+                    ::std::string::String::from(#name_str),
+                    ::ash_core::Value::from(val.clone()),
+                );
+            }
+        });
+    }
+
+    // 6. from_fields inits
+    let mut from_inits = Vec::new();
+    for a in &def.attributes {
+        let id = &a.ident;
+        let name_str = id.to_string();
+        let ty = &a.ty;
+
+        if let Some(ts) = &def.timestamps
+            && (id == &ts.created_at || id == &ts.updated_at)
+        {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::String(s)) => s.clone(),
+                    _ => ::ash_core::utc_now_iso8601(),
+                }
+            });
+            continue;
+        }
+
+        if let Some(default_expr) = &a.default {
+            if is_string(ty) {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(::ash_core::Value::String(s)) => s.clone(),
+                        _ => ::std::convert::Into::into(#default_expr),
+                    }
+                });
+                continue;
+            } else if is_i64(ty) {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(::ash_core::Value::Int(n)) => *n,
+                        _ => #default_expr,
+                    }
+                });
+                continue;
+            } else if is_bool(ty) {
+                from_inits.push(quote! {
+                    #id: match fields.get(#name_str) {
+                        ::std::option::Option::Some(::ash_core::Value::Bool(b)) => *b,
+                        _ => #default_expr,
+                    }
+                });
+                continue;
+            }
+        }
+
+        if let Some(default_fn) = &a.default_fn
+            && is_string(ty)
+        {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::String(s)) => s.clone(),
+                    _ => ::std::convert::Into::into((#default_fn)()),
+                }
+            });
+            continue;
+        }
+
+        if a.pk || is_uuid(ty) {
+            from_inits.push(quote! { #id: ::ash_core::required_uuid(fields, #name_str)? });
+        } else if option_inner(ty).is_some_and(is_uuid) {
+            from_inits.push(quote! { #id: ::ash_core::optional_uuid(fields, #name_str)? });
+        } else if is_string(ty) {
+            from_inits.push(quote! { #id: ::ash_core::required_string(fields, #name_str)? });
+        } else if option_inner(ty).is_some_and(is_string) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::String(s)) => ::std::option::Option::Some(s.clone()),
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else if a.atom.is_some() {
+            from_inits.push(quote! { #id: #ty::parse(&::ash_core::required_string(fields, #name_str)?)? });
+        } else if is_i64(ty) {
+            from_inits.push(quote! {
+                #id: ::ash_core::optional_int(fields, #name_str)?.ok_or_else(|| ::ash_core::Error::Missing { field: #name_str.into() })?
+            });
+        } else if option_inner(ty).is_some_and(is_i64) {
+            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        } else if is_bool(ty) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::Bool(b)) => *b,
+                    _ => return Err(::ash_core::Error::Missing { field: #name_str.into() }),
+                }
+            });
+        } else if option_inner(ty).is_some_and(is_bool) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::Bool(b)) => ::std::option::Option::Some(*b),
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else if let Some(inner) = option_inner(ty) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::Map(m)) => {
+                        ::std::option::Option::Some(<#inner as ::ash_core::Resource>::from_fields(m)?)
+                    }
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::Map(m)) => {
+                        <#ty as ::ash_core::Resource>::from_fields(m)?
+                    }
+                    _ => return Err(::ash_core::Error::Missing { field: #name_str.into() }),
+                }
+            });
+        }
+    }
+    for c in &def.calculations {
+        let id = &c.ident;
+        let name_str = id.to_string();
+        let inner = option_inner(&c.ty).unwrap_or(&c.ty);
+        if is_i64(inner) {
+            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        } else if is_string(inner) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::String(s)) => ::std::option::Option::Some(s.clone()),
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else if is_bool(inner) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::Bool(b)) => ::std::option::Option::Some(*b),
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else if is_uuid(inner) {
+            from_inits.push(quote! { #id: ::ash_core::optional_uuid(fields, #name_str)? });
+        } else {
+            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        }
+    }
+    for agg in &def.aggregates {
+        let id = &agg.ident;
+        let name_str = id.to_string();
+        let inner = option_inner(&agg.ty).unwrap_or(&agg.ty);
+        if is_i64(inner) {
+            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        } else if is_bool(inner) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::Bool(b)) => ::std::option::Option::Some(*b),
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else if is_string(inner) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(::ash_core::Value::String(s)) => ::std::option::Option::Some(s.clone()),
+                    _ => ::std::option::Option::None,
+                }
+            });
+        } else if is_uuid(inner) {
+            from_inits.push(quote! { #id: ::ash_core::optional_uuid(fields, #name_str)? });
+        } else {
+            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        }
+    }
+    for r in &def.relationships {
+        let id = &r.ident;
+        from_inits.push(quote! { #id: ::ash_core::Rel::NotLoaded });
+    }
+
+    // 7. attach arms
+    let mut attach_arms = Vec::new();
+    for r in &def.relationships {
+        let id = &r.ident;
+        let name_str = id.to_string();
+        let dest = &r.dest;
+        match r.kind {
+            RelType::BelongsTo => {
+                attach_arms.push(quote! {
+                    #name_str => {
+                        self.#id = ::ash_core::Rel::Loaded(match related.first() {
+                            ::std::option::Option::Some(row) => ::std::option::Option::Some(<#dest as ::ash_core::Resource>::from_fields(row)?),
+                            ::std::option::Option::None => ::std::option::Option::None,
+                        });
+                        Ok(())
+                    }
+                });
+            }
+            RelType::HasMany | RelType::ManyToMany => {
+                attach_arms.push(quote! {
+                    #name_str => {
+                        self.#id = ::ash_core::Rel::Loaded(
+                            related
+                                .iter()
+                                .map(<#dest as ::ash_core::Resource>::from_fields)
+                                .collect::<::ash_core::Result<::std::vec::Vec<_>>>()?,
+                        );
+                        Ok(())
+                    }
+                });
+            }
+        }
+    }
+
+    // 8. fields constants
+    let mut field_consts = Vec::new();
+    let mut associated_field_consts = Vec::new();
+    for a in &def.attributes {
+        let id = &a.ident;
+        let name_str = id.to_string();
+        let ty = &a.ty;
+        let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
+
+        if a.pk || is_uuid(ty) || option_inner(ty).is_some_and(is_uuid) {
+            field_consts.push(quote! {
+                pub const #id: ::ash_core::Attr<super::#resource, ::uuid::Uuid> =
+                    ::ash_core::Attr::new(#name_str);
+            });
+            if !has_action_conflict {
+                associated_field_consts.push(quote! {
+                    pub const #id: ::ash_core::Attr<Self, ::uuid::Uuid> =
+                        ::ash_core::Attr::new(#name_str);
+                });
+            }
+        } else if is_string(ty) || option_inner(ty).is_some_and(is_string) || a.atom.is_some() {
+            field_consts.push(quote! {
+                pub const #id: ::ash_core::Attr<super::#resource, ::std::string::String> =
+                    ::ash_core::Attr::new(#name_str);
+            });
+            if !has_action_conflict {
+                associated_field_consts.push(quote! {
+                    pub const #id: ::ash_core::Attr<Self, ::std::string::String> =
+                        ::ash_core::Attr::new(#name_str);
+                });
+            }
+        } else if is_i64(ty) || option_inner(ty).is_some_and(is_i64) {
+            field_consts.push(quote! {
+                pub const #id: ::ash_core::Attr<super::#resource, i64> =
+                    ::ash_core::Attr::new(#name_str);
+            });
+            if !has_action_conflict {
+                associated_field_consts.push(quote! {
+                    pub const #id: ::ash_core::Attr<Self, i64> =
+                        ::ash_core::Attr::new(#name_str);
+                });
+            }
+        } else if is_bool(ty) || option_inner(ty).is_some_and(is_bool) {
+            field_consts.push(quote! {
+                pub const #id: ::ash_core::Attr<super::#resource, bool> =
+                    ::ash_core::Attr::new(#name_str);
+            });
+            if !has_action_conflict {
+                associated_field_consts.push(quote! {
+                    pub const #id: ::ash_core::Attr<Self, bool> =
+                        ::ash_core::Attr::new(#name_str);
+                });
+            }
+        }
+    }
+    for c in &def.calculations {
+        let id = &c.ident;
+        let name_str = id.to_string();
+        let c_ty = &c.ty;
+        let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
+        field_consts.push(quote! {
+            pub const #id: ::ash_core::Calc<super::#resource, #c_ty> =
+                ::ash_core::Calc::new(#name_str);
+        });
+        if !has_action_conflict {
+            associated_field_consts.push(quote! {
+                pub const #id: ::ash_core::Calc<Self, #c_ty> =
+                    ::ash_core::Calc::new(#name_str);
+            });
+        }
+    }
+    for agg in &def.aggregates {
+        let id = &agg.ident;
+        let name_str = id.to_string();
+        let inner = option_inner(&agg.ty).unwrap_or(&agg.ty);
+        let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
+        field_consts.push(quote! {
+            pub const #id: ::ash_core::Aggregate<super::#resource, #inner> =
+                ::ash_core::Aggregate::new(#name_str);
+        });
+        if !has_action_conflict {
+            associated_field_consts.push(quote! {
+                pub const #id: ::ash_core::Aggregate<Self, #inner> =
+                    ::ash_core::Aggregate::new(#name_str);
+            });
+        }
+    }
+    for r in &def.relationships {
+        let id = &r.ident;
+        let name_str = id.to_string();
+        let dest = &r.dest;
+        let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
+        field_consts.push(quote! {
+            pub const #id: ::ash_core::Relation<super::#resource, super::#dest> =
+                ::ash_core::Relation::new(#name_str);
+        });
+        if !has_action_conflict {
+            associated_field_consts.push(quote! {
+                pub const #id: ::ash_core::Relation<Self, #dest> =
+                    ::ash_core::Relation::new(#name_str);
+            });
+        }
+    }
+
+    let def_const_name = format_ident!("{}_DEF", screaming_snake(&resource_str));
+    let fields_mod_name = format_ident!("{}_fields", snake_case(&resource_str));
+    let outer_attrs = &def.outer_attrs;
+    let ext_tokens: Vec<_> = def.extensions.iter().map(|ext| quote! { #ext }).collect();
+    let notifier_tokens: Vec<_> = def.notifiers.iter().map(|n| quote! { #n }).collect();
+
+    let ident_defs: Vec<_> = def
+        .identities
+        .iter()
+        .map(|ident| {
+            let name_str = ident.name.to_string();
+            let key_strs: Vec<String> = ident.keys.iter().map(|k| k.to_string()).collect();
+            let msg_tokens = match &ident.message {
+                Some(msg) => quote! { ::std::option::Option::Some(#msg) },
+                None => quote! { ::std::option::Option::None },
+            };
+            quote! {
+                ::ash_core::IdentityDef {
+                    name: #name_str,
+                    keys: &[#(#key_strs),*],
+                    message: #msg_tokens,
+                }
+            }
+        })
+        .collect();
+
+    let embedded_lit = def.embedded;
+    let data_layer_tokens = if def.embedded {
+        quote! { ::ash_core::DataLayerKind::Embedded }
+    } else if let Some(dl) = &def.data_layer {
+        let s = dl.to_string();
+        match s.as_str() {
+            "sqlite" => quote! { ::ash_core::DataLayerKind::Sqlite },
+            "memory" => quote! { ::ash_core::DataLayerKind::Memory },
+            "embedded" => quote! { ::ash_core::DataLayerKind::Embedded },
+            _ => quote! { ::ash_core::DataLayerKind::Custom(#s) },
+        }
+    } else {
+        quote! { ::ash_core::DataLayerKind::Memory }
+    };
+
+    let mut identity_methods = Vec::new();
+    for ident in &def.identities {
+        let name = &ident.name;
+        let fn_get = format_ident!("get_by_{}", name);
+        let fn_find = format_ident!("find_by_{}", name);
+
+        let mut arg_names = Vec::new();
+        let mut arg_tys = Vec::new();
+        let mut filter_exprs = Vec::new();
+
+        for key in &ident.keys {
+            let attr = def.attributes.iter().find(|a| a.ident == *key).ok_or_else(|| {
+                Error::new_spanned(
+                    key,
+                    format!("unknown attribute `{key}` in identity `{name}`"),
+                )
+            })?;
+            let ty = &attr.ty;
+            arg_names.push(key);
+            arg_tys.push(ty);
+            filter_exprs.push(quote! {
+                Self::#key.eq(#key.into())
+            });
+        }
+
+        let combined_filter = if filter_exprs.len() == 1 {
+            quote! { #(#filter_exprs)* }
+        } else {
+            let first = &filter_exprs[0];
+            let rest = &filter_exprs[1..];
+            quote! { #first #(& #rest)* }
+        };
+
+        let name_str = name.to_string();
+        identity_methods.push(quote! {
+            pub const #name: &'static str = #name_str;
+
+            pub async fn #fn_get<D: ::ash_core::DataLayer>(
+                ctx: &::ash_core::Context<D>,
+                #(#arg_names: impl ::std::convert::Into<#arg_tys>),*
+            ) -> ::ash_core::Result<Self> {
+                Self::query(ctx)
+                    .filter(#combined_filter)
+                    .one()
+                    .await
+            }
+
+            pub async fn #fn_find<D: ::ash_core::DataLayer>(
+                ctx: &::ash_core::Context<D>,
+                #(#arg_names: impl ::std::convert::Into<#arg_tys>),*
+            ) -> ::ash_core::Result<::std::option::Option<Self>> {
+                Self::query(ctx)
+                    .filter(#combined_filter)
+                    .first()
+                    .await
+            }
+        });
+    }
+
+    let timestamps_tokens = match &def.timestamps {
+        Some(ts) => {
+            let c_str = ts.created_at.to_string();
+            let u_str = ts.updated_at.to_string();
+            quote! { ::std::option::Option::Some((#c_str, #u_str)) }
+        }
+        None => quote! { ::std::option::Option::None },
+    };
+
+    Ok(quote! {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        #(#outer_attrs)*
+        pub struct #resource {
+            #(#struct_fields,)*
+        }
+
+        impl ::ash_core::Resource for #resource {
+            const DEF: ::ash_core::ResourceDef = {
+                #(#helper_default_fns)*
+                const EXTENSIONS: &'static [&'static dyn ::ash_core::ResourceExtension] = &[#(#ext_tokens),*];
+                const NOTIFIERS: &'static [&'static dyn ::ash_core::Notifier] = &[#(#notifier_tokens),*];
+                ::ash_core::ResourceDef {
+                    name: #resource_str,
+                    table: #table_str,
+                    attributes: &[#(#attr_defs),*],
+                    relationships: &[#(#rel_defs),*],
+                    actions: Self::ACTIONS,
+                    policies: Self::POLICIES,
+                    field_policies: Self::FIELD_POLICIES,
+                    calculations: &[#(#calc_defs),*],
+                    aggregates: &[#(#agg_defs),*],
+                    extensions: EXTENSIONS,
+                    notifiers: NOTIFIERS,
+                    identities: &[#(#ident_defs),*],
+                    embedded: #embedded_lit,
+                    data_layer: #data_layer_tokens,
+                    timestamps: #timestamps_tokens,
+                }
+            };
+
+            fn id(&self) -> ::uuid::Uuid {
+                #pk_fn_body
+            }
+
+            fn to_fields(&self) -> ::ash_core::FieldMap {
+                let mut map = ::ash_core::FieldMap::new();
+                #(#to_inserts)*
+                map
+            }
+
+            fn from_fields(fields: &::ash_core::FieldMap) -> ::ash_core::Result<Self> {
+                Ok(Self {
+                    #(#from_inits),*
+                })
+            }
+
+            fn attach(
+                &mut self,
+                name: &str,
+                related: ::std::vec::Vec<::ash_core::FieldMap>,
+            ) -> ::ash_core::Result<()> {
+                match name {
+                    #(#attach_arms)*
+                    other => Err(::ash_core::Error::Invalid(::std::format!(
+                        "unknown relationship `{other}` on {}",
+                        stringify!(#resource)
+                    ))),
+                }
+            }
+        }
+
+        pub const #def_const_name: ::ash_core::ResourceDef = <#resource as ::ash_core::Resource>::DEF;
+
+        #[allow(non_upper_case_globals)]
+        pub mod fields {
+            #[allow(unused_imports)]
+            use super::*;
+            #(#field_consts)*
+        }
+
+        #[allow(non_upper_case_globals)]
+        pub mod #fields_mod_name {
+            #[allow(unused_imports)]
+            use super::*;
+            #(#field_consts)*
+        }
+
+        #[allow(non_upper_case_globals)]
+        impl #resource {
+            #(#associated_field_consts)*
+            #(#identity_methods)*
+        }
+
+        impl ::ash_core::IntoOption<#resource> for #resource {
+            fn into_option(self) -> ::std::option::Option<#resource> {
+                ::std::option::Option::Some(self)
+            }
+        }
+
+        impl ::std::convert::From<#resource> for ::ash_core::Value {
+            fn from(resource: #resource) -> Self {
+                ::ash_core::Value::Map(::ash_core::Resource::to_fields(&resource))
+            }
+        }
+
+        impl ::std::convert::From<&#resource> for ::ash_core::Value {
+            fn from(resource: &#resource) -> Self {
+                ::ash_core::Value::Map(::ash_core::Resource::to_fields(resource))
+            }
+        }
+    })
+}
+
+fn calc_expr_to_tokens(expr: &crate::define::ast::CalculationExprSpec) -> proc_macro2::TokenStream {
+    use crate::define::ast::CalculationExprSpec;
+    match expr {
+        CalculationExprSpec::StringLength(s) => {
+            quote! { ::ash_core::Expr::StringLength(#s) }
+        }
+        CalculationExprSpec::Field(f) => {
+            let f_str = f.to_string();
+            quote! { ::ash_core::Expr::Field(#f_str) }
+        }
+        CalculationExprSpec::LitInt(n) => {
+            quote! { ::ash_core::Expr::LitInt(#n) }
+        }
+        CalculationExprSpec::LitString(s) => {
+            quote! { ::ash_core::Expr::LitString(#s) }
+        }
+        CalculationExprSpec::LitBool(b) => {
+            quote! { ::ash_core::Expr::LitBool(#b) }
+        }
+        CalculationExprSpec::Null => {
+            quote! { ::ash_core::Expr::Null }
+        }
+        CalculationExprSpec::Length(inner) => {
+            let inner_tok = calc_expr_to_tokens(inner);
+            quote! { ::ash_core::Expr::Length(&#inner_tok) }
+        }
+        CalculationExprSpec::Lower(inner) => {
+            let inner_tok = calc_expr_to_tokens(inner);
+            quote! { ::ash_core::Expr::Lower(&#inner_tok) }
+        }
+        CalculationExprSpec::Upper(inner) => {
+            let inner_tok = calc_expr_to_tokens(inner);
+            quote! { ::ash_core::Expr::Upper(&#inner_tok) }
+        }
+        CalculationExprSpec::Concat(parts) => {
+            let part_toks: Vec<_> = parts.iter().map(calc_expr_to_tokens).collect();
+            quote! { ::ash_core::Expr::Concat(&[#(&#part_toks),*]) }
+        }
+        CalculationExprSpec::Coalesce(parts) => {
+            let part_toks: Vec<_> = parts.iter().map(calc_expr_to_tokens).collect();
+            quote! { ::ash_core::Expr::Coalesce(&[#(&#part_toks),*]) }
+        }
+        CalculationExprSpec::Add(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Add(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Sub(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Sub(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Mul(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Mul(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Div(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Div(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Eq(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Eq(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Ne(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Ne(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Gt(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Gt(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Gte(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Gte(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Lt(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Lt(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::Lte(l, r) => {
+            let l_tok = calc_expr_to_tokens(l);
+            let r_tok = calc_expr_to_tokens(r);
+            quote! { ::ash_core::Expr::Lte(&#l_tok, &#r_tok) }
+        }
+        CalculationExprSpec::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let c_tok = calc_expr_to_tokens(cond);
+            let t_tok = calc_expr_to_tokens(then_expr);
+            let e_tok = calc_expr_to_tokens(else_expr);
+            quote! {
+                ::ash_core::Expr::IfElse {
+                    cond: &#c_tok,
+                    then_expr: &#t_tok,
+                    else_expr: &#e_tok,
+                }
+            }
+        }
+        CalculationExprSpec::Custom(path) => {
+            quote! { ::ash_core::Expr::Custom(#path) }
+        }
+    }
+}
