@@ -35,6 +35,7 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 | **`ash-sqlite`** | `crates/ash-sqlite` | Relational SQLite data layer with dynamic SQL generation, savepoints, and relational joins. |
 | **`ash-pubsub`** | `crates/ash-pubsub` | Pattern-based PubSub event broker and action notifier for resource broadcasts. |
 | **`ash-state-machine`** | `crates/ash-state-machine` | Declarative state machine extension with `#[state_machine]` transformer macro. |
+| **`ash-graphql`** | `crates/ash-graphql` | Automatic GraphQL server engine powered by `async-graphql` with dynamic schemas, DataLoader, Relay pagination, and subscriptions. |
 
 ### Examples
 

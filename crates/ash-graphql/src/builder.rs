@@ -13,6 +13,7 @@ use crate::pagination::{
 };
 use crate::query::build_resource_queries;
 use crate::sort::register_resource_sort_inputs;
+use crate::subscription::build_resource_subscriptions;
 
 /// High-level builder for creating an `async-graphql` [`Schema`] from Ash domains and resources.
 pub struct AshGraphQLBuilder {
@@ -90,8 +91,19 @@ impl AshGraphQLBuilder {
             }
         }
 
+        let mut subscription = Subscription::new("Subscription");
+        let has_subscriptions = self.pubsub.is_some();
+        if let Some(pubsub) = &self.pubsub {
+            for res in &self.resources {
+                for sf in build_resource_subscriptions(res, pubsub.clone()) {
+                    subscription = subscription.field(sf);
+                }
+            }
+        }
+
         let mutation_root = if has_mutations { Some("Mutation") } else { None };
-        let mut builder = Schema::build("Query", mutation_root, None);
+        let subscription_root = if has_subscriptions { Some("Subscription") } else { None };
+        let mut builder = Schema::build("Query", mutation_root, subscription_root);
 
         // Register JSON scalar for arbitrary map values
         builder = builder.register(Scalar::new("JSON"));
@@ -129,6 +141,10 @@ impl AshGraphQLBuilder {
 
         if has_mutations {
             builder = builder.register(mutation);
+        }
+
+        if has_subscriptions {
+            builder = builder.register(subscription);
         }
 
         builder.register(query).finish()

@@ -4,24 +4,170 @@ Automatic GraphQL server engine for `ash-rust` powered by `async-graphql`.
 
 ## Overview
 
-`ash-graphql` transforms Ash Domains and Resources into a fully-functional GraphQL API:
+`ash-graphql` dynamically transforms Ash Domains and Resources into a production-grade GraphQL API with zero manual boilerplate:
 
 - **Type Reflection**: Resources, attributes, enums, calculations, and aggregates map automatically to GraphQL objects, scalars, and enums.
 - **Field-Level Redaction**: Integrates directly with Ash's field policies to redact unauthorized fields to `null`.
-- **Query Generation**: Auto-generates type-safe getters and lists with dynamic filters and sorting.
-- **Relay Keyset Pagination**: Keyset cursor pagination with `Connection`, `Edge`, and `PageInfo`.
-- **Mutation Generation**: Resource actions map to mutations with structured payloads and user error handling.
-- **DataLoader**: Solves N+1 relationship query problems via batched loading.
-- **PubSub Subscriptions**: Live event broadcasting hooked directly into `ash-pubsub`.
-- **Web Adapters**: First-class Axum integration helpers.
+- **Query Generation**: Auto-generates type-safe getters (`get<Resource>`) and lists (`list<Resource>s`) with dynamic filtering (`FilterInput`), comparison operators, boolean combinators (`and`, `or`, `not`), and sorting (`SortInput`).
+- **Relay Keyset Pagination**: Keyset cursor pagination with `Connection`, `Edge`, and `PageInfo` matching the Relay specification.
+- **Mutation Generation**: Resource create, update, and destroy actions map to mutations with structured payloads, action argument validation, optimistic locking, and structured `UserError` responses.
+- **DataLoader**: Solves N+1 relationship query problems via batched loading (`AshBatchLoader`) for `belongs_to`, `has_many`, and `many_to_many`.
+- **PubSub Subscriptions**: Realtime live event streams hooked directly into `ash-pubsub` (`<resource>Created`, `<resource>Updated`, `<resource>Destroyed`) with predicate filtering.
+- **Web Adapters**: First-class Axum integration helpers (`graphql_router`, `graphql_handler`, and interactive `graphiql_handler`).
 
 ## Quick Start
 
 ```rust,ignore
 use ash_graphql::AshGraphQL;
+use ash_pubsub::PubSub;
+use ash_memory::Memory;
 
+let pubsub = PubSub::new();
+
+// Build schema from an Ash Domain definition
 let schema = AshGraphQL::builder(&Helpdesk::DEF)
-    .with_pubsub(pubsub)
+    .with_pubsub(pubsub.clone())
     .with_dataloader()
-    .finish()?;
+    .finish::<Memory>()
+    .expect("Failed to build GraphQL schema");
+
+// Mount directly onto an Axum router
+#[cfg(feature = "axum")]
+let app = ash_graphql::axum::graphql_router(schema);
+```
+
+## Features
+
+### 1. Type Reflection & Field-Level Redaction
+
+Every Ash attribute maps to an appropriate GraphQL scalar, enum, or list:
+- `Uuid` -> `ID!`
+- `String` -> `String`
+- `Integer` -> `Int`
+- `Boolean` -> `Boolean`
+- `Atom { one_of }` -> Dynamic GraphQL `Enum`
+- `Calculations` -> Dynamic computation evaluated via `ash_core::eval`
+- `Aggregates` -> Dynamic aggregation (count, sum, avg, min, max)
+- `Field Policies` -> Unauthorized fields are automatically redacted to `null`
+
+### 2. Queries & Dynamic Filtering
+
+Generated query fields:
+```graphql
+query {
+  getTicket(id: "...") {
+    id
+    title
+    status
+  }
+
+  listTickets(
+    filter: {
+      and: [
+        { status: { eq: OPEN } },
+        { priority: { gte: 3 } }
+      ]
+    }
+    sort: [{ field: CREATED_AT, order: DESC }]
+    limit: 10
+  ) {
+    id
+    title
+  }
+}
+```
+
+### 3. Relay Keyset Cursor Pagination
+
+Relay-compliant connection queries:
+```graphql
+query {
+  ticketConnection(first: 10, after: "eyJpZCI6...") {
+    edges {
+      cursor
+      node {
+        id
+        title
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}
+```
+
+### 4. Mutations & Structured Errors
+
+Actions generate mutations with structured `UserError` responses instead of throwing unhandled exceptions:
+```graphql
+mutation {
+  createTicket(input: { title: "Network down", status: OPEN }) {
+    success
+    errors {
+      message
+      field
+      code
+    }
+    result {
+      id
+      title
+    }
+  }
+}
+```
+
+### 5. Batched Relationship Loading (DataLoader)
+
+N+1 relationship loading problems are solved using `AshBatchLoader`:
+```rust,ignore
+let dataloader = AshGraphQL::create_dataloader(ctx.clone(), &[&AUTHOR_DEF, &POST_DEF]);
+
+let req = Request::new(query)
+    .data(ctx)
+    .data(dataloader);
+
+let res = schema.execute(req).await;
+```
+
+### 6. Realtime Subscriptions
+
+Subscribe to resource changes with optional in-memory filter matching:
+```graphql
+subscription {
+  ticketCreated(filter: { status: { eq: URGENT } }) {
+    id
+    title
+    status
+  }
+
+  ticketUpdated(id: "...") {
+    id
+    status
+  }
+
+  ticketDestroyed(id: "...")
+}
+```
+
+### 7. Axum Web Integration
+
+Enable the `axum` feature in `Cargo.toml`:
+```toml
+[dependencies]
+ash-graphql = { path = "...", features = ["axum"] }
+```
+
+Mount `graphql_router` to serve `/graphql` and `/graphiql`:
+```rust,ignore
+use axum::Router;
+use ash_graphql::axum::graphql_router;
+
+let app = graphql_router(schema);
+let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
+axum::serve(listener, app).await.unwrap();
 ```
