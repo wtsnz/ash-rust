@@ -38,6 +38,8 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 | **`ash-graphql`** | `crates/ash-graphql` | Automatic GraphQL server engine powered by `async-graphql` with dynamic schemas, DataLoader, Relay pagination, and subscriptions. |
 | **`ash-sql`** | `crates/ash-sql` | Shared relational query compiler, dialect abstraction, snapshot diffing, and migration engine. |
 | **`ash-postgres`** | `crates/ash-postgres` | High-performance PostgreSQL data layer with `RETURNING *` writes, error code mapping, and multitenancy. |
+| **`ash-authentication`** | `crates/ash-authentication` | Declarative authentication engine: Argon2id password hashing, database-backed tokens, refresh token rotation, API keys, and Axum HTTP integration. |
+| **`ash-mailer`** | `crates/ash-mailer` | Transactional email delivery and notifier engine with pluggable adapters (Memory, Console) and authentication sender bridge. |
 | **`cargo-ash`** | `crates/cargo-ash` | Developer CLI tool for declarative migrations, snapshot dumping, and database management. |
 
 ### Examples
