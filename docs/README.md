@@ -41,6 +41,12 @@
    - Architectural root cause analysis (monomorphism, stack vs. heap allocation)
    - Continuous regression testing with Criterion (`cargo bench`)
 
+6. **[Relational Query Patterns & Edge Cases](query-patterns-and-edge-cases.md)**
+   - Common patterns: Keyset & offset pagination, combinatorial filters, graph batch loading
+   - Relational edge cases: Empty `IN ()` clauses, SQL 3-valued null logic, self-referential shadowing
+   - Engine matrix: SQLite (`ash-sqlite`) vs PostgreSQL (`ash-postgres`)
+   - Test suite verification matrix
+
 
 ---
 

@@ -375,3 +375,99 @@ async fn test_postgres_self_referential_aggregate() {
 
     let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
 }
+
+static DOCUMENT_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("title", AttrType::String),
+    AttributeDef::version("version"),
+];
+
+static DOCUMENT_DEF: ResourceDef = ResourceDef {
+    name: "Document",
+    table: "documents",
+    attributes: DOCUMENT_ATTRS,
+    relationships: &[],
+    actions: &[],
+    policies: &[],
+    field_policies: &[],
+    calculations: &[],
+    aggregates: &[],
+    extensions: &[],
+    notifiers: &[],
+    identities: &[],
+    embedded: false,
+    data_layer: ash_core::DataLayerKind::Postgres,
+    timestamps: None,
+    store_type_id: ash_core::default_store_type_id,
+    store_name: "default",
+};
+
+#[tokio::test]
+async fn test_postgres_optimistic_locking_stale_record() {
+    let Some(pg) = get_test_postgres().await else {
+        return;
+    };
+    let pool = pg.pool().unwrap();
+    let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
+    let _ = sqlx::query("CREATE TABLE documents (id UUID PRIMARY KEY, title TEXT NOT NULL, version BIGINT NOT NULL);")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let id = Uuid::new_v4();
+    let mut fields = ash_core::FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("title".into(), Value::String("Version 1".into()));
+    fields.insert("version".into(), Value::Int(1));
+    pg.create(&DOCUMENT_DEF, id, fields).await.unwrap();
+
+    // Successful update: version moves from 1 to 2
+    let mut update_fields = ash_core::FieldMap::new();
+    update_fields.insert("title".into(), Value::String("Version 2".into()));
+    update_fields.insert("version".into(), Value::Int(2));
+    let res = pg.update(&DOCUMENT_DEF, id, update_fields.clone()).await.unwrap();
+    assert_eq!(res.get("version"), Some(&Value::Int(2)));
+
+    // Second update with version = 2 (expected 1): fails because current DB version is 2!
+    let err = pg.update(&DOCUMENT_DEF, id, update_fields).await.unwrap_err();
+    assert!(matches!(err, ash_core::Error::StaleRecord { .. }));
+
+    // Non-existent ID: returns NotFound
+    let missing_id = Uuid::new_v4();
+    let mut missing_fields = ash_core::FieldMap::new();
+    missing_fields.insert("title".into(), Value::String("Ghost".into()));
+    missing_fields.insert("version".into(), Value::Int(2));
+    let err_missing = pg.update(&DOCUMENT_DEF, missing_id, missing_fields).await.unwrap_err();
+    assert!(matches!(err_missing, ash_core::Error::NotFound));
+
+    let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
+}
+
+#[tokio::test]
+async fn test_postgres_empty_in_and_empty_bulk_operations() {
+    let Some(pg) = get_test_postgres().await else {
+        return;
+    };
+
+    // 1. Query with Filter::in_list of empty vec -> returns empty vec, no error
+    let query_empty = CompiledQuery {
+        filter: Some(Filter::in_list("id", Vec::<Value>::new())),
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&CUSTOMER_DEF, &query_empty).await.unwrap();
+    assert!(rows.is_empty());
+
+    // 2. Query with NOT (Filter::in_list empty) -> matches without error
+    let query_not_empty = CompiledQuery {
+        filter: Some(!Filter::in_list("id", Vec::<Value>::new())),
+        ..CompiledQuery::default()
+    };
+    let _ = pg.run_query(&CUSTOMER_DEF, &query_not_empty).await.unwrap();
+
+    // 3. bulk_create with empty items -> returns Ok(vec![])
+    let created = pg.bulk_create(&CUSTOMER_DEF, Vec::new()).await.unwrap();
+    assert!(created.is_empty());
+
+    // 4. bulk_destroy with empty IDs -> returns Ok(())
+    pg.bulk_destroy(&CUSTOMER_DEF, &[]).await.unwrap();
+}

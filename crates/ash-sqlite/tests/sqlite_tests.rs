@@ -218,3 +218,33 @@ async fn test_sqlite_self_referential_aggregate() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_sqlite_empty_in_and_empty_bulk_operations() -> Result<()> {
+    let db = Sqlite::memory().await?;
+    db.install(&[&TICKET]).await?;
+
+    // 1. Query with Filter::in_list of empty vec -> returns empty vec, no error
+    let query_empty = ash_core::CompiledQuery {
+        filter: Some(ash_core::Filter::in_list("id", Vec::<Value>::new())),
+        ..ash_core::CompiledQuery::default()
+    };
+    let rows = db.run_query(&TICKET, &query_empty).await?;
+    assert!(rows.is_empty());
+
+    // 2. Query with NOT (Filter::in_list empty) -> matches without error
+    let query_not_empty = ash_core::CompiledQuery {
+        filter: Some(!ash_core::Filter::in_list("id", Vec::<Value>::new())),
+        ..ash_core::CompiledQuery::default()
+    };
+    let _ = db.run_query(&TICKET, &query_not_empty).await?;
+
+    // 3. bulk_create with empty items -> returns Ok(vec![])
+    let created = db.bulk_create(&TICKET, Vec::new()).await?;
+    assert!(created.is_empty());
+
+    // 4. bulk_destroy with empty IDs -> returns Ok(())
+    db.bulk_destroy(&TICKET, &[]).await?;
+
+    Ok(())
+}

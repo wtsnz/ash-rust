@@ -351,12 +351,15 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
 
             let mut sort_tuples = Vec::new();
             for s in &self.sort {
-                let val = cursor
+                let mut val = cursor
                     .values
                     .iter()
                     .find(|(k, _)| k == &s.field)
                     .map(|(_, v)| v.clone())
                     .unwrap_or(Value::Null);
+                if val.is_null() && s.field == pk {
+                    val = Value::Uuid(cursor.id);
+                }
                 sort_tuples.push((s.field.clone(), val, s.descending));
             }
 

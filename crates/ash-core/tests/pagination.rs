@@ -374,3 +374,48 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_sqlite() {
     assert_eq!(prev_page1.results[1].id, all[1].id);
     assert!(!prev_page1.has_more);
 }
+
+#[tokio::test]
+async fn test_keyset_pagination_duplicate_keys_across_boundary_sqlite() {
+    let sqlite = Sqlite::memory().await.unwrap();
+    sqlite.install(&[&Article::DEF]).await.unwrap();
+    let ctx = Context::new(sqlite);
+
+    let a1 = Article::create(&ctx).title("Item 1 (500)").views(500).await.unwrap();
+    let a2 = Article::create(&ctx).title("Item 2 (300)").views(300).await.unwrap();
+    let a3 = Article::create(&ctx).title("Item 3 (300)").views(300).await.unwrap();
+    let a4 = Article::create(&ctx).title("Item 4 (100)").views(100).await.unwrap();
+
+    let mut expected_order = [a1, a2, a3, a4];
+    expected_order.sort_by(|x, y| match y.views.cmp(&x.views) {
+        std::cmp::Ordering::Equal => y.id.cmp(&x.id),
+        other => other,
+    });
+
+    // Page 1: limit 2
+    let page1 = Article::query(&ctx)
+        .sort_by(Article::views, true)
+        .page_keyset(2, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(page1.results.len(), 2);
+    assert_eq!(page1.results[0].id, expected_order[0].id);
+    assert_eq!(page1.results[1].id, expected_order[1].id);
+    assert!(page1.has_more);
+
+    // Page 2: limit 2, after page 1.
+    // The page boundary falls right between expected_order[1] (300) and expected_order[2] (300).
+    // The PK tie-breaker ensures expected_order[2] is NOT skipped!
+    let cursor_p1_after = page1.after.as_deref().unwrap();
+    let page2 = Article::query(&ctx)
+        .sort_by(Article::views, true)
+        .page_keyset(2, Some(cursor_p1_after), None)
+        .await
+        .unwrap();
+
+    assert_eq!(page2.results.len(), 2, "Page 2 must contain 2 items, no items lost to duplicate keys");
+    assert_eq!(page2.results[0].id, expected_order[2].id, "The duplicate-keyed item must be retrieved on page 2");
+    assert_eq!(page2.results[1].id, expected_order[3].id);
+    assert!(!page2.has_more);
+}

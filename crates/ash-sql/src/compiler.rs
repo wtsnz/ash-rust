@@ -449,6 +449,29 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
         }
 
+        // Add deterministic tie-breaker on primary key if not explicitly in sort fields
+        let pk = resource
+            .primary_key()
+            .map(|p| p.name)
+            .unwrap_or("id");
+        if !sorts.iter().any(|s| s.field == pk) {
+            let mut prefix_match = Vec::new();
+            for prev in sorts {
+                let prev_col = column(self.dialect, resource, &prev.field)?;
+                if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
+                    let p = self.push_param(val.clone());
+                    prefix_match.push(format!("{prev_col} = {p}"));
+                }
+            }
+            let pk_col = column(self.dialect, resource, pk)?;
+            let p = self.push_param(Value::Uuid(cursor.id));
+            let mut branch = format!("{pk_col} > {p}");
+            if !prefix_match.is_empty() {
+                branch = format!("{} AND {branch}", prefix_match.join(" AND "));
+            }
+            conds.push(format!("({branch})"));
+        }
+
         if conds.is_empty() {
             let pk = resource
                 .primary_key()
@@ -529,7 +552,20 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             sql.push_str(&where_clauses.join(" AND "));
         }
 
-        sql.push_str(&self.compile_sort(resource, &query.sort)?);
+        let mut all_sorts = query.sort.clone();
+        if cursor.is_some() {
+            let pk = resource
+                .primary_key()
+                .map(|p| p.name)
+                .unwrap_or("id");
+            if !all_sorts.iter().any(|s| s.field == pk) {
+                all_sorts.push(Sort {
+                    field: pk.to_string(),
+                    descending: false,
+                });
+            }
+        }
+        sql.push_str(&self.compile_sort(resource, &all_sorts)?);
 
         if let Some(limit) = query.limit {
             sql.push_str(" LIMIT ");
