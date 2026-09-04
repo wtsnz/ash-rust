@@ -282,9 +282,65 @@ fn test_keyset_cursor_compilation() {
     ];
 
     let cursor_sql = compiler.compile_keyset_cursor(&TICKET_DEF, &cursor, &sorts).unwrap();
-    // Expected format: ("priority" < ? OR ("priority" = ? AND "subject" > ?))
+    // Expected format: ("priority" < ? OR ("priority" = ? AND "subject" > ?) OR ("priority" = ? AND "subject" = ? AND "id" > ?))
     assert!(cursor_sql.contains("\"priority\" < ?"));
     assert!(cursor_sql.contains("\"priority\" = ? AND \"subject\" > ?"));
+    assert!(cursor_sql.contains("\"priority\" = ? AND \"subject\" = ? AND \"id\" > ?"));
+
+    // Also test compile_select_with_cursor appends the primary key tie-breaker to ORDER BY
+    let mut select_compiler = QueryCompiler::new(&dialect);
+    let select_query = CompiledQuery {
+        sort: sorts,
+        ..CompiledQuery::default()
+    };
+    let compiled_select = select_compiler
+        .compile_select_with_cursor(&TICKET_DEF, &select_query, Some(&cursor))
+        .unwrap();
+    assert!(
+        compiled_select.sql.contains("ORDER BY \"priority\" DESC, \"subject\" ASC, \"id\" ASC"),
+        "Cursor queries must order deterministically with PK tie-breaker, got: {}",
+        compiled_select.sql
+    );
+}
+
+#[test]
+fn test_empty_in_and_not_in_compilation() {
+    let dialect = SqliteDialect;
+
+    // Filter::in_list with empty vec
+    let query_empty = CompiledQuery {
+        filter: Some(Filter::in_list("id", Vec::<Value>::new())),
+        ..CompiledQuery::default()
+    };
+    let mut compiler = QueryCompiler::new(&dialect);
+    let compiled = compiler.compile_select(&TICKET_DEF, &query_empty).unwrap();
+    assert!(
+        compiled.sql.contains("WHERE 0=1"),
+        "Empty IN list must compile to 0=1, got: {}",
+        compiled.sql
+    );
+
+    // Filter::not(Filter::in_list) with empty vec
+    let query_not_empty = CompiledQuery {
+        filter: Some(!Filter::in_list("id", Vec::<Value>::new())),
+        ..CompiledQuery::default()
+    };
+    let mut compiler2 = QueryCompiler::new(&dialect);
+    let compiled2 = compiler2.compile_select(&TICKET_DEF, &query_not_empty).unwrap();
+    assert!(
+        compiled2.sql.contains("WHERE NOT (0=1)"),
+        "Negated empty IN must compile to NOT (0=1), got: {}",
+        compiled2.sql
+    );
+
+    // compile_bulk_delete with empty IDs
+    let mut compiler3 = QueryCompiler::new(&dialect);
+    let compiled_del = compiler3.compile_bulk_delete(&TICKET_DEF, &[]).unwrap();
+    assert!(
+        compiled_del.sql.contains("WHERE 0=1"),
+        "Bulk delete with 0 IDs must emit 0=1, got: {}",
+        compiled_del.sql
+    );
 }
 
 #[test]
