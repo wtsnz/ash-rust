@@ -4,28 +4,38 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 echo "=========================================================="
 echo "          Ash Benchmark Suite: Rust vs. Elixir           "
 echo "=========================================================="
 echo ""
 
-echo "[1/3] Running ash-rust core release benchmark (helpdesk)..."
+echo "[1/4] Running ash-rust core release benchmark (helpdesk)..."
 cargo run --release -p helpdesk --example bench
 
 echo ""
-echo "[2/3] Running ash-graphql real-world API release benchmark..."
+echo "[2/4] Running ash-graphql real-world API release benchmark..."
 cargo run --release -p ash-graphql --example bench_graphql --features axum
 
 echo ""
-echo "[3/3] Running canonical Ash (Elixir + ETS) benchmark..."
+echo "[3/4] Running canonical Ash (Elixir + ETS) core benchmark..."
 if command -v mise >/dev/null 2>&1; then
     mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs
 elif command -v elixir >/dev/null 2>&1; then
     elixir benches/ash_elixir_bench.exs
 else
-    echo "Warning: Elixir is not installed or not in PATH. Skipping Elixir suite."
+    echo "Warning: Elixir is not installed or not in PATH. Skipping Elixir core suite."
+fi
+
+echo ""
+echo "[4/4] Running Ash Elixir + Absinthe GraphQL benchmark..."
+if command -v mise >/dev/null 2>&1; then
+    mise exec elixir erlang -- elixir benches/ash_graphql_elixir_bench.exs
+elif command -v elixir >/dev/null 2>&1; then
+    elixir benches/ash_graphql_elixir_bench.exs
+else
+    echo "Warning: Elixir is not installed or not in PATH. Skipping Elixir GraphQL suite."
 fi
 
 echo ""
