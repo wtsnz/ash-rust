@@ -175,6 +175,13 @@ fn bind_compiled<'q>(
     params: &'q [SqlParam],
 ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
     for p in params {
+        if p.is_list
+            && let Value::Array(items) = &p.value
+        {
+            let json_array = ash_sql::values_to_json_array(items);
+            query = query.bind(json_array);
+            continue;
+        }
         match &p.value {
             Value::Null => {
                 query = query.bind(None::<String>);

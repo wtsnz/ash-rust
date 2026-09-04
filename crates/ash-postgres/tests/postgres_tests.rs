@@ -255,3 +255,48 @@ async fn test_postgres_declarative_migration_runner() {
         .await;
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[tokio::test]
+async fn test_postgres_in_query_large_batch_any_array() {
+    let Some(pg) = get_test_postgres().await else {
+        return;
+    };
+
+    let id1 = Uuid::new_v4();
+    let id2 = Uuid::new_v4();
+    let mut f1 = ash_core::FieldMap::new();
+    f1.insert("id".into(), Value::Uuid(id1));
+    f1.insert("email".into(), Value::String(format!("user1_{}@example.com", Uuid::new_v4().simple())));
+    f1.insert("name".into(), Value::String("User 1".into()));
+    f1.insert("role".into(), Value::String("customer".into()));
+    f1.insert("active".into(), Value::Bool(true));
+    f1.insert("points".into(), Value::Int(10));
+    pg.create(&CUSTOMER_DEF, id1, f1).await.unwrap();
+
+    let mut f2 = ash_core::FieldMap::new();
+    f2.insert("id".into(), Value::Uuid(id2));
+    f2.insert("email".into(), Value::String(format!("user2_{}@example.com", Uuid::new_v4().simple())));
+    f2.insert("name".into(), Value::String("User 2".into()));
+    f2.insert("role".into(), Value::String("customer".into()));
+    f2.insert("active".into(), Value::Bool(true));
+    f2.insert("points".into(), Value::Int(20));
+    pg.create(&CUSTOMER_DEF, id2, f2).await.unwrap();
+
+    // Large list with 2,000 UUIDs
+    let mut large_ids = vec![id1, id2];
+    for _ in 0..2000 {
+        large_ids.push(Uuid::new_v4());
+    }
+
+    let id_values: Vec<Value> = large_ids.into_iter().map(Value::Uuid).collect();
+    let query = ash_core::CompiledQuery {
+        filter: Some(ash_core::Filter::in_list("id", id_values)),
+        ..ash_core::CompiledQuery::default()
+    };
+
+    let rows = pg.run_query(&CUSTOMER_DEF, &query).await.unwrap();
+    assert_eq!(rows.len(), 2);
+
+    let _ = pg.destroy(&CUSTOMER_DEF, id1).await;
+    let _ = pg.destroy(&CUSTOMER_DEF, id2).await;
+}

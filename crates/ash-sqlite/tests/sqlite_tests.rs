@@ -98,3 +98,46 @@ async fn test_sqlite_declarative_migration_and_rollback() -> Result<()> {
     let _ = std::fs::remove_dir_all(&temp_dir);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_sqlite_in_query_large_batch_exceeds_1000_limit() -> Result<()> {
+    let db = Sqlite::memory().await?;
+    db.install(&[&TICKET]).await?;
+
+    // Create 5 target tickets
+    let mut target_ids = Vec::new();
+    for i in 0..5 {
+        let id = Uuid::new_v4();
+        target_ids.push(id);
+        let mut fields = FieldMap::new();
+        fields.insert("id".to_string(), Value::Uuid(id));
+        fields.insert("subject".to_string(), Value::String(format!("Ticket {i}")));
+        fields.insert("status".to_string(), Value::String("open".into()));
+        fields.insert("priority".to_string(), Value::Int(i));
+        db.create(&TICKET, id, fields).await?;
+    }
+
+    // Now construct a filter list with 1,500 UUIDs (exceeds SQLite's 999 variable limit)
+    let mut large_id_list = target_ids.clone();
+    for _ in 0..1500 {
+        large_id_list.push(Uuid::new_v4());
+    }
+    assert_eq!(large_id_list.len(), 1505);
+
+    let id_values: Vec<Value> = large_id_list.into_iter().map(Value::Uuid).collect();
+    let query = ash_core::CompiledQuery {
+        filter: Some(ash_core::Filter::in_list("id", id_values)),
+        ..ash_core::CompiledQuery::default()
+    };
+
+    // This query would fail with `too many SQL variables` under traditional IN (?, ?, ...)
+    // But succeeds seamlessly with single-parameter `json_each`!
+    let rows = db.run_query(&TICKET, &query).await?;
+    assert_eq!(rows.len(), 5);
+
+    // Also test bulk_destroy with 1,200 IDs
+    let destroy_targets: Vec<Uuid> = (0..1200).map(|_| Uuid::new_v4()).collect();
+    db.bulk_destroy(&TICKET, &destroy_targets).await?;
+
+    Ok(())
+}

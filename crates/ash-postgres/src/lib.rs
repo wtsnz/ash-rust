@@ -534,6 +534,56 @@ fn bind_compiled<'q>(
     params: &'q [SqlParam],
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
     for p in params {
+        if p.is_list
+            && let Value::Array(items) = &p.value
+        {
+            // If the array is empty or contains UUIDs, integers, strings, etc.
+                if items.iter().all(|v| matches!(v, Value::Uuid(_))) {
+                    let uuids: Vec<Uuid> = items
+                        .iter()
+                        .filter_map(|v| match v {
+                            Value::Uuid(u) => Some(*u),
+                            _ => None,
+                        })
+                        .collect();
+                    query = query.bind(uuids);
+                    continue;
+                } else if items.iter().all(|v| matches!(v, Value::Int(_))) {
+                    let ints: Vec<i64> = items
+                        .iter()
+                        .filter_map(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .collect();
+                    query = query.bind(ints);
+                    continue;
+                } else if items.iter().all(|v| matches!(v, Value::String(_))) {
+                    let strings: Vec<String> = items
+                        .iter()
+                        .filter_map(|v| match v {
+                            Value::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    query = query.bind(strings);
+                    continue;
+                } else {
+                    // Fallback to string array
+                    let strings: Vec<String> = items
+                        .iter()
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            Value::Uuid(u) => u.to_string(),
+                            Value::Int(i) => i.to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            _ => v.to_string(),
+                        })
+                        .collect();
+                    query = query.bind(strings);
+                    continue;
+                }
+        }
         match &p.value {
             Value::Null => {
                 query = query.bind(None::<String>);
