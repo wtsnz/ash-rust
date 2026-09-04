@@ -379,11 +379,9 @@ impl DataLayer for Postgres {
             return Ok(());
         }
         let dialect = PostgresDialect;
-        for chunk in ids.chunks(500) {
-            let mut compiler = QueryCompiler::new(&dialect);
-            let compiled = compiler.compile_bulk_delete(resource, chunk)?;
-            self.execute_compiled_resource(&compiled, resource).await?;
-        }
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_bulk_delete(resource, ids)?;
+        self.execute_compiled_resource(&compiled, resource).await?;
         Ok(())
     }
 }

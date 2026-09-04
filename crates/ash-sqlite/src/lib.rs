@@ -410,10 +410,8 @@ impl DataLayer for Sqlite {
         if ids.is_empty() {
             return Ok(());
         }
-        for chunk in ids.chunks(500) {
-            let qb = sql::bulk_delete_query(resource, chunk)?;
-            self.execute_query_resource(&qb, resource).await?;
-        }
+        let qb = sql::bulk_delete_query(resource, ids)?;
+        self.execute_query_resource(&qb, resource).await?;
         Ok(())
     }
 }
