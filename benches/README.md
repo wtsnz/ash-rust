@@ -18,9 +18,13 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
    - **GraphQL API Runner**: `crates/ash-graphql/examples/bench_graphql.rs`
      - Run: `cargo run --release -p ash-graphql --example bench_graphql --features axum`
      - Measures iterations, throughput (ops/sec), average, median (p50), p95, and p99 latencies for realistic web workloads.
+   - **PostgreSQL DataLayer Runner**: `crates/ash-postgres/examples/bench_postgres.rs`
+     - Run: `cargo run --release -p ash-postgres --example bench_postgres`
+     - Measures point writes (`RETURNING *`), point reads by ID, filtered & sorted queries, correlated aggregate subqueries, vectorized bulk ingestion (`compile_bulk_insert`), and multi-step transactions against PostgreSQL.
 
-3. **Comparative Benchmark Script (`benches/compare.sh`)**
-   - Runs both Rust release runners alongside both canonical Elixir Ash runners on the exact same hardware to track performance and speedup multipliers over time.
+3. **Comparative Benchmark Scripts**
+   - `benches/compare.sh`: Runs both core in-memory and GraphQL suites for Rust and Elixir back-to-back. (Pass `--postgres` to include PostgreSQL).
+   - `benches/bench_postgres.sh`: Spawns or connects to the PostgreSQL Docker container, runs the Rust `ash-postgres` suite, and runs the Elixir `AshPostgres` suite for direct side-by-side comparison.
 
 4. **Ash Elixir Benchmark Suites (Benchee)**
    - **Core Engine Benchmark**: `benches/ash_elixir_bench.exs`
@@ -29,6 +33,9 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
    - **GraphQL API Benchmark**: `benches/ash_graphql_elixir_bench.exs`
      - Measures `getTicket` single record, 100-record collection, filtered & sorted queries, keyset pagination, DataLoader nested relationships, and `openTicket` mutations using `ash_graphql` + `absinthe` + ETS.
      - Run: `mise exec elixir erlang -- elixir benches/ash_graphql_elixir_bench.exs`
+   - **PostgreSQL Benchmark**: `benches/ash_postgres_elixir_bench.exs`
+     - Measures point writes, reads by ID, filtered/sorted queries, correlated aggregates, bulk ingestion, and `Ash.transaction` against PostgreSQL using `ash_postgres` + `Ecto` + `Postgrex`.
+     - Run: `mise exec elixir erlang -- elixir benches/ash_postgres_elixir_bench.exs`
 
 ---
 
@@ -55,16 +62,30 @@ Measured on Apple Silicon M-Series (10 cores, 32GB RAM):
 | **5. DataLoader (100 Tickets + Author)** | 670 ops/sec (1,460 µs) | **576 ops/sec (1,675 µs)** | **~1.0x parity** |
 | **6. Mutation: `openTicket`** | 3,550 ops/sec (240 µs) | **31,140 ops/sec (31.0 µs)** | **~8.8x faster** (7.7x lower latency) |
 
+### PostgreSQL Data Layer (`ash-postgres` vs `ash_postgres` + Ecto)
+
+Measured against PostgreSQL 16 (Docker container on port 5433):
+
+| PostgreSQL Workload | Ash Elixir (`ash_postgres` + Ecto) | Ash Rust (`ash-postgres` + sqlx) | Rust Speedup Multiplier |
+|:---|:---:|:---:|:---:|
+| **1. Point Write (`RETURNING *`)** | 615 ops/sec (1,150 µs) | **832 ops/sec (1,006 µs)** | **~1.35x faster** (1.14x lower latency) |
+| **2. Point Read (`id` PK Lookup)** | 4,243 ops/sec (220 µs) | **2,980 ops/sec (323 µs)** | ~0.7x (both ~200-300 µs network roundtrip) |
+| **3. Filtered & Sorted (50 items)** | 988 ops/sec (910 µs) | **1,623 ops/sec (595 µs)** | **~1.64x faster** (1.53x lower latency) |
+| **4. Correlated Aggregates (Subqueries)** | 959 ops/sec (970 µs) | **1,394 ops/sec (694 µs)** | **~1.45x faster** (1.40x lower latency) |
+| **5. Bulk Ingestion (100 Tickets)** | 152 ops/sec (6,050 µs) | **354 ops/sec (2,570 µs)** | **~2.33x faster** (2.35x lower latency) |
+| **6. Transactional Workflow (BEGIN/COMMIT)** | 571 ops/sec (1,590 µs) | **691 ops/sec (1,312 µs)** | **~1.21x faster** (1.21x lower latency) |
+
 ---
 
 ## How to Run
 
 ### 1. Statistical Regression Testing (Criterion)
 
-Run the Criterion suite:
+Run the Criterion suites:
 ```bash
 cargo bench -p helpdesk
 cargo bench -p ash-graphql --bench graphql_bench --features axum
+cargo bench -p ash-postgres
 ```
 
 Criterion automatically:
@@ -76,23 +97,28 @@ Criterion automatically:
   open target/criterion/report/index.html
   ```
 
-To quickly verify the benchmark suite without a full sampling run:
+To quickly verify the benchmark suites without a full sampling run:
 ```bash
 cargo bench -p helpdesk -- --test
 cargo bench -p ash-graphql --bench graphql_bench --features axum -- --test
+cargo bench -p ash-postgres -- --test
 ```
 
 ### 2. Side-by-Side Comparison with Elixir
 
-Run all suites back-to-back:
+Run in-memory & GraphQL suites back-to-back:
 ```bash
 ./benches/compare.sh
 ```
 
-Or run individual Elixir suites standalone:
+Run PostgreSQL benchmarks against Docker (auto-provisions container):
 ```bash
-mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs
-mise exec elixir erlang -- elixir benches/ash_graphql_elixir_bench.exs
+./benches/bench_postgres.sh
+```
+
+Or run all suites including PostgreSQL:
+```bash
+./benches/compare.sh --postgres
 ```
 
 ---

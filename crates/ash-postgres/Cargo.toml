@@ -22,4 +22,12 @@ uuid.workspace = true
 
 [dev-dependencies]
 ash-macros = { path = "../ash-macros" }
+criterion = { version = "0.5", features = ["async_tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[example]]
+name = "bench_postgres"
+
+[[bench]]
+name = "postgres_bench"
+harness = false
