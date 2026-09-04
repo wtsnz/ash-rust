@@ -611,6 +611,50 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
+    pub fn compile_bulk_insert(
+        &mut self,
+        resource: &ResourceDef,
+        rows: &[(Uuid, FieldMap)],
+    ) -> Result<CompiledSql> {
+        if rows.is_empty() {
+            return Ok(CompiledSql::new(String::new(), Vec::new()));
+        }
+        let table = ident(self.dialect, resource.table_name())?;
+
+        let mut col_names = Vec::new();
+        let mut attrs = Vec::new();
+        for attr in resource.attributes {
+            col_names.push(ident(self.dialect, attr.name)?);
+            attrs.push(attr);
+        }
+
+        let mut row_placeholders = Vec::with_capacity(rows.len());
+        for (id, fields) in rows {
+            let mut placeholders = Vec::with_capacity(attrs.len());
+            for attr in &attrs {
+                let val = if attr.primary_key {
+                    fields.get(attr.name).cloned().unwrap_or(Value::Uuid(*id))
+                } else {
+                    fields.get(attr.name).cloned().unwrap_or(Value::Null)
+                };
+                placeholders.push(self.push_param(val));
+            }
+            row_placeholders.push(format!("({})", placeholders.join(", ")));
+        }
+
+        let mut sql = format!(
+            "INSERT INTO {table} ({}) VALUES {}",
+            col_names.join(", "),
+            row_placeholders.join(", ")
+        );
+
+        if self.dialect.supports_returning() {
+            sql.push_str(" RETURNING *");
+        }
+
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
     pub fn compile_update(
         &mut self,
         resource: &ResourceDef,

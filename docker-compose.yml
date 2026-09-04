@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ash_postgres_bench
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ash_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ash_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ash_benchmark}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ash_user} -d ${POSTGRES_DB:-ash_benchmark}"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+volumes:
+  pgdata:

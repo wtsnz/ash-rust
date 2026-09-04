@@ -128,6 +128,30 @@ impl Postgres {
         }
     }
 
+    async fn fetch_all_resource(
+        &self,
+        compiled: &CompiledSql,
+        resource: &ResourceDef,
+    ) -> Result<Vec<PgRow>> {
+        match &self.source {
+            PostgresSource::Pool(pool) => {
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| map_sqlx_resource(e, resource))
+            }
+            PostgresSource::Tx(conn) => {
+                let mut guard = conn.lock().await;
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query
+                    .fetch_all(&mut **guard)
+                    .await
+                    .map_err(|e| map_sqlx_resource(e, resource))
+            }
+        }
+    }
+
     async fn fetch_optional_resource(
         &self,
         compiled: &CompiledSql,
@@ -361,17 +385,14 @@ impl DataLayer for Postgres {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        self.transaction(|tx| {
-            let tx = tx.clone();
-            async move {
-                let mut results = Vec::with_capacity(rows.len());
-                for (id, fields) in rows {
-                    results.push(tx.create(resource, id, fields).await?);
-                }
-                Ok(results)
-            }
-        })
-        .await
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_bulk_insert(resource, &rows)?;
+        let pg_rows = self.fetch_all_resource(&compiled, resource).await?;
+        pg_rows
+            .iter()
+            .map(|r| row_to_fields(r, resource, &[], &[]))
+            .collect()
     }
 
     async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
