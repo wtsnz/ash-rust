@@ -47,6 +47,12 @@
    - Engine matrix: SQLite (`ash-sqlite`) vs PostgreSQL (`ash-postgres`)
    - Test suite verification matrix
 
+7. **[Authentication & Token Security (`ash-authentication`)](wip/0004-ash-authentication.md)**
+   - RFC 0004 specification for declarative authentication
+   - Strategies: Argon2id password hashing, JWT bearer tokens, and API key management
+   - Axum integration: `AuthUser` extractor and `/auth` router
+   - `#[authentication]` resource decorator macro
+
 
 ---
 

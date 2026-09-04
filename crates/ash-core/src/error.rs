@@ -64,6 +64,7 @@ pub enum Error {
         relationship: &'static str,
         count: usize,
     },
+    Authentication(String),
 }
 
 impl Error {
@@ -154,6 +155,7 @@ impl fmt::Display for Error {
                     "cannot delete {resource} because relationship `{relationship}` has {count} dependent record(s) and specifies on_delete: restrict"
                 )
             }
+            Self::Authentication(msg) => write!(f, "authentication error: {msg}"),
         }
     }
 }
