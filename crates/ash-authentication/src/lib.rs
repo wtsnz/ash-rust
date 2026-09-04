@@ -12,7 +12,10 @@ pub mod axum;
 
 pub use api_key::ApiKeyService;
 pub use change::HashPasswordChange;
-pub use def::{ApiKeyStrategyDef, AuthenticationDef, PasswordStrategyDef, TokenStrategyDef};
+pub use def::{
+    ApiKeyStrategyDef, AuthenticationDef, ConfirmationStrategyDef, PasswordStrategyDef,
+    TokenStrategyDef,
+};
 pub use error::{AuthError, Result};
 pub use password::PasswordService;
 pub use strategy::AuthStrategy;

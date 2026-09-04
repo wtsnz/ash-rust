@@ -96,6 +96,7 @@ pub struct JwtService {
     token_lifetime: Duration,
     refresh_token_lifetime: Duration,
     reset_token_lifetime: Duration,
+    confirmation_token_lifetime: Duration,
     revocation_store: Option<Arc<dyn TokenRevocationStore>>,
 }
 
@@ -109,6 +110,7 @@ impl JwtService {
             token_lifetime: Duration::from_secs(3600), // Default 1 hour
             refresh_token_lifetime: Duration::from_secs(86400 * 14), // Default 14 days
             reset_token_lifetime: Duration::from_secs(900), // Default 15 minutes
+            confirmation_token_lifetime: Duration::from_secs(86400 * 3), // Default 3 days
             revocation_store: Some(Arc::new(MemoryRevocationStore::new())),
         }
     }
@@ -131,6 +133,12 @@ impl JwtService {
         self
     }
 
+    /// Set custom email confirmation token lifetime duration.
+    pub fn with_confirmation_lifetime(mut self, lifetime: Duration) -> Self {
+        self.confirmation_token_lifetime = lifetime;
+        self
+    }
+
     /// Access token lifetime duration.
     pub fn token_lifetime(&self) -> Duration {
         self.token_lifetime
@@ -144,6 +152,11 @@ impl JwtService {
     /// Password reset token lifetime duration.
     pub fn reset_token_lifetime(&self) -> Duration {
         self.reset_token_lifetime
+    }
+
+    /// Confirmation token lifetime duration.
+    pub fn confirmation_token_lifetime(&self) -> Duration {
+        self.confirmation_token_lifetime
     }
 
     /// Attach a custom token revocation store.
@@ -203,6 +216,21 @@ impl JwtService {
             user_id,
             "password_reset",
             self.reset_token_lifetime,
+            None,
+            tenant,
+        )
+    }
+
+    /// Generate and sign an email confirmation token (`purpose = "email_confirmation"`).
+    pub fn sign_confirmation_token(
+        &self,
+        user_id: Uuid,
+        tenant: Option<String>,
+    ) -> Result<String> {
+        self.sign_custom_token(
+            user_id,
+            "email_confirmation",
+            self.confirmation_token_lifetime,
             None,
             tenant,
         )

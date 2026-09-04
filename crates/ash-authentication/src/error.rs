@@ -7,6 +7,8 @@ pub enum AuthError {
     InvalidCredentials,
     /// Targeted user account was not found.
     UserNotFound,
+    /// User account has not yet confirmed their email address.
+    UserUnconfirmed,
     /// Password does not meet complexity/length requirements.
     WeakPassword(String),
     /// The supplied password confirmation does not match the password.
@@ -30,6 +32,7 @@ impl fmt::Display for AuthError {
         match self {
             Self::InvalidCredentials => write!(f, "invalid credentials"),
             Self::UserNotFound => write!(f, "user not found"),
+            Self::UserUnconfirmed => write!(f, "user account has not confirmed email"),
             Self::WeakPassword(msg) => write!(f, "weak password: {msg}"),
             Self::PasswordConfirmationMismatch => write!(f, "password confirmation does not match"),
             Self::InvalidToken(msg) => write!(f, "invalid token: {msg}"),
