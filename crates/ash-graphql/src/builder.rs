@@ -1,4 +1,4 @@
-use ash_core::{ActionKind, DataLayer, DomainDef, ResourceDef};
+use ash_core::{ActionKind, Context, DataLayer, DomainDef, ResourceDef};
 use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 
@@ -55,6 +55,21 @@ impl AshGraphQLBuilder {
 
     /// Builds the dynamic GraphQL schema for the specified data layer context type `D`.
     pub fn finish<D: DataLayer + Clone + 'static>(self) -> Result<Schema, SchemaError> {
+        self.finish_internal::<D>(None)
+    }
+
+    /// Builds the dynamic GraphQL schema and attaches the default [`Context`] to the schema data.
+    pub fn finish_with_context<D: DataLayer + Clone + 'static>(
+        self,
+        ctx: Context<D>,
+    ) -> Result<Schema, SchemaError> {
+        self.finish_internal::<D>(Some(ctx))
+    }
+
+    fn finish_internal<D: DataLayer + Clone + 'static>(
+        self,
+        default_ctx: Option<Context<D>>,
+    ) -> Result<Schema, SchemaError> {
         let mut query = Object::new("Query");
         query = query.field(Field::new(
             "schema_version",
@@ -145,6 +160,10 @@ impl AshGraphQLBuilder {
 
         if has_subscriptions {
             builder = builder.register(subscription);
+        }
+
+        if let Some(ctx) = default_ctx {
+            builder = builder.data(ctx);
         }
 
         builder.register(query).finish()
