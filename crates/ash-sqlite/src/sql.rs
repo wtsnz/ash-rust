@@ -281,4 +281,11 @@ mod tests {
         assert!(ddl.contains("\"representative_id\" TEXT"));
         assert!(!ddl.contains("\"representative_id\" TEXT NOT NULL"));
     }
+
+    #[test]
+    fn in_list_uses_json_each() {
+        let ids = vec![Value::Uuid(uuid::Uuid::nil())];
+        let compiled = sql(Filter::in_list("id", ids));
+        assert!(compiled.contains("\"id\" IN (SELECT value FROM json_each(?))"));
+    }
 }

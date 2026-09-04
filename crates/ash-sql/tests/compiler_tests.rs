@@ -158,3 +158,50 @@ fn test_create_table_ddl_compilation() {
     assert!(pg_ddl.contains("\"subject\" TEXT NOT NULL"));
     assert!(pg_ddl.contains("\"priority\" BIGINT"));
 }
+
+#[test]
+fn test_in_list_compilation_sqlite_json_each_vs_postgres_any() {
+    let ids = vec![
+        Value::Uuid(Uuid::new_v4()),
+        Value::Uuid(Uuid::new_v4()),
+        Value::Uuid(Uuid::new_v4()),
+    ];
+    let query = CompiledQuery {
+        filter: Some(Filter::in_list("id", ids)),
+        ..CompiledQuery::default()
+    };
+
+    // 1. SQLite dialect uses json_each with exactly 1 parameter
+    let mut sqlite_compiler = QueryCompiler::new(&SqliteDialect);
+    let sqlite_compiled = sqlite_compiler.compile_select(&TICKET_DEF, &query).unwrap();
+    assert!(
+        sqlite_compiled
+            .sql
+            .contains("\"id\" IN (SELECT value FROM json_each(?))"),
+        "SQLite must compile IN query to json_each, got: {}",
+        sqlite_compiled.sql
+    );
+    assert_eq!(
+        sqlite_compiled.params.len(),
+        1,
+        "SQLite must bind array as a single parameter"
+    );
+    assert!(sqlite_compiled.params[0].is_list);
+
+    // 2. Postgres dialect uses = ANY($1) with exactly 1 parameter
+    let mut pg_compiler = QueryCompiler::new(&PostgresDialect);
+    let pg_compiled = pg_compiler.compile_select(&TICKET_DEF, &query).unwrap();
+    assert!(
+        pg_compiled
+            .sql
+            .contains("\"id\" = ANY($1)"),
+        "Postgres must compile IN query to = ANY($1), got: {}",
+        pg_compiled.sql
+    );
+    assert_eq!(
+        pg_compiled.params.len(),
+        1,
+        "Postgres must bind array as a single parameter"
+    );
+    assert!(pg_compiled.params[0].is_list);
+}

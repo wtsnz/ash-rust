@@ -38,6 +38,12 @@ pub trait SqlDialect: Send + Sync + 'static {
     fn create_table_if_not_exists(&self) -> bool {
         true
     }
+
+    /// Render membership check (`IN` / `= ANY(...)`).
+    ///
+    /// Given an operand expression `op` (e.g. `"tickets"."id"`) and a bound parameter placeholder `param`,
+    /// renders the dialect-specific SQL test.
+    fn render_in_list(&self, op: &str, param: &str) -> String;
 }
 
 /// Dialect implementation for SQLite.
@@ -98,6 +104,10 @@ impl SqlDialect for SqliteDialect {
             "0"
         }
     }
+
+    fn render_in_list(&self, op: &str, param: &str) -> String {
+        format!("{op} IN (SELECT value FROM json_each({param}))")
+    }
 }
 
 /// Dialect implementation for PostgreSQL.
@@ -157,5 +167,9 @@ impl SqlDialect for PostgresDialect {
         } else {
             "FALSE"
         }
+    }
+
+    fn render_in_list(&self, op: &str, param: &str) -> String {
+        format!("{op} = ANY({param})")
     }
 }

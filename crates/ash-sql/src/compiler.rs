@@ -70,6 +70,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         self.dialect.placeholder(self.param_counter)
     }
 
+    /// Pushes a bound list parameter and returns the dialect placeholder.
+    pub fn push_list_param(&mut self, vals: Vec<Value>) -> String {
+        self.param_counter += 1;
+        self.params.push(SqlParam::list(vals));
+        self.dialect.placeholder(self.param_counter)
+    }
+
     pub fn compile_operand(&mut self, resource: &ResourceDef, field: &str) -> Result<String> {
         if let Some(calc) = resource.calculation(field) {
             self.compile_expr(resource, &calc.expr)
@@ -233,11 +240,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {
                 let op = self.compile_operand(resource, field)?;
-                let mut placeholders = Vec::new();
-                for val in vals {
-                    placeholders.push(self.push_param(val.clone()));
-                }
-                Ok(format!("{op} IN ({})", placeholders.join(", ")))
+                let param = self.push_list_param(vals.clone());
+                Ok(self.dialect.render_in_list(&op, &param))
             }
             Filter::And(parts) => {
                 let mut compiled = Vec::new();
@@ -650,12 +654,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             return Ok(CompiledSql::new(format!("DELETE FROM {table} WHERE 0=1"), Vec::new()));
         }
 
-        let mut placeholders = Vec::new();
-        for id in ids {
-            placeholders.push(self.push_param(Value::Uuid(*id)));
-        }
+        let vals: Vec<Value> = ids.iter().map(|id| Value::Uuid(*id)).collect();
+        let param = self.push_list_param(vals);
+        let condition = self.dialect.render_in_list(&pk_col, &param);
 
-        let sql = format!("DELETE FROM {table} WHERE {pk_col} IN ({})", placeholders.join(", "));
+        let sql = format!("DELETE FROM {table} WHERE {condition}");
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 

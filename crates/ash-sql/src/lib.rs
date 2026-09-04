@@ -17,5 +17,5 @@ pub use generator::{
     generate_migration, generate_migration_version, generate_migration_with_version, MigrationFiles,
 };
 pub use migrator::{MemoryMigrationExecutor, MigrationExecutor, MigrationFile, Migrator};
-pub use param::SqlParam;
+pub use param::{values_to_json_array, SqlParam};
 pub use snapshot::{ColumnSnapshot, IdentitySnapshot, ReferenceSnapshot, TableSnapshot};
