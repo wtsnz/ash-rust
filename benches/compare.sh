@@ -11,11 +11,15 @@ echo "          Ash Benchmark Suite: Rust vs. Elixir           "
 echo "=========================================================="
 echo ""
 
-echo "[1/2] Running ash-rust release benchmark..."
+echo "[1/3] Running ash-rust core release benchmark (helpdesk)..."
 cargo run --release -p helpdesk --example bench
 
 echo ""
-echo "[2/2] Running canonical Ash (Elixir + ETS) benchmark..."
+echo "[2/3] Running ash-graphql real-world API release benchmark..."
+cargo run --release -p ash-graphql --example bench_graphql --features axum
+
+echo ""
+echo "[3/3] Running canonical Ash (Elixir + ETS) benchmark..."
 if command -v mise >/dev/null 2>&1; then
     mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs
 elif command -v elixir >/dev/null 2>&1; then
@@ -29,4 +33,5 @@ echo "=========================================================="
 echo "Benchmark run complete."
 echo "To run statistical regression analysis with Criterion:"
 echo "  cargo bench -p helpdesk"
+echo "  cargo bench -p ash-graphql --bench graphql_bench --features axum"
 echo "=========================================================="

@@ -171,3 +171,33 @@ let app = graphql_router(schema);
 let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
 axum::serve(listener, app).await.unwrap();
 ```
+
+## Benchmarking & Performance
+
+`ash-graphql` includes both an industry-standard statistical Criterion suite and a fast standalone runner for real-world API performance profiling:
+
+### 1. Fast Standalone Runner
+```bash
+cargo run --release -p ash-graphql --example bench_graphql --features axum
+```
+
+Measures throughput (ops/sec), average, median (p50), p95, and p99 latency across realistic workloads:
+- **Schema Build (Dynamic Reflection)**: ~6,700 ops/sec (~140 µs median)
+- **Single Record by ID**: ~14,800 ops/sec (~65 µs median)
+- **100 Tickets Collection Query**: ~2,570 ops/sec (~377 µs median)
+- **Filtered & Sorted Query (50 items)**: ~4,510 ops/sec (~217 µs median)
+- **Relay Keyset Pagination (first: 20)**: ~3,730 ops/sec (~259 µs median)
+- **DataLoader (100 Tickets + Nested Author)**: ~580 ops/sec (~1.7 ms median, batching 100 queries into 1)
+- **Axum HTTP POST `/graphql` Roundtrip (20 items)**: ~7,530 ops/sec (~125 µs median)
+- **GraphQL Mutation `openTicket` (Validation + Action)**: ~31,100 ops/sec (~31 µs median)
+- **SQLite DataLayer (100 Tickets Query)**: ~1,470 ops/sec (~653 µs median)
+
+### 2. Criterion Statistical Regression Suite
+```bash
+cargo bench -p ash-graphql --bench graphql_bench --features axum
+```
+
+To run a fast smoke verification:
+```bash
+cargo bench -p ash-graphql --bench graphql_bench --features axum -- --test
+```
