@@ -89,7 +89,15 @@ async fn main() -> Result<()> {
         });
 
     println!("Ash Authentication Server running on http://127.0.0.1:3000");
-    println!("Try: POST /auth/sign-in with {{\"identity\": \"admin@ash-rust.org\", \"password\": \"password123\"}}");
+    println!("Endpoints available:");
+    println!("  • POST /auth/sign-in               - Sign in, receive access + refresh token pair");
+    println!("  • POST /auth/refresh               - Rotate refresh token & receive new pair");
+    println!("  • POST /auth/revoke                - Invalidate token");
+    println!("  • POST /auth/change-password       - Change password (requires Bearer token)");
+    println!("  • POST /auth/request-password-reset- Request single-use password reset token");
+    println!("  • POST /auth/reset-password        - Reset password with single-use token");
+    println!("  • GET  /auth/me                    - Inspect authenticated identity claims");
+    println!("  • GET  /api/profile                - Protected application route");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();

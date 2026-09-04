@@ -5,6 +5,7 @@ pub mod error;
 pub mod password;
 pub mod strategy;
 pub mod token;
+pub mod token_store;
 
 #[cfg(feature = "axum")]
 pub mod axum;
@@ -15,10 +16,15 @@ pub use def::{ApiKeyStrategyDef, AuthenticationDef, PasswordStrategyDef, TokenSt
 pub use error::{AuthError, Result};
 pub use password::PasswordService;
 pub use strategy::AuthStrategy;
-pub use token::{Claims, JwtService, MemoryRevocationStore, TokenRevocationStore};
+pub use token::{Claims, JwtService, MemoryRevocationStore, TokenPair, TokenRevocationStore};
+pub use token_store::{AshToken, DatabaseTokenStore};
 
 #[cfg(feature = "axum")]
-pub use axum::{AuthRejection, AuthTokenResponse, AuthUser, PasswordAuthRequest, auth_router};
+pub use axum::{
+    AuthRejection, AuthTokenResponse, AuthUser, ChangePasswordRequest, PasswordAuthRequest,
+    RefreshTokenRequest, RequestPasswordResetRequest, ResetPasswordRequest, RevokeTokenRequest,
+    auth_router,
+};
 
 #[cfg(not(feature = "axum"))]
 #[derive(Clone, Debug)]

@@ -8,6 +8,7 @@ description = "Declarative authentication engine for ash-rust"
 
 [dependencies]
 ash-core = { path = "../ash-core" }
+ash-memory = { path = "../ash-memory" }
 ash-authentication-macros = { path = "../ash-authentication-macros" }
 argon2 = { version = "0.6", features = ["alloc", "password-hash", "getrandom"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }

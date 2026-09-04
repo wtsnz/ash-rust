@@ -151,21 +151,62 @@ The transformer automatically:
 3. Injects field policies redacting `hashed_password` on public reads.
 4. Generates typed helpers `User::register_with_password` and `User::sign_in_with_password`.
 
-### 4.4 Axum Web Integration
+### 4.4 Database-Backed Token Resource (`AshToken`) & Refresh Token Rotation
+
+To achieve feature parity with Elixir Ash's `AshAuthentication.TokenResource`, `ash-authentication` provides the canonical `AshToken` resource and `DatabaseTokenStore`:
+- **`AshToken` Schema**:
+  - `id: Uuid [pk]`
+  - `jti: String` — Unique token identifier
+  - `subject: Uuid` — User / account identifier
+  - `purpose: String` — `"access"`, `"refresh"`, `"revocation"`, `"password_reset"`
+  - `expires_at: i64` — Unix timestamp
+  - `revoked: bool` — Revocation flag
+  - `extra: Option<String>` — Optional serialized claims or metadata
+- **Refresh Token Rotation (RFC 6749 / RFC 6819)**:
+  1. On login, `JwtService::sign_token_pair` issues an `(access_token, refresh_token)` pair. The refresh token's `jti` is stored in `ash_tokens`.
+  2. On `POST /auth/refresh`, the client supplies `refresh_token`. The server validates the token in `ash_tokens` and **immediately invalidates it**.
+  3. A new `(access_token, refresh_token)` pair is returned, and the new refresh token is stored.
+  4. **Replay Detection**: If a compromised or previously rotated refresh token is presented again, rotation fails with `401 Unauthorized`.
+- **Background Pruning**:
+  - `store.prune_expired().await` removes expired token records across all supported data layers (`Memory`, `Sqlite`, `Postgres`).
+
+### 4.5 Password Lifecycle: Change & Reset
+
+- **Change Password**:
+  - `POST /auth/change-password` requires `Bearer <token>` authentication.
+  - Verifies `current_password` in constant time, validates new password constraints and confirmation, updates `hashed_password`, and invalidates existing refresh tokens.
+- **Single-Use Password Reset**:
+  - `POST /auth/request-password-reset`: Looks up user and issues a short-lived reset token (`purpose: "password_reset"`).
+  - `POST /auth/reset-password`: Consumes the token, validates the new password, updates the hash, and revokes the reset token so it can never be used again.
+
+### 4.6 Axum Web Integration
 
 With the `axum` feature enabled:
 ```rust
-let auth_service = AuthService::new(jwt_service, user_def);
+let auth_routes = auth_router(User::auth_strategy(), jwt_service.clone(), ctx);
 
 let app = Router::new()
-    .nest("/auth", auth_service.into_router())
-    .route("/api/profile", get(profile_handler));
+    .nest("/auth", auth_routes)
+    .route("/api/profile", get(profile_handler))
+    .with_state(app_state);
 
-async fn profile_handler(AuthUser(actor): AuthUser) -> Json<ProfileResponse> {
+async fn profile_handler(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
     // Actor is verified and loaded from Bearer token
-    Json(ProfileResponse { user_id: actor.id })
+    Json(serde_json::json!({ "user_id": actor.id, "role": actor.role() }))
 }
 ```
+
+#### Standard Endpoints
+
+| Method | Path | Description | Authentication |
+|---|---|---|---|
+| `POST` | `/auth/sign-in` | Authenticate with credentials, return access + refresh tokens | Public |
+| `POST` | `/auth/refresh` | Rotate refresh token, return new token pair | Public (refresh token) |
+| `POST` | `/auth/revoke` | Invalidate an active token | Bearer / token |
+| `POST` | `/auth/change-password` | Change user password | Bearer `<token>` |
+| `POST` | `/auth/request-password-reset` | Request single-use password reset token | Public |
+| `POST` | `/auth/reset-password` | Complete password reset with token | Public (reset token) |
+| `GET` | `/auth/me` | Inspect claims of authenticated actor | Bearer `<token>` |
 
 ---
 
