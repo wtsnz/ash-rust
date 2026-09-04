@@ -27,10 +27,21 @@ axum = ["dep:axum", "dep:async-graphql-axum"]
 ash-macros = { path = "../ash-macros" }
 ash-memory = { path = "../ash-memory" }
 ash-sqlite = { path = "../ash-sqlite" }
+bytes = "1"
+criterion = { version = "0.5", features = ["async_tokio"] }
 http-body-util = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 
 [[example]]
 name = "web_dashboard"
+required-features = ["axum"]
+
+[[example]]
+name = "bench_graphql"
+required-features = ["axum"]
+
+[[bench]]
+name = "graphql_bench"
+harness = false
 required-features = ["axum"]

@@ -158,6 +158,8 @@ dependencies = [
  "async-graphql-axum",
  "async-stream",
  "axum",
+ "bytes",
+ "criterion",
  "futures-util",
  "http-body-util",
  "serde",

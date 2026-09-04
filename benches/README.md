@@ -4,22 +4,25 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 
 ## Benchmark Components
 
-1. **Criterion Regression Suite (`cargo bench`)**
-   - Location: `examples/helpdesk/benches/helpdesk_bench.rs`
-   - Purpose: Industry-standard statistical benchmarking with automated regression detection and HTML reports.
-   - Measures:
-     - `actions/ticket_open_memory`: Action invocation + validation + changeset + in-memory data layer.
-     - `actions/representative_create_memory`: Resource creation + validation.
-     - `actions/ticket_open_sqlite`: Action invocation + validation + SQL generation + SQLite execution.
-     - `queries/filter_status_open_100_memory`: Query pipeline filtering 100 rows in-memory.
-     - `queries/filter_status_open_100_sqlite`: SQL `SELECT` with `WHERE` filter across 100 SQLite rows.
-     - `aggregates/load_aggregates_memory`: Calculating `count`, `open_count`, and `exists` aggregates.
-     - `aggregates/load_aggregates_sqlite`: Correlated SQL subqueries for aggregates.
+1. **Criterion Regression Suites (`cargo bench`)**
+   - **Helpdesk Core Suite**: `examples/helpdesk/benches/helpdesk_bench.rs`
+     - Measures raw action invocations, changeset pipelines, memory and SQLite filtering, and correlated aggregate queries.
+     - Command: `cargo bench -p helpdesk`
+   - **GraphQL API Suite**: `crates/ash-graphql/benches/graphql_bench.rs`
+     - Measures dynamic GraphQL schema reflection, single record queries by ID, 100-record collections, filtered & sorted queries, Relay keyset pagination, DataLoader N+1 relationship batching, GraphQL mutations, Axum HTTP POST `/graphql` roundtrips, and SQLite data layer queries.
+     - Command: `cargo bench -p ash-graphql --bench graphql_bench --features axum`
 
-2. **Comparative Benchmark Script (`benches/compare.sh`)**
-   - Runs the Rust release runner (`examples/helpdesk/examples/bench.rs`) alongside the Elixir Ash runner (`benches/ash_elixir_bench.exs`) on the exact same hardware to track the speedup multiplier over time.
+2. **Fast Standalone Benchmark Runners**
+   - **Core Engine Runner**: `examples/helpdesk/examples/bench.rs`
+     - Run: `cargo run --release -p helpdesk --example bench`
+   - **GraphQL API Runner**: `crates/ash-graphql/examples/bench_graphql.rs`
+     - Run: `cargo run --release -p ash-graphql --example bench_graphql --features axum`
+     - Measures iterations, throughput (ops/sec), average, median (p50), p95, and p99 latencies for realistic web workloads.
 
-3. **Ash Elixir Benchmark (`benches/ash_elixir_bench.exs`)**
+3. **Comparative Benchmark Script (`benches/compare.sh`)**
+   - Runs the Rust release runners alongside the canonical Elixir Ash runner (`benches/ash_elixir_bench.exs`) on the exact same hardware to track performance and speedup multipliers over time.
+
+4. **Ash Elixir Benchmark (`benches/ash_elixir_bench.exs`)**
    - Canonical Ash 3.0 implementation of the same Helpdesk resources using `Ash.DataLayer.Ets` and Benchee for memory and throughput tracking.
 
 ---

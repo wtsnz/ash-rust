@@ -163,6 +163,10 @@ impl AshGraphQLBuilder {
         }
 
         if let Some(ctx) = default_ctx {
+            if self.dataloader_enabled {
+                let loader = crate::AshGraphQL::create_dataloader(ctx.clone(), &self.resources);
+                builder = builder.data(loader);
+            }
             builder = builder.data(ctx);
         }
 
