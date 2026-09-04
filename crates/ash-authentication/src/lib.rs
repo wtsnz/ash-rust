@@ -3,6 +3,7 @@ pub mod change;
 pub mod def;
 pub mod error;
 pub mod password;
+pub mod sender;
 pub mod strategy;
 pub mod token;
 pub mod token_store;
@@ -18,6 +19,7 @@ pub use def::{
 };
 pub use error::{AuthError, Result};
 pub use password::PasswordService;
+pub use sender::{AuthSender, BoxFuture, CallbackSender, ConsoleSender, NoopSender};
 pub use strategy::AuthStrategy;
 pub use token::{Claims, JwtService, MemoryRevocationStore, TokenPair, TokenRevocationStore};
 pub use token_store::{AshToken, DatabaseTokenStore};

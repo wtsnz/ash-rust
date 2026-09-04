@@ -52,6 +52,10 @@
    - Strategies: Argon2id password hashing, JWT bearer tokens, and API key management
    - Axum integration: `AuthUser` extractor and `/auth` router
    - `#[authentication]` resource decorator macro
+8. **Transactional Email & Action Notifiers (`ash-mailer`)**
+   - Pluggable transactional email delivery (`MemoryMailer`, `ConsoleMailer`)
+   - `EmailNotifier`: Declarative email delivery on committed resource actions
+   - `AuthMailerSender`: Abstract bridge to `ash-authentication` for password resets, confirmations, and magic links
 
 
 ---

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ash_core::{Actor, Context, DataLayer, FieldMap, Filter, Resource, ResourceDef, Value};
 use ash_core::Result as CoreResult;
 use uuid::Uuid;
@@ -6,6 +8,7 @@ use crate::api_key::ApiKeyService;
 use crate::def::{AuthenticationDef, PasswordStrategyDef};
 use crate::error::{AuthError, Result};
 use crate::password::PasswordService;
+use crate::sender::{AuthSender, NoopSender};
 use crate::token::{JwtService, TokenPair};
 use crate::token_store::DatabaseTokenStore;
 
@@ -16,6 +19,7 @@ pub struct AuthStrategy<R: Resource> {
     password_service: PasswordService,
     api_key_service: ApiKeyService,
     jwt_service: Option<JwtService>,
+    sender: Arc<dyn AuthSender>,
     _phantom: std::marker::PhantomData<R>,
 }
 
@@ -27,6 +31,7 @@ impl<R: Resource> AuthStrategy<R> {
             password_service: PasswordService::new(),
             api_key_service: ApiKeyService::default(),
             jwt_service: None,
+            sender: Arc::new(NoopSender),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -35,6 +40,23 @@ impl<R: Resource> AuthStrategy<R> {
     pub fn with_jwt_service(mut self, jwt: JwtService) -> Self {
         self.jwt_service = Some(jwt);
         self
+    }
+
+    /// Attach an authentication sender for dispatching reset/confirmation tokens.
+    pub fn with_sender(mut self, sender: impl AuthSender) -> Self {
+        self.sender = Arc::new(sender);
+        self
+    }
+
+    /// Attach a shared authentication sender.
+    pub fn with_arc_sender(mut self, sender: Arc<dyn AuthSender>) -> Self {
+        self.sender = sender;
+        self
+    }
+
+    /// Reference to the configured authentication sender.
+    pub fn sender(&self) -> &Arc<dyn AuthSender> {
+        &self.sender
     }
 
     /// Reference to JWT service if configured.
@@ -405,6 +427,12 @@ impl<R: Resource> AuthStrategy<R> {
                 claims.exp as i64,
                 None,
             )
+            .await?;
+
+        // 4. Dispatch reset token via configured AuthSender
+        let user_fields = user.to_fields();
+        self.sender
+            .send_password_reset(&user_fields, &reset_token)
             .await?;
 
         Ok((user, reset_token))

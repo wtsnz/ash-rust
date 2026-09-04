@@ -177,6 +177,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ash-mailer"
+version = "0.1.0"
+dependencies = [
+ "ash-authentication",
+ "ash-core",
+ "ash-macros",
+ "ash-memory",
+ "ash-sqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "ash-memory"
 version = "0.1.0"
 dependencies = [
