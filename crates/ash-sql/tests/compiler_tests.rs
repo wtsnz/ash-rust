@@ -205,3 +205,107 @@ fn test_in_list_compilation_sqlite_json_each_vs_postgres_any() {
     );
     assert!(pg_compiled.params[0].is_list);
 }
+
+static CATEGORY_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("name", AttrType::String),
+    AttributeDef::optional("parent_id", AttrType::Uuid),
+];
+
+static CATEGORY_RELS: &[ash_core::RelationshipDef] = &[
+    ash_core::RelationshipDef::has_many("subcategories", || &CATEGORY_DEF, "parent_id"),
+];
+
+static CATEGORY_AGGS: &[ash_core::AggregateDef] = &[
+    ash_core::AggregateDef::count("subcategories_count", "subcategories"),
+];
+
+static CATEGORY_DEF: ResourceDef = ResourceDef {
+    name: "Category",
+    table: "categories",
+    attributes: CATEGORY_ATTRS,
+    relationships: CATEGORY_RELS,
+    actions: &[ActionDef::read("read").primary()],
+    policies: &[],
+    field_policies: &[],
+    calculations: &[],
+    aggregates: CATEGORY_AGGS,
+    extensions: &[],
+    notifiers: &[],
+    identities: &[],
+    embedded: false,
+    data_layer: ash_core::DataLayerKind::Sqlite,
+    timestamps: None,
+    store_type_id: ash_core::default_store_type_id,
+    store_name: "default",
+};
+
+#[test]
+fn test_self_referential_aggregate_subquery_aliasing() {
+    let query = CompiledQuery {
+        aggregates: vec!["subcategories_count".into()],
+        ..CompiledQuery::default()
+    };
+
+    let mut compiler = QueryCompiler::new(&SqliteDialect);
+    let compiled = compiler.compile_select(&CATEGORY_DEF, &query).unwrap();
+
+    // Verify subquery table is aliased so outer "categories"."id" is not shadowed by inner table!
+    assert!(
+        compiled.sql.contains("FROM \"categories\" AS \"_ash_sub_subcategories_count\""),
+        "Inner table must be aliased to prevent self-referential shadowing, got: {}",
+        compiled.sql
+    );
+    assert!(
+        compiled.sql.contains("\"_ash_sub_subcategories_count\".\"parent_id\" = \"categories\".\"id\""),
+        "Inner alias must join against outer table, got: {}",
+        compiled.sql
+    );
+}
+
+#[test]
+fn test_keyset_cursor_compilation() {
+    let dialect = SqliteDialect;
+    let mut compiler = QueryCompiler::new(&dialect);
+
+    let cursor = ash_core::KeysetCursor {
+        id: Uuid::nil(),
+        values: vec![
+            ("priority".to_string(), Value::Int(3)),
+            ("subject".to_string(), Value::String("Alpha".to_string())),
+        ],
+    };
+
+    let sorts = vec![
+        Sort { field: "priority".to_string(), descending: true },
+        Sort { field: "subject".to_string(), descending: false },
+    ];
+
+    let cursor_sql = compiler.compile_keyset_cursor(&TICKET_DEF, &cursor, &sorts).unwrap();
+    // Expected format: ("priority" < ? OR ("priority" = ? AND "subject" > ?))
+    assert!(cursor_sql.contains("\"priority\" < ?"));
+    assert!(cursor_sql.contains("\"priority\" = ? AND \"subject\" > ?"));
+}
+
+#[test]
+fn test_complex_expressions_compilation() {
+    let dialect = PostgresDialect;
+    let mut compiler = QueryCompiler::new(&dialect);
+
+    static COND: Expr = Expr::Gt(&Expr::StringLength("subject"), &Expr::LitInt(10));
+    static THEN: Expr = Expr::Upper(&Expr::Field("subject"));
+    static ELSE: Expr = Expr::LitString("short");
+
+    let expr = Expr::IfElse {
+        cond: &COND,
+        then_expr: &THEN,
+        else_expr: &ELSE,
+    };
+
+    let compiled_expr = compiler.compile_expr(&TICKET_DEF, &expr).unwrap();
+    assert!(
+        compiled_expr.contains("CASE WHEN (length(\"subject\") > 10) THEN upper(\"subject\") ELSE $1 END"),
+        "Got: {}",
+        compiled_expr
+    );
+}

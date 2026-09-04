@@ -300,3 +300,78 @@ async fn test_postgres_in_query_large_batch_any_array() {
     let _ = pg.destroy(&CUSTOMER_DEF, id1).await;
     let _ = pg.destroy(&CUSTOMER_DEF, id2).await;
 }
+
+static NODE_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("name", AttrType::String),
+    AttributeDef::optional("parent_id", AttrType::Uuid),
+];
+
+static NODE_RELS: &[ash_core::RelationshipDef] = &[
+    ash_core::RelationshipDef::has_many("children", || &NODE_DEF, "parent_id"),
+];
+
+static NODE_AGGS: &[ash_core::AggregateDef] = &[
+    ash_core::AggregateDef::count("children_count", "children"),
+];
+
+static NODE_DEF: ResourceDef = ResourceDef {
+    name: "Node",
+    table: "nodes",
+    attributes: NODE_ATTRS,
+    relationships: NODE_RELS,
+    actions: &[ActionDef::read("read").primary()],
+    policies: &[],
+    field_policies: &[],
+    calculations: &[],
+    aggregates: NODE_AGGS,
+    extensions: &[],
+    notifiers: &[],
+    identities: &[],
+    embedded: false,
+    data_layer: ash_core::DataLayerKind::Postgres,
+    timestamps: None,
+    store_type_id: ash_core::default_store_type_id,
+    store_name: "default",
+};
+
+#[tokio::test]
+async fn test_postgres_self_referential_aggregate() {
+    let Some(pg) = get_test_postgres().await else {
+        return;
+    };
+    let pool = pg.pool().unwrap();
+
+    let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
+    let _ = sqlx::query("CREATE TABLE nodes (id UUID PRIMARY KEY, name TEXT NOT NULL, parent_id UUID REFERENCES nodes(id));")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let root_id = Uuid::new_v4();
+    let mut root_fields = ash_core::FieldMap::new();
+    root_fields.insert("id".into(), Value::Uuid(root_id));
+    root_fields.insert("name".into(), Value::String("Root Node".into()));
+    pg.create(&NODE_DEF, root_id, root_fields).await.unwrap();
+
+    for i in 1..=3 {
+        let child_id = Uuid::new_v4();
+        let mut child_fields = ash_core::FieldMap::new();
+        child_fields.insert("id".into(), Value::Uuid(child_id));
+        child_fields.insert("name".into(), Value::String(format!("Child Node {i}")));
+        child_fields.insert("parent_id".into(), Value::Uuid(root_id));
+        pg.create(&NODE_DEF, child_id, child_fields).await.unwrap();
+    }
+
+    let query = ash_core::CompiledQuery {
+        filter: Some(ash_core::Filter::eq("id", Value::Uuid(root_id))),
+        aggregates: vec!["children_count".to_string()],
+        ..ash_core::CompiledQuery::default()
+    };
+
+    let rows = pg.run_query(&NODE_DEF, &query).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("children_count"), Some(&Value::Int(3)));
+
+    let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
+}

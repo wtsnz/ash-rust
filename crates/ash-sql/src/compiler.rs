@@ -266,22 +266,20 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
     pub fn compile_aggregate_filter(
         &mut self,
-        dest: &ResourceDef,
+        target_alias: &str,
         filter: &Option<AggregateFilter>,
     ) -> Result<String> {
         match filter {
             None => Ok(String::new()),
             Some(AggregateFilter::Eq(field, val)) => {
-                let table = ident(self.dialect, dest.table_name())?;
                 let col = ident(self.dialect, field)?;
                 let p = self.push_param(Value::from(*val));
-                Ok(format!(" AND {table}.{col} = {p}"))
+                Ok(format!(" AND {target_alias}.{col} = {p}"))
             }
             Some(AggregateFilter::Ne(field, val)) => {
-                let table = ident(self.dialect, dest.table_name())?;
                 let col = ident(self.dialect, field)?;
                 let p = self.push_param(Value::from(*val));
-                Ok(format!(" AND {table}.{col} <> {p}"))
+                Ok(format!(" AND {target_alias}.{col} <> {p}"))
             }
         }
     }
@@ -296,6 +294,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             .ok_or_else(|| Error::Invalid(format!("unknown relationship `{}`", agg.relationship)))?;
         let dest = (rel.destination)();
         let dest_table = ident(self.dialect, dest.table_name())?;
+        let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
         let source_table = ident(self.dialect, resource.table_name())?;
         let source_attr = ident(self.dialect, rel.source_attribute)?;
         let dest_attr = ident(self.dialect, rel.destination_attribute)?;
@@ -304,35 +303,35 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             RelKind::HasMany | RelKind::BelongsTo => match &agg.kind {
                 AggregateKind::Count => {
                     let mut s = format!(
-                        "(SELECT COUNT(*) FROM {dest_table} WHERE {dest_table}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push(')');
                     Ok(s)
                 }
                 AggregateKind::Exists => {
                     let mut s = format!(
-                        "(EXISTS (SELECT 1 FROM {dest_table} WHERE {dest_table}.{dest_attr} = {source_table}.{source_attr}"
+                        "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push_str("))");
                     Ok(s)
                 }
                 AggregateKind::First { field } => {
                     let f = ident(self.dialect, field)?;
                     let mut s = format!(
-                        "(SELECT {dest_table}.{f} FROM {dest_table} WHERE {dest_table}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push_str(" LIMIT 1)");
                     Ok(s)
                 }
                 AggregateKind::Sum { field } => {
                     let f = ident(self.dialect, field)?;
                     let mut s = format!(
-                        "(SELECT SUM({dest_table}.{f}) FROM {dest_table} WHERE {dest_table}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push(')');
                     Ok(s)
                 }
@@ -346,6 +345,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 })?;
                 let through_def = through_fn();
                 let join_table = ident(self.dialect, through_def.table_name())?;
+                let join_alias = ident(self.dialect, &format!("_ash_join_{}", agg.name))?;
                 let source_on_join = ident(
                     self.dialect,
                     rel.source_attribute_on_join_resource
@@ -360,35 +360,35 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 match &agg.kind {
                     AggregateKind::Count => {
                         let mut s = format!(
-                            "(SELECT COUNT(*) FROM {dest_table} JOIN {join_table} ON {dest_table}.{dest_attr} = {join_table}.{dest_on_join} WHERE {join_table}.{source_on_join} = {source_table}.{source_attr}"
+                            "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                         s.push(')');
                         Ok(s)
                     }
                     AggregateKind::Exists => {
                         let mut s = format!(
-                            "(EXISTS (SELECT 1 FROM {dest_table} JOIN {join_table} ON {dest_table}.{dest_attr} = {join_table}.{dest_on_join} WHERE {join_table}.{source_on_join} = {source_table}.{source_attr}"
+                            "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                         s.push_str("))");
                         Ok(s)
                     }
                     AggregateKind::First { field } => {
                         let f = ident(self.dialect, field)?;
                         let mut s = format!(
-                            "(SELECT {dest_table}.{f} FROM {dest_table} JOIN {join_table} ON {dest_table}.{dest_attr} = {join_table}.{dest_on_join} WHERE {join_table}.{source_on_join} = {source_table}.{source_attr}"
+                            "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                         s.push_str(" LIMIT 1)");
                         Ok(s)
                     }
                     AggregateKind::Sum { field } => {
                         let f = ident(self.dialect, field)?;
                         let mut s = format!(
-                            "(SELECT SUM({dest_table}.{f}) FROM {dest_table} JOIN {join_table} ON {dest_table}.{dest_attr} = {join_table}.{dest_on_join} WHERE {join_table}.{source_on_join} = {source_table}.{source_attr}"
+                            "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(dest, &agg.filter)?);
+                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                         s.push(')');
                         Ok(s)
                     }

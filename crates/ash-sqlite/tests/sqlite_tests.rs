@@ -141,3 +141,80 @@ async fn test_sqlite_in_query_large_batch_exceeds_1000_limit() -> Result<()> {
 
     Ok(())
 }
+
+static CATEGORY_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("name", AttrType::String),
+    AttributeDef::optional("parent_id", AttrType::Uuid),
+];
+
+static CATEGORY_RELS: &[ash_core::RelationshipDef] = &[
+    ash_core::RelationshipDef::has_many("subcategories", || &CATEGORY_DEF, "parent_id"),
+];
+
+static CATEGORY_AGGS: &[ash_core::AggregateDef] = &[
+    ash_core::AggregateDef::count("subcategories_count", "subcategories"),
+];
+
+static CATEGORY_DEF: ResourceDef = ResourceDef {
+    name: "Category",
+    table: "categories",
+    attributes: CATEGORY_ATTRS,
+    relationships: CATEGORY_RELS,
+    actions: &[ActionDef::read("read").primary()],
+    policies: &[],
+    field_policies: &[],
+    calculations: &[],
+    aggregates: CATEGORY_AGGS,
+    extensions: &[],
+    notifiers: &[],
+    identities: &[],
+    embedded: false,
+    data_layer: ash_core::DataLayerKind::Sqlite,
+    timestamps: None,
+    store_type_id: ash_core::default_store_type_id,
+    store_name: "default",
+};
+
+#[tokio::test]
+async fn test_sqlite_self_referential_aggregate() -> Result<()> {
+    let db = Sqlite::memory().await?;
+    db.install(&[&CATEGORY_DEF]).await?;
+
+    // Create Root category
+    let root_id = Uuid::new_v4();
+    let mut root_fields = FieldMap::new();
+    root_fields.insert("id".to_string(), Value::Uuid(root_id));
+    root_fields.insert("name".to_string(), Value::String("Electronics".into()));
+    root_fields.insert("parent_id".to_string(), Value::Null);
+    db.create(&CATEGORY_DEF, root_id, root_fields).await?;
+
+    // Create 2 Child categories under root
+    for i in 1..=2 {
+        let child_id = Uuid::new_v4();
+        let mut child_fields = FieldMap::new();
+        child_fields.insert("id".to_string(), Value::Uuid(child_id));
+        child_fields.insert("name".to_string(), Value::String(format!("Subcategory {i}")));
+        child_fields.insert("parent_id".to_string(), Value::Uuid(root_id));
+        db.create(&CATEGORY_DEF, child_id, child_fields).await?;
+    }
+
+    // Query categories with subcategories_count aggregate
+    let query = ash_core::CompiledQuery {
+        filter: Some(ash_core::Filter::eq("id", Value::Uuid(root_id))),
+        aggregates: vec!["subcategories_count".to_string()],
+        ..ash_core::CompiledQuery::default()
+    };
+
+    let rows = db.run_query(&CATEGORY_DEF, &query).await?;
+    assert_eq!(rows.len(), 1);
+    let root_row = &rows[0];
+    assert_eq!(
+        root_row.get("subcategories_count"),
+        Some(&Value::Int(2)),
+        "Self-referential aggregate count must equal 2, got: {:?}",
+        root_row.get("subcategories_count")
+    );
+
+    Ok(())
+}
