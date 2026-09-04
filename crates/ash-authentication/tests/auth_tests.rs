@@ -49,6 +49,19 @@ ash_core::resource! {
 async fn test_declarative_authentication_registration_and_sign_in() -> Result<()> {
     let ctx = Context::new(Memory::new());
 
+    // Verify AuthenticationDef was injected into resource extensions
+    let ext = User::DEF
+        .extension::<ash_authentication::AuthenticationDef>()
+        .expect("AuthenticationDef should be present on User::DEF");
+    assert_eq!(
+        ext.password.as_ref().unwrap().identity_field,
+        "email"
+    );
+    assert_eq!(
+        ext.password.as_ref().unwrap().min_password_length,
+        8
+    );
+
     // 1. Register a new user using the injected `register_with_password` action
     let user: User = User::register_with_password(&ctx)
         .email("alice@example.com")
@@ -425,7 +438,21 @@ async fn test_password_reset_flow() -> Result<()> {
         .await
         .expect("password reset request should succeed");
 
-    // 2. Complete password reset with token
+    // 2a. Password confirmation mismatch should fail and preserve reset token
+    let mismatch_err = strategy
+        .reset_password_with_token(
+            &ctx,
+            &reset_token,
+            "brand-new-pass-999",
+            "typo-in-password-confirmation",
+        )
+        .await;
+    assert!(matches!(
+        mismatch_err,
+        Err(ash_authentication::AuthError::PasswordConfirmationMismatch)
+    ));
+
+    // 2b. Complete password reset with matching confirmation succeeds
     strategy
         .reset_password_with_token(
             &ctx,
@@ -707,7 +734,27 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
     let reset_req_val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let reset_token = reset_req_val["reset_token"].as_str().unwrap().to_string();
 
-    // 6. POST /auth/reset-password
+    // 6a. POST /auth/reset-password with password confirmation mismatch must fail (401)
+    let mismatch_reset_req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/auth/reset-password")
+        .header("Content-Type", "application/json")
+        .body(http_body_util::BodyExt::boxed(
+            http_body_util::Full::from(
+                json!({
+                    "reset_token": reset_token,
+                    "new_password": "brand-new-pass-321",
+                    "password_confirmation": "mismatch-pass"
+                })
+                .to_string(),
+            ),
+        ))
+        .unwrap();
+
+    let res = app.clone().oneshot(mismatch_reset_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // 6b. POST /auth/reset-password with valid confirmation succeeds
     let reset_confirm_req = axum::http::Request::builder()
         .method("POST")
         .uri("/auth/reset-password")

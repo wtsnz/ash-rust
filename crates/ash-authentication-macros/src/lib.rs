@@ -52,11 +52,28 @@ impl Default for ApiKeyStrategyConfig {
     }
 }
 
+struct ConfirmationStrategyConfig {
+    confirmed_field: String,
+    prevent_unconfirmed_sign_in: bool,
+    token_lifetime_secs: u64,
+}
+
+impl Default for ConfirmationStrategyConfig {
+    fn default() -> Self {
+        Self {
+            confirmed_field: "confirmed_at".to_string(),
+            prevent_unconfirmed_sign_in: true,
+            token_lifetime_secs: 86400,
+        }
+    }
+}
+
 #[derive(Default)]
 struct AuthenticationBlock {
     password: Option<PasswordStrategyConfig>,
     tokens: Option<TokenStrategyConfig>,
     api_key: Option<ApiKeyStrategyConfig>,
+    confirmation: Option<ConfirmationStrategyConfig>,
 }
 
 impl Parse for AuthenticationBlock {
@@ -174,6 +191,41 @@ impl Parse for AuthenticationBlock {
                             }
                         }
                         block.api_key = Some(cfg);
+                    }
+                    "confirmation" => {
+                        let mut cfg = ConfirmationStrategyConfig::default();
+                        while !content.is_empty() {
+                            let item_key: Ident = content.parse()?;
+                            if content.peek(Token![:]) {
+                                let _: Token![:] = content.parse()?;
+                            }
+                            if item_key == "confirmed_field" {
+                                if content.peek(Ident) {
+                                    let id: Ident = content.parse()?;
+                                    cfg.confirmed_field = id.to_string();
+                                } else {
+                                    let lit: LitStr = content.parse()?;
+                                    cfg.confirmed_field = lit.value();
+                                }
+                            } else if item_key == "prevent_unconfirmed_sign_in" {
+                                if content.peek(syn::LitBool) {
+                                    let b: syn::LitBool = content.parse()?;
+                                    cfg.prevent_unconfirmed_sign_in = b.value();
+                                } else {
+                                    let id: Ident = content.parse()?;
+                                    cfg.prevent_unconfirmed_sign_in = id == "true";
+                                }
+                            } else if item_key == "token_lifetime_secs" {
+                                let lit: LitInt = content.parse()?;
+                                cfg.token_lifetime_secs = lit.base10_parse()?;
+                            } else {
+                                let _ = content.parse::<proc_macro2::TokenTree>();
+                            }
+                            if content.peek(Token![;]) {
+                                let _: Token![;] = content.parse()?;
+                            }
+                        }
+                        block.confirmation = Some(cfg);
                     }
                     _ => {
                         // ignore unknown strategy
@@ -296,6 +348,7 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
         password: Some(PasswordStrategyConfig::default()),
         tokens: Some(TokenStrategyConfig::default()),
         api_key: None,
+        confirmation: None,
     });
 
     let resource_ident = &dsl.resource_ident;
@@ -311,6 +364,13 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
     }
     if let Some(api) = &auth.api_key {
         let field_ident = format_ident!("{}", api.api_key_field);
+        injected_attrs = quote! {
+            #injected_attrs
+            #field_ident: Option<String>,
+        };
+    }
+    if let Some(conf) = &auth.confirmation {
+        let field_ident = format_ident!("{}", conf.confirmed_field);
         injected_attrs = quote! {
             #injected_attrs
             #field_ident: Option<String>,
@@ -385,6 +445,89 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
                 #injected_actions
             },
             has_brace: true,
+        });
+    }
+
+    // 3. Inject AuthenticationDef into `extensions`
+    let pass_tokens = if let Some(p) = &auth.password {
+        let reg = &p.register_action_name;
+        let sign = &p.sign_in_action_name;
+        let id = &p.identity_field;
+        let hash = &p.hashed_password_field;
+        let min = p.min_password_length;
+        let req_conf = p.require_confirmation;
+        quote! {
+            Some(::ash_authentication::PasswordStrategyDef {
+                register_action_name: #reg,
+                sign_in_action_name: #sign,
+                identity_field: #id,
+                hashed_password_field: #hash,
+                min_password_length: #min,
+                require_confirmation: #req_conf,
+            })
+        }
+    } else {
+        quote! { None }
+    };
+    let token_tokens = if let Some(t) = &auth.tokens {
+        let lt = t.token_lifetime_secs;
+        quote! {
+            Some(::ash_authentication::TokenStrategyDef {
+                token_lifetime_secs: #lt,
+                track_revocations: true,
+            })
+        }
+    } else {
+        quote! { None }
+    };
+    let api_tokens = if let Some(a) = &auth.api_key {
+        let f = &a.api_key_field;
+        let p = &a.key_prefix;
+        quote! {
+            Some(::ash_authentication::ApiKeyStrategyDef {
+                api_key_field: #f,
+                key_prefix: #p,
+            })
+        }
+    } else {
+        quote! { None }
+    };
+    let conf_tokens = if let Some(c) = &auth.confirmation {
+        let f = &c.confirmed_field;
+        let p = c.prevent_unconfirmed_sign_in;
+        let lt = c.token_lifetime_secs;
+        quote! {
+            Some(::ash_authentication::ConfirmationStrategyDef {
+                confirmed_field: #f,
+                prevent_unconfirmed_sign_in: #p,
+                token_lifetime_secs: #lt,
+            })
+        }
+    } else {
+        quote! { None }
+    };
+
+    let auth_ext_expr = quote! {
+        &::ash_authentication::AuthenticationDef {
+            password: #pass_tokens,
+            tokens: #token_tokens,
+            api_key: #api_tokens,
+            confirmation: #conf_tokens,
+        }
+    };
+
+    if let Some(ext_sec) = dsl.sections.iter_mut().find(|s| s.name == "extensions") {
+        let existing = &ext_sec.tokens;
+        ext_sec.tokens = quote! {
+            #existing, #auth_ext_expr
+        };
+    } else {
+        dsl.sections.push(RawSection {
+            name: format_ident!("extensions"),
+            tokens: quote! {
+                [#auth_ext_expr]
+            },
+            has_brace: false,
         });
     }
 

@@ -69,12 +69,34 @@ impl Default for ApiKeyStrategyDef {
     }
 }
 
+/// Configuration definition for email/account confirmation strategy.
+#[derive(Clone, Debug)]
+pub struct ConfirmationStrategyDef {
+    /// Attribute tracking confirmation state (e.g., "confirmed_at" or "confirmed").
+    pub confirmed_field: &'static str,
+    /// Whether confirmation is strictly required to sign in.
+    pub prevent_unconfirmed_sign_in: bool,
+    /// Confirmation token lifetime in seconds (default 86400 = 24 hours).
+    pub token_lifetime_secs: u64,
+}
+
+impl Default for ConfirmationStrategyDef {
+    fn default() -> Self {
+        Self {
+            confirmed_field: "confirmed_at",
+            prevent_unconfirmed_sign_in: true,
+            token_lifetime_secs: 86400,
+        }
+    }
+}
+
 /// Resource extension holding metadata for all enabled authentication strategies.
 #[derive(Clone, Debug, Default)]
 pub struct AuthenticationDef {
     pub password: Option<PasswordStrategyDef>,
     pub tokens: Option<TokenStrategyDef>,
     pub api_key: Option<ApiKeyStrategyDef>,
+    pub confirmation: Option<ConfirmationStrategyDef>,
 }
 
 impl ResourceExtension for AuthenticationDef {
