@@ -20,10 +20,40 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
      - Measures iterations, throughput (ops/sec), average, median (p50), p95, and p99 latencies for realistic web workloads.
 
 3. **Comparative Benchmark Script (`benches/compare.sh`)**
-   - Runs the Rust release runners alongside the canonical Elixir Ash runner (`benches/ash_elixir_bench.exs`) on the exact same hardware to track performance and speedup multipliers over time.
+   - Runs both Rust release runners alongside both canonical Elixir Ash runners on the exact same hardware to track performance and speedup multipliers over time.
 
-4. **Ash Elixir Benchmark (`benches/ash_elixir_bench.exs`)**
-   - Canonical Ash 3.0 implementation of the same Helpdesk resources using `Ash.DataLayer.Ets` and Benchee for memory and throughput tracking.
+4. **Ash Elixir Benchmark Suites (Benchee)**
+   - **Core Engine Benchmark**: `benches/ash_elixir_bench.exs`
+     - Measures `Ticket.open`, `Representative.create`, and 100-record filtered reads using Ash 3.0 + `Ash.DataLayer.Ets`.
+     - Run: `mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs`
+   - **GraphQL API Benchmark**: `benches/ash_graphql_elixir_bench.exs`
+     - Measures `getTicket` single record, 100-record collection, filtered & sorted queries, keyset pagination, DataLoader nested relationships, and `openTicket` mutations using `ash_graphql` + `absinthe` + ETS.
+     - Run: `mise exec elixir erlang -- elixir benches/ash_graphql_elixir_bench.exs`
+
+---
+
+## Performance Comparison: Rust (`ash-rust`) vs. Elixir (`Ash 3.0`)
+
+Measured on Apple Silicon M-Series (10 cores, 32GB RAM):
+
+### Core Engine & Actions
+
+| Workload | Ash Elixir Throughput | Ash Elixir Median Latency | ash-rust Throughput | ash-rust Median Latency | Speedup |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| `Ticket.open` (Validation + Action) | 25,210 ips | 37.3 µs | 31,140 ips | 31.0 µs | **~1.2x faster** |
+| `Representative.create` (Action) | 26,370 ips | 34.4 µs | ~32,000 ips | ~31 µs | **~1.2x faster** |
+| `Ticket.read` (100 records filter) | 2,740 ips | 340.1 µs | ~2,800 ips | ~350 µs | **~1.0x parity** |
+
+### GraphQL API Layer
+
+| GraphQL Workload | Ash Elixir (`ash_graphql` + Absinthe) | Ash Rust (`ash-graphql`) | Rust Speedup Multiplier |
+|:---|:---:|:---:|:---:|
+| **1. Single Record by ID** | 1,440 ops/sec (580 µs) | **14,895 ops/sec (64.8 µs)** | **~10.3x faster** (8.9x lower latency) |
+| **2. 100 Tickets Collection** | 900 ops/sec (1,040 µs) | **2,574 ops/sec (377 µs)** | **~2.8x faster** (2.8x lower latency) |
+| **3. Filtered & Sorted (50 items)** | 800 ops/sec (1,180 µs) | **4,514 ops/sec (217 µs)** | **~5.6x faster** (5.4x lower latency) |
+| **4. Keyset Pagination (first: 20)** | 1,170 ops/sec (830 µs) | **3,733 ops/sec (259 µs)** | **~3.2x faster** (3.2x lower latency) |
+| **5. DataLoader (100 Tickets + Author)** | 670 ops/sec (1,460 µs) | **576 ops/sec (1,675 µs)** | **~1.0x parity** |
+| **6. Mutation: `openTicket`** | 3,550 ops/sec (240 µs) | **31,140 ops/sec (31.0 µs)** | **~8.8x faster** (7.7x lower latency) |
 
 ---
 
@@ -34,6 +64,7 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 Run the Criterion suite:
 ```bash
 cargo bench -p helpdesk
+cargo bench -p ash-graphql --bench graphql_bench --features axum
 ```
 
 Criterion automatically:
@@ -48,18 +79,20 @@ Criterion automatically:
 To quickly verify the benchmark suite without a full sampling run:
 ```bash
 cargo bench -p helpdesk -- --test
+cargo bench -p ash-graphql --bench graphql_bench --features axum -- --test
 ```
 
 ### 2. Side-by-Side Comparison with Elixir
 
-Run both suites back-to-back:
+Run all suites back-to-back:
 ```bash
 ./benches/compare.sh
 ```
 
-Or run the Elixir suite standalone:
+Or run individual Elixir suites standalone:
 ```bash
 mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs
+mise exec elixir erlang -- elixir benches/ash_graphql_elixir_bench.exs
 ```
 
 ---
