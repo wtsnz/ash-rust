@@ -109,6 +109,7 @@ export interface TicketFilterInput {
   status?: StringFilter;
   priority?: IntFilter;
   author_id?: UuidFilter;
+  author?: RepresentativeFilterInput;
   and?: TicketFilterInput[];
   or?: TicketFilterInput[];
   not?: TicketFilterInput;

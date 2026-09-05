@@ -134,7 +134,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let dest_join = rel.destination_attribute_on_join_resource;
 
         let type_ref = match rel_kind {
-            RelKind::BelongsTo => TypeRef::named(dest_name),
+            RelKind::BelongsTo | RelKind::HasOne => TypeRef::named(dest_name),
             RelKind::HasMany | RelKind::ManyToMany => TypeRef::named_nn_list_nn(dest_name),
         };
 
@@ -181,6 +181,22 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                     if let Ok(Some(mut record)) = loader.load_one(key).await {
                                         let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut record);
                                         return Ok(Some(FieldValue::owned_any(record)));
+                                    }
+                                }
+                                return Ok(None);
+                            }
+                            RelKind::HasOne => {
+                                if let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                    let key = HasManyKey {
+                                        dest_resource: dest_name,
+                                        dest_attr,
+                                        source_id,
+                                    };
+                                    if let Ok(Some(records)) = loader.load_one(key).await
+                                        && let Some(mut r) = records.into_iter().next()
+                                    {
+                                        let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut r);
+                                        return Ok(Some(FieldValue::owned_any(r)));
                                     }
                                 }
                                 return Ok(None);
@@ -241,6 +257,23 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                 if let Some(foreign_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
                                     let query = CompiledQuery {
                                         filter: Some(Filter::eq(dest_attr, Value::Uuid(foreign_id))),
+                                        tenant: ctx_ash.tenant.clone(),
+                                        limit: Some(1),
+                                        ..CompiledQuery::default()
+                                    };
+                                    if let Ok(mut records) = ctx_ash.data.run_query(dest_res, &query).await
+                                        && let Some(mut rec) = records.pop()
+                                    {
+                                        let _ = redact_fields(dest_res, ctx_ash.actor.as_ref(), &mut rec);
+                                        return Ok(Some(FieldValue::owned_any(rec)));
+                                    }
+                                }
+                                return Ok(None);
+                            }
+                            RelKind::HasOne => {
+                                if let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                    let query = CompiledQuery {
+                                        filter: Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
                                         tenant: ctx_ash.tenant.clone(),
                                         limit: Some(1),
                                         ..CompiledQuery::default()

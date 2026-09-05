@@ -1,4 +1,7 @@
-use ash_core::{AttrType, AttributeDef, Context, DataLayer, FieldMap, ResourceDef, Value};
+use ash_core::{
+    ActionDef, ArgumentDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, Filter,
+    PreparationDef, ResourceDef, Value,
+};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -17,12 +20,28 @@ static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::required("is_published", AttrType::Boolean),
 ];
 
+static TICKET_READ_ACTION: ActionDef = ActionDef::read("read")
+    .primary()
+    .arguments(&[ArgumentDef::optional("priority", AttrType::Integer)]);
+
+static TICKET_BY_STATUS_ACTION: ActionDef = ActionDef::read("by_status")
+    .arguments(&[ArgumentDef::new("status", AttrType::String)])
+    .preparations(&[PreparationDef::filter_with_args(|args| {
+        if let Some(Value::String(s)) = args.get("status") {
+            Filter::eq("status", Value::String(s.clone()))
+        } else {
+            Filter::True
+        }
+    })]);
+
+static TICKET_ACTIONS: &[ActionDef] = &[TICKET_READ_ACTION, TICKET_BY_STATUS_ACTION];
+
 static TICKET_DEF: ResourceDef = ResourceDef {
     name: "Ticket",
     table: "tickets",
     attributes: TICKET_ATTRS,
     relationships: &[],
-    actions: &[],
+    actions: TICKET_ACTIONS,
     policies: &[],
     field_policies: &[],
     calculations: &[],
@@ -35,6 +54,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
@@ -218,3 +238,49 @@ async fn test_phase2_list_query_with_sorting_and_pagination() {
     assert_eq!(tickets[0]["title"], "Add dark mode");
     assert_eq!(tickets[0]["priority"], 5);
 }
+
+#[tokio::test]
+async fn test_phase2_read_query_with_action_arguments() {
+    let memory = Memory::new();
+    let (_id1, _id2, _id3) = seed_data(&memory).await;
+    let ctx = Context::new(memory);
+
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .finish::<Memory>()
+        .expect("Failed to build schema");
+
+    // 1. Primary read query with argument (listTickets(priority: 5))
+    let query_with_arg = r#"
+        query {
+            listTickets(priority: 5) {
+                title
+                priority
+            }
+        }
+    "#;
+    let res = schema.execute(Request::new(query_with_arg).data(ctx.clone())).await;
+    assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
+    let val = res.data.into_json().unwrap();
+    let tickets = val["listTickets"].as_array().unwrap();
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0]["title"], "Add dark mode");
+    assert_eq!(tickets[0]["priority"], 5);
+
+    // 2. Custom read action query (byStatusTickets(status: "closed"))
+    let query_custom_action = r#"
+        query {
+            byStatusTickets(status: "closed") {
+                title
+                status
+            }
+        }
+    "#;
+    let res = schema.execute(Request::new(query_custom_action).data(ctx)).await;
+    assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
+    let val = res.data.into_json().unwrap();
+    let tickets = val["byStatusTickets"].as_array().unwrap();
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0]["title"], "Improve docs");
+    assert_eq!(tickets[0]["status"], "CLOSED");
+}
+

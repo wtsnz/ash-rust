@@ -143,7 +143,7 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;
         match rel.kind {
-            RelKind::BelongsTo => {
+            RelKind::BelongsTo | RelKind::HasOne => {
                 out.push_str(&format!("  {}?: {} | null;\n", rel.name, dest_name));
             }
             RelKind::HasMany | RelKind::ManyToMany => {
@@ -227,6 +227,10 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     for attr in res.attributes {
         let filter_type = attr_type_to_filter_type(&attr.ty);
         out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
+    }
+    for rel in res.relationships {
+        let dest_name = (rel.destination)().name;
+        out.push_str(&format!("  {}?: {dest_name}FilterInput;\n", rel.name));
     }
     out.push_str(&format!("  and?: {name}FilterInput[];\n"));
     out.push_str(&format!("  or?: {name}FilterInput[];\n"));

@@ -42,6 +42,7 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 static POST_ATTRS: &[AttributeDef] = &[
@@ -80,6 +81,7 @@ static POST_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
@@ -184,3 +186,53 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         assert!(title.starts_with(author_name), "Post author should match title");
     }
 }
+
+#[tokio::test]
+async fn test_nested_relationship_filtering() {
+    let memory = Memory::new();
+    let (_alice_id, _bob_id) = seed_data(&memory).await;
+    let ctx = Context::new(memory);
+
+    let resources = &[&AUTHOR_DEF, &POST_DEF];
+    let schema = AshGraphQL::from_resources(resources)
+        .finish::<Memory>()
+        .expect("Failed to build schema");
+
+    // Filter Posts by related Author name == "Alice"
+    let query_posts_by_author = r#"
+        query {
+            listPosts(filter: { author: { name: { eq: "Alice" } } }) {
+                title
+                author {
+                    name
+                }
+            }
+        }
+    "#;
+
+    let res = schema.execute(Request::new(query_posts_by_author).data(ctx.clone())).await;
+    assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
+    let val = res.data.into_json().unwrap();
+    let posts = val["listPosts"].as_array().unwrap();
+    assert_eq!(posts.len(), 2);
+    for post in posts {
+        assert_eq!(post["author"]["name"], "Alice");
+    }
+
+    // Filter Authors by related Posts title == "Bob Post #1"
+    let query_authors_by_post = r#"
+        query {
+            listAuthors(filter: { posts: { title: { eq: "Bob Post #1" } } }) {
+                name
+            }
+        }
+    "#;
+
+    let res = schema.execute(Request::new(query_authors_by_post).data(ctx)).await;
+    assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
+    let val = res.data.into_json().unwrap();
+    let authors = val["listAuthors"].as_array().unwrap();
+    assert_eq!(authors.len(), 1);
+    assert_eq!(authors[0]["name"], "Bob");
+}
+

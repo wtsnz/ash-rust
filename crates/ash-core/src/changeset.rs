@@ -225,6 +225,23 @@ impl<R: Resource> Changeset<R> {
             }));
         }
 
+        if let Some(mt) = R::DEF.multitenancy {
+            match mt.strategy {
+                crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
+                    if let Some(t) = ctx.tenant() {
+                        fields.insert(attr_name.to_string(), Value::String(t.to_string()));
+                    } else if !mt.global {
+                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                    }
+                }
+                crate::resource::MultitenancyStrategy::Context => {
+                    if ctx.tenant().is_none() && !mt.global {
+                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                    }
+                }
+            }
+        }
+
         run_validations_with_context(
             &R::DEF,
             action,
@@ -313,6 +330,12 @@ impl<R: Resource> Changeset<R> {
             before_actions.push(Box::new(move |cs: &mut Changeset<R>| {
                 dyn_hook(cs.attributes_mut())
             }));
+        }
+
+        if let Some(mt) = R::DEF.multitenancy
+            && ctx.tenant().is_none() && !mt.global
+        {
+            return Err(Error::TenantRequired { resource: R::DEF.name });
         }
 
         run_validations_with_context(
@@ -562,6 +585,26 @@ impl<R: Resource> Changeset<R> {
                         }
                     };
                     self.fields.insert(rel.source_attribute.to_string(), Value::from(child_id));
+                }
+            }
+        }
+
+        let tenant = ctx.tenant();
+        if let Some(mt) = R::DEF.multitenancy {
+            match mt.strategy {
+                crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
+                    if let Some(t) = tenant {
+                        if self.action.kind == ActionKind::Create {
+                            self.fields.insert(attr_name.to_string(), Value::String(t.to_string()));
+                        }
+                    } else if !mt.global {
+                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                    }
+                }
+                crate::resource::MultitenancyStrategy::Context => {
+                    if tenant.is_none() && !mt.global {
+                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                    }
                 }
             }
         }

@@ -17,9 +17,20 @@ pub enum Filter {
     And(Vec<Filter>),
     Or(Vec<Filter>),
     Not(Box<Filter>),
+    Related {
+        relationship: String,
+        filter: Box<Filter>,
+    },
 }
 
 impl Filter {
+    pub fn related(relationship: impl Into<String>, filter: Filter) -> Self {
+        Self::Related {
+            relationship: relationship.into(),
+            filter: Box::new(filter),
+        }
+    }
+
     pub fn eq(field: impl Into<String>, value: impl Into<Value>) -> Self {
         Self::Eq(field.into(), value.into())
     }
@@ -69,6 +80,7 @@ impl Filter {
                 }
             }
             Self::Not(inner) => inner.collect_fields(out),
+            Self::Related { filter, .. } => filter.collect_fields(out),
         }
     }
 
@@ -133,6 +145,14 @@ impl Filter {
             Self::And(parts) => parts.iter().all(|part| part.matches(fields)),
             Self::Or(parts) => parts.iter().any(|part| part.matches(fields)),
             Self::Not(inner) => !inner.matches(fields),
+            Self::Related { relationship, filter } => match fields.get(relationship) {
+                Some(Value::Map(m)) => filter.matches(m),
+                Some(Value::Array(arr)) => arr.iter().any(|v| match v {
+                    Value::Map(m) => filter.matches(m),
+                    _ => false,
+                }),
+                _ => true,
+            },
         }
     }
 }

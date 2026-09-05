@@ -44,7 +44,7 @@ pub(crate) async fn attach_relationships<R: Resource, D: DataLayer>(
                     record.attach(name, attached)?;
                 }
             }
-            RelKind::HasMany => {
+            RelKind::HasMany | RelKind::HasOne => {
                 let ids: HashSet<Uuid> = records.iter().map(Resource::id).collect();
                 let related = fetch_related(ctx, dest, rel.destination_attribute, &ids).await?;
                 let mut groups: HashMap<Uuid, Vec<FieldMap>> = HashMap::new();

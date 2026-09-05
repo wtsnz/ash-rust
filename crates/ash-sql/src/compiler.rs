@@ -52,6 +52,7 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     pub dialect: &'a D,
     param_counter: usize,
     pub params: Vec<SqlParam>,
+    pub current_calc_args: Option<FieldMap>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -60,6 +61,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             dialect,
             param_counter: 0,
             params: Vec::new(),
+            current_calc_args: None,
         }
     }
 
@@ -78,16 +80,40 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     pub fn compile_operand(&mut self, resource: &ResourceDef, field: &str) -> Result<String> {
+        self.compile_operand_scoped(resource, field, None)
+    }
+
+    pub fn compile_operand_scoped(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        scope_alias: Option<&str>,
+    ) -> Result<String> {
         if let Some(calc) = resource.calculation(field) {
             self.compile_expr(resource, &calc.expr)
         } else {
-            column(self.dialect, resource, field)
+            let col = column(self.dialect, resource, field)?;
+            if let Some(alias) = scope_alias {
+                Ok(format!("{alias}.{col}"))
+            } else {
+                Ok(col)
+            }
         }
     }
 
     pub fn compile_expr(&mut self, resource: &ResourceDef, expr: &Expr) -> Result<String> {
         match expr {
             Expr::Field(name) => column(self.dialect, resource, name),
+            Expr::Arg(name) => {
+                let val = self
+                    .current_calc_args
+                    .as_ref()
+                    .and_then(|args| args.get(*name))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let p = self.push_param(val);
+                Ok(p)
+            }
             Expr::LitInt(n) => Ok(n.to_string()),
             Expr::LitString(s) => {
                 let p = self.push_param(Value::String((*s).to_string()));
@@ -192,74 +218,134 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     pub fn compile_filter(&mut self, resource: &ResourceDef, filter: &Filter) -> Result<String> {
+        self.compile_filter_scoped(resource, filter, None)
+    }
+
+    pub fn compile_filter_scoped(
+        &mut self,
+        resource: &ResourceDef,
+        filter: &Filter,
+        scope_alias: Option<&str>,
+    ) -> Result<String> {
         match filter {
             Filter::True => Ok("1=1".to_string()),
             Filter::False => Ok("0=1".to_string()),
             Filter::Eq(field, val) if val.is_null() => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NULL"))
             }
             Filter::Eq(field, val) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let p = self.push_param(val.clone());
                 Ok(format!("{op} = {p}"))
             }
             Filter::Ne(field, val) if val.is_null() => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NOT NULL"))
             }
             Filter::Ne(field, val) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let p = self.push_param(val.clone());
                 Ok(format!("{op} <> {p}"))
             }
             Filter::Gt(field, val) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let p = self.push_param(val.clone());
                 Ok(format!("{op} > {p}"))
             }
             Filter::Gte(field, val) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let p = self.push_param(val.clone());
                 Ok(format!("{op} >= {p}"))
             }
             Filter::Lt(field, val) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let p = self.push_param(val.clone());
                 Ok(format!("{op} < {p}"))
             }
             Filter::Lte(field, val) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let p = self.push_param(val.clone());
                 Ok(format!("{op} <= {p}"))
             }
             Filter::IsNil(field) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NULL"))
             }
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {
-                let op = self.compile_operand(resource, field)?;
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let param = self.push_list_param(vals.clone());
                 Ok(self.dialect.render_in_list(&op, &param))
             }
             Filter::And(parts) => {
                 let mut compiled = Vec::new();
                 for part in parts {
-                    compiled.push(self.compile_filter(resource, part)?);
+                    compiled.push(self.compile_filter_scoped(resource, part, scope_alias)?);
                 }
                 Ok(format!("({})", compiled.join(" AND ")))
             }
             Filter::Or(parts) => {
                 let mut compiled = Vec::new();
                 for part in parts {
-                    compiled.push(self.compile_filter(resource, part)?);
+                    compiled.push(self.compile_filter_scoped(resource, part, scope_alias)?);
                 }
                 Ok(format!("({})", compiled.join(" OR ")))
             }
             Filter::Not(part) => {
-                let inner = self.compile_filter(resource, part)?;
+                let inner = self.compile_filter_scoped(resource, part, scope_alias)?;
                 Ok(format!("NOT ({inner})"))
+            }
+            Filter::Related { relationship, filter } => {
+                let rel = resource.relationship(relationship).ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "unknown relationship `{relationship}` on {}",
+                        resource.name
+                    ))
+                })?;
+                let dest_res = (rel.destination)();
+                self.param_counter += 1;
+                let dest_alias = format!("rel_{}_{}", dest_res.table_name(), self.param_counter);
+                let dest_table = ident(self.dialect, dest_res.table_name())?;
+                let outer_scope = scope_alias
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| ident(self.dialect, resource.table_name()).unwrap());
+                let outer_col = column(self.dialect, resource, rel.source_attribute)?;
+                let dest_col = column(self.dialect, dest_res, rel.destination_attribute)?;
+                let inner_sql = self.compile_filter_scoped(dest_res, filter, Some(&dest_alias))?;
+
+                match rel.kind {
+                    RelKind::ManyToMany => {
+                        let through_fn = rel.through.ok_or_else(|| {
+                            Error::Invalid(format!(
+                                "many_to_many relationship `{}` on `{}` requires through join resource",
+                                rel.name, resource.name
+                            ))
+                        })?;
+                        let through_res = through_fn();
+                        self.param_counter += 1;
+                        let join_alias = format!("rel_join_{}_{}", through_res.table_name(), self.param_counter);
+                        let through_table = ident(self.dialect, through_res.table_name())?;
+                        let source_on_join = column(
+                            self.dialect,
+                            through_res,
+                            rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute),
+                        )?;
+                        let dest_on_join = column(
+                            self.dialect,
+                            through_res,
+                            rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute),
+                        )?;
+                        Ok(format!(
+                            "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} INNER JOIN {through_table} AS {join_alias} ON {dest_alias}.{dest_col} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {outer_scope}.{outer_col} AND {inner_sql})"
+                        ))
+                    }
+                    RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
+                        Ok(format!(
+                            "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_col} = {outer_scope}.{outer_col} AND {inner_sql})"
+                        ))
+                    }
+                }
             }
         }
     }
@@ -300,7 +386,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let dest_attr = ident(self.dialect, rel.destination_attribute)?;
 
         match rel.kind {
-            RelKind::HasMany | RelKind::BelongsTo => match &agg.kind {
+            RelKind::HasMany | RelKind::BelongsTo | RelKind::HasOne => match &agg.kind {
                 AggregateKind::Count => {
                     let mut s = format!(
                         "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
@@ -519,7 +605,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let calc = resource.calculation(calc_name).ok_or_else(|| {
                 Error::Invalid(format!("unknown calculation `{calc_name}` on {}", resource.name))
             })?;
+            self.current_calc_args = query.calculation_args.get(calc_name).cloned();
             let expr_sql = self.compile_expr(resource, &calc.expr)?;
+            self.current_calc_args = None;
             let alias = ident(self.dialect, calc.name)?;
             select_items.push(format!("{expr_sql} AS {alias}"));
         }

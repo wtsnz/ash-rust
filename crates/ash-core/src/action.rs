@@ -134,6 +134,7 @@ pub enum PersistKind {
 #[derive(Clone, Copy)]
 pub enum PreparationDef {
     Filter(fn() -> crate::filter::Filter),
+    FilterWithArgs(fn(&crate::value::FieldMap) -> crate::filter::Filter),
     Sort { field: &'static str, descending: bool },
     Limit(usize),
     Offset(usize),
@@ -143,6 +144,7 @@ impl std::fmt::Debug for PreparationDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Filter(_) => f.write_str("PreparationDef::Filter(..)"),
+            Self::FilterWithArgs(_) => f.write_str("PreparationDef::FilterWithArgs(..)"),
             Self::Sort { field, descending } => f
                 .debug_struct("Sort")
                 .field("field", field)
@@ -157,6 +159,10 @@ impl std::fmt::Debug for PreparationDef {
 impl PreparationDef {
     pub const fn filter(f: fn() -> crate::filter::Filter) -> Self {
         Self::Filter(f)
+    }
+
+    pub const fn filter_with_args(f: fn(&crate::value::FieldMap) -> crate::filter::Filter) -> Self {
+        Self::FilterWithArgs(f)
     }
 
     pub const fn sort(field: &'static str, descending: bool) -> Self {

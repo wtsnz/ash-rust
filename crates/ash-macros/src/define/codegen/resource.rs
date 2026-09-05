@@ -217,6 +217,19 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     ).with_on_delete(#on_delete_tok)
                 });
             }
+            RelType::HasOne => {
+                let fk_str = r
+                    .fk
+                    .clone()
+                    .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
+                rel_defs.push(quote! {
+                    ::ash_core::RelationshipDef::has_one(
+                        #name_str,
+                        || &<#dest as ::ash_core::Resource>::DEF,
+                        #fk_str,
+                    ).with_on_delete(#on_delete_tok)
+                });
+            }
             RelType::ManyToMany => {
                 let through_ident = r.through.as_ref().ok_or_else(|| {
                     syn::Error::new_spanned(&r.ident, "many_to_many requires `through: JoinResource`")
@@ -259,13 +272,48 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             quote! { ::ash_core::AttrType::String }
         };
         let expr_tokens = calc_expr_to_tokens(&c.expr);
-        calc_defs.push(quote! {
-            ::ash_core::CalculationDef::new(
-                #name_str,
-                #ty_tokens,
-                #expr_tokens,
-            )
-        });
+        if c.arguments.is_empty() {
+            calc_defs.push(quote! {
+                ::ash_core::CalculationDef::new(
+                    #name_str,
+                    #ty_tokens,
+                    #expr_tokens,
+                )
+            });
+        } else {
+            let arg_defs: Vec<_> = c.arguments.iter().map(|arg| {
+                let arg_name = arg.name.to_string();
+                let arg_ty = &arg.ty;
+                let arg_inner = option_inner(arg_ty).unwrap_or(arg_ty);
+                let arg_allow_nil = option_inner(arg_ty).is_some();
+                let arg_type_tok = if is_string(arg_inner) {
+                    quote! { ::ash_core::AttrType::String }
+                } else if is_i64(arg_inner) {
+                    quote! { ::ash_core::AttrType::Integer }
+                } else if is_bool(arg_inner) {
+                    quote! { ::ash_core::AttrType::Boolean }
+                } else if is_uuid(arg_inner) {
+                    quote! { ::ash_core::AttrType::Uuid }
+                } else {
+                    quote! { ::ash_core::AttrType::String }
+                };
+                quote! {
+                    ::ash_core::ArgumentDef {
+                        name: #arg_name,
+                        ty: #arg_type_tok,
+                        allow_nil: #arg_allow_nil,
+                    }
+                }
+            }).collect();
+            calc_defs.push(quote! {
+                ::ash_core::CalculationDef::with_arguments(
+                    #name_str,
+                    #ty_tokens,
+                    #expr_tokens,
+                    &[#(#arg_defs),*],
+                )
+            });
+        }
     }
 
     // 4b. AggregateDefs
@@ -637,7 +685,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = id.to_string();
         let dest = &r.dest;
         match r.kind {
-            RelType::BelongsTo => {
+            RelType::BelongsTo | RelType::HasOne => {
                 attach_arms.push(quote! {
                     #name_str => {
                         self.#id = ::ash_core::Rel::Loaded(match related.first() {
@@ -890,6 +938,26 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         None => quote! { ::std::option::Option::None },
     };
 
+    let multitenancy_tokens = match &def.multitenancy {
+        Some(mt) => {
+            let global = mt.global;
+            let strat_tokens = match mt.strategy.as_deref() {
+                Some("context") => quote! { ::ash_core::MultitenancyStrategy::Context },
+                _ => {
+                    let attr = mt.attribute.as_deref().unwrap_or("tenant_id");
+                    quote! { ::ash_core::MultitenancyStrategy::Attribute(#attr) }
+                }
+            };
+            quote! {
+                ::std::option::Option::Some(::ash_core::MultitenancyDef {
+                    strategy: #strat_tokens,
+                    global: #global,
+                })
+            }
+        }
+        None => quote! { ::std::option::Option::None },
+    };
+
     let (store_type_tokens, store_name_tokens) = if let Some(store_ty) = &def.store {
         (quote! { #store_ty }, quote! { stringify!(#store_ty) })
     } else if let Some(dl) = &def.data_layer {
@@ -939,6 +1007,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     timestamps: #timestamps_tokens,
                     store_type_id: __ash_store_type_id,
                     store_name: #store_name_tokens,
+                    multitenancy: #multitenancy_tokens,
                 }
             };
 

@@ -19,6 +19,7 @@ static USER_DEST: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: || std::any::TypeId::of::<()>(),
     store_name: "memory",
+    multitenancy: None,
 };
 
 static TICKET_ATTRS: &[AttributeDef] = &[
@@ -56,6 +57,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: || std::any::TypeId::of::<()>(),
     store_name: "memory",
+    multitenancy: None,
 };
 
 #[test]
@@ -88,9 +90,69 @@ fn test_filter_and_sort_generation() {
     assert!(filter.contains("  id?: UuidFilter;"));
     assert!(filter.contains("  title?: StringFilter;"));
     assert!(filter.contains("  priority?: IntFilter;"));
+    assert!(filter.contains("  author?: UserFilterInput;"));
     assert!(filter.contains("  and?: TicketFilterInput[];"));
 
     let sort = generate_resource_sort_input(&TICKET_DEF);
     assert!(sort.contains("export type TicketSortField = \"id\" | \"title\" | \"status\" | \"priority\" | \"author_id\";"));
     assert!(sort.contains("export interface TicketSortInput {"));
+}
+
+#[test]
+fn test_has_one_typescript_interface() {
+    static PROFILE_ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("bio", AttrType::String),
+    ];
+    static PROFILE_DEF: ResourceDef = ResourceDef {
+        name: "Profile",
+        table: "profiles",
+        attributes: PROFILE_ATTRS,
+        relationships: &[],
+        actions: &[],
+        policies: &[],
+        field_policies: &[],
+        calculations: &[],
+        aggregates: &[],
+        extensions: &[],
+        notifiers: &[],
+        identities: &[],
+        embedded: false,
+        data_layer: ash_core::DataLayerKind::Memory,
+        timestamps: None,
+        store_type_id: || std::any::TypeId::of::<()>(),
+        store_name: "memory",
+        multitenancy: None,
+    };
+
+    static USER_RELS: &[RelationshipDef] = &[
+        RelationshipDef::has_one("profile", || &PROFILE_DEF, "user_id"),
+    ];
+
+    static USER_DEF_HAS_ONE: ResourceDef = ResourceDef {
+        name: "User",
+        table: "users",
+        attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+        relationships: USER_RELS,
+        actions: &[],
+        policies: &[],
+        field_policies: &[],
+        calculations: &[],
+        aggregates: &[],
+        extensions: &[],
+        notifiers: &[],
+        identities: &[],
+        embedded: false,
+        data_layer: ash_core::DataLayerKind::Memory,
+        timestamps: None,
+        store_type_id: || std::any::TypeId::of::<()>(),
+        store_name: "memory",
+        multitenancy: None,
+    };
+
+    let ts = generate_resource_interface(&USER_DEF_HAS_ONE);
+    assert!(ts.contains("  profile?: Profile | null;"));
+
+    let filter = generate_resource_filter_input(&USER_DEF_HAS_ONE);
+    assert!(filter.contains("  profile?: ProfileFilterInput;"));
 }

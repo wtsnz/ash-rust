@@ -42,6 +42,7 @@ static CUSTOMER_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 async fn get_test_postgres() -> Option<Postgres> {
@@ -333,6 +334,7 @@ static NODE_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 #[tokio::test]
@@ -400,6 +402,7 @@ static DOCUMENT_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 #[tokio::test]

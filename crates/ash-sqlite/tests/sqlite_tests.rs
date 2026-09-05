@@ -34,6 +34,7 @@ const TICKET: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "DefaultStore",
+    multitenancy: None,
 };
 
 #[tokio::test]
@@ -174,6 +175,7 @@ static CATEGORY_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 #[tokio::test]

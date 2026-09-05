@@ -16,6 +16,7 @@ pub struct CompiledQuery {
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     pub calculations: Vec<String>,
+    pub calculation_args: std::collections::HashMap<String, FieldMap>,
     pub aggregates: Vec<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,

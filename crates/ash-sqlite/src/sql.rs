@@ -222,6 +222,7 @@ mod tests {
         timestamps: None,
         store_type_id: ash_core::default_store_type_id,
         store_name: "DefaultStore",
+        multitenancy: None,
     };
 
     fn sql(filter: Filter) -> String {

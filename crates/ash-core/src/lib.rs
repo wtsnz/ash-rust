@@ -50,7 +50,7 @@ pub use engine::{
     update_existing,
 };
 pub use error::{Error, Result};
-pub use expr::{CalculationDef, Expr, apply_named, eval};
+pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
 pub use filter::Filter;
 pub use keys::{Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation};
@@ -63,8 +63,9 @@ pub use policy::{
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
-    AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, OnDelete, RelKind,
-    RelationshipDef, Resource, ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
+    AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, MultitenancyDef,
+    MultitenancyStrategy, OnDelete, RelKind, RelationshipDef, Resource, ResourceDef, ResourceExt,
+    utc_now_iso8601, utc_now_timestamp,
 };
 pub use store::{
     default_store_type_id, DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore,

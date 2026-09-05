@@ -87,6 +87,39 @@ impl IdentityDef {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultitenancyStrategy {
+    Attribute(&'static str),
+    Context,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MultitenancyDef {
+    pub strategy: MultitenancyStrategy,
+    pub global: bool,
+}
+
+impl MultitenancyDef {
+    pub const fn attribute(attribute: &'static str) -> Self {
+        Self {
+            strategy: MultitenancyStrategy::Attribute(attribute),
+            global: false,
+        }
+    }
+
+    pub const fn context() -> Self {
+        Self {
+            strategy: MultitenancyStrategy::Context,
+            global: false,
+        }
+    }
+
+    pub const fn with_global(mut self, global: bool) -> Self {
+        self.global = global;
+        self
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ResourceDef {
     pub name: &'static str,
@@ -106,6 +139,7 @@ pub struct ResourceDef {
     pub timestamps: Option<(&'static str, &'static str)>,
     pub store_type_id: fn() -> std::any::TypeId,
     pub store_name: &'static str,
+    pub multitenancy: Option<MultitenancyDef>,
 }
 
 impl ResourceDef {
@@ -340,6 +374,7 @@ pub struct RelationshipDef {
 pub enum RelKind {
     BelongsTo,
     HasMany,
+    HasOne,
     ManyToMany,
 }
 
@@ -375,6 +410,24 @@ impl RelationshipDef {
         Self {
             name,
             kind: RelKind::HasMany,
+            destination,
+            source_attribute: "id",
+            destination_attribute,
+            through: None,
+            source_attribute_on_join_resource: None,
+            destination_attribute_on_join_resource: None,
+            on_delete: OnDelete::Nothing,
+        }
+    }
+
+    pub const fn has_one(
+        name: &'static str,
+        destination: fn() -> &'static ResourceDef,
+        destination_attribute: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            kind: RelKind::HasOne,
             destination,
             source_attribute: "id",
             destination_attribute,

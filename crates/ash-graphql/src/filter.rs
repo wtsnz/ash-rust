@@ -87,6 +87,13 @@ pub fn register_resource_filter_inputs(
         res_filter = res_filter.field(InputValue::new(attr.name, TypeRef::named(field_filter_type)));
     }
 
+    // Relationships (nested filters)
+    for rel in resource.relationships {
+        let dest = (rel.destination)();
+        let dest_filter_name = resource_filter_input_name(dest.name);
+        res_filter = res_filter.field(InputValue::new(rel.name, TypeRef::named(dest_filter_name)));
+    }
+
     // Boolean combinators
     res_filter = res_filter
         .field(InputValue::new(
@@ -172,7 +179,19 @@ pub fn parse_resource_filter(
         }
     }
 
-    // 2. Boolean combinator 'and'
+    // 2. Relationship filters
+    for rel in resource.relationships {
+        if let Some(rel_filter_val) = obj.get(rel.name) {
+            let rel_obj = rel_filter_val.object()?;
+            let dest = (rel.destination)();
+            let dest_filter = parse_resource_filter(dest, &rel_obj)?;
+            if dest_filter != Filter::True {
+                filters.push(Filter::related(rel.name, dest_filter));
+            }
+        }
+    }
+
+    // 3. Boolean combinator 'and'
     if let Some(and_val) = obj.get("and") {
         let list = and_val.list()?;
         let mut sub_filters = Vec::new();

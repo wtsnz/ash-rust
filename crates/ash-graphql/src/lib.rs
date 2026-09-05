@@ -28,7 +28,10 @@ pub use pagination::{
     build_resource_connection_query, register_page_info, register_resource_connection_types,
     resource_connection_field_name, resource_connection_type_name, resource_edge_type_name,
 };
-pub use query::{build_resource_queries, get_query_name, list_query_name};
+pub use query::{
+    build_read_action_query, build_resource_queries, get_query_name, list_query_name,
+    list_query_name_for_action,
+};
 pub use sort::{parse_resource_sort, register_resource_sort_inputs};
 pub use subscription::build_resource_subscriptions;
 pub use types::{

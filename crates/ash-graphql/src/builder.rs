@@ -11,7 +11,7 @@ use crate::object::{build_resource_object, collect_enums_for_resource};
 use crate::pagination::{
     build_resource_connection_query, register_page_info, register_resource_connection_types,
 };
-use crate::query::build_resource_queries;
+use crate::query::{build_read_action_query, build_resource_queries};
 use crate::sort::register_resource_sort_inputs;
 use crate::subscription::build_resource_subscriptions;
 
@@ -88,6 +88,14 @@ impl AshGraphQLBuilder {
             let (get_field, list_field) = build_resource_queries::<D>(res);
             let conn_field = build_resource_connection_query::<D>(res);
             query = query.field(get_field).field(list_field).field(conn_field);
+
+            // Connect any custom read actions
+            for action in res.actions {
+                if action.kind == ActionKind::Read && !action.primary && action.name != "read" {
+                    let custom_field = build_read_action_query::<D>(action, res);
+                    query = query.field(custom_field);
+                }
+            }
         }
 
         let mut mutation = Object::new("Mutation");
@@ -130,8 +138,30 @@ impl AshGraphQLBuilder {
         // Register primitive filters
         builder = register_primitive_filter_inputs(builder);
 
+        // Compute all reachable resources (including relationship destinations)
+        let mut all_resources = self.resources.clone();
+        let mut added = true;
+        while added {
+            added = false;
+            let mut to_add = Vec::new();
+            for res in &all_resources {
+                for rel in res.relationships {
+                    let dest = (rel.destination)();
+                    if !all_resources.iter().any(|r| r.name == dest.name)
+                        && !to_add.iter().any(|r: &&'static ResourceDef| r.name == dest.name)
+                    {
+                        to_add.push(dest);
+                    }
+                }
+            }
+            if !to_add.is_empty() {
+                all_resources.extend(to_add);
+                added = true;
+            }
+        }
+
         // Register all resources, connections, filters, sorts, mutations, and enums
-        for res in &self.resources {
+        for res in &all_resources {
             let obj = build_resource_object::<D>(res);
             builder = builder.register(obj);
 

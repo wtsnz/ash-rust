@@ -48,6 +48,7 @@ pub static USER_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 static TICKET_ATTRS: &[AttributeDef] = &[
@@ -87,6 +88,7 @@ pub static TICKET_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
