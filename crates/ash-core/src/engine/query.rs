@@ -11,7 +11,7 @@ use crate::keys::{AggregateName, CalcName, FieldName, RelName};
 use crate::pipeline::{pk_name, read_action};
 use crate::policy::compile_read_filter;
 use crate::resource::Resource;
-use crate::value::Value;
+use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
 use super::pagination::{build_keyset_filter, cursor_for_record, KeysetCursor, Page};
@@ -20,9 +20,11 @@ use super::relations::attach_relationships;
 pub struct Query<'a, R, D> {
     ctx: &'a Context<D>,
     action: Option<&'static str>,
+    pub arguments: FieldMap,
     filter: Option<Filter>,
     sort: Vec<Sort>,
     calculations: Vec<String>,
+    calculation_args: std::collections::HashMap<String, FieldMap>,
     aggregates: Vec<String>,
     loads: Vec<String>,
     limit: Option<usize>,
@@ -36,9 +38,11 @@ impl<'a, R, D> Clone for Query<'a, R, D> {
         Self {
             ctx: self.ctx,
             action: self.action,
+            arguments: self.arguments.clone(),
             filter: self.filter.clone(),
             sort: self.sort.clone(),
             calculations: self.calculations.clone(),
+            calculation_args: self.calculation_args.clone(),
             aggregates: self.aggregates.clone(),
             loads: self.loads.clone(),
             limit: self.limit,
@@ -52,6 +56,18 @@ impl<'a, R, D> Clone for Query<'a, R, D> {
 impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     pub fn action(mut self, name: &'static str) -> Self {
         self.action = Some(name);
+        self
+    }
+
+    /// Set an action argument on this query.
+    pub fn argument(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.arguments.insert(name.into(), value.into());
+        self
+    }
+
+    /// Set multiple action arguments on this query.
+    pub fn arguments(mut self, args: FieldMap) -> Self {
+        self.arguments.extend(args);
         self
     }
 
@@ -111,6 +127,13 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self
     }
 
+    pub fn calc_with_args(mut self, name: impl CalcName<R>, args: FieldMap) -> Self {
+        let calc_name = name.as_calc().to_string();
+        self.calculation_args.insert(calc_name.clone(), args);
+        self.calculations.push(calc_name);
+        self
+    }
+
     pub fn aggregate(mut self, name: impl AggregateName<R>) -> Self {
         self.aggregates.push(name.as_aggregate().to_string());
         self
@@ -134,6 +157,13 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             match *prep {
                 crate::action::PreparationDef::Filter(filter_fn) => {
                     let prep_filter = filter_fn();
+                    self.filter = match self.filter {
+                        Some(user_filter) => Some(Filter::and([prep_filter, user_filter])),
+                        None => Some(prep_filter),
+                    };
+                }
+                crate::action::PreparationDef::FilterWithArgs(filter_fn) => {
+                    let prep_filter = filter_fn(&self.arguments);
                     self.filter = match self.filter {
                         Some(user_filter) => Some(Filter::and([prep_filter, user_filter])),
                         None => Some(prep_filter),
@@ -164,7 +194,18 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
 
     pub async fn load(self) -> Result<Vec<R>> {
         let action = read_action(&R::DEF, self.action)?;
-        let this = self.apply_preparations(action);
+        let mut this = self.apply_preparations(action);
+
+        for (arg_name, arg_val) in &this.arguments {
+            if R::DEF.attributes.iter().any(|a| a.name == arg_name.as_str()) {
+                let attr_filter = Filter::eq(arg_name.as_str(), arg_val.clone());
+                this.filter = match this.filter {
+                    Some(f) => Some(Filter::and([f, attr_filter])),
+                    None => Some(attr_filter),
+                };
+            }
+        }
+
         let policy_filter = compile_read_filter(&R::DEF, action, this.ctx.actor.as_ref())?;
         let filter = match (this.filter, policy_filter) {
             (None, None) => None,
@@ -190,6 +231,30 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
         }
 
+        let tenant = this.tenant.clone().or_else(|| this.ctx.tenant().map(|s| s.to_string()));
+        let mut filter = filter;
+
+        if let Some(mt) = R::DEF.multitenancy {
+            match mt.strategy {
+                crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
+                    if let Some(ref t) = tenant {
+                        let tenant_filter = Filter::eq(attr_name, Value::String(t.clone()));
+                        filter = match filter {
+                            Some(existing) => Some(Filter::and([existing, tenant_filter])),
+                            None => Some(tenant_filter),
+                        };
+                    } else if !mt.global {
+                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                    }
+                }
+                crate::resource::MultitenancyStrategy::Context => {
+                    if tenant.is_none() && !mt.global {
+                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                    }
+                }
+            }
+        }
+
         let rows = this
             .ctx
             .data
@@ -199,10 +264,11 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                     filter,
                     sort: this.sort,
                     calculations: this.calculations,
+                    calculation_args: this.calculation_args,
                     aggregates: this.aggregates,
                     limit: this.limit,
                     offset: this.offset,
-                    tenant: this.tenant,
+                    tenant,
                 },
             )
             .await?;
@@ -253,6 +319,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                     filter,
                     sort: Vec::new(),
                     calculations: Vec::new(),
+                    calculation_args: std::collections::HashMap::new(),
                     aggregates: Vec::new(),
                     limit: None,
                     offset: None,
@@ -273,9 +340,11 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             let count_query = Query {
                 ctx: self.ctx,
                 action: self.action,
+                arguments: self.arguments.clone(),
                 filter: self.filter.clone(),
                 sort: Vec::new(),
                 calculations: Vec::new(),
+                calculation_args: std::collections::HashMap::new(),
                 aggregates: Vec::new(),
                 loads: Vec::new(),
                 limit: None,
@@ -499,9 +568,11 @@ pub fn query<R: Resource, D: DataLayer>(ctx: &Context<D>) -> Query<'_, R, D> {
     Query {
         ctx,
         action: None,
+        arguments: FieldMap::new(),
         filter: None,
         sort: Vec::new(),
         calculations: Vec::new(),
+        calculation_args: std::collections::HashMap::new(),
         aggregates: Vec::new(),
         loads: Vec::new(),
         limit: None,

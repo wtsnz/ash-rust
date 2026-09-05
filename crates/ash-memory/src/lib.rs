@@ -6,8 +6,8 @@ use std::future::ready;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash_core::{
-    AggregateFilter, AggregateKind, CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result,
-    SchemaSupport, TransactionSupport, Value, apply_named,
+    apply_named_with_args, AggregateFilter, AggregateKind, CompiledQuery, DataLayer, Error,
+    FieldMap, Filter, ResourceDef, Result, SchemaSupport, TransactionSupport, Value,
 };
 use uuid::Uuid;
 
@@ -240,9 +240,11 @@ impl DataLayer for Memory {
                 .unwrap_or_default();
 
             let needed = needed_calculations(resource, query);
+            let empty_args = ash_core::FieldMap::new();
             for row in &mut rows {
                 for name in &needed {
-                    apply_named(resource, row, name)?;
+                    let args = query.calculation_args.get(*name).unwrap_or(&empty_args);
+                    apply_named_with_args(resource, row, name, args)?;
                 }
             }
 
@@ -250,7 +252,7 @@ impl DataLayer for Memory {
             apply_aggregates(&tables, resource, &mut rows, &needed_aggs)?;
 
             if let Some(filter) = &query.filter {
-                rows.retain(|row| filter.matches(row));
+                rows.retain(|row| row_matches_filter(&tables, resource, filter, row));
             }
 
             if !query.sort.is_empty() {
@@ -289,6 +291,115 @@ impl DataLayer for Memory {
 
             Ok(rows)
         })())
+    }
+}
+
+fn row_matches_filter(
+    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+    resource: &ResourceDef,
+    filter: &Filter,
+    row: &FieldMap,
+) -> bool {
+    match filter {
+        Filter::True => true,
+        Filter::False => false,
+        Filter::Eq(field, value) => {
+            if value.is_null() {
+                matches!(row.get(field), None | Some(Value::Null))
+            } else {
+                row.get(field).is_some_and(|got| !got.is_null() && got == value)
+            }
+        }
+        Filter::Ne(field, value) => {
+            if value.is_null() {
+                row.get(field).is_some_and(|got| !got.is_null())
+            } else {
+                row.get(field).is_some_and(|got| !got.is_null() && got != value)
+            }
+        }
+        Filter::Gt(field, value) => compare(row.get(field), value, Ordering::Greater, false),
+        Filter::Gte(field, value) => compare(row.get(field), value, Ordering::Greater, true),
+        Filter::Lt(field, value) => compare(row.get(field), value, Ordering::Less, false),
+        Filter::Lte(field, value) => compare(row.get(field), value, Ordering::Less, true),
+        Filter::In(field, values) => row.get(field).is_some_and(|got| values.contains(got)),
+        Filter::IsNil(field) => matches!(row.get(field), None | Some(Value::Null)),
+        Filter::And(parts) => parts.iter().all(|part| row_matches_filter(tables, resource, part, row)),
+        Filter::Or(parts) => parts.iter().any(|part| row_matches_filter(tables, resource, part, row)),
+        Filter::Not(inner) => !row_matches_filter(tables, resource, inner, row),
+        Filter::Related { relationship, filter: rel_filter } => {
+            let Some(rel) = resource.relationship(relationship) else {
+                return false;
+            };
+            let dest_res = (rel.destination)();
+            let dest_table = tables.get(dest_res.name);
+            let Some(dest_table) = dest_table else {
+                return false;
+            };
+
+            match rel.kind {
+                ash_core::RelKind::BelongsTo => {
+                    let Some(fk_val) = row.get(rel.source_attribute) else {
+                        return false;
+                    };
+                    let Value::Uuid(fk_id) = fk_val else {
+                        return false;
+                    };
+                    let Some(dest_row) = dest_table.get(fk_id) else {
+                        return false;
+                    };
+                    row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                }
+                ash_core::RelKind::HasMany | ash_core::RelKind::HasOne => {
+                    let Some(source_val) = row.get(rel.source_attribute) else {
+                        return false;
+                    };
+                    dest_table.values().any(|dest_row| {
+                        dest_row.get(rel.destination_attribute) == Some(source_val)
+                            && row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                    })
+                }
+                ash_core::RelKind::ManyToMany => {
+                    let Some(through_fn) = rel.through else {
+                        return false;
+                    };
+                    let through_res = through_fn();
+                    let through_table = tables.get(through_res.name);
+                    let Some(through_table) = through_table else {
+                        return false;
+                    };
+                    let Some(source_val) = row.get(rel.source_attribute) else {
+                        return false;
+                    };
+                    let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
+                    let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
+
+                    let matching_dest_ids: Vec<&Value> = through_table
+                        .values()
+                        .filter(|jr| jr.get(source_on_join) == Some(source_val))
+                        .filter_map(|jr| jr.get(dest_on_join))
+                        .collect();
+
+                    dest_table.values().any(|dest_row| {
+                        let dest_id = dest_row.get(rel.destination_attribute).unwrap_or(&Value::Null);
+                        matching_dest_ids.contains(&dest_id)
+                            && row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                    })
+                }
+            }
+        }
+    }
+}
+
+fn compare(got: Option<&Value>, rhs: &Value, direction: Ordering, equal_ok: bool) -> bool {
+    let Some(got) = got else {
+        return false;
+    };
+    if got.is_null() || rhs.is_null() {
+        return false;
+    }
+    match got.cmp(rhs) {
+        Ordering::Equal => equal_ok,
+        order => order == direction,
     }
 }
 

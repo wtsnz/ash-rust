@@ -53,6 +53,7 @@ static USER_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 static TICKET_ATTRS: &[AttributeDef] = &[
@@ -105,6 +106,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 static SQLITE_USER_DEF: ResourceDef = ResourceDef {
@@ -125,6 +127,7 @@ static SQLITE_USER_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 static SQLITE_TICKET_DEF: ResourceDef = ResourceDef {
@@ -145,6 +148,7 @@ static SQLITE_TICKET_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 async fn setup_memory_benchmark_data(

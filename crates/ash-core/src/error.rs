@@ -64,6 +64,9 @@ pub enum Error {
         relationship: &'static str,
         count: usize,
     },
+    TenantRequired {
+        resource: &'static str,
+    },
     Authentication(String),
 }
 
@@ -154,6 +157,9 @@ impl fmt::Display for Error {
                     f,
                     "cannot delete {resource} because relationship `{relationship}` has {count} dependent record(s) and specifies on_delete: restrict"
                 )
+            }
+            Self::TenantRequired { resource } => {
+                write!(f, "tenant is required for resource `{resource}`")
             }
             Self::Authentication(msg) => write!(f, "authentication error: {msg}"),
         }

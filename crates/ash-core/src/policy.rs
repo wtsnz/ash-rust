@@ -387,6 +387,7 @@ mod tests {
         timestamps: None,
         store_type_id: crate::store::default_store_type_id,
         store_name: "DefaultStore",
+        multitenancy: None,
     };
 
     const QUEUE: ResourceDef = ResourceDef {
@@ -418,6 +419,7 @@ mod tests {
         timestamps: None,
         store_type_id: crate::store::default_store_type_id,
         store_name: "DefaultStore",
+        multitenancy: None,
     };
 
     #[test]

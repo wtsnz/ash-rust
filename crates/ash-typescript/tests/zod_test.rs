@@ -40,6 +40,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: || std::any::TypeId::of::<()>(),
     store_name: "memory",
+    multitenancy: None,
 };
 
 #[test]

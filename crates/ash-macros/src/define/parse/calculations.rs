@@ -1,13 +1,31 @@
 use syn::parse::ParseStream;
 use syn::{Error, Expr, Ident, Result, Token, Type};
 
-use crate::define::ast::{CalculationExprSpec, CalculationSpec};
+use crate::define::ast::{ArgumentSpec, CalculationExprSpec, CalculationSpec};
 
 pub fn parse_calculations(input: ParseStream) -> Result<Vec<CalculationSpec>> {
     let mut calcs = Vec::new();
     while !input.is_empty() {
         let outer_attrs = input.call(syn::Attribute::parse_outer)?;
         let ident: Ident = input.parse()?;
+        let mut arguments = Vec::new();
+        if input.peek(syn::token::Paren) {
+            let args_content;
+            syn::parenthesized!(args_content in input);
+            while !args_content.is_empty() {
+                let arg_ident: Ident = args_content.parse()?;
+                let _: Token![:] = args_content.parse()?;
+                let arg_ty: Type = args_content.parse()?;
+                arguments.push(ArgumentSpec {
+                    name: arg_ident,
+                    ty: arg_ty,
+                    allow_nil: false,
+                });
+                if args_content.peek(Token![,]) {
+                    let _: Token![,] = args_content.parse()?;
+                }
+            }
+        }
         let _: Token![:] = input.parse()?;
         let ty: Type = input.parse()?;
         let _: Token![=] = input.parse()?;
@@ -37,6 +55,7 @@ pub fn parse_calculations(input: ParseStream) -> Result<Vec<CalculationSpec>> {
         calcs.push(CalculationSpec {
             outer_attrs,
             ident,
+            arguments,
             ty,
             expr,
         });
@@ -72,6 +91,26 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
 
             let name = func_ident.to_string();
             match name.as_str() {
+                "arg" => {
+                    let first = call
+                        .args
+                        .first()
+                        .ok_or_else(|| Error::new_spanned(call, "expected argument name"))?;
+                    match first {
+                        syn::Expr::Path(p) => {
+                            let f = p
+                                .path
+                                .get_ident()
+                                .ok_or_else(|| Error::new_spanned(p, "expected identifier"))?;
+                            Ok(CalculationExprSpec::Arg(f.to_string()))
+                        }
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => Ok(CalculationExprSpec::Arg(s.value())),
+                        other => Err(Error::new_spanned(other, "expected argument identifier or string literal")),
+                    }
+                }
                 "string_length" => {
                     let first = call
                         .args

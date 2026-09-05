@@ -21,7 +21,7 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
 ) -> Result<()> {
     for rel in resource.relationships {
         match rel.kind {
-            RelKind::HasMany => {
+            RelKind::HasMany | RelKind::HasOne => {
                 match rel.on_delete {
                     OnDelete::Nothing => {}
                     OnDelete::Restrict => {
@@ -207,7 +207,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
             .ok_or_else(|| Error::Invalid(format!("unknown relationship `{}` on {}", managed.relationship, resource.name)))?;
 
         match rel.kind {
-            RelKind::HasMany => {
+            RelKind::HasMany | RelKind::HasOne => {
                 let dest_def = (rel.destination)();
                 let child_fk = rel.destination_attribute;
                 let child_pk = pk_name(dest_def)?;

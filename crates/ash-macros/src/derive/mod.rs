@@ -64,6 +64,7 @@ pub fn expand(input: DeriveInput) -> Result<TokenStream> {
                 timestamps: None,
                 store_type_id: ::ash_core::default_store_type_id,
                 store_name: "DefaultStore",
+                multitenancy: None,
             };
 
             fn id(&self) -> ::uuid::Uuid {

@@ -148,3 +148,39 @@ pub fn graphql_value_to_ash_value(val: &GqlValue) -> AshValue {
         _ => AshValue::Null,
     }
 }
+
+/// Parses an `async_graphql` [`ValueAccessor`] into an [`ash_core::Value`] based on [`AttrType`].
+pub fn parse_input_val(
+    acc: &async_graphql::dynamic::ValueAccessor<'_>,
+    ty: AttrType,
+) -> Result<AshValue, async_graphql::Error> {
+    match ty {
+        AttrType::Uuid => {
+            let s = acc.string()?;
+            let u = uuid::Uuid::parse_str(s)
+                .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
+            Ok(AshValue::Uuid(u))
+        }
+        AttrType::String => {
+            let s = acc.string()?;
+            Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::Integer => {
+            let n = acc.i64()?;
+            Ok(AshValue::Int(n))
+        }
+        AttrType::Boolean => {
+            let b = acc.boolean()?;
+            Ok(AshValue::Bool(b))
+        }
+        AttrType::Atom { one_of } => {
+            let name = acc.enum_name()?;
+            if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
+                Ok(AshValue::String((*matched).to_string()))
+            } else {
+                Ok(AshValue::String(name.to_string()))
+            }
+        }
+        _ => Ok(AshValue::Null),
+    }
+}

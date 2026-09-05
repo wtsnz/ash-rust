@@ -37,6 +37,7 @@ pub mod item {
             display_name: String = coalesce(nickname, name, "Item");
             badge: String = if_else(views >= 500, "Popular", "Regular");
             discount_type: String = custom(calculate_discount_code);
+            discounted(discount: i64): i64 = price - arg(discount);
         }
 
         actions {
@@ -143,6 +144,19 @@ async fn test_calculations_in_memory() {
     assert_eq!(sorted_by_total[0].name, "Laptop");   // 2000
     assert_eq!(sorted_by_total[1].name, "Mouse");    // 100
     assert_eq!(sorted_by_total[2].name, "Keyboard"); // 45
+
+    // Invariant 4: Calculation with runtime arguments
+    let mut args = FieldMap::new();
+    args.insert("discount".to_string(), Value::Int(100));
+    let discounted_items = Item::query(&ctx)
+        .calc_with_args(Item::discounted, args)
+        .all()
+        .await
+        .unwrap();
+    let laptop = discounted_items.iter().find(|i| i.name == "Laptop").unwrap();
+    assert_eq!(laptop.discounted, Some(900)); // 1000 - 100
+    let mouse = discounted_items.iter().find(|i| i.name == "Mouse").unwrap();
+    assert_eq!(mouse.discounted, Some(-75)); // 25 - 100
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -224,4 +238,17 @@ async fn test_calculations_in_sqlite() {
     assert_eq!(sorted_by_total[0].name, "Laptop");
     assert_eq!(sorted_by_total[1].name, "Mouse");
     assert_eq!(sorted_by_total[2].name, "Keyboard");
+
+    // Invariant 4: Calculation with runtime arguments in SQL
+    let mut args = FieldMap::new();
+    args.insert("discount".to_string(), Value::Int(100));
+    let discounted_items = Item::query(&ctx)
+        .calc_with_args(Item::discounted, args)
+        .all()
+        .await
+        .unwrap();
+    let laptop = discounted_items.iter().find(|i| i.name == "Laptop").unwrap();
+    assert_eq!(laptop.discounted, Some(900)); // 1000 - 100
+    let mouse = discounted_items.iter().find(|i| i.name == "Mouse").unwrap();
+    assert_eq!(mouse.discounted, Some(-75)); // 25 - 100
 }

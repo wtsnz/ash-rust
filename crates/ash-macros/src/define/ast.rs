@@ -21,6 +21,14 @@ pub struct ResourceDefinition {
     pub data_layer: Option<Ident>,
     pub store: Option<Type>,
     pub timestamps: Option<TimestampsSpec>,
+    pub multitenancy: Option<MultitenancySpec>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MultitenancySpec {
+    pub attribute: Option<String>,
+    pub strategy: Option<String>,
+    pub global: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +60,7 @@ pub struct AttributeSpec {
 pub enum RelType {
     BelongsTo,
     HasMany,
+    HasOne,
     ManyToMany,
 }
 
@@ -80,12 +89,14 @@ pub struct RelationshipSpec {
 pub struct CalculationSpec {
     pub outer_attrs: Vec<syn::Attribute>,
     pub ident: Ident,
+    pub arguments: Vec<ArgumentSpec>,
     pub ty: Type,
     pub expr: CalculationExprSpec,
 }
 
 #[derive(Clone, Debug)]
 pub enum CalculationExprSpec {
+    Arg(String),
     StringLength(String),
     Field(Ident),
     LitInt(i64),

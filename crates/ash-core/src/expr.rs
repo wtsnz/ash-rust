@@ -30,6 +30,7 @@ pub enum Expr {
         then_expr: &'static Expr,
         else_expr: &'static Expr,
     },
+    Arg(&'static str),
     Custom(fn(&FieldMap) -> Result<Value>),
 }
 
@@ -37,6 +38,7 @@ impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Field(a), Self::Field(b)) => a == b,
+            (Self::Arg(a), Self::Arg(b)) => a == b,
             (Self::LitInt(a), Self::LitInt(b)) => a == b,
             (Self::LitString(a), Self::LitString(b)) => a == b,
             (Self::LitBool(a), Self::LitBool(b)) => a == b,
@@ -82,17 +84,42 @@ pub struct CalculationDef {
     pub name: &'static str,
     pub ty: AttrType,
     pub expr: Expr,
+    pub arguments: &'static [crate::action::ArgumentDef],
 }
 
 impl CalculationDef {
     pub const fn new(name: &'static str, ty: AttrType, expr: Expr) -> Self {
-        Self { name, ty, expr }
+        Self {
+            name,
+            ty,
+            expr,
+            arguments: &[],
+        }
+    }
+
+    pub const fn with_arguments(
+        name: &'static str,
+        ty: AttrType,
+        expr: Expr,
+        arguments: &'static [crate::action::ArgumentDef],
+    ) -> Self {
+        Self {
+            name,
+            ty,
+            expr,
+            arguments,
+        }
     }
 }
 
 pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
+    eval_with_args(expr, fields, &FieldMap::new())
+}
+
+pub fn eval_with_args(expr: &Expr, fields: &FieldMap, args: &FieldMap) -> Result<Value> {
     match *expr {
         Expr::Field(name) => Ok(fields.get(name).cloned().unwrap_or(Value::Null)),
+        Expr::Arg(name) => Ok(args.get(name).cloned().unwrap_or(Value::Null)),
         Expr::LitInt(n) => Ok(Value::Int(n)),
         Expr::LitString(s) => Ok(Value::String(s.to_string())),
         Expr::LitBool(b) => Ok(Value::Bool(b)),
@@ -106,7 +133,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
                 got: other.type_name().into(),
             }),
         },
-        Expr::Length(inner) => match eval(inner, fields)? {
+        Expr::Length(inner) => match eval_with_args(inner, fields, args)? {
             Value::Null => Ok(Value::Null),
             Value::String(text) => Ok(Value::Int(text.chars().count() as i64)),
             other => Err(Error::TypeMismatch {
@@ -115,7 +142,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
                 got: other.type_name().into(),
             }),
         },
-        Expr::Lower(inner) => match eval(inner, fields)? {
+        Expr::Lower(inner) => match eval_with_args(inner, fields, args)? {
             Value::Null => Ok(Value::Null),
             Value::String(s) => Ok(Value::String(s.to_lowercase())),
             other => Err(Error::TypeMismatch {
@@ -124,7 +151,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
                 got: other.type_name().into(),
             }),
         },
-        Expr::Upper(inner) => match eval(inner, fields)? {
+        Expr::Upper(inner) => match eval_with_args(inner, fields, args)? {
             Value::Null => Ok(Value::Null),
             Value::String(s) => Ok(Value::String(s.to_uppercase())),
             other => Err(Error::TypeMismatch {
@@ -136,7 +163,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
         Expr::Concat(parts) => {
             let mut out = String::new();
             for part in parts {
-                match eval(part, fields)? {
+                match eval_with_args(part, fields, args)? {
                     Value::Null => {}
                     Value::String(s) => out.push_str(&s),
                     Value::Int(n) => out.push_str(&n.to_string()),
@@ -149,14 +176,14 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
         }
         Expr::Coalesce(parts) => {
             for part in parts {
-                let v = eval(part, fields)?;
+                let v = eval_with_args(part, fields, args)?;
                 if v != Value::Null {
                     return Ok(v);
                 }
             }
             Ok(Value::Null)
         }
-        Expr::Add(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Add(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{}{}", a, b))),
             (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
@@ -166,7 +193,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
                 got: format!("{} + {}", a.type_name(), b.type_name()),
             }),
         },
-        Expr::Sub(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Sub(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
             (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
             (a, b) => Err(Error::TypeMismatch {
@@ -175,7 +202,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
                 got: format!("{} - {}", a.type_name(), b.type_name()),
             }),
         },
-        Expr::Mul(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Mul(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
             (a, b) => Err(Error::TypeMismatch {
@@ -184,7 +211,7 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
                 got: format!("{} * {}", a.type_name(), b.type_name()),
             }),
         },
-        Expr::Div(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Div(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => {
                 if b == 0 {
                     Ok(Value::Null)
@@ -200,39 +227,39 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
             }),
         },
         Expr::Eq(l, r) => {
-            let a = eval(l, fields)?;
-            let b = eval(r, fields)?;
+            let a = eval_with_args(l, fields, args)?;
+            let b = eval_with_args(r, fields, args)?;
             Ok(Value::Bool(a == b))
         }
         Expr::Ne(l, r) => {
-            let a = eval(l, fields)?;
-            let b = eval(r, fields)?;
+            let a = eval_with_args(l, fields, args)?;
+            let b = eval_with_args(r, fields, args)?;
             Ok(Value::Bool(a != b))
         }
-        Expr::Gt(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Gt(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
             (Value::String(a), Value::String(b)) => Ok(Value::Bool(a > b)),
             _ => Ok(Value::Bool(false)),
         },
-        Expr::Gte(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Gte(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
             (Value::String(a), Value::String(b)) => Ok(Value::Bool(a >= b)),
             _ => Ok(Value::Bool(false)),
         },
-        Expr::Lt(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Lt(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
             (Value::String(a), Value::String(b)) => Ok(Value::Bool(a < b)),
             _ => Ok(Value::Bool(false)),
         },
-        Expr::Lte(l, r) => match (eval(l, fields)?, eval(r, fields)?) {
+        Expr::Lte(l, r) => match (eval_with_args(l, fields, args)?, eval_with_args(r, fields, args)?) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
             (Value::String(a), Value::String(b)) => Ok(Value::Bool(a <= b)),
             _ => Ok(Value::Bool(false)),
         },
         Expr::IfElse { cond, then_expr, else_expr } => {
-            match eval(cond, fields)? {
-                Value::Bool(true) => eval(then_expr, fields),
-                _ => eval(else_expr, fields),
+            match eval_with_args(cond, fields, args)? {
+                Value::Bool(true) => eval_with_args(then_expr, fields, args),
+                _ => eval_with_args(else_expr, fields, args),
             }
         }
         Expr::Custom(f) => f(fields),
@@ -240,8 +267,17 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
 }
 
 pub fn apply_named(resource: &ResourceDef, row: &mut FieldMap, name: &str) -> Result<()> {
+    apply_named_with_args(resource, row, name, &FieldMap::new())
+}
+
+pub fn apply_named_with_args(
+    resource: &ResourceDef,
+    row: &mut FieldMap,
+    name: &str,
+    args: &FieldMap,
+) -> Result<()> {
     if let Some(calc) = resource.calculation(name) {
-        let value = eval(&calc.expr, row)?;
+        let value = eval_with_args(&calc.expr, row, args)?;
         row.insert(calc.name.to_string(), value);
     }
     Ok(())

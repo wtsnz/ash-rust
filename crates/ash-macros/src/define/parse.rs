@@ -59,6 +59,7 @@ impl Parse for ResourceDefinition {
         let mut data_layer = None;
         let mut store = None;
         let mut timestamps = None;
+        let mut multitenancy = None;
 
         while !input.is_empty() {
             let section_ident: Ident = input.parse()?;
@@ -188,6 +189,47 @@ impl Parse for ResourceDefinition {
                 if input.peek(Token![;]) {
                     let _: Token![;] = input.parse()?;
                 }
+            } else if section_ident == "multitenancy" {
+                parse_braced!(input, content);
+                let mut attribute = None;
+                let mut strategy = None;
+                let mut global = false;
+                while !content.is_empty() {
+                    let key_ident: Ident = content.parse()?;
+                    if content.peek(Token![:]) {
+                        let _: Token![:] = content.parse()?;
+                    }
+                    if key_ident == "attribute" {
+                        if content.peek(syn::LitStr) {
+                            let lit: syn::LitStr = content.parse()?;
+                            attribute = Some(lit.value());
+                        } else {
+                            let attr_ident: Ident = content.parse()?;
+                            attribute = Some(attr_ident.to_string());
+                        }
+                    } else if key_ident == "strategy" {
+                        if content.peek(syn::LitStr) {
+                            let lit: syn::LitStr = content.parse()?;
+                            strategy = Some(lit.value());
+                        } else {
+                            let strat_ident: Ident = content.parse()?;
+                            strategy = Some(strat_ident.to_string());
+                        }
+                    } else if key_ident == "global" {
+                        let lit: syn::LitBool = content.parse()?;
+                        global = lit.value;
+                    }
+                    if content.peek(Token![,]) {
+                        let _: Token![,] = content.parse()?;
+                    } else if content.peek(Token![;]) {
+                        let _: Token![;] = content.parse()?;
+                    }
+                }
+                multitenancy = Some(crate::define::ast::MultitenancySpec {
+                    attribute,
+                    strategy,
+                    global,
+                });
             } else if section_ident == "timestamps" {
                 let mut created_at = syn::Ident::new("created_at", proc_macro2::Span::call_site());
                 let mut updated_at = syn::Ident::new("updated_at", proc_macro2::Span::call_site());
@@ -271,6 +313,7 @@ impl Parse for ResourceDefinition {
             data_layer,
             store,
             timestamps,
+            multitenancy,
         })
     }
 }

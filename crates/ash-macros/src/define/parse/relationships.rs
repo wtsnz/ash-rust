@@ -12,11 +12,12 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
         let kind = match kind_ident.to_string().as_str() {
             "belongs_to" => RelType::BelongsTo,
             "has_many" => RelType::HasMany,
+            "has_one" => RelType::HasOne,
             "many_to_many" => RelType::ManyToMany,
             other => {
                 return Err(Error::new_spanned(
                     kind_ident,
-                    format!("unknown relationship `{other}`, expected `belongs_to`, `has_many`, or `many_to_many`"),
+                    format!("unknown relationship `{other}`, expected `belongs_to`, `has_many`, `has_one`, or `many_to_many`"),
                 ));
             }
         };
@@ -119,7 +120,7 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
         }
 
         let (dest, struct_field_ty) = match kind {
-            RelType::BelongsTo => {
+            RelType::BelongsTo | RelType::HasOne => {
                 if let Some(inner) = option_inner(&ty) {
                     let dest_ident = last_ident(inner)
                         .ok_or_else(|| {

@@ -27,6 +27,7 @@ static RES_V1: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 static RES_V2_ATTRS: &[AttributeDef] = &[
@@ -53,6 +54,7 @@ static RES_V2: ResourceDef = ResourceDef {
     timestamps: None,
     store_type_id: ash_core::default_store_type_id,
     store_name: "default",
+    multitenancy: None,
 };
 
 #[test]
