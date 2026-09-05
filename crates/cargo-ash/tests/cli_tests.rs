@@ -85,6 +85,27 @@ async fn test_cli_migrate_status_rollback_lifecycle() {
     assert_eq!(snapshot.table, "todos");
     assert_eq!(snapshot.columns.len(), 2);
 
+    // 4b. Generate TypeScript SDK via CLI
+    let ts_out = temp_dir.join("frontend/src/ash.ts");
+    cargo_ash::run_ts(cargo_ash::TypeScriptArgs {
+        snapshots: dump_dir.clone(),
+        out: ts_out.clone(),
+        no_zod: false,
+        no_client: false,
+        no_react: false,
+        client_name: "AshClient".to_string(),
+        endpoint: "/graphql".to_string(),
+    })
+    .unwrap();
+
+    assert!(ts_out.exists());
+    let generated_ts = fs::read_to_string(&ts_out).unwrap();
+    assert!(generated_ts.contains("export interface Todo {"));
+    assert!(generated_ts.contains("export const TodoSchema = z.object({"));
+    assert!(generated_ts.contains("export class TodoClient {"));
+    assert!(generated_ts.contains("export class AshClient {"));
+    assert!(generated_ts.contains("public readonly todo: TodoClient;"));
+
     // 5. Rollback
     cargo_ash::run_rollback(cargo_ash::RollbackArgs {
         database_url: Some(db_url.clone()),

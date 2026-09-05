@@ -1,0 +1,27 @@
+[package]
+name = "ash-typescript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "TypeScript definitions, Zod validation schemas, and isomorphic client SDK generator for ash-rust"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+ash-sql = { path = "../ash-sql", default-features = false, optional = true }
+thiserror = "2"
+
+[features]
+default = ["snapshot"]
+snapshot = ["dep:ash-sql"]
+
+[dev-dependencies]
+ash-macros = { path = "../ash-macros" }
+ash-memory = { path = "../ash-memory" }
+ash-sql = { path = "../ash-sql" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[[example]]
+name = "generate_ts"
+path = "examples/generate_ts.rs"

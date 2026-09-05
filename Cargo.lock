@@ -275,6 +275,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ash-typescript"
+version = "0.1.0"
+dependencies = [
+ "ash-core",
+ "ash-macros",
+ "ash-memory",
+ "ash-sql",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "async-graphql"
 version = "7.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -587,6 +600,7 @@ dependencies = [
  "ash-postgres",
  "ash-sql",
  "ash-sqlite",
+ "ash-typescript",
  "clap",
  "serde",
  "serde_json",

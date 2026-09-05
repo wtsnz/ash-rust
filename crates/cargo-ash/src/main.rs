@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 
 use cargo_ash::{
-    run_dump, run_generate, run_migrate, run_rollback, run_status, DumpArgs, GenerateArgs,
-    MigrateArgs, RollbackArgs, StatusArgs,
+    run_dump, run_generate, run_migrate, run_rollback, run_status, run_ts, DumpArgs, GenerateArgs,
+    MigrateArgs, RollbackArgs, StatusArgs, TypeScriptArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -29,6 +29,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: SchemaCommands,
     },
+    /// Generate client SDKs and code
+    Codegen {
+        #[command(subcommand)]
+        command: CodegenCommands,
+    },
     /// Run pending migrations (shortcut for `migrations run`)
     Migrate(MigrateArgs),
     /// Rollback migrations (shortcut for `migrations rollback`)
@@ -39,6 +44,8 @@ pub enum Commands {
     Status(StatusArgs),
     /// Dump database schema (shortcut for `schema dump`)
     Dump(DumpArgs),
+    /// Generate TypeScript SDK and Zod schemas (shortcut for `codegen ts`)
+    Ts(TypeScriptArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -57,6 +64,12 @@ pub enum MigrationCommands {
 pub enum SchemaCommands {
     /// Dump database schema to snapshot JSON files
     Dump(DumpArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CodegenCommands {
+    /// Generate TypeScript definitions, Zod validation schemas, and isomorphic client SDK
+    Ts(TypeScriptArgs),
 }
 
 #[tokio::main]
@@ -79,11 +92,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Schema { command } => match command {
             SchemaCommands::Dump(args) => run_dump(args).await?,
         },
+        Commands::Codegen { command } => match command {
+            CodegenCommands::Ts(args) => run_ts(args)?,
+        },
         Commands::Migrate(args) => run_migrate(args).await?,
         Commands::Rollback(args) => run_rollback(args).await?,
         Commands::Generate(args) => run_generate(args)?,
         Commands::Status(args) => run_status(args).await?,
         Commands::Dump(args) => run_dump(args).await?,
+        Commands::Ts(args) => run_ts(args)?,
     }
 
     Ok(())
