@@ -35,32 +35,49 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
 
 /// Generate a Zod schema for an action input, incorporating validations (StringLength, Numericality, OneOf, Present).
 pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Option<String> {
-    if action.kind == ActionKind::Read || action.kind == ActionKind::Destroy {
+    if action.kind == ActionKind::Read {
         return None;
     }
 
-    let schema_name = format!("{}{action_pascal}InputSchema", res.name, action_pascal = to_pascal_case(action.name));
-    let type_name = format!("{}{action_pascal}Input", res.name, action_pascal = to_pascal_case(action.name));
+    let action_pascal = to_pascal_case(action.name);
+    let schema_name = format!("{action_pascal}{}InputSchema", res.name);
+    let alias_schema_name = format!("{}{action_pascal}InputSchema", res.name);
+    let type_name = format!("{action_pascal}{}Input", res.name);
+    let alias_type_name = format!("{}{action_pascal}Input", res.name);
 
     let mut out = String::new();
     out.push_str(&format!("export const {schema_name} = z.object({{\n"));
 
-    // Collect accepted fields
-    for attr_name in action.accept {
-        if let Some(attr) = res.attribute(attr_name) {
-            let field_schema = build_field_zod_schema(res, action, attr_name, &attr.ty, attr.allow_nil);
-            out.push_str(&format!("  {attr_name}: {field_schema},\n"));
+    if action.kind == ActionKind::Destroy {
+        out.push_str("  id: z.string().uuid(),\n");
+    } else {
+        if action.kind == ActionKind::Update {
+            out.push_str("  id: z.string().uuid().optional(),\n");
+        }
+
+        // Collect accepted fields
+        for attr_name in action.accept {
+            if let Some(attr) = res.attribute(attr_name) {
+                let field_schema = build_field_zod_schema(res, action, attr_name, &attr.ty, attr.allow_nil);
+                out.push_str(&format!("  {attr_name}: {field_schema},\n"));
+            }
+        }
+
+        // Collect action arguments
+        for arg in action.arguments {
+            let field_schema = build_field_zod_schema(res, action, arg.name, &arg.ty, arg.allow_nil);
+            out.push_str(&format!("  {}: {},\n", arg.name, field_schema));
         }
     }
 
-    // Collect action arguments
-    for arg in action.arguments {
-        let field_schema = build_field_zod_schema(res, action, arg.name, &arg.ty, arg.allow_nil);
-        out.push_str(&format!("  {}: {},\n", arg.name, field_schema));
-    }
-
     out.push_str("});\n\n");
+    if schema_name != alias_schema_name {
+        out.push_str(&format!("export const {alias_schema_name} = {schema_name};\n\n"));
+    }
     out.push_str(&format!("export type {type_name} = z.infer<typeof {schema_name}>;\n\n"));
+    if type_name != alias_type_name {
+        out.push_str(&format!("export type {alias_type_name} = {type_name};\n\n"));
+    }
     Some(out)
 }
 

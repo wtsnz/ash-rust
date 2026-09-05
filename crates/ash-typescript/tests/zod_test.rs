@@ -51,12 +51,14 @@ fn test_zod_schema_generation() {
     assert!(zod.contains("author_id: z.string().uuid().nullable().optional()"));
 
     // Action input schema
-    assert!(zod.contains("export const TicketOpenInputSchema = z.object({"));
+    assert!(zod.contains("export const OpenTicketInputSchema = z.object({"));
+    assert!(zod.contains("export const TicketOpenInputSchema = OpenTicketInputSchema;"));
     assert!(zod.contains("title: z.string().min(5).max(255)"));
     assert!(zod.contains("status: z.enum([\"open\", \"in_progress\", \"closed\"])"));
     assert!(zod.contains("priority: z.number().int().min(1).max(5)"));
     assert!(zod.contains("author_id: z.string().uuid().nullable().optional()"));
 
     // Type inference export
-    assert!(zod.contains("export type TicketOpenInput = z.infer<typeof TicketOpenInputSchema>;"));
+    assert!(zod.contains("export type OpenTicketInput = z.infer<typeof OpenTicketInputSchema>;"));
+    assert!(zod.contains("export type TicketOpenInput = OpenTicketInput;"));
 }

@@ -109,8 +109,11 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
 
                 // Parse user filter if provided
                 let user_filter = if let Some(filter_arg) = ctx.args.get("filter") {
-                    let obj = filter_arg.object()?;
-                    Some(parse_resource_filter(resource, &obj)?)
+                    if let Ok(obj) = filter_arg.object() {
+                        Some(parse_resource_filter(resource, &obj)?)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -128,23 +131,17 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
 
                 // Parse sort if provided
                 let sort = if let Some(sort_arg) = ctx.args.get("sort") {
-                    let list = sort_arg.list()?;
-                    parse_resource_sort(resource, &list)?
+                    if let Ok(list) = sort_arg.list() {
+                        parse_resource_sort(resource, &list)?
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 };
 
-                let limit = if let Some(limit_arg) = ctx.args.get("limit") {
-                    Some(limit_arg.i64()? as usize)
-                } else {
-                    None
-                };
-
-                let offset = if let Some(offset_arg) = ctx.args.get("offset") {
-                    Some(offset_arg.i64()? as usize)
-                } else {
-                    None
-                };
+                let limit = ctx.args.get("limit").and_then(|v| v.i64().ok()).map(|n| n as usize);
+                let offset = ctx.args.get("offset").and_then(|v| v.i64().ok()).map(|n| n as usize);
 
                 let query = CompiledQuery {
                     filter: combined_filter,

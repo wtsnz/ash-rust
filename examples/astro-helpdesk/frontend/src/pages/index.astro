@@ -1,0 +1,476 @@
+---
+import TicketManager from '../components/TicketManager';
+import { ash, type Ticket, type Representative } from '../lib/client';
+
+// --- Server-Side Rendering (SSR) ---
+// Runs on the Node.js / Bun server during request handling
+let initialTickets: Ticket[] = [];
+let initialReps: Representative[] = [];
+let backendStatus = "online";
+let errorMessage = "";
+
+try {
+  const [tickets, reps] = await Promise.all([
+    ash.ticket.query().include({ author: true }).sort("priority", "asc").all(),
+    ash.representative.query().all(),
+  ]);
+  initialTickets = tickets;
+  initialReps = reps;
+} catch (err: any) {
+  backendStatus = "offline";
+  errorMessage = err.message || "Could not connect to ash-rust backend on http://127.0.0.1:4000/graphql";
+}
+
+const openCount = initialTickets.filter(t => t.status === "OPEN").length;
+const inProgressCount = initialTickets.filter(t => t.status === "IN_PROGRESS").length;
+const resolvedCount = initialTickets.filter(t => t.status === "RESOLVED").length;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Astro + ash-rust Fullstack Helpdesk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style is:global>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-hover: #0284c7;
+      --success: #34d399;
+      --warning: #fbbf24;
+      --danger: #f87171;
+      --radius: 10px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 32px 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .title-group h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .title-group p {
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-size: 15px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: 500;
+      background: rgba(52, 211, 153, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(52, 211, 153, 0.3);
+    }
+    .status-pill.offline {
+      background: rgba(248, 113, 113, 0.15);
+      color: var(--danger);
+      border-color: rgba(248, 113, 113, 0.3);
+    }
+
+    /* Metrics Bar */
+    .metrics-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .metric-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+    }
+    .metric-val {
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .metric-lbl {
+      color: var(--text-muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+
+    /* Cards & Layout */
+    .grid-layout {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 900px) {
+      .grid-layout { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .card-header h3 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .badge-tech {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--primary);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    /* Form Styles */
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .req {
+      color: var(--danger);
+      font-size: 11px;
+    }
+    input, textarea, select {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      color: #fff;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .input-error {
+      border-color: var(--danger) !important;
+    }
+    .err-msg {
+      color: var(--danger);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 18px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #0f172a;
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-block { width: 100%; }
+
+    /* List Toolbar */
+    .list-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .filters {
+      display: flex;
+      gap: 6px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .search-box input {
+      width: 180px;
+      padding: 6px 10px;
+    }
+    .btn-refresh {
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    /* Ticket Items */
+    .tickets-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .ticket-item {
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      transition: border-color 0.15s;
+    }
+    .ticket-item:hover {
+      border-color: #475569;
+    }
+    .ticket-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .badges {
+      display: flex;
+      gap: 8px;
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .badge-urgent { background: rgba(248, 113, 113, 0.2); color: var(--danger); }
+    .badge-high { background: rgba(251, 191, 36, 0.2); color: var(--warning); }
+    .badge-medium { background: rgba(56, 189, 248, 0.2); color: var(--primary); }
+    .badge-low { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); }
+
+    .badge-open { background: rgba(56, 189, 248, 0.2); color: var(--primary); }
+    .badge-progress { background: rgba(251, 191, 36, 0.2); color: var(--warning); }
+    .badge-resolved { background: rgba(52, 211, 153, 0.2); color: var(--success); }
+    .badge-closed { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); }
+
+    .ticket-id {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .ticket-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    .ticket-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    .ticket-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .ticket-author {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .ticket-author strong {
+      color: #fff;
+    }
+    .unassigned {
+      font-style: italic;
+      color: #64748b;
+    }
+    .ticket-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-action {
+      background: #1e293b;
+      border: 1px solid var(--card-border);
+      color: #cbd5e1;
+      padding: 5px 10px;
+      border-radius: 5px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-action:hover {
+      background: #334155;
+      color: #fff;
+    }
+    .btn-progress:hover { border-color: var(--warning); color: var(--warning); }
+    .btn-resolve:hover { border-color: var(--success); color: var(--success); }
+    .btn-reopen:hover { border-color: var(--primary); color: var(--primary); }
+    .btn-danger:hover { border-color: var(--danger); color: var(--danger); }
+
+    .alert {
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .alert-success { background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.3); color: var(--success); }
+    .alert-error { background: rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.3); color: var(--danger); }
+
+    /* Architecture Footer */
+    footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    .tech-stack {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .tech-pill {
+      background: #1e293b;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-group">
+        <h1>🦀 ash-rust + 🚀 Astro Full-Stack CRUD</h1>
+        <p>Isomorphic TypeScript SDK & Zod validation generated directly from Rust declarative resources.</p>
+      </div>
+      <div>
+        {backendStatus === "online" ? (
+          <span class="status-pill">● ash-rust API Online (port 4000)</span>
+        ) : (
+          <span class="status-pill offline">● Backend Offline</span>
+        )}
+      </div>
+    </header>
+
+    {errorMessage && (
+      <div class="alert alert-error">
+        <strong>Backend Warning:</strong> {errorMessage}. Make sure the Rust backend is running: <code>cargo run -p astro-helpdesk --bin astro-helpdesk-server</code>
+      </div>
+    )}
+
+    <!-- Metrics Bar -->
+    <div class="metrics-bar">
+      <div class="metric-card">
+        <div class="metric-val">{initialTickets.length}</div>
+        <div class="metric-lbl">Total Tickets</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val" style="color: var(--primary);">{openCount}</div>
+        <div class="metric-lbl">Open</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val" style="color: var(--warning);">{inProgressCount}</div>
+        <div class="metric-lbl">In Progress</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val" style="color: var(--success);">{resolvedCount}</div>
+        <div class="metric-lbl">Resolved</div>
+      </div>
+    </div>
+
+    <!-- Interactive React Island with Client-Side Hydration and Full CRUD -->
+    <TicketManager client:load initialTickets={initialTickets} initialReps={initialReps} />
+
+    <footer>
+      <strong>How this works:</strong>
+      <div class="tech-stack">
+        <span class="tech-pill">Rust: <code>ash-core</code> ResourceDef & Domain</span>
+        <span class="tech-pill">Rust: <code>ash-graphql</code> Axum Server</span>
+        <span class="tech-pill">Codegen: <code>ash-typescript</code> TypeScript & Zod</span>
+        <span class="tech-pill">Frontend: Astro 5 SSR</span>
+        <span class="tech-pill">Hydration: React Island (CRUD Mutations)</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

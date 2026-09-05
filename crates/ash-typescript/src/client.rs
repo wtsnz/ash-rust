@@ -341,7 +341,7 @@ pub fn generate_resource_client(res: &ResourceDef) -> String {
         let m_name = mutation_name(action, res);
         let action_method_name = to_camel_case(action.name);
         let action_pascal = to_pascal_case(action.name);
-        let input_type = format!("{name}{action_pascal}Input");
+        let input_type = format!("{action_pascal}{name}Input");
 
         match action.kind {
             ActionKind::Create => {
@@ -385,8 +385,8 @@ pub fn generate_resource_client(res: &ResourceDef) -> String {
                     r#"
   public async {action_method_name}(id: string, input: {input_type}, include?: {name}Include): Promise<{name}> {{
     const fields = build{name}SelectionSet(include);
-    const query = `mutation Mutate{name}($id: ID!, $input: {input_type}!) {{
-      {m_name}(id: $id, input: $input) {{
+    const query = `mutation Mutate{name}($input: {input_type}!) {{
+      {m_name}(input: $input) {{
         result {{
           ${{fields}}
         }}
@@ -404,7 +404,7 @@ pub fn generate_resource_client(res: &ResourceDef) -> String {
         errors: AshUserError[];
         success: boolean;
       }};
-    }}>(query, {{ id, input }});
+    }}>(query, {{ input: {{ id, ...input }} }});
 
     const payload = data.{m_name};
     if (!payload.success || !payload.result) {{
@@ -420,8 +420,8 @@ pub fn generate_resource_client(res: &ResourceDef) -> String {
                 out.push_str(&format!(
                     r#"
   public async {action_method_name}(id: string): Promise<boolean> {{
-    const query = `mutation Mutate{name}($id: ID!) {{
-      {m_name}(id: $id) {{
+    const query = `mutation Mutate{name}($input: {input_type}!) {{
+      {m_name}(input: $input) {{
         errors {{
           field
           message
@@ -435,7 +435,7 @@ pub fn generate_resource_client(res: &ResourceDef) -> String {
         errors: AshUserError[];
         success: boolean;
       }};
-    }}>(query, {{ id }});
+    }}>(query, {{ input: {{ id }} }});
 
     const payload = data.{m_name};
     if (!payload.success) {{

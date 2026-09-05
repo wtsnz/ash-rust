@@ -63,6 +63,7 @@
    - Isomorphic zero-dependency `fetch` client runtime
    - SSR patterns (Next.js Server Components & Server Actions) vs SPA patterns (React Query v5 `queryOptions`)
    - CLI integration: `cargo ash codegen ts`
+   - Full-stack demo: **[`examples/astro-helpdesk`](../examples/astro-helpdesk/README.md)** showing Astro 5 SSR + React Island CRUD with live Rust backend
 
 
 ---

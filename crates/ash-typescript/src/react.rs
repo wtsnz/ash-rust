@@ -57,7 +57,7 @@ pub fn generate_resource_react_hooks(res: &ResourceDef, client_name: &str) -> St
     for action in res.actions {
         let action_camel = to_camel_case(action.name);
         let action_pascal = to_pascal_case(action.name);
-        let input_type = format!("{name}{action_pascal}Input");
+        let input_type = format!("{action_pascal}{name}Input");
 
         match action.kind {
             ActionKind::Create => {

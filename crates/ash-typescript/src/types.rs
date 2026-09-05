@@ -171,38 +171,50 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
 /// Generate TypeScript action input interface (e.g. `OpenTicketInput`).
 pub fn generate_action_input_interface(res: &ResourceDef, action_name: &str) -> Option<String> {
     let action = res.action(action_name)?;
-    if action.kind == ActionKind::Read || action.kind == ActionKind::Destroy {
+    if action.kind == ActionKind::Read {
         return None;
     }
 
-    let input_name = format!("{}{action_pascal}Input", res.name, action_pascal = to_pascal_case(action.name));
+    let action_pascal = to_pascal_case(action.name);
+    let input_name = format!("{action_pascal}{}Input", res.name);
+    let alias_name = format!("{}{action_pascal}Input", res.name);
     let mut out = String::new();
     out.push_str(&format!("export interface {input_name} {{\n"));
 
-    // Accepted attributes
-    for attr_name in action.accept {
-        if let Some(attr) = res.attribute(attr_name) {
-            let ts_type = attr_type_to_ts(&attr.ty);
-            let is_optional = attr.allow_nil || action.kind == ActionKind::Update;
-            if is_optional {
-                out.push_str(&format!("  {}?: {} | null;\n", attr.name, ts_type));
+    if action.kind == ActionKind::Destroy {
+        out.push_str("  id: string;\n");
+    } else {
+        if action.kind == ActionKind::Update {
+            out.push_str("  id?: string;\n");
+        }
+        // Accepted attributes
+        for attr_name in action.accept {
+            if let Some(attr) = res.attribute(attr_name) {
+                let ts_type = attr_type_to_ts(&attr.ty);
+                let is_optional = attr.allow_nil || action.kind == ActionKind::Update;
+                if is_optional {
+                    out.push_str(&format!("  {}?: {} | null;\n", attr.name, ts_type));
+                } else {
+                    out.push_str(&format!("  {}: {};\n", attr.name, ts_type));
+                }
+            }
+        }
+
+        // Action arguments
+        for arg in action.arguments {
+            let ts_type = attr_type_to_ts(&arg.ty);
+            if arg.allow_nil {
+                out.push_str(&format!("  {}?: {} | null;\n", arg.name, ts_type));
             } else {
-                out.push_str(&format!("  {}: {};\n", attr.name, ts_type));
+                out.push_str(&format!("  {}: {};\n", arg.name, ts_type));
             }
         }
     }
 
-    // Action arguments
-    for arg in action.arguments {
-        let ts_type = attr_type_to_ts(&arg.ty);
-        if arg.allow_nil {
-            out.push_str(&format!("  {}?: {} | null;\n", arg.name, ts_type));
-        } else {
-            out.push_str(&format!("  {}: {};\n", arg.name, ts_type));
-        }
-    }
-
     out.push_str("}\n\n");
+    if input_name != alias_name {
+        out.push_str(&format!("export type {alias_name} = {input_name};\n\n"));
+    }
     Some(out)
 }
 

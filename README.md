@@ -45,6 +45,7 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 
 ### Examples
 
+- **`astro-helpdesk`** (`examples/astro-helpdesk`): Full-stack Node + Rust workflow pairing an Astro 5 SSR frontend (with React island) to an `ash-rust` GraphQL backend via auto-generated `ash-typescript` SDK and Zod schemas.
 - **`kanban`** (`examples/kanban`): A complete multi-domain Trello-like kanban application featuring Workspaces, Boards, Lists, Cards, Comments, and Checklist Items.
 - **`helpdesk`** (`examples/helpdesk`): A support ticket tracking domain demonstrating authorization policies, representatives, customer assignments, and calculations.
 
