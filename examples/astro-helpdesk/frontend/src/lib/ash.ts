@@ -182,20 +182,12 @@ export const OpenTicketInputSchema = z.object({
 
 export const TicketOpenInputSchema = OpenTicketInputSchema;
 
-export type OpenTicketInput = z.infer<typeof OpenTicketInputSchema>;
-
-export type TicketOpenInput = OpenTicketInput;
-
 export const ChangeStatusTicketInputSchema = z.object({
   id: z.string().uuid().optional(),
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).nullable().optional(),
 });
 
 export const TicketChangeStatusInputSchema = ChangeStatusTicketInputSchema;
-
-export type ChangeStatusTicketInput = z.infer<typeof ChangeStatusTicketInputSchema>;
-
-export type TicketChangeStatusInput = ChangeStatusTicketInput;
 
 export const UpdateDetailsTicketInputSchema = z.object({
   id: z.string().uuid().optional(),
@@ -206,19 +198,11 @@ export const UpdateDetailsTicketInputSchema = z.object({
 
 export const TicketUpdateDetailsInputSchema = UpdateDetailsTicketInputSchema;
 
-export type UpdateDetailsTicketInput = z.infer<typeof UpdateDetailsTicketInputSchema>;
-
-export type TicketUpdateDetailsInput = UpdateDetailsTicketInput;
-
 export const CloseTicketInputSchema = z.object({
   id: z.string().uuid(),
 });
 
 export const TicketCloseInputSchema = CloseTicketInputSchema;
-
-export type CloseTicketInput = z.infer<typeof CloseTicketInputSchema>;
-
-export type TicketCloseInput = CloseTicketInput;
 
 
 export const RepresentativeSchema = z.object({
@@ -235,10 +219,6 @@ export const CreateRepresentativeInputSchema = z.object({
 });
 
 export const RepresentativeCreateInputSchema = CreateRepresentativeInputSchema;
-
-export type CreateRepresentativeInput = z.infer<typeof CreateRepresentativeInputSchema>;
-
-export type RepresentativeCreateInput = CreateRepresentativeInput;
 
 
 // --- Section 4: Isomorphic Client SDK & Transport ---

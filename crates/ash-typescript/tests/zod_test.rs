@@ -57,8 +57,4 @@ fn test_zod_schema_generation() {
     assert!(zod.contains("status: z.enum([\"open\", \"in_progress\", \"closed\"])"));
     assert!(zod.contains("priority: z.number().int().min(1).max(5)"));
     assert!(zod.contains("author_id: z.string().uuid().nullable().optional()"));
-
-    // Type inference export
-    assert!(zod.contains("export type OpenTicketInput = z.infer<typeof OpenTicketInputSchema>;"));
-    assert!(zod.contains("export type TicketOpenInput = OpenTicketInput;"));
 }
