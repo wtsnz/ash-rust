@@ -42,8 +42,6 @@ pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Opti
     let action_pascal = to_pascal_case(action.name);
     let schema_name = format!("{action_pascal}{}InputSchema", res.name);
     let alias_schema_name = format!("{}{action_pascal}InputSchema", res.name);
-    let type_name = format!("{action_pascal}{}Input", res.name);
-    let alias_type_name = format!("{}{action_pascal}Input", res.name);
 
     let mut out = String::new();
     out.push_str(&format!("export const {schema_name} = z.object({{\n"));
@@ -73,10 +71,6 @@ pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Opti
     out.push_str("});\n\n");
     if schema_name != alias_schema_name {
         out.push_str(&format!("export const {alias_schema_name} = {schema_name};\n\n"));
-    }
-    out.push_str(&format!("export type {type_name} = z.infer<typeof {schema_name}>;\n\n"));
-    if type_name != alias_type_name {
-        out.push_str(&format!("export type {alias_type_name} = {type_name};\n\n"));
     }
     Some(out)
 }

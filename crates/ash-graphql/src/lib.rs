@@ -45,6 +45,11 @@ impl AshGraphQL {
         AshGraphQLBuilder::from_domain(domain)
     }
 
+    /// Creates a schema builder from an Ash [`DomainDef`](ash_core::DomainDef).
+    pub fn from_domain(domain: &'static ash_core::DomainDef) -> AshGraphQLBuilder {
+        AshGraphQLBuilder::from_domain(domain)
+    }
+
     /// Creates a schema builder from a slice of [`ResourceDef`](ash_core::ResourceDef)s.
     pub fn from_resources(resources: &[&'static ash_core::ResourceDef]) -> AshGraphQLBuilder {
         AshGraphQLBuilder::from_resources(resources)

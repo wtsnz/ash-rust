@@ -1,5 +1,5 @@
 use std::process::Command;
-use astro_helpdesk::{build_app, emit_typescript_sdk};
+use astro_helpdesk::{build_app, emit_typescript_sdk, TicketActions};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -173,8 +173,8 @@ async fn test_fullstack_helpdesk_server_crud() {
 
 #[test]
 fn test_typescript_codegen_and_tsc_typecheck() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let sdk_path = temp_dir.path().join("ash.ts");
+    let frontend_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend");
+    let sdk_path = frontend_dir.join("src/lib/ash.ts");
     emit_typescript_sdk(&sdk_path).expect("Failed to emit TypeScript SDK");
     assert!(sdk_path.exists());
 
@@ -184,16 +184,18 @@ fn test_typescript_codegen_and_tsc_typecheck() {
     assert!(content.contains("export const OpenTicketInputSchema = z.object({"));
     assert!(content.contains("export class TicketClient {"));
 
-    // Check with tsc if available
-    if let Ok(output) = Command::new("tsc")
-        .arg("--noEmit")
-        .arg("--target")
-        .arg("ES2022")
-        .arg("--moduleResolution")
-        .arg("node")
-        .arg("--skipLibCheck")
-        .arg(&sdk_path)
-        .output()
+    // Check with tsc inside frontend (where zod is installed in node_modules)
+    if frontend_dir.join("node_modules").exists()
+        && let Ok(output) = Command::new("tsc")
+            .current_dir(&frontend_dir)
+            .arg("--noEmit")
+            .arg("--target")
+            .arg("ES2022")
+            .arg("--moduleResolution")
+            .arg("node")
+            .arg("--skipLibCheck")
+            .arg("src/lib/ash.ts")
+            .output()
     {
         assert!(
             output.status.success(),
@@ -202,4 +204,67 @@ fn test_typescript_codegen_and_tsc_typecheck() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[tokio::test]
+async fn test_rust_resource_and_context_dsl() {
+    let mem = ash_memory::Memory::new();
+    let ctx = ash_core::Context::new(mem);
+
+    // 1. Create representative using Action builder DSL
+    let rep = astro_helpdesk::Representative::create(&ctx)
+        .name("Alex Mercer")
+        .email("alex@support.ash")
+        .role("Escalations Lead")
+        .await
+        .expect("Failed to create representative via Action DSL");
+
+    assert_eq!(rep.name, "Alex Mercer");
+
+    // 2. Open ticket using Action builder DSL
+    let ticket = astro_helpdesk::Ticket::open(&ctx)
+        .title("Flaky websocket disconnects in EU cluster")
+        .description("Heartbeat latency spikes over 5000ms.")
+        .status("OPEN")
+        .priority(2i64)
+        .author_id(rep.id)
+        .await
+        .expect("Failed to open ticket via Action DSL");
+
+    assert_eq!(ticket.title, "Flaky websocket disconnects in EU cluster");
+    assert_eq!(ticket.status, "OPEN");
+    assert_eq!(ticket.priority, 2);
+    assert_eq!(ticket.author_id, Some(rep.id));
+
+    // 3. Query tickets using fluent Query DSL
+    let tickets = astro_helpdesk::Ticket::query(&ctx)
+        .filter(astro_helpdesk::Ticket::priority.lte(2))
+        .all()
+        .await
+        .expect("Failed to query tickets via Query DSL");
+
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0].id, ticket.id);
+
+    // 4. Update ticket status using Instance Action DSL
+    let updated = ticket
+        .change_status(&ctx)
+        .status("IN_PROGRESS")
+        .await
+        .expect("Failed to update status via Action DSL");
+
+    assert_eq!(updated.status, "IN_PROGRESS");
+
+    // 5. Close/Destroy ticket using Instance Action DSL
+    updated
+        .close(&ctx)
+        .await
+        .expect("Failed to close ticket via Action DSL");
+
+    let remaining = astro_helpdesk::Ticket::query(&ctx)
+        .all()
+        .await
+        .expect("Failed to query tickets");
+
+    assert_eq!(remaining.len(), 0);
 }

@@ -104,20 +104,75 @@ Open [http://localhost:4321](http://localhost:4321) in your browser.
 
 ## 💡 Code Walkthrough
 
-### 1. Ash Rust Domain Definition (`server/src/lib.rs`)
+### 1. Ash Rust Declarative Resources & Domain (`server/src/ticket.rs` & `server/src/lib.rs`)
 
 ```rust
-static TICKET_ACTIONS: &[ActionDef] = &[
-    ActionDef::read("read").primary(),
-    ActionDef::create("open")
-        .primary()
-        .accept(&["title", "description", "status", "priority", "author_id"])
-        .validations(TICKET_VALIDATIONS),
-    ActionDef::update("change_status")
-        .primary()
-        .accept(&["status"]),
-    ActionDef::destroy("close").primary(),
-];
+// 1. Declarative Resource with typed actions and validations
+resource! {
+    resource Ticket;
+    table "tickets";
+
+    attributes {
+        id: Uuid [pk],
+        title: String,
+        description: Option<String>,
+        status: String [atom: "OPEN,IN_PROGRESS,RESOLVED,CLOSED"],
+        priority: i64,
+        author_id: Option<Uuid>,
+    }
+
+    relationships {
+        belongs_to author: Option<Representative> [fk: "author_id"],
+    }
+
+    actions {
+        create open {
+            primary
+            accept [title, description, status, priority, author_id]
+            validate present(title);
+            validate string_length(title, min = 5, max = 100);
+            validate one_of(status, ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]);
+            validate numericality(priority, min = 1, max = 5);
+        }
+
+        update change_status {
+            primary
+            accept [status]
+            validate one_of(status, ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]);
+        }
+
+        destroy close {
+            primary
+        }
+
+        read read {
+            primary
+        }
+    }
+}
+
+// 2. Declarative Domain
+domain! {
+    domain Helpdesk;
+    resources {
+        Ticket,
+        Representative,
+    }
+}
+
+// 3. Ergonomic Action invocation with Context DSL
+let rep = Representative::create(&ctx)
+    .name("Sarah Chen")
+    .email("sarah.chen@support.ash")
+    .role("Support Lead")
+    .await?;
+
+let ticket = Ticket::open(&ctx)
+    .title("Postgres connection pool exhaustion")
+    .status("IN_PROGRESS")
+    .priority(1)
+    .author_id(rep.id)
+    .await?;
 ```
 
 ### 2. Auto-Generated TypeScript SDK (`frontend/src/lib/ash.ts`)
