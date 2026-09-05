@@ -199,6 +199,12 @@ impl TypeScriptGenerator {
                     "  {}, {}Include, {}FilterInput, {}SortInput, {}SortField,\n",
                     res.name, res.name, res.name, res.name, res.name
                 ));
+                for action in res.actions {
+                    if action.kind != ash_core::ActionKind::Read {
+                        let action_pascal = crate::types::to_pascal_case(action.name);
+                        c.push_str(&format!("  {action_pascal}{}Input,\n", res.name));
+                    }
+                }
             }
             c.push_str("} from \"./types\";\n\n");
 

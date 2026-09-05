@@ -18,15 +18,32 @@ pub struct MutationPayload {
 }
 
 pub fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
+    let mut result = String::new();
+    let mut capitalize_next = true;
+    for ch in s.chars() {
+        if ch == '_' || ch == '-' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+pub fn to_camel_case(s: &str) -> String {
+    let pascal = capitalize_first(s);
+    let mut chars = pascal.chars();
     match chars.next() {
         None => String::new(),
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
     }
 }
 
 pub fn mutation_name(action_name: &str, resource_name: &str) -> String {
-    format!("{}{}", action_name, resource_name)
+    format!("{}{}", to_camel_case(action_name), resource_name)
 }
 
 pub fn mutation_input_name(action_name: &str, resource_name: &str) -> String {

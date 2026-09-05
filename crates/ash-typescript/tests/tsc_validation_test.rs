@@ -104,11 +104,12 @@ fn test_typescript_syntax_validity_with_tsc() {
         .arg(&file_path)
         .output()
     {
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            panic!("tsc validation failed!\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
-        }
+        assert!(
+            output.status.success(),
+            "tsc validation failed!\nSTDOUT:\n{}\nSTDERR:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let _ = fs::remove_dir_all(&temp_dir);

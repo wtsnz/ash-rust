@@ -106,7 +106,8 @@ fn test_consolidated_code_generation() {
     assert!(ts.contains("export interface User {"));
 
     // Check Zod validation schemas
-    assert!(ts.contains("export const TicketOpenInputSchema = z.object({"));
+    assert!(ts.contains("export const OpenTicketInputSchema = z.object({"));
+    assert!(ts.contains("export const TicketOpenInputSchema = OpenTicketInputSchema;"));
     assert!(ts.contains("export const TicketSchema = z.object({"));
     assert!(ts.contains("export const UserSchema = z.object({"));
 
@@ -128,8 +129,8 @@ fn test_consolidated_code_generation() {
     // Check Resource Client
     assert!(ts.contains("export class TicketClient {"));
     assert!(ts.contains("public async get(id: string, include?: TicketInclude): Promise<Ticket | null> {"));
-    assert!(ts.contains("public async open(input: TicketOpenInput, include?: TicketInclude): Promise<Ticket> {"));
-    assert!(ts.contains("public async close(id: string, input: TicketCloseInput, include?: TicketInclude): Promise<Ticket> {"));
+    assert!(ts.contains("public async open(input: OpenTicketInput, include?: TicketInclude): Promise<Ticket> {"));
+    assert!(ts.contains("public async close(id: string, input: CloseTicketInput, include?: TicketInclude): Promise<Ticket> {"));
     assert!(ts.contains("public async destroy(id: string): Promise<boolean> {"));
 
     // Check Domain & Root Client

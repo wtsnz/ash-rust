@@ -1,0 +1,31 @@
+[package]
+name = "astro-helpdesk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Full-stack Astro + ash-rust helpdesk CRUD application"
+
+[lib]
+path = "server/src/lib.rs"
+
+[[bin]]
+name = "astro-helpdesk-server"
+path = "server/src/main.rs"
+
+[dependencies]
+ash-core = { path = "../../crates/ash-core" }
+ash-graphql = { path = "../../crates/ash-graphql", features = ["axum"] }
+ash-memory = { path = "../../crates/ash-memory" }
+ash-pubsub = { path = "../../crates/ash-pubsub" }
+ash-typescript = { path = "../../crates/ash-typescript" }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[dev-dependencies]
+http-body-util = "0.1"
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }

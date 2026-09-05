@@ -248,8 +248,11 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
 
             // 1. Parse filter
             let user_filter = if let Some(filter_arg) = ctx.args.get("filter") {
-                let obj = filter_arg.object()?;
-                Some(parse_resource_filter(resource, &obj)?)
+                if let Ok(obj) = filter_arg.object() {
+                    Some(parse_resource_filter(resource, &obj)?)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -267,8 +270,11 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
 
             // 3. Parse sort
             let mut sort = if let Some(sort_arg) = ctx.args.get("sort") {
-                let list = sort_arg.list()?;
-                parse_resource_sort(resource, &list)?
+                if let Ok(list) = sort_arg.list() {
+                    parse_resource_sort(resource, &list)?
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             };

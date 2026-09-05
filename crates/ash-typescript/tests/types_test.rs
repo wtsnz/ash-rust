@@ -73,7 +73,8 @@ fn test_resource_interface_generation() {
 #[test]
 fn test_action_input_interface() {
     let ts = generate_action_input_interface(&TICKET_DEF, "open").unwrap();
-    assert!(ts.contains("export interface TicketOpenInput {"));
+    assert!(ts.contains("export interface OpenTicketInput {"));
+    assert!(ts.contains("export type TicketOpenInput = OpenTicketInput;"));
     assert!(ts.contains("  title: string;"));
     assert!(ts.contains("  status: \"open\" | \"in_progress\" | \"closed\";"));
     assert!(ts.contains("  priority: number;"));

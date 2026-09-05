@@ -288,6 +288,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "astro-helpdesk"
+version = "0.1.0"
+dependencies = [
+ "ash-core",
+ "ash-graphql",
+ "ash-memory",
+ "ash-pubsub",
+ "ash-typescript",
+ "axum",
+ "http-body-util",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "async-graphql"
 version = "7.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

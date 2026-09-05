@@ -19,7 +19,9 @@ pub fn register_resource_sort_inputs(
     // 1. SortOrderEnum
     let order_enum = Enum::new("SortOrderEnum")
         .item(EnumItem::new("ASC"))
-        .item(EnumItem::new("DESC"));
+        .item(EnumItem::new("DESC"))
+        .item(EnumItem::new("asc"))
+        .item(EnumItem::new("desc"));
     builder = builder.register(order_enum);
 
     // 2. <Resource>SortFieldEnum
@@ -27,6 +29,9 @@ pub fn register_resource_sort_inputs(
     let mut field_enum = Enum::new(field_enum_name.clone());
     for attr in resource.attributes {
         field_enum = field_enum.item(EnumItem::new(attr.name.to_uppercase()));
+        if attr.name != attr.name.to_uppercase() {
+            field_enum = field_enum.item(EnumItem::new(attr.name));
+        }
     }
     builder = builder.register(field_enum);
 
