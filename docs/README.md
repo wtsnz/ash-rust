@@ -57,6 +57,13 @@
    - `EmailNotifier`: Declarative email delivery on committed resource actions
    - `AuthMailerSender`: Abstract bridge to `ash-authentication` for password resets, confirmations, and magic links
 
+9. **[TypeScript SDK & Client Generation (`ash-typescript`)](../crates/ash-typescript/README.md)**
+   - End-to-end type safety from Rust resources to TypeScript interfaces
+   - Automatic Zod validation schema generation for React Hook Form / TanStack Form
+   - Isomorphic zero-dependency `fetch` client runtime
+   - SSR patterns (Next.js Server Components & Server Actions) vs SPA patterns (React Query v5 `queryOptions`)
+   - CLI integration: `cargo ash codegen ts`
+
 
 ---
 

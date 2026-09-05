@@ -40,6 +40,7 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 | **`ash-postgres`** | `crates/ash-postgres` | High-performance PostgreSQL data layer with `RETURNING *` writes, error code mapping, and multitenancy. |
 | **`ash-authentication`** | `crates/ash-authentication` | Declarative authentication engine: Argon2id password hashing, database-backed tokens, refresh token rotation, API keys, and Axum HTTP integration. |
 | **`ash-mailer`** | `crates/ash-mailer` | Transactional email delivery and notifier engine with pluggable adapters (Memory, Console) and authentication sender bridge. |
+| **`ash-typescript`** | `crates/ash-typescript` | End-to-end type-safe TypeScript definitions, Zod validation schemas, and isomorphic client SDK generator. |
 | **`cargo-ash`** | `crates/cargo-ash` | Developer CLI tool for declarative migrations, snapshot dumping, and database management. |
 
 ### Examples

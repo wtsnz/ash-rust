@@ -15,6 +15,7 @@ ash-core = { path = "../ash-core" }
 ash-sql = { path = "../ash-sql", features = ["sqlite", "postgres"] }
 ash-sqlite = { path = "../ash-sqlite" }
 ash-postgres = { path = "../ash-postgres" }
+ash-typescript = { path = "../ash-typescript" }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
