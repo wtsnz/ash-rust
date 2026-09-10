@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 
-use crate::define::ast::{ChangeSpec, ResourceDefinition, ValidationSpec};
+use crate::define::ast::{ChangeSpec, PreparationSpec, ResourceDefinition, ValidationSpec};
 
 pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
     let resource = &def.resource;
@@ -9,30 +9,33 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
     let mut action_probes = Vec::new();
 
     for action in &def.actions {
+        if action.kind == crate::define::ast::ActionKind::Generic {
+            continue;
+        }
+
         let mut field_probes = Vec::new();
 
-        // 1. Action arguments declared as local variables in probe scope
+        // 1. Action arguments declared as local variables in probe scope.
+        // Using `loop {}` allows type coercion from `!` without calling unwrap/panic.
         for arg in &action.arguments {
             let arg_name = &arg.name;
             let arg_ty = &arg.ty;
             field_probes.push(quote_spanned! { arg_name.span() =>
-                let #arg_name: &#arg_ty = ::std::option::Option::None.unwrap();
+                let #arg_name: &#arg_ty = loop {};
                 let _ = &#arg_name;
             });
         }
 
-        // 2. Bracketed accept fields reference struct fields on __record
+        // 2. Accept fields (inferred bracket-form or explicit brace-form) reference struct fields
         for acc in &action.accept {
-            if acc.inferred {
-                let name = &acc.name;
-                field_probes.push(quote_spanned! { name.span() =>
-                    let _ = &__record.#name;
-                });
-            }
+            let name = &acc.name;
+            field_probes.push(quote_spanned! { name.span() =>
+                let _ = &__ash_record.#name;
+            });
         }
 
-        // 3. Validation fields: if they match an attribute on the struct, probe &__record.#field
-        // If they match an action argument, probe that local!
+        // 3. Validation fields: if they match an attribute on the struct, probe &__ash_record.#field.
+        // If they match an action argument, probe that local variable.
         for val in &action.validations {
             match val {
                 ValidationSpec::Present { field }
@@ -46,7 +49,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         });
                     } else {
                         field_probes.push(quote_spanned! { field.span() =>
-                            let _ = &__record.#field;
+                            let _ = &__ash_record.#field;
                         });
                     }
                 }
@@ -61,18 +64,32 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 | ChangeSpec::SetNew { field, .. }
                 | ChangeSpec::RelateActor { field } => {
                     field_probes.push(quote_spanned! { field.span() =>
-                        let _ = &__record.#field;
+                        let _ = &__ash_record.#field;
                     });
                 }
                 ChangeSpec::SetFromArg { field, argument } => {
                     field_probes.push(quote_spanned! { field.span() =>
-                        let _ = &__record.#field;
+                        let _ = &__ash_record.#field;
                     });
                     field_probes.push(quote_spanned! { argument.span() =>
                         let _ = &#argument;
                     });
                 }
+                ChangeSpec::ManageRelationship { relationship, .. } => {
+                    field_probes.push(quote_spanned! { relationship.span() =>
+                        let _ = &__ash_record.#relationship;
+                    });
+                }
                 _ => {}
+            }
+        }
+
+        // 5. Preparation fields (sort)
+        for prep in &action.preparations {
+            if let PreparationSpec::Sort { field, .. } = prep {
+                field_probes.push(quote_spanned! { field.span() =>
+                    let _ = &__ash_record.#field;
+                });
             }
         }
 
@@ -86,8 +103,15 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
     quote! {
         #[doc(hidden)]
         const _: () = {
-            #[allow(dead_code, unused_variables, non_snake_case, unreachable_code)]
-            fn __ash_ide_typecheck(__record: &#resource) {
+            #[allow(
+                dead_code,
+                unused_variables,
+                non_snake_case,
+                unreachable_code,
+                clippy::all,
+                clippy::pedantic
+            )]
+            fn __ash_ide_typecheck(__ash_record: &#resource) {
                 if false {
                     #(#action_probes)*
                 }

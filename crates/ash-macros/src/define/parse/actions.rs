@@ -573,13 +573,13 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 }
             }
 
-            if let (Some(min_v), Some(max_v)) = (min, max) {
-                if min_v > max_v {
-                    return Err(Error::new_spanned(
-                        &field,
-                        format!("invalid string_length for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
-                    ));
-                }
+            if let (Some(min_v), Some(max_v)) = (min, max)
+                && min_v > max_v
+            {
+                return Err(Error::new_spanned(
+                    &field,
+                    format!("invalid string_length for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
+                ));
             }
 
             Ok(ValidationSpec::StringLength { field, min, max })
@@ -663,13 +663,13 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 }
             }
 
-            if let (Some(min_v), Some(max_v)) = (min, max) {
-                if min_v > max_v {
-                    return Err(Error::new_spanned(
-                        &field,
-                        format!("invalid numericality for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
-                    ));
-                }
+            if let (Some(min_v), Some(max_v)) = (min, max)
+                && min_v > max_v
+            {
+                return Err(Error::new_spanned(
+                    &field,
+                    format!("invalid numericality for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
+                ));
             }
 
             Ok(ValidationSpec::Numericality { field, min, max })

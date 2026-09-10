@@ -1,7 +1,7 @@
 use syn::ext::IdentExt;
 use syn::parse::ParseStream;
 use syn::punctuated::Punctuated;
-use syn::{Error, Expr, Ident, Result, Token, Type};
+use syn::{Expr, Ident, Result, Token, Type};
 
 use crate::define::ast::{AttributeSpec, TimestampsSpec};
 
@@ -99,9 +99,20 @@ pub fn parse_attributes(
                         .collect();
                     atom = Some(list);
                 } else {
-                    return Err(Error::new_spanned(
-                        flag_ident,
-                        "expected `pk`, `version`, `generated`, `default`, `default_fn`, `atom`, or `enum`",
+                    const ATTR_OPTIONS: &[&str] = &[
+                        "pk",
+                        "version",
+                        "generated",
+                        "default",
+                        "default_fn",
+                        "atom",
+                        "enum",
+                        "ash_enum",
+                    ];
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &flag_ident,
+                        ATTR_OPTIONS,
+                        "attribute option",
                     ));
                 }
                 if flags_content.peek(Token![,]) {

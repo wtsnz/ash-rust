@@ -14,10 +14,12 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
             "has_many" => RelType::HasMany,
             "has_one" => RelType::HasOne,
             "many_to_many" => RelType::ManyToMany,
-            other => {
-                return Err(Error::new_spanned(
-                    kind_ident,
-                    format!("unknown relationship `{other}`, expected `belongs_to`, `has_many`, `has_one`, or `many_to_many`"),
+            _ => {
+                const REL_KINDS: &[&str] = &["belongs_to", "has_many", "has_one", "many_to_many"];
+                return Err(crate::ast_helpers::unknown_ident_error(
+                    &kind_ident,
+                    REL_KINDS,
+                    "relationship kind",
                 ));
             }
         };
@@ -100,10 +102,20 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
                             }
                         };
                     }
-                    other => {
-                        return Err(Error::new_spanned(
-                            flag_ident,
-                            format!("unknown relationship option `{other}`, expected `fk`, `through`, `source_fk`, `dest_fk`, or `on_delete`"),
+                    _ => {
+                        const REL_OPTIONS: &[&str] = &[
+                            "fk",
+                            "through",
+                            "source_fk",
+                            "source_attribute_on_join_resource",
+                            "dest_fk",
+                            "destination_attribute_on_join_resource",
+                            "on_delete",
+                        ];
+                        return Err(crate::ast_helpers::unknown_ident_error(
+                            &flag_ident,
+                            REL_OPTIONS,
+                            "relationship option",
                         ));
                     }
                 }

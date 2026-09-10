@@ -44,7 +44,10 @@ resource! {
 async fn test_action_target_conversions() {
     let id = Uuid::new_v4();
     let target_from_id: ActionTarget<Ticket> = id.into();
-    assert_eq!(target_from_id.id(), Some(id));
+    assert_eq!(target_from_id.id(), id);
+
+    let target_from_ref_id: ActionTarget<Ticket> = (&id).into();
+    assert_eq!(target_from_ref_id.id(), id);
 
     let ticket = Ticket {
         id,
@@ -55,9 +58,16 @@ async fn test_action_target_conversions() {
 
     let target_from_ref: ActionTarget<Ticket> = (&ticket).into();
     assert_eq!(target_from_ref, ActionTarget::Record(ticket.clone()));
+    assert_eq!(target_from_ref.id(), id);
+
+    let mut ticket_mut = ticket.clone();
+    let target_from_mut_ref: ActionTarget<Ticket> = (&mut ticket_mut).into();
+    assert_eq!(target_from_mut_ref, ActionTarget::Record(ticket.clone()));
+    assert_eq!(target_from_mut_ref.id(), id);
 
     let target_from_owned: ActionTarget<Ticket> = ticket.clone().into();
     assert_eq!(target_from_owned, ActionTarget::Record(ticket));
+    assert_eq!(target_from_owned.id(), id);
 }
 
 #[tokio::test]
