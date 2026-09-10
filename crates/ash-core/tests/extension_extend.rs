@@ -68,10 +68,7 @@ resource! {
     actions {
         create create {
             primary;
-            accept {
-                title: String,
-                price: i64,
-            }
+            accept [title, price];
         }
 
         read read {

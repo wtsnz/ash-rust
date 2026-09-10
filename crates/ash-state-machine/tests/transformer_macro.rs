@@ -50,9 +50,7 @@ resource! {
     actions {
         create create {
             primary;
-            accept {
-                amount: i64,
-            }
+            accept [amount];
         }
 
         read read {
@@ -172,7 +170,7 @@ mod ticket_module {
         state_machine {
             state_attribute status;
             initial: "open";
-            // `resolve` has explicit action with accept { resolution_note: Option<String> }
+            // `resolve` has an explicit action with `accept [resolution_note]`
             transition resolve, from: ["open"], to: "resolved";
             // `close` is NOT declared in actions below - it will be auto-synthesized by the transformer!
             transition close, from: ["open", "resolved"], to: "closed";
@@ -181,9 +179,7 @@ mod ticket_module {
         actions {
             create create {
                 primary;
-                accept {
-                    title: String,
-                }
+                accept [title];
             }
 
             read read {
@@ -191,9 +187,7 @@ mod ticket_module {
             }
 
             update resolve {
-                accept {
-                    resolution_note: Option<String>,
-                }
+                accept [resolution_note];
             }
         }
     }

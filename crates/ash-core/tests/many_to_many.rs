@@ -18,9 +18,7 @@ pub mod tag {
         actions {
             create create {
                 primary;
-                accept {
-                    name: String,
-                }
+                accept [name];
             }
 
             read read {
@@ -46,10 +44,7 @@ pub mod post_tag {
         actions {
             create create {
                 primary;
-                accept {
-                    post_id: Uuid,
-                    tag_id: Uuid,
-                }
+                accept [post_id, tag_id];
             }
 
             read read {
@@ -74,7 +69,7 @@ pub mod post {
         }
 
         relationships {
-            many_to_many tags: Vec<Tag> [through: PostTag, source_fk: "post_id", dest_fk: "tag_id"];
+            many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
         }
 
         aggregates {
@@ -85,9 +80,7 @@ pub mod post {
         actions {
             create create {
                 primary;
-                accept {
-                    title: String,
-                }
+                accept [title];
             }
 
             read read {

@@ -66,7 +66,7 @@ pub mod tenant_models {
                 primary;
             }
 
-            action process_document, String {
+            generic process_document, String {
                 argument extra_tag: String;
 
                 run |input| async move {

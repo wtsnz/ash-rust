@@ -16,12 +16,7 @@ resource! {
 
     actions {
         create create {
-            accept {
-                name: String,
-                category: String,
-                price: i64,
-                status: String,
-            }
+            accept [name, category, price, status];
             validate present(name);
             validate string_length(name, min = 3, max = 20);
             validate one_of(category, ["electronics", "books", "clothing"]);

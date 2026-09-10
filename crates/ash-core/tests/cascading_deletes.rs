@@ -19,7 +19,7 @@ pub mod author_mod {
         }
 
         relationships {
-            has_many posts: post_mod::Post [fk: "author_id", on_delete: cascade],
+            has_many posts: post_mod::Post [fk: author_id, on_delete: cascade],
         }
 
         actions {
@@ -53,8 +53,8 @@ pub mod post_mod {
         }
 
         relationships {
-            belongs_to author: author_mod::Author [fk: "author_id"],
-            has_many comments: comment_mod::Comment [fk: "post_id", on_delete: cascade],
+            belongs_to author: author_mod::Author [fk: author_id],
+            has_many comments: comment_mod::Comment [fk: post_id, on_delete: cascade],
         }
 
         actions {
@@ -88,7 +88,7 @@ pub mod comment_mod {
         }
 
         relationships {
-            belongs_to post: post_mod::Post [fk: "post_id"],
+            belongs_to post: post_mod::Post [fk: post_id],
         }
 
         actions {
@@ -121,7 +121,7 @@ pub mod dept_mod {
         }
 
         relationships {
-            has_many employees: emp_mod::Employee [fk: "dept_id", on_delete: restrict],
+            has_many employees: emp_mod::Employee [fk: dept_id, on_delete: restrict],
         }
 
         actions {
@@ -155,7 +155,7 @@ pub mod emp_mod {
         }
 
         relationships {
-            belongs_to department: dept_mod::Department [fk: "dept_id"],
+            belongs_to department: dept_mod::Department [fk: dept_id],
         }
 
         actions {
@@ -188,7 +188,7 @@ pub mod team_mod {
         }
 
         relationships {
-            has_many players: player_mod::Player [fk: "team_id", on_delete: nilify],
+            has_many players: player_mod::Player [fk: team_id, on_delete: nilify],
         }
 
         actions {
@@ -222,7 +222,7 @@ pub mod player_mod {
         }
 
         relationships {
-            belongs_to team: team_mod::Team [fk: "team_id"],
+            belongs_to team: team_mod::Team [fk: team_id],
         }
 
         actions {
@@ -318,8 +318,8 @@ pub mod article_mod {
         relationships {
             many_to_many tags: Tag [
                 through: ArticleTag,
-                source_fk: "article_id",
-                dest_fk: "tag_id",
+                source_fk: article_id,
+                dest_fk: tag_id,
                 on_delete: cascade,
             ],
         }

@@ -13,7 +13,7 @@ resource! {
     }
 
     relationships {
-        has_many tickets: Vec<Ticket> [fk: "representative_id"],
+        has_many tickets: Ticket [fk: representative_id],
     }
 
     aggregates {
@@ -25,9 +25,7 @@ resource! {
 
     actions {
         create create {
-            accept {
-                name: String,
-            }
+            accept [name];
             validate present(name);
             validate string_length(name, min = 2);
         }

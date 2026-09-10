@@ -16,8 +16,8 @@ resource! {
     }
 
     relationships {
-        has_many lists: Vec<List> [fk: "board_id"],
-        has_many cards: Vec<Card> [fk: "board_id"],
+        has_many lists: List [fk: board_id],
+        has_many cards: Card [fk: board_id],
     }
 
     aggregates {
@@ -28,11 +28,7 @@ resource! {
 
     actions {
         create create {
-            accept {
-                workspace_id: Uuid,
-                name: String,
-                description: Option<String>,
-            }
+            accept [workspace_id, name, description];
             validate present(name);
             change set(archived = false);
         }
@@ -42,10 +38,7 @@ resource! {
         }
 
         update update_details {
-            accept {
-                name: String,
-                description: Option<String>,
-            }
+            accept [name, description];
         }
 
         update archive {

@@ -20,7 +20,7 @@ pub mod line_item_mod {
         }
 
         relationships {
-            belongs_to order: order_mod::Order [fk: "order_id"],
+            belongs_to order: order_mod::Order [fk: order_id],
         }
 
         actions {
@@ -60,7 +60,7 @@ pub mod order_mod {
         }
 
         relationships {
-            has_many items: line_item_mod::LineItem [fk: "order_id"],
+            has_many items: line_item_mod::LineItem [fk: order_id],
         }
 
         actions {
@@ -105,7 +105,7 @@ pub mod player_mod {
         }
 
         relationships {
-            belongs_to team: team_mod::Team [fk: "team_id"],
+            belongs_to team: team_mod::Team [fk: team_id],
         }
 
         actions {
@@ -143,7 +143,7 @@ pub mod team_mod {
         }
 
         relationships {
-            has_many players: player_mod::Player [fk: "team_id", on_delete: nilify],
+            has_many players: player_mod::Player [fk: team_id, on_delete: nilify],
         }
 
         actions {
@@ -212,7 +212,7 @@ pub mod user_mod {
         }
 
         relationships {
-            belongs_to profile: profile_mod::Profile [fk: "profile_id"],
+            belongs_to profile: profile_mod::Profile [fk: profile_id],
         }
 
         actions {
@@ -305,8 +305,8 @@ pub mod article_mod {
         relationships {
             many_to_many tags: Tag [
                 through: ArticleTag,
-                source_fk: "article_id",
-                dest_fk: "tag_id",
+                source_fk: article_id,
+                dest_fk: tag_id,
             ],
         }
 

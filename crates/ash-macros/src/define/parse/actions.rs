@@ -1,4 +1,5 @@
 use syn::parse::ParseStream;
+use syn::parse::discouraged::Speculative;
 use syn::punctuated::Punctuated;
 use syn::{Error, Expr, Ident, Result, Token, Type};
 
@@ -16,222 +17,239 @@ macro_rules! parse_braced {
     };
 }
 
-pub fn parse_actions(
-    input: ParseStream,
-    warnings: &mut Vec<proc_macro2::TokenStream>,
-) -> Result<Vec<ActionSpec>> {
+pub fn parse_actions(input: ParseStream, errors: &mut Vec<Error>) -> Vec<ActionSpec> {
     let mut actions = Vec::new();
 
     while !input.is_empty() {
-        let outer_attrs = input.call(syn::Attribute::parse_outer)?;
-        let kind_ident: Ident = input.parse()?;
-        const ACTION_KINDS: &[&str] = &["create", "read", "update", "destroy", "generic", "action"];
-        let kind = match kind_ident.to_string().as_str() {
-            "create" => ActionKind::Create,
-            "read" => ActionKind::Read,
-            "update" => ActionKind::Update,
-            "destroy" => ActionKind::Destroy,
-            "generic" | "action" => ActionKind::Generic,
-            _ => {
-                return Err(crate::ast_helpers::unknown_ident_error(
-                    &kind_ident,
-                    ACTION_KINDS,
-                    "action kind",
-                ));
-            }
-        };
-
-        let name: Ident = input.parse()?;
-        let mut returns = None;
-        if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
-            let ret_ty: Type = input.parse()?;
-            returns = Some(ret_ty);
+        if input.peek(Token![;]) || input.peek(Token![,]) {
+            let _ = input.parse::<proc_macro2::TokenTree>();
+            continue;
         }
+        let fork = input.fork();
+        match parse_one_action(&fork, errors) {
+            Ok(act) => {
+                input.advance_to(&fork);
+                actions.push(act);
+            }
+            Err(e) => {
+                errors.push(e);
+                input.advance_to(&fork);
+                if !super::recover::at_action_kind(input) {
+                    super::recover::skip_action(input);
+                }
+            }
+        }
+    }
 
-        let mut primary = false;
-        let mut accept = Vec::new();
-        let mut arguments = Vec::new();
-        let mut changes = Vec::new();
-        let mut validations = Vec::new();
-        let mut preparations = Vec::new();
-        let mut persist_manual = false;
-        let mut run_expr = None;
+    actions
+}
 
-        if input.peek(Token![;]) {
-            let _: Token![;] = input.parse()?;
-        } else if input.peek(syn::token::Brace) {
-            parse_braced!(input, body);
-            while !body.is_empty() {
-                let item_attrs = body.call(syn::Attribute::parse_outer)?;
-                let item_ident: Ident = body.parse()?;
-                match item_ident.to_string().as_str() {
-                    "primary" => {
-                        primary = true;
-                        if body.peek(Token![:]) || body.peek(Token![=]) {
-                            let _ = body.parse::<proc_macro2::TokenTree>()?;
-                        }
-                        if body.peek(syn::LitBool) {
-                            let lit: syn::LitBool = body.parse()?;
-                            primary = lit.value;
-                        }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<ActionSpec> {
+    let outer_attrs = input.call(syn::Attribute::parse_outer)?;
+    let kind_ident: Ident = input.parse()?;
+    const ACTION_KINDS: &[&str] = &["create", "read", "update", "destroy", "generic"];
+    let kind = match kind_ident.to_string().as_str() {
+        "create" => ActionKind::Create,
+        "read" => ActionKind::Read,
+        "update" => ActionKind::Update,
+        "destroy" => ActionKind::Destroy,
+        "generic" => ActionKind::Generic,
+        "action" => {
+            errors.push(Error::new_spanned(
+                &kind_ident,
+                "use `generic`, not `action`",
+            ));
+            ActionKind::Generic
+        }
+        _ => {
+            return Err(crate::ast_helpers::unknown_ident_error(
+                &kind_ident,
+                ACTION_KINDS,
+                "action kind",
+            ));
+        }
+    };
+
+    let name: Ident = input.parse()?;
+    let mut returns = None;
+    if input.peek(Token![,]) {
+        let _: Token![,] = input.parse()?;
+        let ret_ty: Type = input.parse()?;
+        returns = Some(ret_ty);
+    }
+
+    let mut primary = false;
+    let mut accept = Vec::new();
+    let mut arguments = Vec::new();
+    let mut changes = Vec::new();
+    let mut validations = Vec::new();
+    let mut preparations = Vec::new();
+    let mut persist_manual = false;
+    let mut run_expr = None;
+
+    if input.peek(Token![;]) {
+        let _: Token![;] = input.parse()?;
+    } else if input.peek(syn::token::Brace) {
+        parse_braced!(input, body);
+        while !body.is_empty() {
+            let item_attrs = body.call(syn::Attribute::parse_outer)?;
+            let item_ident: Ident = body.parse()?;
+            match item_ident.to_string().as_str() {
+                "primary" => {
+                    primary = true;
+                    if body.peek(Token![:]) || body.peek(Token![=]) {
+                        let _ = body.parse::<proc_macro2::TokenTree>()?;
                     }
-                    "argument" => {
-                        let a_name: Ident = body.parse()?;
+                    if body.peek(syn::LitBool) {
+                        let lit: syn::LitBool = body.parse()?;
+                        primary = lit.value;
+                    }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "argument" => {
+                    let a_name: Ident = body.parse()?;
+                    let _: Token![:] = body.parse()?;
+                    let a_ty: Type = body.parse()?;
+                    let allow_nil = option_inner(&a_ty).is_some();
+                    arguments.push(ArgumentSpec {
+                        outer_attrs: item_attrs,
+                        name: a_name,
+                        ty: a_ty,
+                        allow_nil,
+                    });
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "arguments" => {
+                    errors.push(Error::new_spanned(
+                        &item_ident,
+                        "use `argument <name>: <type>;`, not `arguments { ... }`",
+                    ));
+                    if body.peek(Token![:]) {
                         let _: Token![:] = body.parse()?;
-                        let a_ty: Type = body.parse()?;
+                    }
+                    parse_braced!(body, args_input);
+                    while !args_input.is_empty() {
+                        let outer_attrs = args_input.call(syn::Attribute::parse_outer)?;
+                        let a_name: Ident = args_input.parse()?;
+                        let _: Token![:] = args_input.parse()?;
+                        let a_ty: Type = args_input.parse()?;
                         let allow_nil = option_inner(&a_ty).is_some();
                         arguments.push(ArgumentSpec {
-                            outer_attrs: item_attrs,
+                            outer_attrs,
                             name: a_name,
                             ty: a_ty,
                             allow_nil,
                         });
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
+                        if args_input.peek(Token![,]) {
+                            let _: Token![,] = args_input.parse()?;
                         }
                     }
-                    "arguments" => {
-                        warnings.push(crate::ast_helpers::make_deprecated_warning(
-                            item_ident.span(),
-                            "The 'arguments { ... }' syntax is deprecated; prefer 'argument <name>: <type>;'",
-                        ));
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
-                        parse_braced!(body, args_input);
-                        while !args_input.is_empty() {
-                            let outer_attrs = args_input.call(syn::Attribute::parse_outer)?;
-                            let a_name: Ident = args_input.parse()?;
-                            let _: Token![:] = args_input.parse()?;
-                            let a_ty: Type = args_input.parse()?;
-                            let allow_nil = option_inner(&a_ty).is_some();
-                            arguments.push(ArgumentSpec {
-                                outer_attrs,
-                                name: a_name,
-                                ty: a_ty,
-                                allow_nil,
-                            });
-                            if args_input.peek(Token![,]) {
-                                let _: Token![,] = args_input.parse()?;
-                            }
-                        }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
                     }
-                    "accept" => {
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
-                        if body.peek(syn::token::Bracket) {
-                            let items;
-                            let _ = syn::bracketed!(items in body);
-                            let list = Punctuated::<Ident, Token![,]>::parse_terminated(&items)?;
-                            for item in list {
-                                accept.push(FieldAccept {
-                                    name: item,
-                                    ty: syn::parse_quote!(::ash_core::Value),
-                                    inferred: true,
-                                });
-                            }
-                        } else if body.peek(syn::token::Brace) {
-                            parse_braced!(body, fields_input);
-                            while !fields_input.is_empty() {
-                                let f_name: Ident = fields_input.parse()?;
-                                let _: Token![:] = fields_input.parse()?;
-                                let f_ty: Type = fields_input.parse()?;
-                                if fields_input.peek(Token![,]) {
-                                    let _: Token![,] = fields_input.parse()?;
-                                }
-                                accept.push(FieldAccept {
-                                    name: f_name,
-                                    ty: f_ty,
-                                    inferred: false,
-                                });
-                            }
-                        }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+                }
+                "accept" => {
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
                     }
-                    "change" => {
-                        let expr: Expr = body.parse()?;
-                        changes.push(parse_change(&expr)?);
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
-                    }
-                    "before_action" => {
-                        let expr: Expr = body.parse()?;
-                        changes.push(ChangeSpec::BeforeAction(expr));
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
-                    }
-                    "after_action" => {
-                        let expr: Expr = body.parse()?;
-                        changes.push(ChangeSpec::AfterAction(expr));
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
-                    }
-                    "after_transaction" => {
-                        let expr: Expr = body.parse()?;
-                        changes.push(ChangeSpec::AfterTransaction(expr));
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
-                    }
-                    "changes" => {
-                        warnings.push(crate::ast_helpers::make_deprecated_warning(
-                            item_ident.span(),
-                            "The 'changes [...]' syntax is deprecated; prefer 'change <action>;'",
-                        ));
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
+                    if body.peek(syn::token::Bracket) {
                         let items;
                         let _ = syn::bracketed!(items in body);
-                        let exprs = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
-                        for expr in exprs {
-                            changes.push(parse_change(&expr)?);
+                        let list = Punctuated::<Ident, Token![,]>::parse_terminated(&items)?;
+                        for item in list {
+                            accept.push(FieldAccept {
+                                name: item,
+                                ty: syn::parse_quote!(::ash_core::Value),
+                                inferred: true,
+                            });
                         }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
+                    } else if body.peek(syn::token::Brace) {
+                        if kind != ActionKind::Generic {
+                            errors.push(Error::new_spanned(
+                                    &item_ident,
+                                    "use `accept [field, ...];` on create/read/update/destroy — types come from attributes. Typed `accept { name: Type }` is only for generic actions",
+                                ));
                         }
-                    }
-                    "validate" | "validation" => {
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
-                        if body.peek(syn::token::Bracket) {
-                            let items;
-                            let _ = syn::bracketed!(items in body);
-                            while !items.is_empty() {
-                                validations.push(parse_validation(&items)?);
-                                if items.peek(Token![,]) {
-                                    let _: Token![,] = items.parse()?;
-                                }
+                        parse_braced!(body, fields_input);
+                        while !fields_input.is_empty() {
+                            let f_name: Ident = fields_input.parse()?;
+                            let _: Token![:] = fields_input.parse()?;
+                            let f_ty: Type = fields_input.parse()?;
+                            if fields_input.peek(Token![,]) {
+                                let _: Token![,] = fields_input.parse()?;
                             }
-                        } else {
-                            validations.push(parse_validation(&body)?);
-                        }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
+                            accept.push(FieldAccept {
+                                name: f_name,
+                                ty: f_ty,
+                                inferred: kind != ActionKind::Generic,
+                            });
                         }
                     }
-                    "validations" => {
-                        warnings.push(crate::ast_helpers::make_deprecated_warning(
-                            item_ident.span(),
-                            "The 'validations [...]' syntax is deprecated; prefer 'validate <rule>;'",
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "change" => {
+                    let expr: Expr = body.parse()?;
+                    changes.push(parse_change(&expr)?);
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "before_action" => {
+                    let expr: Expr = body.parse()?;
+                    changes.push(ChangeSpec::BeforeAction(expr));
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "after_action" => {
+                    let expr: Expr = body.parse()?;
+                    changes.push(ChangeSpec::AfterAction(expr));
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "after_transaction" => {
+                    let expr: Expr = body.parse()?;
+                    changes.push(ChangeSpec::AfterTransaction(expr));
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "changes" => {
+                    errors.push(Error::new_spanned(
+                        &item_ident,
+                        "use `change <action>;`, not `changes [...]`",
+                    ));
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    let items;
+                    let _ = syn::bracketed!(items in body);
+                    let exprs = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
+                    for expr in exprs {
+                        changes.push(parse_change(&expr)?);
+                    }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "validate" | "validation" => {
+                    if item_ident == "validation" {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "use `validate`, not `validation`",
                         ));
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
+                    }
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    if body.peek(syn::token::Bracket) {
                         let items;
                         let _ = syn::bracketed!(items in body);
                         while !items.is_empty() {
@@ -240,38 +258,44 @@ pub fn parse_actions(
                                 let _: Token![,] = items.parse()?;
                             }
                         }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
+                    } else {
+                        validations.push(parse_validation(&body)?);
+                    }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "validations" => {
+                    errors.push(Error::new_spanned(
+                        &item_ident,
+                        "use `validate <rule>;`, not `validations [...]`",
+                    ));
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    let items;
+                    let _ = syn::bracketed!(items in body);
+                    while !items.is_empty() {
+                        validations.push(parse_validation(&items)?);
+                        if items.peek(Token![,]) {
+                            let _: Token![,] = items.parse()?;
                         }
                     }
-                    "prepare" | "preparation" => {
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
-                        if body.peek(syn::token::Bracket) {
-                            let items;
-                            let _ = syn::bracketed!(items in body);
-                            while !items.is_empty() {
-                                preparations.push(parse_preparation(&items)?);
-                                if items.peek(Token![,]) {
-                                    let _: Token![,] = items.parse()?;
-                                }
-                            }
-                        } else {
-                            preparations.push(parse_preparation(&body)?);
-                        }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
                     }
-                    "preparations" => {
-                        warnings.push(crate::ast_helpers::make_deprecated_warning(
-                            item_ident.span(),
-                            "The 'preparations [...]' syntax is deprecated; prefer 'prepare <item>;'",
+                }
+                "prepare" | "preparation" => {
+                    if item_ident == "preparation" {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "use `prepare`, not `preparation`",
                         ));
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
+                    }
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    if body.peek(syn::token::Bracket) {
                         let items;
                         let _ = syn::bracketed!(items in body);
                         while !items.is_empty() {
@@ -280,89 +304,111 @@ pub fn parse_actions(
                                 let _: Token![,] = items.parse()?;
                             }
                         }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
+                    } else {
+                        preparations.push(parse_preparation(&body)?);
+                    }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "preparations" => {
+                    errors.push(Error::new_spanned(
+                        &item_ident,
+                        "use `prepare <item>;`, not `preparations [...]`",
+                    ));
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    let items;
+                    let _ = syn::bracketed!(items in body);
+                    while !items.is_empty() {
+                        preparations.push(parse_preparation(&items)?);
+                        if items.peek(Token![,]) {
+                            let _: Token![,] = items.parse()?;
                         }
                     }
-                    "persist" => {
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
-                        let mode: Ident = body.parse()?;
-                        if mode == "manual" {
-                            persist_manual = true;
-                        } else {
-                            return Err(Error::new_spanned(mode, "expected `manual`"));
-                        }
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
                     }
-                    "returns" => {
-                        if body.peek(Token![:]) {
-                            let _: Token![:] = body.parse()?;
-                        }
-                        let ret_ty: Type = body.parse()?;
-                        returns = Some(ret_ty);
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+                }
+                "persist" => {
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
                     }
-                    "run" => {
-                        let expr: Expr = body.parse()?;
-                        run_expr = Some(expr);
-                        if body.peek(Token![;]) {
-                            let _: Token![;] = body.parse()?;
-                        }
+                    let mode: Ident = body.parse()?;
+                    if mode == "manual" {
+                        persist_manual = true;
+                    } else {
+                        return Err(Error::new_spanned(mode, "expected `manual`"));
                     }
-                    _ => {
-                        const ACTION_ITEM_NAMES: &[&str] = &[
-                            "primary",
-                            "argument",
-                            "arguments",
-                            "accept",
-                            "change",
-                            "changes",
-                            "before_action",
-                            "after_action",
-                            "after_transaction",
-                            "validate",
-                            "validations",
-                            "prepare",
-                            "preparations",
-                            "persist",
-                            "returns",
-                            "run",
-                        ];
-                        return Err(crate::ast_helpers::unknown_ident_error(
-                            &item_ident,
-                            ACTION_ITEM_NAMES,
-                            "action item",
-                        ));
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
                     }
+                }
+                "returns" => {
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    let ret_ty: Type = body.parse()?;
+                    returns = Some(ret_ty);
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                "run" => {
+                    let expr: Expr = body.parse()?;
+                    run_expr = Some(expr);
+                    if body.peek(Token![;]) {
+                        let _: Token![;] = body.parse()?;
+                    }
+                }
+                _ => {
+                    const ACTION_ITEM_NAMES: &[&str] = &[
+                        "primary",
+                        "argument",
+                        "arguments",
+                        "accept",
+                        "change",
+                        "changes",
+                        "before_action",
+                        "after_action",
+                        "after_transaction",
+                        "validate",
+                        "validation",
+                        "validations",
+                        "prepare",
+                        "preparation",
+                        "preparations",
+                        "persist",
+                        "returns",
+                        "run",
+                    ];
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &item_ident,
+                        ACTION_ITEM_NAMES,
+                        "action item",
+                    ));
                 }
             }
         }
-
-        super::helpers::optional_semi(input)?;
-
-        actions.push(ActionSpec {
-            outer_attrs,
-            kind,
-            name,
-            primary,
-            accept,
-            arguments,
-            changes,
-            validations,
-            preparations,
-            persist_manual,
-            returns,
-            run_expr,
-        });
     }
 
-    Ok(actions)
+    super::helpers::optional_semi(input)?;
+
+    Ok(ActionSpec {
+        outer_attrs,
+        kind,
+        name,
+        primary,
+        accept,
+        arguments,
+        changes,
+        validations,
+        preparations,
+        persist_manual,
+        returns,
+        run_expr,
+    })
 }
 
 pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {

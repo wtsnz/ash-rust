@@ -1,77 +1,94 @@
 use syn::parse::ParseStream;
+use syn::parse::discouraged::Speculative;
 use syn::{Error, Expr, Ident, Result, Token, Type};
 
 use crate::define::ast::{ArgumentSpec, CalculationExprSpec, CalculationSpec};
 
 use super::helpers::ident_from_string;
 
-pub fn parse_calculations(
-    input: ParseStream,
-    warnings: &mut Vec<proc_macro2::TokenStream>,
-) -> Result<Vec<CalculationSpec>> {
+pub fn parse_calculations(input: ParseStream, errors: &mut Vec<Error>) -> Vec<CalculationSpec> {
     let mut calcs = Vec::new();
     while !input.is_empty() {
-        let outer_attrs = input.call(syn::Attribute::parse_outer)?;
-        let ident: Ident = input.parse()?;
-        let mut arguments = Vec::new();
-        if input.peek(syn::token::Paren) {
-            let args_content;
-            syn::parenthesized!(args_content in input);
-            while !args_content.is_empty() {
-                let outer_attrs = args_content.call(syn::Attribute::parse_outer)?;
-                let arg_ident: Ident = args_content.parse()?;
-                let _: Token![:] = args_content.parse()?;
-                let arg_ty: Type = args_content.parse()?;
-                arguments.push(ArgumentSpec {
-                    outer_attrs,
-                    name: arg_ident,
-                    ty: arg_ty,
-                    allow_nil: false,
-                });
-                if args_content.peek(Token![,]) {
-                    let _: Token![,] = args_content.parse()?;
-                }
+        if input.peek(Token![,]) || input.peek(Token![;]) {
+            let _ = input.parse::<proc_macro2::TokenTree>();
+            continue;
+        }
+        let fork = input.fork();
+        match parse_one_calculation(&fork, errors) {
+            Ok(calc) => {
+                input.advance_to(&fork);
+                calcs.push(calc);
+            }
+            Err(e) => {
+                errors.push(e);
+                input.advance_to(&fork);
+                super::recover::skip_item(input);
             }
         }
-        let _: Token![:] = input.parse()?;
-        let ty: Type = input.parse()?;
-        let _: Token![=] = input.parse()?;
-
-        let expr = if input.peek(syn::LitStr) {
-            let lit: syn::LitStr = input.parse()?;
-            let val = lit.value();
-            if let Some(stripped) = val
-                .strip_prefix("string_length(")
-                .and_then(|s| s.strip_suffix(')'))
-            {
-                warnings.push(crate::ast_helpers::make_deprecated_warning(
-                    lit.span(),
-                    "Quoted calculation strings like \"string_length(subject)\" are deprecated; prefer unquoted `string_length(subject)`",
-                ));
-                CalculationExprSpec::StringLength(ident_from_string(stripped.trim(), lit.span())?)
-            } else {
-                CalculationExprSpec::LitString(val)
-            }
-        } else {
-            let syn_expr: Expr = input.parse()?;
-            parse_calc_expr(&syn_expr)?
-        };
-
-        if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
-        } else if input.peek(Token![;]) {
-            let _: Token![;] = input.parse()?;
-        }
-
-        calcs.push(CalculationSpec {
-            outer_attrs,
-            ident,
-            arguments,
-            ty,
-            expr,
-        });
     }
-    Ok(calcs)
+    calcs
+}
+
+fn parse_one_calculation(input: ParseStream, errors: &mut Vec<Error>) -> Result<CalculationSpec> {
+    let outer_attrs = input.call(syn::Attribute::parse_outer)?;
+    let ident: Ident = input.parse()?;
+    let mut arguments = Vec::new();
+    if input.peek(syn::token::Paren) {
+        let args_content;
+        syn::parenthesized!(args_content in input);
+        while !args_content.is_empty() {
+            let outer_attrs = args_content.call(syn::Attribute::parse_outer)?;
+            let arg_ident: Ident = args_content.parse()?;
+            let _: Token![:] = args_content.parse()?;
+            let arg_ty: Type = args_content.parse()?;
+            arguments.push(ArgumentSpec {
+                outer_attrs,
+                name: arg_ident,
+                ty: arg_ty,
+                allow_nil: false,
+            });
+            if args_content.peek(Token![,]) {
+                let _: Token![,] = args_content.parse()?;
+            }
+        }
+    }
+    let _: Token![:] = input.parse()?;
+    let ty: Type = input.parse()?;
+    let _: Token![=] = input.parse()?;
+
+    let expr = if input.peek(syn::LitStr) {
+        let lit: syn::LitStr = input.parse()?;
+        let val = lit.value();
+        errors.push(Error::new_spanned(
+            &lit,
+            "use unquoted `string_length(subject)`, not a quoted string",
+        ));
+        if let Some(stripped) = val
+            .strip_prefix("string_length(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            CalculationExprSpec::StringLength(ident_from_string(stripped.trim(), lit.span())?)
+        } else {
+            CalculationExprSpec::LitString(val)
+        }
+    } else {
+        let syn_expr: Expr = input.parse()?;
+        parse_calc_expr(&syn_expr)?
+    };
+
+    if input.peek(Token![,]) {
+        let _: Token![,] = input.parse()?;
+    } else if input.peek(Token![;]) {
+        let _: Token![;] = input.parse()?;
+    }
+
+    Ok(CalculationSpec {
+        outer_attrs,
+        ident,
+        arguments,
+        ty,
+        expr,
+    })
 }
 
 pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {

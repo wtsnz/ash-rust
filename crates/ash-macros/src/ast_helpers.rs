@@ -187,6 +187,15 @@ fn available_label(kind: &str) -> String {
     }
 }
 
+pub fn combine_errors(errors: Vec<syn::Error>) -> Option<syn::Error> {
+    let mut iter = errors.into_iter();
+    let mut first = iter.next()?;
+    for err in iter {
+        first.combine(err);
+    }
+    Some(first)
+}
+
 pub fn unknown_ident_error(typo: &Ident, candidates: &[&str], kind: &str) -> syn::Error {
     let name = typo.to_string();
     let available = format!("{}: {}", available_label(kind), candidates.join(", "));

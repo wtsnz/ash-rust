@@ -17,7 +17,7 @@ resource! {
     }
 
     relationships {
-        belongs_to author: Option<Representative> [fk: "author_id"],
+        belongs_to author: Representative [fk: author_id],
     }
 
     actions {

@@ -16,10 +16,7 @@ resource! {
     actions {
         create create {
             primary;
-            accept {
-                title: String,
-                views: i64,
-            }
+            accept [title, views];
         }
 
         read read {

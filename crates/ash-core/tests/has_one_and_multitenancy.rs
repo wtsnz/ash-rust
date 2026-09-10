@@ -18,7 +18,7 @@ pub mod user {
         }
 
         relationships {
-            has_one profile: super::profile::Profile [fk: "user_id", on_delete: cascade],
+            has_one profile: super::profile::Profile [fk: user_id, on_delete: cascade],
         }
 
         actions {

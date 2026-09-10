@@ -46,7 +46,7 @@ resource! {
     }
 
     relationships {
-        belongs_to engineer: Option<Engineer> [fk: engineer_id];
+        belongs_to engineer: Engineer [fk: engineer_id];
     }
 
     actions {
@@ -234,7 +234,7 @@ mod post {
         }
 
         relationships {
-            has_many comments: Vec<Comment> [fk: post_id];
+            has_many comments: Comment [fk: post_id];
         }
 
         aggregates {

@@ -35,7 +35,7 @@
 //!     actions {
 //!         create create {
 //!             primary;
-//!             accept { amount: i64 }
+//!             accept [amount];
 //!         }
 //!
 //!         // Action validations and state changes are automatically injected!

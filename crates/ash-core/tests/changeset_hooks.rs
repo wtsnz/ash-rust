@@ -25,22 +25,12 @@ resource! {
 
         create create {
             primary;
-            accept {
-                title: String,
-                body: String,
-                slug: Option<String>,
-                view_count: i64,
-            }
+            accept [title, body, slug, view_count];
         }
 
         update update {
             primary;
-            accept {
-                title: String,
-                body: String,
-                slug: Option<String>,
-                view_count: i64,
-            }
+            accept [title, body, slug, view_count];
         }
     }
 }

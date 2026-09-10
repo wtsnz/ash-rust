@@ -419,7 +419,7 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
         injected_actions = quote! {
             #injected_actions
             create #reg_ident {
-                accept { #id_ident: String }
+                accept [#id_ident];
                 argument password: String;
                 #conf_arg
                 change custom(&::ash_authentication::HashPasswordChange::new(

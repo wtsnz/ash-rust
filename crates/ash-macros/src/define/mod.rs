@@ -1,43 +1,47 @@
 pub mod ast;
 mod codegen;
 mod parse;
+mod validate;
 
+use crate::ast_helpers::combine_errors;
 pub use ast::ResourceDefinition;
 
 pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let extracted = crate::ast_helpers::extract_resource_ident(&input);
-    match syn::parse2::<ResourceDefinition>(input) {
-        Ok(def) => {
-            let stub = richer_fallback_resource_stub(&def);
-            match codegen::expand_define(def) {
-                Ok(tokens) => tokens,
-                Err(err) => {
-                    let compile_error = err.to_compile_error();
-                    quote::quote! {
-                        #compile_error
-                        #stub
-                    }
+    let mut parsed = parse::parse_resource(input);
+    parsed.errors.extend(validate::validate(&mut parsed.def));
+
+    let stub = if parsed.def.attributes.is_empty() {
+        extracted
+            .as_ref()
+            .map(fallback_resource_stub)
+            .unwrap_or_else(|| richer_fallback_resource_stub(&parsed.def))
+    } else {
+        richer_fallback_resource_stub(&parsed.def)
+    };
+
+    match codegen::expand_define(parsed.def) {
+        Ok(tokens) => {
+            if let Some(err) = combine_errors(parsed.errors) {
+                let compile_error = err.to_compile_error();
+                quote::quote! {
+                    #compile_error
+                    #tokens
                 }
+            } else {
+                tokens
             }
         }
-        Err(err) => error_with_fallback_stub(err, extracted.as_ref()),
-    }
-}
-
-fn error_with_fallback_stub(
-    err: syn::Error,
-    resource: Option<&syn::Ident>,
-) -> proc_macro2::TokenStream {
-    let compile_error = err.to_compile_error();
-    match resource {
-        Some(resource) => {
-            let stub = fallback_resource_stub(resource);
+        Err(err) => {
+            parsed.errors.push(err);
+            let compile_error = combine_errors(parsed.errors)
+                .map(|e| e.to_compile_error())
+                .unwrap_or_default();
             quote::quote! {
                 #compile_error
                 #stub
             }
         }
-        None => compile_error,
     }
 }
 
@@ -188,5 +192,54 @@ mod tests {
             out.contains("impl") && out.contains("Resource"),
             "missing Resource stub impl: {out}"
         );
+    }
+
+    #[test]
+    fn test_recovery_keeps_good_actions_and_reports_bad_one() {
+        let tokens = quote! {
+            resource Ticket;
+            attributes {
+                id: Uuid [pk],
+                subject: String,
+            }
+            actions {
+                creat broken;
+                create open {
+                    accept [subject];
+                }
+            }
+        };
+        let out = expand_dsl(tokens).to_string();
+        assert!(
+            out.contains("compile_error"),
+            "missing compile_error: {out}"
+        );
+        assert!(out.contains("Did you mean"), "missing suggestion: {out}");
+        assert!(out.contains("struct Ticket"), "missing struct: {out}");
+        assert!(
+            out.contains("open") || out.contains("Open"),
+            "missing recovered open action: {out}"
+        );
+    }
+
+    #[test]
+    fn test_multiple_semantic_errors_are_combined() {
+        let tokens = quote! {
+            resource Ticket;
+            attributes {
+                id: Uuid [pk],
+                subject: String,
+            }
+            actions {
+                create open {
+                    accept [subjet];
+                    change set(statu = "open");
+                }
+            }
+        };
+        let out = expand_dsl(tokens).to_string();
+        assert!(out.contains("subjet"), "missing subjet error: {out}");
+        assert!(out.contains("statu"), "missing statu error: {out}");
+        assert!(out.contains("struct Ticket"), "missing struct: {out}");
     }
 }

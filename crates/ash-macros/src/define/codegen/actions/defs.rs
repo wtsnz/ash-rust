@@ -4,9 +4,7 @@ use syn::Result;
 
 use super::super::policies::lit_to_const_value;
 use crate::ast_helpers::{is_bool, is_i64, is_string, is_uuid, option_inner};
-use crate::define::ast::{
-    ChangeSpec, PreparationSpec, ResourceDefinition, ValidationSpec,
-};
+use crate::define::ast::{ChangeSpec, PreparationSpec, ResourceDefinition, ValidationSpec};
 
 pub(crate) fn filter_expr_to_tokens(expr: &syn::Expr, resource: &syn::Ident) -> TokenStream {
     match expr {

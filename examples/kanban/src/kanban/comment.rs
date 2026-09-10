@@ -14,15 +14,12 @@ resource! {
     }
 
     relationships {
-        belongs_to card: Option<Card> [fk: "card_id"],
+        belongs_to card: Card [fk: card_id],
     }
 
     actions {
         create create {
-            accept {
-                card_id: Uuid,
-                body: String,
-            }
+            accept [card_id, body];
             validate present(body);
             change relate_actor(author_id);
         }
@@ -32,9 +29,7 @@ resource! {
         }
 
         update update_body {
-            accept {
-                body: String,
-            }
+            accept [body];
             validate present(body);
         }
 

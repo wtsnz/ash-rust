@@ -16,8 +16,8 @@ resource! {
     }
 
     relationships {
-        belongs_to board: Option<Board> [fk: "board_id"],
-        has_many cards: Vec<Card> [fk: "list_id"],
+        belongs_to board: Board [fk: board_id],
+        has_many cards: Card [fk: list_id],
     }
 
     aggregates {
@@ -28,11 +28,7 @@ resource! {
 
     actions {
         create create {
-            accept {
-                board_id: Uuid,
-                title: String,
-                position: i64,
-            }
+            accept [board_id, title, position];
             validate present(title);
             validate numericality(position, min = 0);
             change set(archived = false);
@@ -43,16 +39,12 @@ resource! {
         }
 
         update rename {
-            accept {
-                title: String,
-            }
+            accept [title];
             validate present(title);
         }
 
         update move_position {
-            accept {
-                position: i64,
-            }
+            accept [position];
             validate numericality(position, min = 0);
         }
 
