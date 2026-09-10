@@ -2,7 +2,29 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::ast_helpers::{option_inner, pascal_case};
-use crate::define::ast::{ActionKind, ResourceDefinition};
+use crate::define::ast::{ActionKind, ActionSpec, ResourceDefinition};
+
+fn docs_for_input_name<'a>(
+    def: &'a ResourceDefinition,
+    act: &'a ActionSpec,
+    name: &syn::Ident,
+) -> &'a [syn::Attribute] {
+    if let Some(attr) = def.attributes.iter().find(|a| a.ident == *name) {
+        return &attr.outer_attrs;
+    }
+    if let Some(arg) = act.arguments.iter().find(|a| a.name == *name) {
+        return &arg.outer_attrs;
+    }
+    &[]
+}
+
+fn arg_docs_for_name<'a>(act: &'a ActionSpec, name: &syn::Ident) -> &'a [syn::Attribute] {
+    act.arguments
+        .iter()
+        .find(|a| a.name == *name)
+        .map(|a| a.outer_attrs.as_slice())
+        .unwrap_or(&[])
+}
 
 pub struct ActionCodegen {
     pub builders: Vec<TokenStream>,
@@ -10,10 +32,7 @@ pub struct ActionCodegen {
     pub trait_block: TokenStream,
 }
 
-pub fn expand_action_builders(
-    def: &ResourceDefinition,
-    has_primary_read: bool,
-) -> ActionCodegen {
+pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) -> ActionCodegen {
     let resource = &def.resource;
     let actions = &def.actions;
     let mut builders = Vec::new();
@@ -33,7 +52,11 @@ pub fn expand_action_builders(
         });
     }
 
-    if let Some(create_act) = actions.iter().find(|a| a.kind == ActionKind::Create && a.primary).or_else(|| actions.iter().find(|a| a.kind == ActionKind::Create)) {
+    if let Some(create_act) = actions
+        .iter()
+        .find(|a| a.kind == ActionKind::Create && a.primary)
+        .or_else(|| actions.iter().find(|a| a.kind == ActionKind::Create))
+    {
         let act_name_str = create_act.name.to_string();
         resource_methods.push(quote! {
             pub async fn bulk_create<D: ::ash_core::DataLayer, I, F>(
@@ -62,7 +85,11 @@ pub fn expand_action_builders(
         });
     }
 
-    if let Some(destroy_act) = actions.iter().find(|a| a.kind == ActionKind::Destroy && a.primary).or_else(|| actions.iter().find(|a| a.kind == ActionKind::Destroy)) {
+    if let Some(destroy_act) = actions
+        .iter()
+        .find(|a| a.kind == ActionKind::Destroy && a.primary)
+        .or_else(|| actions.iter().find(|a| a.kind == ActionKind::Destroy))
+    {
         let act_name_str = destroy_act.name.to_string();
         resource_methods.push(quote! {
             pub async fn bulk_destroy<D: ::ash_core::DataLayer>(
@@ -124,10 +151,12 @@ pub fn expand_action_builders(
 
                 for (name, ty) in all_inputs {
                     let s = name.to_string();
+                    let docs = docs_for_input_name(def, act, name);
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
                     if let Some(inner) = option_inner(ty) {
                         field_setters.push(quote! {
+                            #(#docs)*
                             pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into_option());
                                 self
@@ -147,6 +176,7 @@ pub fn expand_action_builders(
                         });
                     } else {
                         field_setters.push(quote! {
+                            #(#docs)*
                             pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into());
                                 self
@@ -433,10 +463,12 @@ pub fn expand_action_builders(
 
                 for (name, ty) in all_inputs {
                     let s = name.to_string();
+                    let docs = docs_for_input_name(def, act, name);
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
                     if let Some(inner) = option_inner(ty) {
                         field_setters.push(quote! {
+                            #(#docs)*
                             pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into_option());
                                 self
@@ -456,6 +488,7 @@ pub fn expand_action_builders(
                         });
                     } else {
                         field_setters.push(quote! {
+                            #(#docs)*
                             pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into());
                                 self
@@ -782,10 +815,7 @@ pub fn expand_action_builders(
 
             ActionKind::Generic => {
                 let input_struct_name = format_ident!("{}{}Input", resource, act_pascal);
-                let returns_ty = act
-                    .returns
-                    .clone()
-                    .unwrap_or_else(|| syn::parse_quote!(()));
+                let returns_ty = act.returns.clone().unwrap_or_else(|| syn::parse_quote!(()));
 
                 let mut field_members = Vec::new();
                 let mut field_inits = Vec::new();
@@ -802,12 +832,15 @@ pub fn expand_action_builders(
 
                 for (name, ty) in all_inputs {
                     let s = name.to_string();
-                    input_struct_fields.push(quote! { pub #name: #ty });
+                    let docs = docs_for_input_name(def, act, name);
+                    let arg_docs = arg_docs_for_name(act, name);
+                    input_struct_fields.push(quote! { #(#arg_docs)* pub #name: #ty });
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
 
                     if let Some(inner) = option_inner(ty) {
                         field_setters.push(quote! {
+                            #(#docs)*
                             pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into_option());
                                 self
@@ -818,6 +851,7 @@ pub fn expand_action_builders(
                         });
                     } else {
                         field_setters.push(quote! {
+                            #(#docs)*
                             pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into());
                                 self

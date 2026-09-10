@@ -122,7 +122,7 @@ pub fn parse_whens(input: ParseStream) -> Result<Vec<PolicyWhenSpec>> {
             let content;
             syn::parenthesized!(content in input);
             let action_ident: Ident = content.parse()?;
-            whens.push(PolicyWhenSpec::ActionName(action_ident.to_string()));
+            whens.push(PolicyWhenSpec::ActionName(action_ident));
         } else if ident == "action_type" {
             let content;
             syn::parenthesized!(content in input);

@@ -2,6 +2,35 @@ use ash_core::{ActionTarget, Context, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
+mod engineer {
+    use super::*;
+
+    resource! {
+        /// Engineer who can be assigned tickets
+        resource Engineer;
+        table "engineers";
+
+        attributes {
+            id: Uuid [pk],
+            /// Display name for the engineer
+            name: String,
+        }
+
+        actions {
+            create create {
+                primary;
+                accept [name];
+            }
+
+            read read {
+                primary;
+            }
+        }
+    }
+}
+
+use engineer::Engineer;
+
 resource! {
     /// Ticket resource representation
     resource Ticket;
@@ -9,9 +38,15 @@ resource! {
 
     attributes {
         id: Uuid [pk],
+        /// Short summary shown in the queue
         title: String,
         status: String,
         assignee: Option<String>,
+        engineer_id: Option<Uuid>,
+    }
+
+    relationships {
+        belongs_to engineer: Option<Engineer> [fk: engineer_id];
     }
 
     actions {
@@ -29,13 +64,20 @@ resource! {
 
         /// Assigns a ticket to an engineer
         update assign {
-            accept [assignee];
+            accept [assignee, engineer_id];
             change set(status = "in_progress");
         }
 
         /// Closes and deletes a ticket
         destroy close {
             primary;
+        }
+
+        generic summarize {
+            /// Extra notes included in the summary
+            argument notes: String;
+            returns String;
+            run |input| async move { Ok(input.notes) };
         }
     }
 }
@@ -54,6 +96,8 @@ async fn test_action_target_conversions() {
         title: "Test".to_string(),
         status: "open".to_string(),
         assignee: None,
+        engineer_id: None,
+        engineer: Default::default(),
     };
 
     let target_from_ref: ActionTarget<Ticket> = (&ticket).into();
@@ -149,6 +193,35 @@ mod permissive {
 }
 
 use permissive::PermissiveTicket;
+
+#[test]
+fn test_field_constants_and_relationship_probe_compile() {
+    let _ = Ticket::title;
+    let _ = ticket_fields::title;
+    let _ = Ticket::engineer;
+    let _ = Engineer::name;
+}
+
+#[tokio::test]
+async fn test_documented_builder_setters_and_belongs_to_fk() {
+    let ctx = Context::new(Memory::new());
+
+    let engineer = Engineer::create(&ctx).name("Ada").await.unwrap();
+    let ticket = Ticket::create(&ctx).title("Printer jam").await.unwrap();
+    assert_eq!(ticket.title, "Printer jam");
+    assert!(ticket.engineer_id.is_none());
+
+    let updated = Ticket::assign(&ctx, ticket.id)
+        .assignee(Some("Ada".to_string()))
+        .engineer_id(Some(engineer.id))
+        .await
+        .unwrap();
+    assert_eq!(updated.assignee, Some("Ada".to_string()));
+    assert_eq!(updated.engineer_id, Some(engineer.id));
+
+    let summary = Ticket::summarize(&ctx).notes("needs toner").await.unwrap();
+    assert_eq!(summary, "needs toner");
+}
 
 #[tokio::test]
 async fn test_permissive_punctuation_and_empty_sections() {

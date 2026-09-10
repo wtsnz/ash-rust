@@ -33,9 +33,10 @@ impl Parse for DomainDefinition {
                     syn::braced!(r_content in body);
                     resources = parse_resources(&r_content)?;
                 } else {
-                    return Err(Error::new_spanned(
-                        section_kw,
-                        "expected `resources` block inside domain",
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &section_kw,
+                        &["resources"],
+                        "domain section",
                     ));
                 }
             }
@@ -47,9 +48,10 @@ impl Parse for DomainDefinition {
                     syn::braced!(r_content in input);
                     resources = parse_resources(&r_content)?;
                 } else {
-                    return Err(Error::new_spanned(
-                        section_kw,
-                        "expected `resources` block inside domain",
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &section_kw,
+                        &["resources"],
+                        "domain section",
                     ));
                 }
             }
@@ -89,9 +91,10 @@ fn parse_resources(input: ParseStream) -> Result<Vec<DomainResourceSpec>> {
                 if item_kw == "define" {
                     interfaces.push(parse_code_interface(&content)?);
                 } else {
-                    return Err(Error::new_spanned(
-                        item_kw,
-                        "expected `define` inside resource block",
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &item_kw,
+                        &["define"],
+                        "resource item",
                     ));
                 }
             }
@@ -158,15 +161,17 @@ fn parse_code_interface(input: ParseStream) -> Result<CodeInterfaceSpec> {
             } else if target_ident == "id" {
                 target = CodeInterfaceTarget::Id;
             } else {
-                return Err(Error::new_spanned(
-                    target_ident,
-                    "expected `record` or `id` for `on` option",
+                return Err(crate::ast_helpers::unknown_ident_error(
+                    &target_ident,
+                    &["record", "id"],
+                    "on target",
                 ));
             }
         } else {
-            return Err(Error::new_spanned(
-                key,
-                "unknown code interface option; expected `action`, `args`, `get_by`, or `on`",
+            return Err(crate::ast_helpers::unknown_ident_error(
+                &key,
+                &["action", "args", "get_by", "on"],
+                "code interface option",
             ));
         }
 
@@ -180,10 +185,7 @@ fn parse_code_interface(input: ParseStream) -> Result<CodeInterfaceSpec> {
     }
 
     let action_name = action_name.ok_or_else(|| {
-        Error::new_spanned(
-            &fn_name,
-            "code interface requires `action: <action_name>`",
-        )
+        Error::new_spanned(&fn_name, "code interface requires `action: <action_name>`")
     })?;
 
     Ok(CodeInterfaceSpec {
@@ -193,4 +195,83 @@ fn parse_code_interface(input: ParseStream) -> Result<CodeInterfaceSpec> {
         get_by,
         target,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::ast::DomainDefinition;
+    use quote::quote;
+
+    fn parse_err(tokens: proc_macro2::TokenStream) -> syn::Error {
+        match syn::parse2::<DomainDefinition>(tokens) {
+            Err(e) => e,
+            Ok(_) => panic!("expected parse error"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_domain_section_suggests_resources() {
+        let err = parse_err(quote! {
+            domain Helpdesk;
+            resourcez {
+                Ticket
+            }
+        });
+        assert!(
+            err.to_string().contains("Did you mean `resources`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_unknown_resource_item_suggests_define() {
+        let err = parse_err(quote! {
+            domain Helpdesk;
+            resources {
+                Ticket {
+                    defin open_ticket, action: open;
+                }
+            }
+        });
+        assert!(
+            err.to_string().contains("Did you mean `define`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_unknown_code_interface_key_suggests_correction() {
+        let err = parse_err(quote! {
+            domain Helpdesk;
+            resources {
+                Ticket {
+                    define open_ticket, acton: open;
+                }
+            }
+        });
+        assert!(
+            err.to_string().contains("Did you mean `action`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_unknown_on_target_suggests_correction() {
+        let err = parse_err(quote! {
+            domain Helpdesk;
+            resources {
+                Ticket {
+                    define close_ticket, action: close, on: recrod;
+                }
+            }
+        });
+        assert!(
+            err.to_string().contains("Did you mean `record`?"),
+            "got: {}",
+            err
+        );
+    }
 }

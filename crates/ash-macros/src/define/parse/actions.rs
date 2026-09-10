@@ -63,6 +63,7 @@ pub fn parse_actions(
         } else if input.peek(syn::token::Brace) {
             parse_braced!(input, body);
             while !body.is_empty() {
+                let item_attrs = body.call(syn::Attribute::parse_outer)?;
                 let item_ident: Ident = body.parse()?;
                 match item_ident.to_string().as_str() {
                     "primary" => {
@@ -84,6 +85,7 @@ pub fn parse_actions(
                         let a_ty: Type = body.parse()?;
                         let allow_nil = option_inner(&a_ty).is_some();
                         arguments.push(ArgumentSpec {
+                            outer_attrs: item_attrs,
                             name: a_name,
                             ty: a_ty,
                             allow_nil,
@@ -102,11 +104,13 @@ pub fn parse_actions(
                         }
                         parse_braced!(body, args_input);
                         while !args_input.is_empty() {
+                            let outer_attrs = args_input.call(syn::Attribute::parse_outer)?;
                             let a_name: Ident = args_input.parse()?;
                             let _: Token![:] = args_input.parse()?;
                             let a_ty: Type = args_input.parse()?;
                             let allow_nil = option_inner(&a_ty).is_some();
                             arguments.push(ArgumentSpec {
+                                outer_attrs,
                                 name: a_name,
                                 ty: a_ty,
                                 allow_nil,
@@ -580,6 +584,15 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 }
             }
 
+            if min.is_none() && max.is_none() {
+                return Err(Error::new_spanned(
+                    &field,
+                    format!(
+                        "string_length validation for '{field}' must specify at least one of 'min' or 'max'"
+                    ),
+                ));
+            }
+
             if let (Some(min_v), Some(max_v)) = (min, max)
                 && min_v > max_v
             {
@@ -626,6 +639,15 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                         let _: Token![,] = content.parse()?;
                     }
                 }
+            }
+
+            if allowed.is_empty() {
+                return Err(Error::new_spanned(
+                    &field,
+                    format!(
+                        "one_of validation for '{field}' must specify at least one allowed value"
+                    ),
+                ));
             }
 
             Ok(ValidationSpec::OneOf { field, allowed })

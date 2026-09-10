@@ -175,6 +175,7 @@ pub struct ActionSpec {
 }
 
 pub struct ArgumentSpec {
+    pub outer_attrs: Vec<syn::Attribute>,
     pub name: Ident,
     pub ty: Type,
     pub allow_nil: bool,
@@ -278,7 +279,7 @@ pub struct PolicySpec {
 
 pub enum PolicyWhenSpec {
     Always,
-    ActionName(String),
+    ActionName(Ident),
     ActionKind(ActionKind),
 }
 

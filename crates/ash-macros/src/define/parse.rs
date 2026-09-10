@@ -659,4 +659,79 @@ mod tests {
         assert_eq!(def.actions[0].accept.len(), 1);
         assert_eq!(def.actions[0].validations.len(), 1);
     }
+
+    #[test]
+    fn test_vacuous_string_length_fails() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validate string_length(title);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string().contains(
+                "string_length validation for 'title' must specify at least one of 'min' or 'max'"
+            ),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_empty_one_of_fails() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validate one_of(status, []);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("one_of validation for 'status' must specify at least one allowed value"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_argument_doc_comments_are_parsed() {
+        let tokens = quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open {
+                    /// Caller-supplied reason
+                    argument reason: String;
+                }
+            }
+            calculations {
+                titled(
+                    /// Prefix to prepend
+                    prefix: String
+                ): String = concat(arg(prefix), "x");
+            }
+        };
+        let def = match syn::parse2::<ResourceDefinition>(tokens) {
+            Ok(d) => d,
+            Err(e) => panic!("parse failed: {e}"),
+        };
+        assert_eq!(def.actions[0].arguments.len(), 1);
+        assert!(
+            !def.actions[0].arguments[0].outer_attrs.is_empty(),
+            "missing action argument docs"
+        );
+        assert_eq!(def.calculations[0].arguments.len(), 1);
+        assert!(
+            !def.calculations[0].arguments[0].outer_attrs.is_empty(),
+            "missing calculation argument docs"
+        );
+    }
 }

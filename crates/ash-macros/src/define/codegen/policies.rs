@@ -90,7 +90,10 @@ pub fn expand_policy_defs(policies: &[PolicySpec]) -> Result<Vec<TokenStream>> {
         for when in &pol.whens {
             let when_tok = match when {
                 PolicyWhenSpec::Always => quote! { ::ash_core::PolicyWhen::Always },
-                PolicyWhenSpec::ActionName(n) => quote! { ::ash_core::PolicyWhen::ActionName(#n) },
+                PolicyWhenSpec::ActionName(n) => {
+                    let n = n.to_string();
+                    quote! { ::ash_core::PolicyWhen::ActionName(#n) }
+                }
                 PolicyWhenSpec::ActionKind(k) => {
                     let variant = k.kind_variant();
                     quote! { ::ash_core::PolicyWhen::ActionType(::ash_core::ActionKind::#variant) }
