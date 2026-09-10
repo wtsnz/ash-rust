@@ -3,9 +3,7 @@ use super::policies::lit_to_const_value;
 use crate::ast_helpers::{
     is_bool, is_i64, is_string, is_uuid, option_inner, screaming_snake, snake_case,
 };
-use crate::define::ast::{
-    AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition,
-};
+use crate::define::ast::{AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Error, Result};
@@ -129,7 +127,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     ::ash_core::Value::from(#default_expr)
                 }
             });
-            attr_defs.push(quote! { ::ash_core::AttributeDef::with_default(#name_str, #attr_ty, #fn_name) });
+            attr_defs.push(
+                quote! { ::ash_core::AttributeDef::with_default(#name_str, #attr_ty, #fn_name) },
+            );
         } else if let Some(default_fn_path) = &a.default_fn {
             let fn_name = format_ident!("__default_{}", name_str);
             let attr_ty = if is_string(ty) {
@@ -146,7 +146,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     ::ash_core::Value::from((#default_fn_path)())
                 }
             });
-            attr_defs.push(quote! { ::ash_core::AttributeDef::with_default(#name_str, #attr_ty, #fn_name) });
+            attr_defs.push(
+                quote! { ::ash_core::AttributeDef::with_default(#name_str, #attr_ty, #fn_name) },
+            );
         } else if a.generated {
             attr_defs.push(quote! { ::ash_core::AttributeDef::generated(#name_str, ::ash_core::AttrType::String) });
         } else if let Some(atoms) = &a.atom {
@@ -173,9 +175,13 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         } else if option_inner(ty).is_some_and(is_bool) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Boolean) });
         } else if option_inner(ty).is_some() {
-            attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Map) });
+            attr_defs.push(
+                quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Map) },
+            );
         } else {
-            attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Map) });
+            attr_defs.push(
+                quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Map) },
+            );
         }
     }
 
@@ -192,10 +198,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         };
         match r.kind {
             RelType::BelongsTo => {
-                let fk_str = r
-                    .fk
-                    .clone()
-                    .unwrap_or_else(|| format!("{name_str}_id"));
+                let fk_str = r.fk.clone().unwrap_or_else(|| format!("{name_str}_id"));
                 rel_defs.push(quote! {
                     ::ash_core::RelationshipDef::belongs_to(
                         #name_str,
@@ -205,10 +208,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 });
             }
             RelType::HasMany => {
-                let fk_str = r
-                    .fk
-                    .clone()
-                    .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
+                let fk_str =
+                    r.fk.clone()
+                        .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
                 rel_defs.push(quote! {
                     ::ash_core::RelationshipDef::has_many(
                         #name_str,
@@ -218,10 +220,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 });
             }
             RelType::HasOne => {
-                let fk_str = r
-                    .fk
-                    .clone()
-                    .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
+                let fk_str =
+                    r.fk.clone()
+                        .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
                 rel_defs.push(quote! {
                     ::ash_core::RelationshipDef::has_one(
                         #name_str,
@@ -232,7 +233,10 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             }
             RelType::ManyToMany => {
                 let through_ident = r.through.as_ref().ok_or_else(|| {
-                    syn::Error::new_spanned(&r.ident, "many_to_many requires `through: JoinResource`")
+                    syn::Error::new_spanned(
+                        &r.ident,
+                        "many_to_many requires `through: JoinResource`",
+                    )
                 })?;
                 let source_on_join = r
                     .source_attribute_on_join_resource
@@ -281,30 +285,34 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 )
             });
         } else {
-            let arg_defs: Vec<_> = c.arguments.iter().map(|arg| {
-                let arg_name = arg.name.to_string();
-                let arg_ty = &arg.ty;
-                let arg_inner = option_inner(arg_ty).unwrap_or(arg_ty);
-                let arg_allow_nil = option_inner(arg_ty).is_some();
-                let arg_type_tok = if is_string(arg_inner) {
-                    quote! { ::ash_core::AttrType::String }
-                } else if is_i64(arg_inner) {
-                    quote! { ::ash_core::AttrType::Integer }
-                } else if is_bool(arg_inner) {
-                    quote! { ::ash_core::AttrType::Boolean }
-                } else if is_uuid(arg_inner) {
-                    quote! { ::ash_core::AttrType::Uuid }
-                } else {
-                    quote! { ::ash_core::AttrType::String }
-                };
-                quote! {
-                    ::ash_core::ArgumentDef {
-                        name: #arg_name,
-                        ty: #arg_type_tok,
-                        allow_nil: #arg_allow_nil,
+            let arg_defs: Vec<_> = c
+                .arguments
+                .iter()
+                .map(|arg| {
+                    let arg_name = arg.name.to_string();
+                    let arg_ty = &arg.ty;
+                    let arg_inner = option_inner(arg_ty).unwrap_or(arg_ty);
+                    let arg_allow_nil = option_inner(arg_ty).is_some();
+                    let arg_type_tok = if is_string(arg_inner) {
+                        quote! { ::ash_core::AttrType::String }
+                    } else if is_i64(arg_inner) {
+                        quote! { ::ash_core::AttrType::Integer }
+                    } else if is_bool(arg_inner) {
+                        quote! { ::ash_core::AttrType::Boolean }
+                    } else if is_uuid(arg_inner) {
+                        quote! { ::ash_core::AttrType::Uuid }
+                    } else {
+                        quote! { ::ash_core::AttrType::String }
+                    };
+                    quote! {
+                        ::ash_core::ArgumentDef {
+                            name: #arg_name,
+                            ty: #arg_type_tok,
+                            allow_nil: #arg_allow_nil,
+                        }
                     }
-                }
-            }).collect();
+                })
+                .collect();
             calc_defs.push(quote! {
                 ::ash_core::CalculationDef::with_arguments(
                     #name_str,
@@ -580,7 +588,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 }
             });
         } else if a.atom.is_some() {
-            from_inits.push(quote! { #id: #ty::parse(&::ash_core::required_string(fields, #name_str)?)? });
+            from_inits.push(
+                quote! { #id: #ty::parse(&::ash_core::required_string(fields, #name_str)?)? },
+            );
         } else if is_i64(ty) {
             from_inits.push(quote! {
                 #id: ::ash_core::optional_int(fields, #name_str)?.ok_or_else(|| ::ash_core::Error::Missing { field: #name_str.into() })?
@@ -719,60 +729,71 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
+        let o_attrs = &a.outer_attrs;
         let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
 
         if a.is_enum {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             field_consts.push(quote! {
+                #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, #inner_ty> =
                     ::ash_core::Attr::new(#name_str);
             });
             if !has_action_conflict {
                 associated_field_consts.push(quote! {
+                    #(#o_attrs)*
                     pub const #id: ::ash_core::Attr<Self, #inner_ty> =
                         ::ash_core::Attr::new(#name_str);
                 });
             }
         } else if a.pk || is_uuid(ty) || option_inner(ty).is_some_and(is_uuid) {
             field_consts.push(quote! {
+                #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, ::uuid::Uuid> =
                     ::ash_core::Attr::new(#name_str);
             });
             if !has_action_conflict {
                 associated_field_consts.push(quote! {
+                    #(#o_attrs)*
                     pub const #id: ::ash_core::Attr<Self, ::uuid::Uuid> =
                         ::ash_core::Attr::new(#name_str);
                 });
             }
         } else if is_string(ty) || option_inner(ty).is_some_and(is_string) || a.atom.is_some() {
             field_consts.push(quote! {
+                #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, ::std::string::String> =
                     ::ash_core::Attr::new(#name_str);
             });
             if !has_action_conflict {
                 associated_field_consts.push(quote! {
+                    #(#o_attrs)*
                     pub const #id: ::ash_core::Attr<Self, ::std::string::String> =
                         ::ash_core::Attr::new(#name_str);
                 });
             }
         } else if is_i64(ty) || option_inner(ty).is_some_and(is_i64) {
             field_consts.push(quote! {
+                #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, i64> =
                     ::ash_core::Attr::new(#name_str);
             });
             if !has_action_conflict {
                 associated_field_consts.push(quote! {
+                    #(#o_attrs)*
                     pub const #id: ::ash_core::Attr<Self, i64> =
                         ::ash_core::Attr::new(#name_str);
                 });
             }
         } else if is_bool(ty) || option_inner(ty).is_some_and(is_bool) {
             field_consts.push(quote! {
+                #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, bool> =
                     ::ash_core::Attr::new(#name_str);
             });
             if !has_action_conflict {
                 associated_field_consts.push(quote! {
+                    #(#o_attrs)*
                     pub const #id: ::ash_core::Attr<Self, bool> =
                         ::ash_core::Attr::new(#name_str);
                 });
@@ -881,12 +902,16 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let mut filter_exprs = Vec::new();
 
         for key in &ident.keys {
-            let attr = def.attributes.iter().find(|a| a.ident == *key).ok_or_else(|| {
-                Error::new_spanned(
-                    key,
-                    format!("unknown attribute `{key}` in identity `{name}`"),
-                )
-            })?;
+            let attr = def
+                .attributes
+                .iter()
+                .find(|a| a.ident == *key)
+                .ok_or_else(|| {
+                    Error::new_spanned(
+                        key,
+                        format!("unknown attribute `{key}` in identity `{name}`"),
+                    )
+                })?;
             let ty = &attr.ty;
             arg_names.push(key);
             arg_tys.push(ty);
@@ -963,13 +988,22 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     } else if let Some(dl) = &def.data_layer {
         let s = dl.to_string();
         match s.as_str() {
-            "postgres" => (quote! { ::ash_core::PostgresStore }, quote! { "PostgresStore" }),
+            "postgres" => (
+                quote! { ::ash_core::PostgresStore },
+                quote! { "PostgresStore" },
+            ),
             "sqlite" => (quote! { ::ash_core::SqliteStore }, quote! { "SqliteStore" }),
             "memory" => (quote! { ::ash_core::MemoryStore }, quote! { "MemoryStore" }),
-            _ => (quote! { ::ash_core::DefaultStore }, quote! { "DefaultStore" }),
+            _ => (
+                quote! { ::ash_core::DefaultStore },
+                quote! { "DefaultStore" },
+            ),
         }
     } else {
-        (quote! { ::ash_core::DefaultStore }, quote! { "DefaultStore" })
+        (
+            quote! { ::ash_core::DefaultStore },
+            quote! { "DefaultStore" },
+        )
     };
 
     Ok(quote! {

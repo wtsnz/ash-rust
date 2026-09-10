@@ -26,11 +26,7 @@ pub fn derive_ash_enum(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn domain(input: TokenStream) -> TokenStream {
-    let def = parse_macro_input!(input as domain::DomainDefinition);
-    match domain::expand_domain(def) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.into_compile_error().into(),
-    }
+    domain::expand_dsl(input.into()).into()
 }
 
 #[proc_macro]

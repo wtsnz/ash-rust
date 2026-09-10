@@ -182,11 +182,22 @@ pub fn unknown_ident_error(typo: &Ident, candidates: &[&str], kind: &str) -> syn
 }
 
 pub fn extract_resource_ident(input: &proc_macro2::TokenStream) -> Option<Ident> {
+    extract_ident_after_keyword(input, &["resource", "name"])
+}
+
+pub fn extract_domain_ident(input: &proc_macro2::TokenStream) -> Option<Ident> {
+    extract_ident_after_keyword(input, &["domain", "name"])
+}
+
+fn extract_ident_after_keyword(
+    input: &proc_macro2::TokenStream,
+    keywords: &[&str],
+) -> Option<Ident> {
     let tokens: Vec<proc_macro2::TokenTree> = input.clone().into_iter().collect();
     let mut i = 0;
     while i < tokens.len() {
         if let proc_macro2::TokenTree::Ident(id) = &tokens[i]
-            && (id == "resource" || id == "name")
+            && keywords.iter().any(|kw| id == kw)
             && let Some(proc_macro2::TokenTree::Ident(name)) = tokens.get(i + 1)
         {
             return Some(name.clone());
@@ -297,5 +308,16 @@ mod tests {
         };
         let ident = extract_resource_ident(&tokens).expect("resource ident");
         assert_eq!(ident.to_string(), "Ticket");
+    }
+
+    #[test]
+    fn test_extract_domain_ident_from_header() {
+        let tokens = quote::quote! {
+            /// docs
+            domain Helpdesk;
+            resources { Ticket }
+        };
+        let ident = extract_domain_ident(&tokens).expect("domain ident");
+        assert_eq!(ident.to_string(), "Helpdesk");
     }
 }

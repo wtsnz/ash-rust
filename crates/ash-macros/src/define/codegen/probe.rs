@@ -179,6 +179,9 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 clippy::pedantic
             )]
             fn __ash_ide_typecheck(__ash_record: &#resource) {
+                #[allow(dead_code)]
+                fn __ash_assert_resource<T: ::ash_core::Resource>() {}
+
                 if false {
                     #(#action_probes)*
                     #(#section_probes)*
@@ -190,6 +193,13 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
 
 fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     let mut probes = Vec::new();
+
+    for rel in &def.relationships {
+        let dest = &rel.dest;
+        probes.push(quote_spanned! { dest.span() =>
+            __ash_assert_resource::<#dest>();
+        });
+    }
 
     for rel in &def.relationships {
         if let Some(fk_name) = &rel.fk {
@@ -417,5 +427,11 @@ mod tests {
         assert!(out.contains("comments"), "missing aggregate rel: {out}");
         assert!(out.contains("title"), "missing identity/field: {out}");
         assert!(out.contains("prefix"), "missing calc arg: {out}");
+        assert!(
+            out.contains("__ash_assert_resource"),
+            "missing relationship resource probe: {out}"
+        );
+        assert!(out.contains("User"), "missing dest type: {out}");
+        assert!(out.contains("Comment"), "missing dest type: {out}");
     }
 }

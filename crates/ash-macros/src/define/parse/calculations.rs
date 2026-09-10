@@ -13,10 +13,12 @@ pub fn parse_calculations(input: ParseStream) -> Result<Vec<CalculationSpec>> {
             let args_content;
             syn::parenthesized!(args_content in input);
             while !args_content.is_empty() {
+                let outer_attrs = args_content.call(syn::Attribute::parse_outer)?;
                 let arg_ident: Ident = args_content.parse()?;
                 let _: Token![:] = args_content.parse()?;
                 let arg_ty: Type = args_content.parse()?;
                 arguments.push(ArgumentSpec {
+                    outer_attrs,
                     name: arg_ident,
                     ty: arg_ty,
                     allow_nil: false,
@@ -79,7 +81,10 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                 syn::BinOp::Ge(_) => Ok(CalculationExprSpec::Gte(left, right)),
                 syn::BinOp::Lt(_) => Ok(CalculationExprSpec::Lt(left, right)),
                 syn::BinOp::Le(_) => Ok(CalculationExprSpec::Lte(left, right)),
-                _ => Err(Error::new_spanned(b, "unsupported binary operator in calculation")),
+                _ => Err(Error::new_spanned(
+                    b,
+                    "unsupported binary operator in calculation",
+                )),
             }
         }
         syn::Expr::Call(call) => {
@@ -87,7 +92,9 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                 syn::Expr::Path(p) => p.path.get_ident().cloned(),
                 _ => None,
             }
-            .ok_or_else(|| Error::new_spanned(&call.func, "expected function name in calculation"))?;
+            .ok_or_else(|| {
+                Error::new_spanned(&call.func, "expected function name in calculation")
+            })?;
 
             let name = func_ident.to_string();
             match name.as_str() {
@@ -108,7 +115,10 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                             lit: syn::Lit::Str(s),
                             ..
                         }) => Ok(CalculationExprSpec::Arg(s.value())),
-                        other => Err(Error::new_spanned(other, "expected argument identifier or string literal")),
+                        other => Err(Error::new_spanned(
+                            other,
+                            "expected argument identifier or string literal",
+                        )),
                     }
                 }
                 "string_length" => {
@@ -161,14 +171,18 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                         .args
                         .first()
                         .ok_or_else(|| Error::new_spanned(call, "expected argument"))?;
-                    Ok(CalculationExprSpec::Lower(Box::new(parse_calc_expr(first)?)))
+                    Ok(CalculationExprSpec::Lower(Box::new(parse_calc_expr(
+                        first,
+                    )?)))
                 }
                 "upper" => {
                     let first = call
                         .args
                         .first()
                         .ok_or_else(|| Error::new_spanned(call, "expected argument"))?;
-                    Ok(CalculationExprSpec::Upper(Box::new(parse_calc_expr(first)?)))
+                    Ok(CalculationExprSpec::Upper(Box::new(parse_calc_expr(
+                        first,
+                    )?)))
                 }
                 "if_else" => {
                     if call.args.len() != 3 {
@@ -216,9 +230,15 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
             syn::Lit::Int(n) => Ok(CalculationExprSpec::LitInt(n.base10_parse()?)),
             syn::Lit::Str(s) => Ok(CalculationExprSpec::LitString(s.value())),
             syn::Lit::Bool(b) => Ok(CalculationExprSpec::LitBool(b.value)),
-            _ => Err(Error::new_spanned(lit, "unsupported literal in calculation")),
+            _ => Err(Error::new_spanned(
+                lit,
+                "unsupported literal in calculation",
+            )),
         },
         syn::Expr::Paren(p) => parse_calc_expr(&p.expr),
-        other => Err(Error::new_spanned(other, "unsupported calculation expression")),
+        other => Err(Error::new_spanned(
+            other,
+            "unsupported calculation expression",
+        )),
     }
 }

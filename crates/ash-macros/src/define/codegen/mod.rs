@@ -4,11 +4,226 @@ pub mod policies;
 pub mod probe;
 pub mod resource;
 
-use crate::define::ast::ResourceDefinition;
+use crate::ast_helpers::{find_closest_match, unknown_ident_error};
+use crate::define::ast::{
+    ActionKind, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, RelType,
+    ResourceDefinition,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::collections::HashSet;
 use syn::{Error, Ident, Result};
+
+fn ident_refs(names: &[String]) -> Vec<&str> {
+    names.iter().map(String::as_str).collect()
+}
+
+fn unknown_field(ident: &Ident, names: &[String], kind: &str) -> Error {
+    unknown_ident_error(ident, &ident_refs(names), kind)
+}
+
+fn ident_from_name(name: &str) -> Ident {
+    syn::parse_str(name).unwrap_or_else(|_| Ident::new("unknown", proc_macro2::Span::call_site()))
+}
+
+fn attr_and_rel_names(def: &ResourceDefinition) -> Vec<String> {
+    let mut names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+    names.extend(def.relationships.iter().map(|r| r.ident.to_string()));
+    names
+}
+
+fn validate_policy_check(check: &PolicyCheckExpr, field_names: &[String]) -> Result<()> {
+    match check {
+        PolicyCheckExpr::RelatesToActor(field)
+        | PolicyCheckExpr::IsNil(field)
+        | PolicyCheckExpr::Eq { field, .. } => {
+            if !field_names.iter().any(|n| n == field) {
+                return Err(unknown_field(&ident_from_name(field), field_names, "field"));
+            }
+        }
+        PolicyCheckExpr::And(parts) | PolicyCheckExpr::Or(parts) => {
+            for part in parts {
+                validate_policy_check(part, field_names)?;
+            }
+        }
+        PolicyCheckExpr::Always
+        | PolicyCheckExpr::ActorPresent
+        | PolicyCheckExpr::ActorAttributeEquals { .. } => {}
+    }
+    Ok(())
+}
+
+fn validate_policy_effect(effect: &PolicyEffectSpec, field_names: &[String]) -> Result<()> {
+    let check = match effect {
+        PolicyEffectSpec::AuthorizeIf(c)
+        | PolicyEffectSpec::AuthorizeUnless(c)
+        | PolicyEffectSpec::ForbidIf(c)
+        | PolicyEffectSpec::ForbidUnless(c) => c,
+    };
+    validate_policy_check(check, field_names)
+}
+
+fn validate_calc_fields(
+    expr: &CalculationExprSpec,
+    attr_names: &[String],
+    arg_names: &[String],
+) -> Result<()> {
+    let candidates = {
+        let mut names = attr_names.to_vec();
+        names.extend(arg_names.iter().cloned());
+        names
+    };
+    match expr {
+        CalculationExprSpec::Field(ident) => {
+            let name = ident.to_string();
+            if !candidates.iter().any(|n| n == &name) {
+                return Err(unknown_field(ident, &candidates, "field"));
+            }
+        }
+        CalculationExprSpec::StringLength(field) => {
+            if !candidates.iter().any(|n| n == field) {
+                return Err(unknown_field(&ident_from_name(field), &candidates, "field"));
+            }
+        }
+        CalculationExprSpec::Add(left, right)
+        | CalculationExprSpec::Sub(left, right)
+        | CalculationExprSpec::Mul(left, right)
+        | CalculationExprSpec::Div(left, right)
+        | CalculationExprSpec::Eq(left, right)
+        | CalculationExprSpec::Ne(left, right)
+        | CalculationExprSpec::Gt(left, right)
+        | CalculationExprSpec::Gte(left, right)
+        | CalculationExprSpec::Lt(left, right)
+        | CalculationExprSpec::Lte(left, right) => {
+            validate_calc_fields(left, attr_names, arg_names)?;
+            validate_calc_fields(right, attr_names, arg_names)?;
+        }
+        CalculationExprSpec::Concat(parts) | CalculationExprSpec::Coalesce(parts) => {
+            for part in parts {
+                validate_calc_fields(part, attr_names, arg_names)?;
+            }
+        }
+        CalculationExprSpec::Lower(inner)
+        | CalculationExprSpec::Upper(inner)
+        | CalculationExprSpec::Length(inner) => {
+            validate_calc_fields(inner, attr_names, arg_names)?;
+        }
+        CalculationExprSpec::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            validate_calc_fields(cond, attr_names, arg_names)?;
+            validate_calc_fields(then_expr, attr_names, arg_names)?;
+            validate_calc_fields(else_expr, attr_names, arg_names)?;
+        }
+        CalculationExprSpec::Arg(_)
+        | CalculationExprSpec::LitInt(_)
+        | CalculationExprSpec::LitString(_)
+        | CalculationExprSpec::LitBool(_)
+        | CalculationExprSpec::Null
+        | CalculationExprSpec::Custom(_) => {}
+    }
+    Ok(())
+}
+
+fn check_multiple_primary_actions(def: &ResourceDefinition) -> Result<()> {
+    let mut seen: Vec<(ActionKind, &Ident)> = Vec::new();
+    for act in &def.actions {
+        if !act.primary {
+            continue;
+        }
+        if let Some((_, first)) = seen.iter().find(|(kind, _)| *kind == act.kind) {
+            return Err(Error::new_spanned(
+                &act.name,
+                format!(
+                    "multiple primary actions of kind '{}' on resource '{}' ('{}' and '{}') - only one primary action is allowed per kind",
+                    act.kind.as_str(),
+                    def.resource,
+                    first,
+                    act.name
+                ),
+            ));
+        }
+        seen.push((act.kind, &act.name));
+    }
+    Ok(())
+}
+
+fn validate_cross_section(def: &ResourceDefinition) -> Result<()> {
+    check_multiple_primary_actions(def)?;
+
+    let action_names: Vec<String> = def.actions.iter().map(|a| a.name.to_string()).collect();
+    let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+    let rel_names: Vec<String> = def
+        .relationships
+        .iter()
+        .map(|r| r.ident.to_string())
+        .collect();
+    let policy_fields = attr_and_rel_names(def);
+
+    for pol in &def.policies {
+        for when in &pol.whens {
+            if let PolicyWhenSpec::ActionName(act_name) = when
+                && !action_names.iter().any(|n| n == &act_name.to_string())
+            {
+                return Err(unknown_field(act_name, &action_names, "action"));
+            }
+        }
+        for check in &pol.checks {
+            validate_policy_effect(check, &policy_fields)?;
+        }
+    }
+
+    for fp in &def.field_policies {
+        if !attr_names.iter().any(|n| n == &fp.field.to_string()) {
+            return Err(unknown_field(&fp.field, &attr_names, "attribute"));
+        }
+        for check in &fp.checks {
+            validate_policy_effect(check, &policy_fields)?;
+        }
+    }
+
+    for rel in &def.relationships {
+        if rel.kind != RelType::BelongsTo {
+            continue;
+        }
+        let fk = rel
+            .fk
+            .clone()
+            .unwrap_or_else(|| format!("{}_id", rel.ident));
+        if attr_names.iter().any(|n| n == &fk) {
+            continue;
+        }
+        let span = rel.fk_span.unwrap_or_else(|| rel.ident.span());
+        let suggestion = find_closest_match(&fk, ident_refs(&attr_names));
+        let msg = if let Some(closest) = suggestion {
+            format!(
+                "belongs_to relationship `{}` requires foreign key `{fk}`, but no such attribute exists. Did you mean `{closest}`? Define `{fk}: Uuid`.",
+                rel.ident
+            )
+        } else {
+            format!(
+                "belongs_to relationship `{}` requires foreign key `{fk}`, but no such attribute exists. Define `{fk}: Uuid`.",
+                rel.ident
+            )
+        };
+        return Err(Error::new(span, msg));
+    }
+
+    for calc in &def.calculations {
+        let arg_names: Vec<String> = calc.arguments.iter().map(|a| a.name.to_string()).collect();
+        validate_calc_fields(&calc.expr, &attr_names, &arg_names)?;
+    }
+
+    for agg in &def.aggregates {
+        if !rel_names.iter().any(|n| n == &agg.relationship.to_string()) {
+            return Err(unknown_field(&agg.relationship, &rel_names, "relationship"));
+        }
+    }
+
+    Ok(())
+}
 
 fn check_unique_idents<'a>(idents: impl IntoIterator<Item = &'a Ident>, kind: &str) -> Result<()> {
     let mut seen = HashSet::new();
@@ -192,6 +407,8 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
             }
         }
     }
+
+    validate_cross_section(&def)?;
 
     let resource = &def.resource;
     let struct_and_resource_tokens = resource::expand_resource_struct(&def)?;
@@ -535,6 +752,267 @@ mod tests {
         assert!(
             msg.contains("Available attributes: id, subject, status, opener_id"),
             "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_policy_unknown_action_name_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open { primary; }
+                read read { primary; }
+            }
+            policies {
+                policy action(opn) {
+                    authorize_if always;
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `open`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_policy_unknown_check_field_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                author_id: Uuid,
+            }
+            relationships {
+                belongs_to author: User [fk: author_id];
+            }
+            policies {
+                policy always {
+                    authorize_if relates_to(auther);
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `author`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_policy_is_nil_unknown_field_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                assignee_id: Option<Uuid>,
+            }
+            policies {
+                policy always {
+                    authorize_if is_nil(assignee);
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `assignee_id`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_belongs_to_missing_fk_suggests_attribute_or_define() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                authorid: Uuid,
+            }
+            relationships {
+                belongs_to author: User;
+            }
+        });
+        let err = expand_err(def);
+        let msg = err.to_string();
+        assert!(msg.contains("author_id"), "got: {msg}");
+        assert!(
+            msg.contains("Did you mean `authorid`?") || msg.contains("Define `author_id: Uuid`"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_belongs_to_explicit_fk_typo_suggests_attribute() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                author_id: Uuid,
+            }
+            relationships {
+                belongs_to author: User [fk: auther_id];
+            }
+        });
+        let err = expand_err(def);
+        let msg = err.to_string();
+        assert!(msg.contains("Did you mean `author_id`?"), "got: {msg}");
+        assert!(msg.contains("Define `auther_id: Uuid`"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_belongs_to_matching_fk_expands() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                author_id: Uuid,
+            }
+            relationships {
+                belongs_to author: User [fk: author_id];
+            }
+            actions {
+                read read { primary; }
+            }
+        });
+        expand_define(def).expect("valid belongs_to should expand");
+    }
+
+    #[test]
+    fn test_calculation_unknown_field_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+            }
+            calculations {
+                title_len: i64 = string_length(titel);
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `title`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_calculation_unknown_field_ident_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+            }
+            calculations {
+                titled: String = titel;
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `title`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_aggregate_unknown_relationship_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            relationships {
+                has_many comments: Vec<Comment>;
+            }
+            aggregates {
+                comment_count: i64 = count(commnts);
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `comments`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_field_policy_unknown_target_suggests_did_you_mean() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+            }
+            field_policies {
+                field titel {
+                    authorize_if always;
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("Did you mean `title`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_multiple_primary_actions_of_same_kind_fail() {
+        let def = parse_def(quote! {
+            resource Ticket;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open { primary; }
+                create draft { primary; }
+            }
+        });
+        let err = expand_err(def);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("multiple primary actions of kind 'create' on resource 'Ticket' ('open' and 'draft')"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_attribute_docs_copied_to_field_consts_and_setters() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                /// The ticket subject
+                subject: String,
+            }
+            actions {
+                create open {
+                    accept [subject];
+                    /// Reason supplied by the caller
+                    argument reason: String;
+                }
+            }
+        });
+        let out = expand_define(def).expect("expand").to_string();
+        assert!(
+            out.contains("The ticket subject"),
+            "missing attribute docs: {out}"
+        );
+        assert!(
+            out.contains("Reason supplied by the caller"),
+            "missing argument docs: {out}"
         );
     }
 }
