@@ -25,6 +25,34 @@ pub struct ResourceDefinition {
     pub warnings: Vec<proc_macro2::TokenStream>,
 }
 
+impl ResourceDefinition {
+    pub fn empty(resource: Ident) -> Self {
+        Self {
+            outer_attrs: Vec::new(),
+            resource,
+            table: None,
+            attributes: Vec::new(),
+            relationships: Vec::new(),
+            calculations: Vec::new(),
+            aggregates: Vec::new(),
+            actions: Vec::new(),
+            policies: Vec::new(),
+            field_policies: Vec::new(),
+            extensions: Vec::new(),
+            notifiers: Vec::new(),
+            extends: Vec::new(),
+            optimistic_lock: None,
+            identities: Vec::new(),
+            embedded: false,
+            data_layer: None,
+            store: None,
+            timestamps: None,
+            multitenancy: None,
+            warnings: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MultitenancySpec {
     pub attribute: Option<String>,

@@ -17,10 +17,7 @@ resource! {
     actions {
         create submit {
             primary;
-            accept {
-                order_id: String,
-                amount: i64,
-            }
+            accept [order_id, amount];
             argument reason: String;
             argument feedback: Option<String>;
             validate present(reason);

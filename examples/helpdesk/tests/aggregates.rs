@@ -20,7 +20,7 @@ mod order {
         }
 
         relationships {
-            has_many line_items: Vec<LineItem> [fk: "order_id"],
+            has_many line_items: LineItem [fk: order_id],
         }
 
         aggregates {
@@ -33,9 +33,7 @@ mod order {
 
         actions {
             create create {
-                accept {
-                    customer_name: String,
-                }
+                accept [customer_name];
             }
             read read {
                 primary
@@ -69,17 +67,12 @@ mod line_item {
         }
 
         relationships {
-            belongs_to order: Option<Order>,
+            belongs_to order: Order,
         }
 
         actions {
             create create {
-                accept {
-                    order_id: Uuid,
-                    sku: String,
-                    amount: i64,
-                    status: String,
-                }
+                accept [order_id, sku, amount, status];
             }
             read read {
                 primary

@@ -25,8 +25,8 @@ resource! {
             primary;
         }
 
-        // 1. Ash Elixir style `action <name>, <return_type>` with inline run closure:
-        action send_message, bool {
+        // 1. Generic action with inline run closure:
+        generic send_message, bool {
             argument recipient: String;
             argument message: String;
             argument priority: Option<String>;
@@ -56,12 +56,12 @@ resource! {
         }
 
         // 3. Generic action without inline run (runner provided dynamically via `.run(...)`):
-        action dynamic_operation, String {
+        generic dynamic_operation, String {
             argument payload: String;
         }
 
         // 4. Generic action protected by policy:
-        action admin_purge, bool {
+        generic admin_purge, bool {
             argument reason: String;
 
             run |_input| async move {

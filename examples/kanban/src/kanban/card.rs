@@ -22,10 +22,10 @@ resource! {
     }
 
     relationships {
-        belongs_to list: Option<List> [fk: "list_id"],
-        belongs_to board: Option<Board> [fk: "board_id"],
-        has_many checklist_items: Vec<ChecklistItem> [fk: "card_id"],
-        has_many comments: Vec<Comment> [fk: "card_id"],
+        belongs_to list: List [fk: list_id],
+        belongs_to board: Board [fk: board_id],
+        has_many checklist_items: ChecklistItem [fk: card_id],
+        has_many comments: Comment [fk: card_id],
     }
 
     calculations {
@@ -40,13 +40,7 @@ resource! {
 
     actions {
         create create {
-            accept {
-                board_id: Uuid,
-                list_id: Uuid,
-                title: String,
-                description: Option<String>,
-                position: i64,
-            }
+            accept [board_id, list_id, title, description, position];
             validate present(title);
             validate string_length(title, min = 1);
             change set(archived = false);
@@ -58,23 +52,15 @@ resource! {
         }
 
         update update_details {
-            accept {
-                title: String,
-                description: Option<String>,
-            }
+            accept [title, description];
         }
 
         update move_to_list {
-            accept {
-                list_id: Uuid,
-                position: i64,
-            }
+            accept [list_id, position];
         }
 
         update assign {
-            accept {
-                assignee_id: Option<Uuid>,
-            }
+            accept [assignee_id];
         }
 
         update archive {

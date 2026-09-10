@@ -15,17 +15,13 @@ resource! {
     }
 
     relationships {
-        belongs_to workspace: Option<Workspace> [fk: "workspace_id"],
-        belongs_to user: Option<User> [fk: "user_id"],
+        belongs_to workspace: Workspace [fk: workspace_id],
+        belongs_to user: User [fk: user_id],
     }
 
     actions {
         create add {
-            accept {
-                workspace_id: Uuid,
-                user_id: Uuid,
-                role: String,
-            }
+            accept [workspace_id, user_id, role];
             validate present(role);
             validate one_of(role, ["admin", "member", "guest"]);
         }

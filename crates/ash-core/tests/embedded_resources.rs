@@ -21,15 +21,15 @@ pub mod address {
             create create {
                 primary;
                 accept [street, city, zip_code];
-                validation present(street);
-                validation present(zip_code);
-                validation string_length(street, min: 3);
+                validate present(street);
+                validate present(zip_code);
+                validate string_length(street, min: 3);
             }
 
             update update {
                 primary;
                 accept [street, city, zip_code];
-                validation present(street);
+                validate present(street);
             }
         }
     }

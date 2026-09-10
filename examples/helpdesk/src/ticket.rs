@@ -47,7 +47,7 @@ resource! {
     }
 
     relationships {
-        belongs_to representative: Option<Representative>,
+        belongs_to representative: Representative,
     }
 
     calculations {
@@ -56,9 +56,7 @@ resource! {
 
     actions {
         create open {
-            accept {
-                subject: String,
-            }
+            accept [subject];
             validate present(subject);
             validate string_length(subject, min = 2);
             change set(status = "open");
@@ -70,9 +68,7 @@ resource! {
         }
 
         update assign {
-            accept {
-                representative_id: Uuid,
-            }
+            accept [representative_id];
         }
 
         update close {
@@ -93,9 +89,7 @@ resource! {
         }
 
         create intake {
-            accept {
-                subject: String,
-            }
+            accept [subject];
             change set(status = "open");
             change relate_actor(opener_id);
             persist manual;

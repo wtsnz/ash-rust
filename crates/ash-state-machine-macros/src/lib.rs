@@ -329,7 +329,7 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
         let t_action_str = &t.action;
 
         let val_tokens = quote! {
-            validation custom(&::ash_state_machine::TransitionValidation::new(
+            validate custom(&::ash_state_machine::TransitionValidation::new(
                 #state_attr_str,
                 &[#(#t_from),*],
                 #t_to,

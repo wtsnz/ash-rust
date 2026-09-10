@@ -435,8 +435,8 @@ mod tests {
                 title: String,
             }
             relationships {
-                belongs_to author: User [fk: "author_id"];
-                has_many comments: Vec<Comment>;
+                belongs_to author: User [fk: author_id];
+                has_many comments: Comment;
             }
             aggregates {
                 comment_count: i64 = count(comments);
@@ -483,7 +483,7 @@ mod tests {
                 id: Uuid [pk],
             }
             relationships {
-                has_many comments: Vec<Comment> [fk: ticket_id];
+                has_many comments: Comment [fk: ticket_id];
             }
             actions {
                 read read { primary; }

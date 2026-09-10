@@ -37,12 +37,7 @@ pub mod user_profile_mod {
         actions {
             create create {
                 primary;
-                accept {
-                    user_id: Uuid,
-                    name: String,
-                    ssn: Option<String>,
-                    salary: Option<i64>,
-                }
+                accept [user_id, name, ssn, salary];
             }
 
             read read {
@@ -51,11 +46,7 @@ pub mod user_profile_mod {
 
             update update {
                 primary;
-                accept {
-                    name: String,
-                    ssn: Option<String>,
-                    salary: Option<i64>,
-                }
+                accept [name, ssn, salary];
             }
         }
     }
@@ -76,7 +67,7 @@ pub mod department_mod {
         }
 
         relationships {
-            belongs_to manager: Option<UserProfile> [fk: "manager_id"];
+            belongs_to manager: UserProfile [fk: manager_id];
         }
 
         policies {

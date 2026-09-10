@@ -17,16 +17,11 @@ resource! {
     actions {
         create open {
             primary;
-            accept {
-                holder: String,
-                balance: i64,
-            }
+            accept [holder, balance];
         }
 
         update deposit {
-            accept {
-                balance: i64,
-            }
+            accept [balance];
         }
     }
 }

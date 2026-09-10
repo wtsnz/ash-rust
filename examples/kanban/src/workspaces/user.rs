@@ -13,10 +13,7 @@ resource! {
 
     actions {
         create register {
-            accept {
-                name: String,
-                email: String,
-            }
+            accept [name, email];
             validate present(name);
             validate present(email);
         }

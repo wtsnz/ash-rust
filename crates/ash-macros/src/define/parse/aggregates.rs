@@ -45,7 +45,9 @@ pub fn parse_aggregates(input: ParseStream) -> Result<Vec<AggregateSpec>> {
             other => {
                 return Err(Error::new_spanned(
                     func,
-                    format!("unknown aggregate function `{other}`, expected `count`, `exists`, `first`, or `sum`"),
+                    format!(
+                        "unknown aggregate function `{other}`, expected `count`, `exists`, `first`, or `sum`"
+                    ),
                 ));
             }
         };
@@ -68,7 +70,9 @@ pub fn parse_aggregates(input: ParseStream) -> Result<Vec<AggregateSpec>> {
     Ok(aggs)
 }
 
-pub fn parse_optional_aggregate_filter(content: ParseStream) -> Result<Option<AggregateFilterSpec>> {
+pub fn parse_optional_aggregate_filter(
+    content: ParseStream,
+) -> Result<Option<AggregateFilterSpec>> {
     if content.is_empty() {
         return Ok(None);
     }
@@ -98,7 +102,10 @@ pub fn parse_optional_aggregate_filter(content: ParseStream) -> Result<Option<Ag
         let _: Token![=] = content.parse()?;
         false
     } else {
-        return Err(Error::new_spanned(field, "expected `==`, `!=`, or `=` in filter"));
+        return Err(Error::new_spanned(
+            field,
+            "expected `==`, `!=`, or `=` in filter",
+        ));
     };
     let value: Lit = content.parse()?;
     if is_ne {

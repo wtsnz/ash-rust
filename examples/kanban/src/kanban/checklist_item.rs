@@ -15,16 +15,12 @@ resource! {
     }
 
     relationships {
-        belongs_to card: Option<Card> [fk: "card_id"],
+        belongs_to card: Card [fk: card_id],
     }
 
     actions {
         create create {
-            accept {
-                card_id: Uuid,
-                title: String,
-                position: i64,
-            }
+            accept [card_id, title, position];
             validate present(title);
             change set(completed = false);
         }
@@ -34,9 +30,7 @@ resource! {
         }
 
         update toggle {
-            accept {
-                completed: bool,
-            }
+            accept [completed];
         }
 
         destroy destroy {}

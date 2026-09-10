@@ -40,7 +40,7 @@ ash_core::resource! {
         read read { primary; }
         update update {
             primary;
-            accept { api_key_hash: Option<String> }
+            accept [api_key_hash];
         }
     }
 }

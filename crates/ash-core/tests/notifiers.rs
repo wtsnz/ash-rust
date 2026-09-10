@@ -34,13 +34,10 @@ resource! {
     actions {
         create create {
             primary;
-            accept {
-                customer: String,
-                amount: i64,
-            }
+            accept [customer, amount];
             change set_attribute(status, "pending");
-            validation present(customer);
-            validation numericality(amount, min: 1);
+            validate present(customer);
+            validate numericality(amount, min: 1);
         }
 
         read read {

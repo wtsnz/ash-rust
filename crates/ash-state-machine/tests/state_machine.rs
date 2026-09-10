@@ -53,9 +53,7 @@ resource! {
     actions {
         create draft {
             primary;
-            accept {
-                total: i64,
-            }
+            accept [total];
             change custom(&DEFAULT_DRAFT_CHANGE);
         }
 

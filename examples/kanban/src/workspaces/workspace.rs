@@ -14,7 +14,7 @@ resource! {
     }
 
     relationships {
-        has_many members: Vec<WorkspaceMember> [fk: "workspace_id"],
+        has_many members: WorkspaceMember [fk: workspace_id],
     }
 
     aggregates {
@@ -24,10 +24,7 @@ resource! {
 
     actions {
         create create {
-            accept {
-                name: String,
-                slug: String,
-            }
+            accept [name, slug];
             validate present(name);
             validate present(slug);
             change relate_actor(owner_id);
