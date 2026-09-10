@@ -29,6 +29,7 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
         let ty: Type = input.parse()?;
 
         let mut fk = None;
+        let mut fk_span = None;
         let mut through = None;
         let mut source_attribute_on_join_resource = None;
         let mut destination_attribute_on_join_resource = None;
@@ -46,8 +47,15 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
                         } else if flags_content.peek(Token![=]) {
                             let _: Token![=] = flags_content.parse()?;
                         }
-                        let s: syn::LitStr = flags_content.parse()?;
-                        fk = Some(s.value());
+                        if flags_content.peek(syn::LitStr) {
+                            let s: syn::LitStr = flags_content.parse()?;
+                            fk_span = Some(s.span());
+                            fk = Some(s.value());
+                        } else {
+                            let id: Ident = flags_content.parse()?;
+                            fk_span = Some(id.span());
+                            fk = Some(id.to_string());
+                        }
                     }
                     "through" => {
                         if flags_content.peek(Token![:]) {
@@ -97,7 +105,9 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
                             other => {
                                 return Err(Error::new_spanned(
                                     flag_ident,
-                                    format!("unknown on_delete value `{other}`, expected `cascade`, `nilify`, `restrict`, or `nothing`"),
+                                    format!(
+                                        "unknown on_delete value `{other}`, expected `cascade`, `nilify`, `restrict`, or `nothing`"
+                                    ),
                                 ));
                             }
                         };
@@ -181,6 +191,7 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
             dest,
             struct_field_ty,
             fk,
+            fk_span,
             through,
             source_attribute_on_join_resource,
             destination_attribute_on_join_resource,

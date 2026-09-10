@@ -160,22 +160,40 @@ where
     best.map(|(c, _)| c)
 }
 
+fn available_label(kind: &str) -> String {
+    if kind.ends_with('s') {
+        format!("Available {kind}")
+    } else {
+        format!("Available {kind}s")
+    }
+}
+
 pub fn unknown_ident_error(typo: &Ident, candidates: &[&str], kind: &str) -> syn::Error {
     let name = typo.to_string();
+    let available = format!("{}: {}", available_label(kind), candidates.join(", "));
     if let Some(suggestion) = find_closest_match(&name, candidates.iter().copied()) {
         syn::Error::new_spanned(
             typo,
-            format!("unknown {kind} `{name}`. Did you mean `{suggestion}`?"),
+            format!("unknown {kind} `{name}`. Did you mean `{suggestion}`? {available}"),
         )
     } else {
-        syn::Error::new_spanned(
-            typo,
-            format!(
-                "unknown {kind} `{name}`. Expected one of: {}",
-                candidates.join(", ")
-            ),
-        )
+        syn::Error::new_spanned(typo, format!("unknown {kind} `{name}`. {available}"))
     }
+}
+
+pub fn extract_resource_ident(input: &proc_macro2::TokenStream) -> Option<Ident> {
+    let tokens: Vec<proc_macro2::TokenTree> = input.clone().into_iter().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        if let proc_macro2::TokenTree::Ident(id) = &tokens[i]
+            && (id == "resource" || id == "name")
+            && let Some(proc_macro2::TokenTree::Ident(name)) = tokens.get(i + 1)
+        {
+            return Some(name.clone());
+        }
+        i += 1;
+    }
+    None
 }
 
 pub fn make_deprecated_warning(span: proc_macro2::Span, msg: &str) -> proc_macro2::TokenStream {
@@ -238,5 +256,46 @@ mod tests {
             find_closest_match("set_attr", changes.iter().copied()),
             Some("set_attribute")
         );
+    }
+
+    #[test]
+    fn test_unknown_ident_error_includes_suggestion_and_candidates() {
+        let typo: Ident = syn::parse_str("subjet").unwrap();
+        let err = unknown_ident_error(
+            &typo,
+            &["id", "subject", "status", "opener_id"],
+            "attribute",
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("unknown attribute `subjet`"), "got: {msg}");
+        assert!(msg.contains("Did you mean `subject`?"), "got: {msg}");
+        assert!(
+            msg.contains("Available attributes: id, subject, status, opener_id"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_unknown_ident_error_lists_candidates_without_suggestion() {
+        let typo: Ident = syn::parse_str("zzzzzzzz").unwrap();
+        let err = unknown_ident_error(&typo, &["id", "subject", "status"], "attribute");
+        let msg = err.to_string();
+        assert!(msg.contains("unknown attribute `zzzzzzzz`"), "got: {msg}");
+        assert!(!msg.contains("Did you mean"), "got: {msg}");
+        assert!(
+            msg.contains("Available attributes: id, subject, status"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_extract_resource_ident_from_header() {
+        let tokens = quote::quote! {
+            /// docs
+            resource Ticket;
+            attributes { id: Uuid [pk] }
+        };
+        let ident = extract_resource_ident(&tokens).expect("resource ident");
+        assert_eq!(ident.to_string(), "Ticket");
     }
 }

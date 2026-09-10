@@ -340,6 +340,8 @@ pub fn parse_actions(
             }
         }
 
+        super::helpers::optional_semi(input)?;
+
         actions.push(ActionSpec {
             outer_attrs,
             kind,
@@ -485,7 +487,10 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
                 let expr = call.args[0].clone();
                 return Ok(ChangeSpec::AfterTransaction(expr));
             }
-            Err(Error::new_spanned(call, "expected `after_transaction(expr)`"))
+            Err(Error::new_spanned(
+                call,
+                "expected `after_transaction(expr)`",
+            ))
         }
         _ => {
             const CHANGE_NAMES: &[&str] = &[
@@ -566,7 +571,9 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                         other => {
                             return Err(Error::new_spanned(
                                 key,
-                                format!("unknown string_length option `{other}`, expected `min` or `max`"),
+                                format!(
+                                    "unknown string_length option `{other}`, expected `min` or `max`"
+                                ),
                             ));
                         }
                     }
@@ -578,7 +585,9 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
             {
                 return Err(Error::new_spanned(
                     &field,
-                    format!("invalid string_length for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
+                    format!(
+                        "invalid string_length for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"
+                    ),
                 ));
             }
 
@@ -656,7 +665,9 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                         other => {
                             return Err(Error::new_spanned(
                                 key,
-                                format!("unknown numericality option `{other}`, expected `min` or `max`"),
+                                format!(
+                                    "unknown numericality option `{other}`, expected `min` or `max`"
+                                ),
                             ));
                         }
                     }
@@ -668,7 +679,9 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
             {
                 return Err(Error::new_spanned(
                     &field,
-                    format!("invalid numericality for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
+                    format!(
+                        "invalid numericality for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"
+                    ),
                 ));
             }
 

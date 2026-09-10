@@ -80,24 +80,31 @@ impl Parse for ResourceDefinition {
                 if timestamps.is_none() {
                     timestamps = attr_ts;
                 }
+                helpers::optional_semi(input)?;
             } else if section_ident == "relationships" {
                 parse_braced!(input, content);
                 relationships = relationships::parse_relationships(&content)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "calculations" {
                 parse_braced!(input, content);
                 calculations = calculations::parse_calculations(&content)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "aggregates" {
                 parse_braced!(input, content);
                 aggregates = aggregates::parse_aggregates(&content)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "actions" {
                 parse_braced!(input, content);
                 actions = actions::parse_actions(&content, &mut warnings)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "policies" {
                 parse_braced!(input, content);
                 policies = policies::parse_policies(&content)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "field_policies" {
                 parse_braced!(input, content);
                 field_policies = policies::parse_field_policies(&content)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "extensions" {
                 if input.peek(syn::token::Bracket) {
                     let items;
@@ -151,10 +158,7 @@ impl Parse for ResourceDefinition {
                 if input.peek(Token![;]) {
                     let _: Token![;] = input.parse()?;
                 }
-                extends.push(crate::define::ast::ExtendSpec {
-                    macro_path,
-                    tokens,
-                });
+                extends.push(crate::define::ast::ExtendSpec { macro_path, tokens });
             } else if section_ident == "optimistic_lock" {
                 if input.peek(Token![:]) {
                     let _: Token![:] = input.parse()?;
@@ -167,6 +171,7 @@ impl Parse for ResourceDefinition {
             } else if section_ident == "identities" {
                 parse_braced!(input, content);
                 identities = identities::parse_identities(&content)?;
+                helpers::optional_semi(input)?;
             } else if section_ident == "embedded" {
                 embedded = true;
                 if input.peek(Token![;]) {
@@ -226,6 +231,7 @@ impl Parse for ResourceDefinition {
                         let _: Token![;] = content.parse()?;
                     }
                 }
+                helpers::optional_semi(input)?;
                 multitenancy = Some(crate::define::ast::MultitenancySpec {
                     attribute,
                     strategy,
@@ -361,7 +367,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `actions`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `actions`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -373,7 +383,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `create`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `create`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -387,7 +401,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `validate`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `validate`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -401,7 +419,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `present`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `present`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -415,7 +437,12 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("min (10) cannot be greater than max (2)"), "got: {}", err);
+        assert!(
+            err.to_string()
+                .contains("min (10) cannot be greater than max (2)"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -429,7 +456,12 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("min (100) cannot be greater than max (18)"), "got: {}", err);
+        assert!(
+            err.to_string()
+                .contains("min (100) cannot be greater than max (18)"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -471,7 +503,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `belongs_to`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `belongs_to`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -483,7 +519,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `fk`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `fk`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -495,7 +535,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `pk`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `pk`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -509,7 +553,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `policy`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `policy`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -523,7 +571,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `authorize_if`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `authorize_if`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -537,7 +589,11 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `always`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `always`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -551,6 +607,56 @@ mod tests {
             }
         };
         let err = parse_err(tokens);
-        assert!(err.to_string().contains("Did you mean `actor_eq`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `actor_eq`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_permissive_trailing_punctuation_and_empty_sections() {
+        let tokens = quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+                status: String,
+            };
+            relationships {};
+            policies {};
+            field_policies {};
+            calculations {};
+            aggregates {};
+            identities {
+                identity by_title: [title,];
+            };
+            actions {
+                create open {
+                    primary;
+                    accept [title,];
+                    validate one_of(status, ["open", "closed",]);
+                };
+                read read {
+                    primary;
+                };
+            };
+        };
+        let def = match syn::parse2::<ResourceDefinition>(tokens) {
+            Ok(d) => d,
+            Err(e) => panic!("parse failed: {e}"),
+        };
+        assert_eq!(def.attributes.len(), 3);
+        assert!(def.relationships.is_empty());
+        assert!(def.policies.is_empty());
+        assert!(def.field_policies.is_empty());
+        assert!(def.calculations.is_empty());
+        assert!(def.aggregates.is_empty());
+        assert_eq!(def.identities.len(), 1);
+        assert_eq!(def.identities[0].keys.len(), 1);
+        assert_eq!(def.identities[0].keys[0].to_string(), "title");
+        assert_eq!(def.actions.len(), 2);
+        assert_eq!(def.actions[0].accept.len(), 1);
+        assert_eq!(def.actions[0].validations.len(), 1);
     }
 }

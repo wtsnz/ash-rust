@@ -75,10 +75,7 @@ async fn test_inherent_action_invocations_without_trait_imports() {
     let ctx = Context::new(Memory::new());
 
     // 1. Inherent create without trait imports
-    let ticket = Ticket::create(&ctx)
-        .title("Network down")
-        .await
-        .unwrap();
+    let ticket = Ticket::create(&ctx).title("Network down").await.unwrap();
     assert_eq!(ticket.title, "Network down");
     assert_eq!(ticket.status, "open");
 
@@ -109,4 +106,61 @@ async fn test_inherent_action_invocations_without_trait_imports() {
 
     // Verify it was destroyed
     assert!(Ticket::get(&ctx, updated_by_owned.id).await.is_err());
+}
+
+mod permissive {
+    use super::*;
+
+    resource! {
+        resource PermissiveTicket;
+        table "permissive_tickets";
+
+        attributes {
+            id: Uuid [pk],
+            title: String,
+            status: String,
+        };
+
+        relationships {};
+
+        policies {};
+
+        identities {
+            identity by_title: [title,];
+        };
+
+        calculations {
+            title_len: i64 = string_length(title);
+        };
+
+        actions {
+            create create {
+                primary;
+                accept [title,];
+                change set(status = "open");
+                validate one_of(status, ["open", "closed",]);
+            };
+
+            read read {
+                primary;
+            };
+        };
+    }
+}
+
+use permissive::PermissiveTicket;
+
+#[tokio::test]
+async fn test_permissive_punctuation_and_empty_sections() {
+    let ctx = Context::new(Memory::new());
+
+    let ticket = PermissiveTicket::create(&ctx)
+        .title("Permissive syntax")
+        .await
+        .unwrap();
+    assert_eq!(ticket.title, "Permissive syntax");
+    assert_eq!(ticket.status, "open");
+
+    let fetched = PermissiveTicket::get(&ctx, ticket.id).await.unwrap();
+    assert_eq!(fetched.title, ticket.title);
 }

@@ -81,6 +81,7 @@ pub struct RelationshipSpec {
     pub dest: Ident,
     pub struct_field_ty: Type,
     pub fk: Option<String>,
+    pub fk_span: Option<proc_macro2::Span>,
     pub through: Option<Ident>,
     pub source_attribute_on_join_resource: Option<String>,
     pub destination_attribute_on_join_resource: Option<String>,
@@ -221,11 +222,25 @@ pub struct FieldAccept {
 }
 
 pub enum ChangeSpec {
-    Set { field: Ident, value: Lit },
-    SetNew { field: Ident, value: Lit },
-    RelateActor { field: Ident },
-    SetFromArg { field: Ident, argument: Ident },
-    ManageRelationship { relationship: Ident, rel_type: Ident },
+    Set {
+        field: Ident,
+        value: Lit,
+    },
+    SetNew {
+        field: Ident,
+        value: Lit,
+    },
+    RelateActor {
+        field: Ident,
+    },
+    SetFromArg {
+        field: Ident,
+        argument: Ident,
+    },
+    ManageRelationship {
+        relationship: Ident,
+        rel_type: Ident,
+    },
     BeforeAction(Expr),
     AfterAction(Expr),
     AfterTransaction(Expr),
