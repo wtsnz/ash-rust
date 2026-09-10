@@ -7,9 +7,44 @@ pub mod resource;
 use crate::define::ast::ResourceDefinition;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::Result;
+use std::collections::HashSet;
+use syn::{Error, Ident, Result};
+
+fn check_unique_idents<'a>(idents: impl IntoIterator<Item = &'a Ident>, kind: &str) -> Result<()> {
+    let mut seen = HashSet::new();
+    for ident in idents {
+        let name = ident.to_string();
+        if !seen.insert(name.clone()) {
+            return Err(Error::new_spanned(
+                ident,
+                format!("duplicate {kind} `{name}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_name_collisions(def: &ResourceDefinition) -> Result<()> {
+    check_unique_idents(def.attributes.iter().map(|a| &a.ident), "attribute")?;
+    check_unique_idents(def.actions.iter().map(|a| &a.name), "action")?;
+    check_unique_idents(def.identities.iter().map(|i| &i.name), "identity")?;
+
+    let attr_names: HashSet<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+    for rel in &def.relationships {
+        let name = rel.ident.to_string();
+        if attr_names.contains(&name) {
+            return Err(Error::new_spanned(
+                &rel.ident,
+                format!("name collision: `{name}` is both an attribute and a relationship"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
+    check_name_collisions(&def)?;
+
     // 0. Resolve accept field types from def.attributes for bracketed accept lists,
     // and validate all accept, change, validation, preparation, and identity fields.
     for action in &mut def.actions {
@@ -21,9 +56,14 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
                         acc.ty = attr.ty.clone();
                     }
                 } else {
-                    let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                    let attr_names: Vec<String> =
+                        def.attributes.iter().map(|a| a.ident.to_string()).collect();
                     let attr_refs: Vec<&str> = attr_names.iter().map(|s| s.as_str()).collect();
-                    return Err(crate::ast_helpers::unknown_ident_error(&acc.name, &attr_refs, "attribute"));
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &acc.name,
+                        &attr_refs,
+                        "attribute",
+                    ));
                 }
             }
         }
@@ -33,36 +73,65 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
                 crate::define::ast::ChangeSpec::Set { field, .. }
                 | crate::define::ast::ChangeSpec::SetNew { field, .. } => {
                     if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                        let attr_names: Vec<String> =
+                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
                         let attr_refs: Vec<&str> = attr_names.iter().map(|s| s.as_str()).collect();
-                        return Err(crate::ast_helpers::unknown_ident_error(field, &attr_refs, "attribute"));
+                        return Err(crate::ast_helpers::unknown_ident_error(
+                            field,
+                            &attr_refs,
+                            "attribute",
+                        ));
                     }
                 }
                 crate::define::ast::ChangeSpec::SetFromArg { field, argument } => {
                     if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                        let attr_names: Vec<String> =
+                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
                         let attr_refs: Vec<&str> = attr_names.iter().map(|s| s.as_str()).collect();
-                        return Err(crate::ast_helpers::unknown_ident_error(field, &attr_refs, "attribute"));
+                        return Err(crate::ast_helpers::unknown_ident_error(
+                            field,
+                            &attr_refs,
+                            "attribute",
+                        ));
                     }
                     if action.arguments.iter().all(|a| a.name != *argument) {
-                        let arg_names: Vec<String> = action.arguments.iter().map(|a| a.name.to_string()).collect();
+                        let arg_names: Vec<String> = action
+                            .arguments
+                            .iter()
+                            .map(|a| a.name.to_string())
+                            .collect();
                         let arg_refs: Vec<&str> = arg_names.iter().map(|s| s.as_str()).collect();
-                        return Err(crate::ast_helpers::unknown_ident_error(argument, &arg_refs, "argument"));
+                        return Err(crate::ast_helpers::unknown_ident_error(
+                            argument, &arg_refs, "argument",
+                        ));
                     }
                 }
                 crate::define::ast::ChangeSpec::RelateActor { field } => {
                     if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                        let attr_names: Vec<String> =
+                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
                         let attr_refs: Vec<&str> = attr_names.iter().map(|s| s.as_str()).collect();
-                        return Err(crate::ast_helpers::unknown_ident_error(field, &attr_refs, "attribute"));
+                        return Err(crate::ast_helpers::unknown_ident_error(
+                            field,
+                            &attr_refs,
+                            "attribute",
+                        ));
                     }
                 }
                 crate::define::ast::ChangeSpec::ManageRelationship { relationship, .. }
                     if def.relationships.iter().all(|r| r.ident != *relationship) =>
                 {
-                    let rel_names: Vec<String> = def.relationships.iter().map(|r| r.ident.to_string()).collect();
+                    let rel_names: Vec<String> = def
+                        .relationships
+                        .iter()
+                        .map(|r| r.ident.to_string())
+                        .collect();
                     let rel_refs: Vec<&str> = rel_names.iter().map(|s| s.as_str()).collect();
-                    return Err(crate::ast_helpers::unknown_ident_error(relationship, &rel_refs, "relationship"));
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        relationship,
+                        &rel_refs,
+                        "relationship",
+                    ));
                 }
                 _ => {}
             }
@@ -72,9 +141,14 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
             if let crate::define::ast::PreparationSpec::Sort { field, .. } = prep
                 && def.attributes.iter().all(|a| a.ident != *field)
             {
-                let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                let attr_names: Vec<String> =
+                    def.attributes.iter().map(|a| a.ident.to_string()).collect();
                 let attr_refs: Vec<&str> = attr_names.iter().map(|s| s.as_str()).collect();
-                return Err(crate::ast_helpers::unknown_ident_error(field, &attr_refs, "attribute"));
+                return Err(crate::ast_helpers::unknown_ident_error(
+                    field,
+                    &attr_refs,
+                    "attribute",
+                ));
             }
         }
 
@@ -90,10 +164,15 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
                 let is_attr = def.attributes.iter().any(|a| a.ident == *field);
                 let is_arg = action.arguments.iter().any(|a| a.name == *field);
                 if !is_attr && !is_arg {
-                    let mut candidates: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                    let mut candidates: Vec<String> =
+                        def.attributes.iter().map(|a| a.ident.to_string()).collect();
                     candidates.extend(action.arguments.iter().map(|a| a.name.to_string()));
                     let cand_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
-                    return Err(crate::ast_helpers::unknown_ident_error(field, &cand_refs, "attribute or argument"));
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        field,
+                        &cand_refs,
+                        "attribute or argument",
+                    ));
                 }
             }
         }
@@ -102,9 +181,14 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
     for identity in &def.identities {
         for key in &identity.keys {
             if def.attributes.iter().all(|a| a.ident != *key) {
-                let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                let attr_names: Vec<String> =
+                    def.attributes.iter().map(|a| a.ident.to_string()).collect();
                 let attr_refs: Vec<&str> = attr_names.iter().map(|s| s.as_str()).collect();
-                return Err(crate::ast_helpers::unknown_ident_error(key, &attr_refs, "attribute"));
+                return Err(crate::ast_helpers::unknown_ident_error(
+                    key,
+                    &attr_refs,
+                    "attribute",
+                ));
             }
         }
     }
@@ -200,7 +284,11 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `subject`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `subject`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -220,7 +308,11 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `subject`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `subject`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -240,7 +332,11 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `reason_input`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `reason_input`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -261,7 +357,11 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `subject`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `subject`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -280,7 +380,11 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `status`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `status`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -300,7 +404,11 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `subject`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `subject`?"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -317,6 +425,116 @@ mod tests {
         };
         let def = parse_def(tokens);
         let err = expand_err(def);
-        assert!(err.to_string().contains("Did you mean `email`?"), "got: {}", err);
+        assert!(
+            err.to_string().contains("Did you mean `email`?"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_duplicate_attribute_names_fail() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+                title: String,
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("duplicate attribute `title`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_duplicate_action_names_fail() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open { primary; }
+                update open { primary; }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains("duplicate action `open`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_duplicate_identity_names_fail() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                email: String,
+            }
+            identities {
+                identity unique_email: [email];
+                identity unique_email: [id];
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string()
+                .contains("duplicate identity `unique_email`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_attribute_relationship_name_collision_fails() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                user: Uuid,
+            }
+            relationships {
+                belongs_to user: User [fk: "user"];
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string()
+                .contains("name collision: `user` is both an attribute and a relationship"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_unknown_attribute_error_lists_available_candidates() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                subject: String,
+                status: String,
+                opener_id: Uuid,
+            }
+            actions {
+                create open {
+                    accept [subjet];
+                }
+            }
+        });
+        let err = expand_err(def);
+        let msg = err.to_string();
+        assert!(msg.contains("Did you mean `subject`?"), "got: {msg}");
+        assert!(
+            msg.contains("Available attributes: id, subject, status, opener_id"),
+            "got: {msg}"
+        );
     }
 }

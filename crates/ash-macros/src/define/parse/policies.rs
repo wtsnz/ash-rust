@@ -49,6 +49,8 @@ pub fn parse_policies(input: ParseStream) -> Result<Vec<PolicySpec>> {
             checks.push(parse_policy_effect(&checks_block)?);
         }
 
+        super::helpers::optional_semi(input)?;
+
         policies.push(PolicySpec {
             bypass,
             whens,
@@ -73,6 +75,7 @@ pub fn parse_field_policies(input: ParseStream) -> Result<Vec<FieldPolicySpec>> 
         while !checks_block.is_empty() {
             checks.push(parse_policy_effect(&checks_block)?);
         }
+        super::helpers::optional_semi(input)?;
         fps.push(FieldPolicySpec { field, checks });
     }
 
@@ -164,9 +167,7 @@ pub fn parse_whens(input: ParseStream) -> Result<Vec<PolicyWhenSpec>> {
 
 pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
     match expr {
-        Expr::Path(ExprPath { path, .. }) if path.is_ident("always") => {
-            Ok(PolicyCheckExpr::Always)
-        }
+        Expr::Path(ExprPath { path, .. }) if path.is_ident("always") => Ok(PolicyCheckExpr::Always),
         Expr::Path(ExprPath { path, .. }) if path.is_ident("actor_present") => {
             Ok(PolicyCheckExpr::ActorPresent)
         }

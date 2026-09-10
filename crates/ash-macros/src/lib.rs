@@ -35,18 +35,10 @@ pub fn domain(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn resource(input: TokenStream) -> TokenStream {
-    let def = parse_macro_input!(input as define::ResourceDefinition);
-    match define::expand_define(def) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.into_compile_error().into(),
-    }
+    define::expand_dsl(input.into()).into()
 }
 
 #[proc_macro]
 pub fn define(input: TokenStream) -> TokenStream {
-    let def = parse_macro_input!(input as define::ResourceDefinition);
-    match define::expand_define(def) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.into_compile_error().into(),
-    }
+    define::expand_dsl(input.into()).into()
 }

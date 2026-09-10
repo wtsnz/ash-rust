@@ -32,6 +32,13 @@ pub fn expr_to_lit(expr: &Expr) -> Result<Lit> {
     }
 }
 
+pub fn optional_semi(input: ParseStream) -> Result<()> {
+    if input.peek(Token![;]) {
+        let _: Token![;] = input.parse()?;
+    }
+    Ok(())
+}
+
 pub fn parse_i64(input: ParseStream) -> Result<i64> {
     let is_negative = if input.peek(Token![-]) {
         let _: Token![-] = input.parse()?;
