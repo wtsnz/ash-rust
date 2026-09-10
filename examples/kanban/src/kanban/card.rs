@@ -29,7 +29,7 @@ resource! {
     }
 
     calculations {
-        title_length: Option<i64> = "string_length(title)",
+        title_length: Option<i64> = string_length(title),
     }
 
     aggregates {

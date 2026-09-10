@@ -136,6 +136,50 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
         }
     }
 
+    let mut interface_probes = Vec::new();
+    for res in &def.resources {
+        let res_ident = &res.resource;
+        for ci in &res.interfaces {
+            if ci.get_by.is_some() || ci.action_name == "read" {
+                continue;
+            }
+            let action_name = &ci.action_name;
+            interface_probes.push(match ci.target {
+                CodeInterfaceTarget::Static => quote! {
+                    if false {
+                        let _ = <#res_ident>::#action_name::<::ash_memory::Memory>;
+                    }
+                },
+                CodeInterfaceTarget::Record | CodeInterfaceTarget::Id => quote! {
+                    if false {
+                        fn __ash_probe_action(
+                            __ctx: &::ash_core::Context<::ash_memory::Memory>,
+                            __id: ::uuid::Uuid,
+                        ) {
+                            let _ = <#res_ident>::#action_name(__ctx, __id);
+                        }
+                    }
+                },
+            });
+        }
+    }
+    let probe_tokens = quote! {
+        #[doc(hidden)]
+        const _: () = {
+            #[allow(
+                dead_code,
+                unused_variables,
+                unused_imports,
+                unreachable_code,
+                clippy::all,
+                clippy::pedantic
+            )]
+            fn __ash_domain_ide_probes() {
+                #(#interface_probes)*
+            }
+        };
+    };
+
     Ok(quote! {
         #(#outer_attrs)*
         pub struct #domain_name<D = ()> {
@@ -248,6 +292,8 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
             #(#resource_methods)*
         }
 
+        #probe_tokens
+
         impl<D: ::ash_core::SchemaSupport> #domain_name<D> {
             pub async fn install(&self) -> ::ash_core::Result<()> {
                 self.ctx.data.install_resources(Self::DEF.resources).await
@@ -276,4 +322,37 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::ast::DomainDefinition;
+    use quote::quote;
+
+    #[test]
+    fn test_domain_emits_action_interface_probes() {
+        let def = match syn::parse2::<DomainDefinition>(quote! {
+            domain Helpdesk;
+            resources {
+                Ticket {
+                    define open_ticket, action: open, args: [subject: String];
+                    define close_ticket, action: close, on: record;
+                    define list_tickets, action: read;
+                    define get_ticket, action: read, get_by: id;
+                }
+            }
+        }) {
+            Ok(d) => d,
+            Err(e) => panic!("parse failed: {e}"),
+        };
+        let out = expand_domain(def).expect("expand").to_string();
+        assert!(out.contains("Ticket"), "missing resource: {out}");
+        assert!(out.contains("open"), "missing open probe: {out}");
+        assert!(out.contains("close"), "missing close probe: {out}");
+        assert!(
+            out.contains("__ash_domain_ide_probes"),
+            "missing domain probe: {out}"
+        );
+    }
 }

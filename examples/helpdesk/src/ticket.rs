@@ -51,7 +51,7 @@ resource! {
     }
 
     calculations {
-        subject_length: Option<i64> = "string_length(subject)",
+        subject_length: Option<i64> = string_length(subject),
     }
 
     actions {

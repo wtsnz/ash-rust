@@ -198,7 +198,10 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         };
         match r.kind {
             RelType::BelongsTo => {
-                let fk_str = r.fk.clone().unwrap_or_else(|| format!("{name_str}_id"));
+                let fk_str =
+                    r.fk.as_ref()
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| format!("{name_str}_id"));
                 rel_defs.push(quote! {
                     ::ash_core::RelationshipDef::belongs_to(
                         #name_str,
@@ -209,7 +212,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             }
             RelType::HasMany => {
                 let fk_str =
-                    r.fk.clone()
+                    r.fk.as_ref()
+                        .map(|id| id.to_string())
                         .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
                 rel_defs.push(quote! {
                     ::ash_core::RelationshipDef::has_many(
@@ -221,7 +225,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             }
             RelType::HasOne => {
                 let fk_str =
-                    r.fk.clone()
+                    r.fk.as_ref()
+                        .map(|id| id.to_string())
                         .unwrap_or_else(|| format!("{}_id", snake_case(&resource_str)));
                 rel_defs.push(quote! {
                     ::ash_core::RelationshipDef::has_one(

@@ -152,7 +152,9 @@ impl ResourceDef {
     }
 
     pub fn identity(&self, name: &str) -> Option<&IdentityDef> {
-        self.identities.iter().find(|identity| identity.name == name)
+        self.identities
+            .iter()
+            .find(|identity| identity.name == name)
     }
 
     pub fn is_embedded(&self) -> bool {
@@ -459,6 +461,11 @@ impl RelationshipDef {
     }
 }
 
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an Ash resource",
+    label = "not an Ash resource",
+    note = "define it with `resource! {{ resource {Self}; ... }}` or check imports"
+)]
 pub trait Resource: Sized + Clone + Send + Sync + 'static {
     type Store: crate::store::StoreTag;
     const DEF: ResourceDef;
@@ -482,9 +489,7 @@ pub trait ResourceExt: Resource {
         &'a self,
         ctx: &'a Context<D>,
     ) -> Pin<Box<dyn Future<Output = Result<Self>> + Send + 'a>> {
-        Box::pin(async move {
-            crate::engine::get::<Self, D>(ctx, self.id()).await
-        })
+        Box::pin(async move { crate::engine::get::<Self, D>(ctx, self.id()).await })
     }
 
     /// Destroy this record using its primary destroy action (or the first destroy action found).
@@ -510,7 +515,8 @@ pub trait ResourceExt: Resource {
                     ))
                 })?;
 
-            crate::engine::destroy_existing::<Self, D>(ctx, primary_destroy.name, self.clone()).await
+            crate::engine::destroy_existing::<Self, D>(ctx, primary_destroy.name, self.clone())
+                .await
         })
     }
 }

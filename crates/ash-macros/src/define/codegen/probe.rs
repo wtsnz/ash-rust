@@ -2,11 +2,12 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::{Ident, Type};
 
-use crate::ast_helpers::{is_bool, is_i64, is_string, is_uuid, option_inner};
+use crate::ast_helpers::{is_bool, is_i64, is_string, is_uuid, option_inner, pascal_case};
 use crate::define::ast::{
-    AggregateKindSpec, CalculationExprSpec, ChangeSpec, PreparationSpec, ResourceDefinition,
-    ValidationSpec,
+    ActionKind, AggregateKindSpec, CalculationExprSpec, ChangeSpec, PreparationSpec, RelType,
+    ResourceDefinition, ValidationSpec,
 };
+use quote::format_ident;
 
 fn record_has_field(def: &ResourceDefinition, name: &Ident) -> bool {
     def.attributes.iter().any(|a| a.ident == *name)
@@ -25,10 +26,6 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
     let mut action_probes = Vec::new();
 
     for action in &def.actions {
-        if action.kind == crate::define::ast::ActionKind::Generic {
-            continue;
-        }
-
         let mut field_probes = Vec::new();
 
         // 1. Action arguments declared as local variables in probe scope.
@@ -43,12 +40,20 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
             });
         }
 
-        // 2. Accept fields (inferred bracket-form or explicit brace-form) reference struct fields
+        // 2. Accept fields: resource attributes on CRUD actions, locals on generic actions.
         for acc in &action.accept {
             let name = &acc.name;
-            field_probes.push(quote_spanned! { name.span() =>
-                let _ = &__ash_record.#name;
-            });
+            if action.kind == ActionKind::Generic {
+                let ty = &acc.ty;
+                field_probes.push(quote_spanned! { name.span() =>
+                    let #name: #ty = loop {};
+                    let _ = &#name;
+                });
+            } else {
+                field_probes.push(quote_spanned! { name.span() =>
+                    let _ = &__ash_record.#name;
+                });
+            }
         }
 
         // 3. Validation fields: if they match an attribute on the struct, probe &__ash_record.#field.
@@ -59,7 +64,9 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 | ValidationSpec::StringLength { field, .. }
                 | ValidationSpec::OneOf { field, .. }
                 | ValidationSpec::Numericality { field, .. } => {
-                    let is_arg = action.arguments.iter().any(|a| a.name == *field);
+                    let is_arg = action.arguments.iter().any(|a| a.name == *field)
+                        || (action.kind == ActionKind::Generic
+                            && action.accept.iter().any(|a| a.name == *field));
                     if is_arg {
                         field_probes.push(quote_spanned! { field.span() =>
                             let _ = &#field;
@@ -125,6 +132,28 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                     let _ = &__ash_record.#field;
                 });
             }
+        }
+
+        if let Some(run_expr) = &action.run_expr {
+            let input_struct_name =
+                format_ident!("{}{}Input", resource, pascal_case(&action.name.to_string()));
+            let returns_ty = action
+                .returns
+                .clone()
+                .unwrap_or_else(|| syn::parse_quote!(()));
+            field_probes.push(quote! {
+                if false {
+                    fn __ash_probe_run<'a, F, Fut>(_: F)
+                    where
+                        F: ::std::ops::FnOnce(
+                            #input_struct_name<'a, ::ash_memory::Memory>,
+                        ) -> Fut,
+                        Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>>,
+                    {
+                    }
+                    __ash_probe_run(#run_expr);
+                }
+            });
         }
 
         action_probes.push(quote! {
@@ -202,14 +231,14 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     }
 
     for rel in &def.relationships {
-        if let Some(fk_name) = &rel.fk {
-            let span = rel.fk_span.unwrap_or_else(proc_macro2::Span::call_site);
-            if let Some(fk_ident) = ident_with_span(fk_name, span)
-                && record_has_field(def, &fk_ident)
-            {
-                probes.push(quote_spanned! { span =>
-                    let _ = &__ash_record.#fk_ident;
+        if let Some(fk) = &rel.fk {
+            if record_has_field(def, fk) {
+                probes.push(quote_spanned! { fk.span() =>
+                    let _ = &__ash_record.#fk;
                 });
+            }
+            if matches!(rel.kind, RelType::HasMany | RelType::HasOne) {
+                probes.push(dest_field_probe(&rel.dest, fk));
             }
         }
     }
@@ -221,10 +250,8 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
         });
         match &agg.kind {
             AggregateKindSpec::First { field } | AggregateKindSpec::Sum { field } => {
-                if record_has_field(def, field) {
-                    probes.push(quote_spanned! { field.span() =>
-                        let _ = &__ash_record.#field;
-                    });
+                if let Some(r) = def.relationships.iter().find(|r| r.ident == *rel) {
+                    probes.push(dest_field_probe(&r.dest, field));
                 }
             }
             AggregateKindSpec::Count | AggregateKindSpec::Exists => {}
@@ -274,19 +301,15 @@ fn collect_calc_field_probes(expr: &CalculationExprSpec, probes: &mut Vec<TokenS
                 let _ = &__ash_record.#field;
             });
         }
-        CalculationExprSpec::Arg(name) => {
-            if let Some(ident) = ident_with_span(name, proc_macro2::Span::call_site()) {
-                probes.push(quote! {
-                    let _ = &#ident;
-                });
-            }
+        CalculationExprSpec::Arg(ident) => {
+            probes.push(quote_spanned! { ident.span() =>
+                let _ = &#ident;
+            });
         }
-        CalculationExprSpec::StringLength(name) => {
-            if let Some(field) = ident_with_span(name, proc_macro2::Span::call_site()) {
-                probes.push(quote! {
-                    let _ = &__ash_record.#field;
-                });
-            }
+        CalculationExprSpec::StringLength(field) => {
+            probes.push(quote_spanned! { field.span() =>
+                let _ = &__ash_record.#field;
+            });
         }
         CalculationExprSpec::Add(left, right)
         | CalculationExprSpec::Sub(left, right)
@@ -328,9 +351,21 @@ fn collect_calc_field_probes(expr: &CalculationExprSpec, probes: &mut Vec<TokenS
     }
 }
 
-fn ident_with_span(name: &str, span: proc_macro2::Span) -> Option<syn::Ident> {
-    let parsed: syn::Ident = syn::parse_str(name).ok()?;
-    Some(syn::Ident::new(&parsed.to_string(), span))
+fn dest_field_probe(dest: &Ident, field: &Ident) -> TokenStream {
+    let access = quote_spanned! { field.span() =>
+        let _ = &__dest_stub.#field;
+    };
+    quote! {
+        {
+            #[allow(dead_code, unreachable_code, clippy::all, clippy::pedantic)]
+            fn __ash_probe_dest<Dest: ::ash_core::Resource>(__dest: &Dest) {
+                let _ = __dest;
+            }
+            let __dest_stub: &#dest = loop {};
+            __ash_probe_dest(__dest_stub);
+            #access
+        }
+    }
 }
 
 #[cfg(test)]
@@ -433,5 +468,64 @@ mod tests {
         );
         assert!(out.contains("User"), "missing dest type: {out}");
         assert!(out.contains("Comment"), "missing dest type: {out}");
+        assert!(
+            out.contains("__ash_probe_dest"),
+            "missing destination probe: {out}"
+        );
+        assert!(out.contains("__dest_stub"), "missing dest stub: {out}");
+    }
+
+    #[test]
+    fn test_probe_emits_dest_fk_for_has_many() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            relationships {
+                has_many comments: Vec<Comment> [fk: ticket_id];
+            }
+            actions {
+                read read { primary; }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("ticket_id"), "missing dest fk: {out}");
+        assert!(out.contains("Comment"), "missing dest type: {out}");
+        assert!(
+            out.contains("__ash_probe_dest"),
+            "missing dest fk probe: {out}"
+        );
+    }
+
+    #[test]
+    fn test_probe_covers_generic_action_inputs_and_run_expr() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                generic summarize {
+                    argument notes: String;
+                    accept {
+                        extra: String,
+                    }
+                    returns String;
+                    run |input| async move { Ok(input.notes) };
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("notes"), "missing generic arg: {out}");
+        assert!(out.contains("extra"), "missing generic accept: {out}");
+        assert!(
+            out.contains("__ash_probe_run"),
+            "missing generic run probe: {out}"
+        );
+        assert!(
+            out.contains("TestResourceSummarizeInput"),
+            "missing generic input type: {out}"
+        );
     }
 }

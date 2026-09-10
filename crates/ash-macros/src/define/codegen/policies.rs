@@ -23,14 +23,20 @@ pub fn check_to_tokens(check: &PolicyCheckExpr) -> Result<TokenStream> {
         PolicyCheckExpr::Always => Ok(quote! { ::ash_core::Check::Always }),
         PolicyCheckExpr::ActorPresent => Ok(quote! { ::ash_core::Check::ActorPresent }),
         PolicyCheckExpr::RelatesToActor(f) => {
+            let f = f.to_string();
             Ok(quote! { ::ash_core::Check::RelatesToActor { field: #f } })
         }
-        PolicyCheckExpr::IsNil(f) => Ok(quote! { ::ash_core::Check::IsNil { field: #f } }),
+        PolicyCheckExpr::IsNil(f) => {
+            let f = f.to_string();
+            Ok(quote! { ::ash_core::Check::IsNil { field: #f } })
+        }
         PolicyCheckExpr::ActorAttributeEquals { attr, value } => {
+            let attr = attr.to_string();
             let val_tok = lit_to_const_value(value)?;
             Ok(quote! { ::ash_core::Check::ActorAttributeEquals { attr: #attr, value: #val_tok } })
         }
         PolicyCheckExpr::Eq { field, value } => {
+            let field = field.to_string();
             let val_tok = lit_to_const_value(value)?;
             Ok(quote! { ::ash_core::Check::Eq { field: #field, value: #val_tok } })
         }

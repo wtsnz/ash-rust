@@ -5,7 +5,7 @@ use crate::define::ast::{
     ActionKind, FieldPolicySpec, PolicyCheckExpr, PolicyEffectSpec, PolicySpec, PolicyWhenSpec,
 };
 
-use super::helpers::{expr_to_field_name, expr_to_lit};
+use super::helpers::{expr_to_field_ident, expr_to_lit};
 
 macro_rules! parse_braced {
     ($input:expr, $content:ident) => {
@@ -186,25 +186,25 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
                     let arg = args
                         .first()
                         .ok_or_else(|| Error::new_spanned(args, "expected field"))?;
-                    let field = expr_to_field_name(arg)?;
+                    let field = expr_to_field_ident(arg)?;
                     Ok(PolicyCheckExpr::RelatesToActor(field))
                 }
                 "is_nil" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| Error::new_spanned(args, "expected field"))?;
-                    let field = expr_to_field_name(arg)?;
+                    let field = expr_to_field_ident(arg)?;
                     Ok(PolicyCheckExpr::IsNil(field))
                 }
                 "actor_eq" | "actor_attribute_equals" => {
                     if args.len() == 1 {
                         if let Some(Expr::Assign(assign)) = args.first() {
-                            let attr = expr_to_field_name(&assign.left)?;
+                            let attr = expr_to_field_ident(&assign.left)?;
                             let value = expr_to_lit(&assign.right)?;
                             return Ok(PolicyCheckExpr::ActorAttributeEquals { attr, value });
                         }
                     } else if args.len() == 2 {
-                        let attr = expr_to_field_name(&args[0])?;
+                        let attr = expr_to_field_ident(&args[0])?;
                         let value = expr_to_lit(&args[1])?;
                         return Ok(PolicyCheckExpr::ActorAttributeEquals { attr, value });
                     }
@@ -216,12 +216,12 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
                 "eq" => {
                     if args.len() == 1 {
                         if let Some(Expr::Assign(assign)) = args.first() {
-                            let field = expr_to_field_name(&assign.left)?;
+                            let field = expr_to_field_ident(&assign.left)?;
                             let value = expr_to_lit(&assign.right)?;
                             return Ok(PolicyCheckExpr::Eq { field, value });
                         }
                     } else if args.len() == 2 {
-                        let field = expr_to_field_name(&args[0])?;
+                        let field = expr_to_field_ident(&args[0])?;
                         let value = expr_to_lit(&args[1])?;
                         return Ok(PolicyCheckExpr::Eq { field, value });
                     }

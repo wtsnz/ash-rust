@@ -65,6 +65,25 @@ pub fn is_bool(ty: &Type) -> bool {
     last_ident(ty).is_some_and(|i| i == "bool")
 }
 
+pub fn is_integer(ty: &Type) -> bool {
+    last_ident(ty).is_some_and(|i| {
+        matches!(
+            i.to_string().as_str(),
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+        )
+    })
+}
+
 pub fn generic_arg0(ty: &Type) -> Option<&Type> {
     let path = type_path(ty)?;
     let args = &path.path.segments.last()?.arguments;
