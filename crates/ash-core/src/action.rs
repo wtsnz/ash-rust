@@ -22,6 +22,40 @@ pub type AfterActionFn = fn(&mut FieldMap) -> Result<()>;
 /// Static function pointer for an `after_transaction` hook on an action definition.
 pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
 
+/// Target for an update or destroy action, which can be an entity ID, an existing record reference, or an owned record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActionTarget<R> {
+    Id(uuid::Uuid),
+    Record(R),
+}
+
+impl<R> ActionTarget<R> {
+    pub fn id(&self) -> Option<uuid::Uuid> {
+        match self {
+            Self::Id(id) => Some(*id),
+            Self::Record(_) => None,
+        }
+    }
+}
+
+impl<R> From<uuid::Uuid> for ActionTarget<R> {
+    fn from(id: uuid::Uuid) -> Self {
+        Self::Id(id)
+    }
+}
+
+impl<R: crate::resource::Resource + Clone> From<&R> for ActionTarget<R> {
+    fn from(rec: &R) -> Self {
+        Self::Record(rec.clone())
+    }
+}
+
+impl<R: crate::resource::Resource> From<R> for ActionTarget<R> {
+    fn from(rec: R) -> Self {
+        Self::Record(rec)
+    }
+}
+
 pub struct ChangeContext<'a> {
     pub fields: &'a mut FieldMap,
     pub actor: Option<&'a Actor>,

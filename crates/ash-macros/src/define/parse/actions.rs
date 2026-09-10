@@ -16,11 +16,16 @@ macro_rules! parse_braced {
     };
 }
 
-pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
+pub fn parse_actions(
+    input: ParseStream,
+    warnings: &mut Vec<proc_macro2::TokenStream>,
+) -> Result<Vec<ActionSpec>> {
     let mut actions = Vec::new();
 
     while !input.is_empty() {
+        let outer_attrs = input.call(syn::Attribute::parse_outer)?;
         let kind_ident: Ident = input.parse()?;
+        const ACTION_KINDS: &[&str] = &["create", "read", "update", "destroy", "generic", "action"];
         let kind = match kind_ident.to_string().as_str() {
             "create" => ActionKind::Create,
             "read" => ActionKind::Read,
@@ -28,9 +33,10 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
             "destroy" => ActionKind::Destroy,
             "generic" | "action" => ActionKind::Generic,
             _ => {
-                return Err(Error::new_spanned(
-                    kind_ident,
-                    "expected action kind: create, read, update, destroy, generic, or action",
+                return Err(crate::ast_helpers::unknown_ident_error(
+                    &kind_ident,
+                    ACTION_KINDS,
+                    "action kind",
                 ));
             }
         };
@@ -87,6 +93,10 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                         }
                     }
                     "arguments" => {
+                        warnings.push(crate::ast_helpers::make_deprecated_warning(
+                            item_ident.span(),
+                            "The 'arguments { ... }' syntax is deprecated; prefer 'argument <name>: <type>;'",
+                        ));
                         if body.peek(Token![:]) {
                             let _: Token![:] = body.parse()?;
                         }
@@ -173,6 +183,10 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                         }
                     }
                     "changes" => {
+                        warnings.push(crate::ast_helpers::make_deprecated_warning(
+                            item_ident.span(),
+                            "The 'changes [...]' syntax is deprecated; prefer 'change <action>;'",
+                        ));
                         if body.peek(Token![:]) {
                             let _: Token![:] = body.parse()?;
                         }
@@ -207,6 +221,10 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                         }
                     }
                     "validations" => {
+                        warnings.push(crate::ast_helpers::make_deprecated_warning(
+                            item_ident.span(),
+                            "The 'validations [...]' syntax is deprecated; prefer 'validate <rule>;'",
+                        ));
                         if body.peek(Token![:]) {
                             let _: Token![:] = body.parse()?;
                         }
@@ -243,6 +261,10 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                         }
                     }
                     "preparations" => {
+                        warnings.push(crate::ast_helpers::make_deprecated_warning(
+                            item_ident.span(),
+                            "The 'preparations [...]' syntax is deprecated; prefer 'prepare <item>;'",
+                        ));
                         if body.peek(Token![:]) {
                             let _: Token![:] = body.parse()?;
                         }
@@ -289,10 +311,29 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
                             let _: Token![;] = body.parse()?;
                         }
                     }
-                    other => {
-                        return Err(Error::new_spanned(
-                            item_ident,
-                            format!("unknown action item `{other}`"),
+                    _ => {
+                        const ACTION_ITEM_NAMES: &[&str] = &[
+                            "primary",
+                            "argument",
+                            "arguments",
+                            "accept",
+                            "change",
+                            "changes",
+                            "before_action",
+                            "after_action",
+                            "after_transaction",
+                            "validate",
+                            "validations",
+                            "prepare",
+                            "preparations",
+                            "persist",
+                            "returns",
+                            "run",
+                        ];
+                        return Err(crate::ast_helpers::unknown_ident_error(
+                            &item_ident,
+                            ACTION_ITEM_NAMES,
+                            "action item",
                         ));
                     }
                 }
@@ -300,6 +341,7 @@ pub fn parse_actions(input: ParseStream) -> Result<Vec<ActionSpec>> {
         }
 
         actions.push(ActionSpec {
+            outer_attrs,
             kind,
             name,
             primary,
@@ -445,10 +487,35 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
             }
             Err(Error::new_spanned(call, "expected `after_transaction(expr)`"))
         }
-        other => Err(Error::new_spanned(
-            func,
-            format!("unknown change `{other}`, expected `set`, `set_new`, `relate_actor`, `set_from_arg`, `before_action`, `after_action`, `after_transaction`, `custom`, or `func`"),
-        )),
+        _ => {
+            const CHANGE_NAMES: &[&str] = &[
+                "set",
+                "set_attribute",
+                "set_new",
+                "set_new_attribute",
+                "relate_actor",
+                "set_from_arg",
+                "set_from_argument",
+                "manage_relationship",
+                "before_action",
+                "after_action",
+                "after_transaction",
+                "custom",
+                "func",
+            ];
+            if let Some(ident) = func.path.get_ident() {
+                Err(crate::ast_helpers::unknown_ident_error(
+                    ident,
+                    CHANGE_NAMES,
+                    "change",
+                ))
+            } else {
+                Err(Error::new_spanned(
+                    func,
+                    "unknown change, expected `set`, `set_new`, `relate_actor`, `set_from_arg`, `before_action`, `after_action`, `after_transaction`, `custom`, or `func`",
+                ))
+            }
+        }
     }
 }
 
@@ -503,6 +570,15 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                             ));
                         }
                     }
+                }
+            }
+
+            if let (Some(min_v), Some(max_v)) = (min, max) {
+                if min_v > max_v {
+                    return Err(Error::new_spanned(
+                        &field,
+                        format!("invalid string_length for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
+                    ));
                 }
             }
 
@@ -587,6 +663,15 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 }
             }
 
+            if let (Some(min_v), Some(max_v)) = (min, max) {
+                if min_v > max_v {
+                    return Err(Error::new_spanned(
+                        &field,
+                        format!("invalid numericality for `{field}`: min ({min_v}) cannot be greater than max ({max_v})"),
+                    ));
+                }
+            }
+
             Ok(ValidationSpec::Numericality { field, min, max })
         }
         "custom" => {
@@ -597,12 +682,21 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
             let expr: Expr = content.parse()?;
             Ok(ValidationSpec::Func(expr))
         }
-        other => Err(Error::new_spanned(
-            func_name,
-            format!(
-                "unknown validation `{other}`, expected `present`, `string_length`, `one_of`, `numericality`, `custom`, or `func`"
-            ),
-        )),
+        _ => {
+            const VALIDATION_NAMES: &[&str] = &[
+                "present",
+                "string_length",
+                "one_of",
+                "numericality",
+                "custom",
+                "func",
+            ];
+            Err(crate::ast_helpers::unknown_ident_error(
+                &func_name,
+                VALIDATION_NAMES,
+                "validation",
+            ))
+        }
     }
 }
 
@@ -644,10 +738,14 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 let val: usize = lit.base10_parse()?;
                 Ok(PreparationSpec::Offset(val))
             }
-            other => Err(Error::new_spanned(
-                func_name,
-                format!("unknown preparation `{other}`, expected `filter`, `sort`, `limit`, or `offset`"),
-            )),
+            _ => {
+                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset"];
+                Err(crate::ast_helpers::unknown_ident_error(
+                    &func_name,
+                    PREPARATION_NAMES,
+                    "preparation",
+                ))
+            }
         }
     } else if input.peek(Token![:]) || input.peek(Token![=]) {
         let _ = input.parse::<proc_macro2::TokenTree>()?;
@@ -680,10 +778,14 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 let val: usize = lit.base10_parse()?;
                 Ok(PreparationSpec::Offset(val))
             }
-            other => Err(Error::new_spanned(
-                func_name,
-                format!("unknown preparation `{other}`"),
-            )),
+            _ => {
+                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset"];
+                Err(crate::ast_helpers::unknown_ident_error(
+                    &func_name,
+                    PREPARATION_NAMES,
+                    "preparation",
+                ))
+            }
         }
     } else {
         Err(Error::new_spanned(

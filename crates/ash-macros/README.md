@@ -30,6 +30,9 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
 - **Generated Ergonomic APIs**:
   - **Zero-Import Field Operators**: `Article::title.eq("Rust")` directly on the resource struct.
   - **Typed Action Builders**: `Article::publish(&ctx).title("...").tag("rust").await?`.
+  - **Zero-Import Action Invocations**: Update and destroy actions accept IDs, records, and record references (`Ticket::assign(&ctx, id)`, `Ticket::assign(&ctx, &ticket)`, `Ticket::destroy(&ctx, &ticket)`) without importing action traits.
+  - **IDE Autocomplete & Diagnostics**: Hidden static typecheck probe enables instant LSP autocomplete for `accept [...]`, jump-to-definition, and refactoring renames.
+  - **Intelligent Error Guidance**: Levenshtein distance suggestions ("Did you mean?") for section typos, action kinds, validations, and field references.
   - **Changeset Interoperability**: Generated action builders automatically implement `IntoChangeset` for direct use in `Multi` pipelines.
 
 ---
@@ -60,8 +63,8 @@ resource! {
             primary;
             accept [sku, name, price, description];
             change set(active = true);
-            validation present(sku);
-            validation numericality(price, min: 1);
+            validate present(sku);
+            validate numericality(price, min = 1);
         }
 
         read read {

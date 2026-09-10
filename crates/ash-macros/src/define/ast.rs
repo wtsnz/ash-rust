@@ -22,6 +22,7 @@ pub struct ResourceDefinition {
     pub store: Option<Type>,
     pub timestamps: Option<TimestampsSpec>,
     pub multitenancy: Option<MultitenancySpec>,
+    pub warnings: Vec<proc_macro2::TokenStream>,
 }
 
 #[derive(Clone, Debug)]
@@ -158,6 +159,7 @@ pub enum PreparationSpec {
 }
 
 pub struct ActionSpec {
+    pub outer_attrs: Vec<syn::Attribute>,
     pub kind: ActionKind,
     pub name: Ident,
     pub primary: bool,
