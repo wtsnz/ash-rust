@@ -1,6 +1,4 @@
-use syn::{
-    Expr, ExprLit, GenericArgument, Ident, Lit, PathArguments, Result, Type, TypePath,
-};
+use syn::{Expr, ExprLit, GenericArgument, Ident, Lit, PathArguments, Result, Type, TypePath};
 
 pub fn screaming_snake(name: &str) -> String {
     let mut out = String::new();
@@ -120,15 +118,19 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     let m = a_chars.len();
     let n = b_chars.len();
     let mut dp = vec![vec![0; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = i;
     }
-    for j in 0..=n {
-        dp[0][j] = j;
+    for (j, val) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *val = j;
     }
     for i in 1..=m {
         for j in 1..=n {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             dp[i][j] = (dp[i - 1][j] + 1)
                 .min(dp[i][j - 1] + 1)
                 .min(dp[i - 1][j - 1] + cost);
@@ -201,17 +203,40 @@ mod tests {
 
     #[test]
     fn test_find_closest_match() {
-        let sections = &["table", "attributes", "relationships", "actions", "policies"];
-        assert_eq!(find_closest_match("action", sections.iter().copied()), Some("actions"));
-        assert_eq!(find_closest_match("attribute", sections.iter().copied()), Some("attributes"));
-        assert_eq!(find_closest_match("xyz12345", sections.iter().copied()), None);
+        let sections = &[
+            "table",
+            "attributes",
+            "relationships",
+            "actions",
+            "policies",
+        ];
+        assert_eq!(
+            find_closest_match("action", sections.iter().copied()),
+            Some("actions")
+        );
+        assert_eq!(
+            find_closest_match("attribute", sections.iter().copied()),
+            Some("attributes")
+        );
+        assert_eq!(
+            find_closest_match("xyz12345", sections.iter().copied()),
+            None
+        );
 
         let validations = &["present", "string_length", "one_of", "numericality"];
-        assert_eq!(find_closest_match("presence", validations.iter().copied()), Some("present"));
-        assert_eq!(find_closest_match("str_length", validations.iter().copied()), Some("string_length"));
+        assert_eq!(
+            find_closest_match("presence", validations.iter().copied()),
+            Some("present")
+        );
+        assert_eq!(
+            find_closest_match("str_length", validations.iter().copied()),
+            Some("string_length")
+        );
 
         let changes = &["set", "set_attribute", "relate_actor", "set_from_arg"];
-        assert_eq!(find_closest_match("set_attr", changes.iter().copied()), Some("set_attribute"));
+        assert_eq!(
+            find_closest_match("set_attr", changes.iter().copied()),
+            Some("set_attribute")
+        );
     }
 }
-

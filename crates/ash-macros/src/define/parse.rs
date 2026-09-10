@@ -461,4 +461,96 @@ mod tests {
         assert!(warn_str.contains("validations [...]"));
         assert!(warn_str.contains("changes [...]"));
     }
+
+    #[test]
+    fn test_unknown_relationship_kind_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            relationships {
+                belongs_too author: User [fk: author_id];
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `belongs_to`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_relationship_option_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            relationships {
+                belongs_to author: User [fkey: author_id];
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `fk`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_attribute_option_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pkk];
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `pk`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_policy_declaration_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            policies {
+                polisy always {
+                    authorize_if always;
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `policy`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_policy_statement_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            policies {
+                policy always {
+                    authorize_iff always;
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `authorize_if`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_policy_when_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            policies {
+                policy alwayz {
+                    authorize_if always;
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `always`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_policy_check_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            policies {
+                policy always {
+                    authorize_if actor_eqq(author_id);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `actor_eq`?"), "got: {}", err);
+    }
 }

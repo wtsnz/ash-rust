@@ -23,17 +23,23 @@ pub type AfterActionFn = fn(&mut FieldMap) -> Result<()>;
 pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
 
 /// Target for an update or destroy action, which can be an entity ID, an existing record reference, or an owned record.
+///
+/// ### Snapshot vs. Refetch Semantics
+/// - Passing a [`uuid::Uuid`] (e.g. `Ticket::assign(&ctx, ticket.id)`) refetches the latest record from the data layer.
+/// - Passing a record reference or owned record (e.g. `Ticket::assign(&ctx, &ticket)`) operates directly on the provided snapshot,
+///   avoiding an extra query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionTarget<R> {
     Id(uuid::Uuid),
     Record(R),
 }
 
-impl<R> ActionTarget<R> {
-    pub fn id(&self) -> Option<uuid::Uuid> {
+impl<R: crate::resource::Resource> ActionTarget<R> {
+    /// Returns the entity ID of this target, whether given as an ID or extracted from an existing record.
+    pub fn id(&self) -> uuid::Uuid {
         match self {
-            Self::Id(id) => Some(*id),
-            Self::Record(_) => None,
+            Self::Id(id) => *id,
+            Self::Record(rec) => rec.id(),
         }
     }
 }
@@ -44,8 +50,20 @@ impl<R> From<uuid::Uuid> for ActionTarget<R> {
     }
 }
 
+impl<R> From<&uuid::Uuid> for ActionTarget<R> {
+    fn from(id: &uuid::Uuid) -> Self {
+        Self::Id(*id)
+    }
+}
+
 impl<R: crate::resource::Resource + Clone> From<&R> for ActionTarget<R> {
     fn from(rec: &R) -> Self {
+        Self::Record(rec.clone())
+    }
+}
+
+impl<R: crate::resource::Resource + Clone> From<&mut R> for ActionTarget<R> {
+    fn from(rec: &mut R) -> Self {
         Self::Record(rec.clone())
     }
 }
@@ -169,7 +187,10 @@ pub enum PersistKind {
 pub enum PreparationDef {
     Filter(fn() -> crate::filter::Filter),
     FilterWithArgs(fn(&crate::value::FieldMap) -> crate::filter::Filter),
-    Sort { field: &'static str, descending: bool },
+    Sort {
+        field: &'static str,
+        descending: bool,
+    },
     Limit(usize),
     Offset(usize),
 }
@@ -389,10 +410,7 @@ impl Change {
         Self::AfterTransaction(f)
     }
 
-    pub const fn manage_relationship(
-        relationship: &'static str,
-        rel_type: ManagedRelType,
-    ) -> Self {
+    pub const fn manage_relationship(relationship: &'static str, rel_type: ManagedRelType) -> Self {
         Self::ManageRelationship {
             relationship,
             rel_type,
@@ -464,9 +482,7 @@ pub enum Validation {
 impl std::fmt::Debug for Validation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Present { field } => {
-                f.debug_struct("Present").field("field", field).finish()
-            }
+            Self::Present { field } => f.debug_struct("Present").field("field", field).finish(),
             Self::StringLength { field, min, max } => f
                 .debug_struct("StringLength")
                 .field("field", field)
@@ -507,11 +523,7 @@ impl Validation {
         Self::OneOf { field, allowed }
     }
 
-    pub const fn numericality(
-        field: &'static str,
-        min: Option<i64>,
-        max: Option<i64>,
-    ) -> Self {
+    pub const fn numericality(field: &'static str, min: Option<i64>, max: Option<i64>) -> Self {
         Self::Numericality { field, min, max }
     }
 

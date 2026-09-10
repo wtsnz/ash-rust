@@ -34,7 +34,12 @@ pub fn parse_policies(input: ParseStream) -> Result<Vec<PolicySpec>> {
             };
             (true, whens)
         } else {
-            return Err(Error::new_spanned(policy_kw, "expected `policy` or `bypass`"));
+            const POLICY_DECLS: &[&str] = &["policy", "bypass"];
+            return Err(crate::ast_helpers::unknown_ident_error(
+                &policy_kw,
+                POLICY_DECLS,
+                "policy declaration",
+            ));
         };
 
         parse_braced!(input, checks_block);
@@ -87,10 +92,19 @@ pub fn parse_policy_effect(checks_block: ParseStream) -> Result<PolicyEffectSpec
         "authorize_unless" => Ok(PolicyEffectSpec::AuthorizeUnless(check)),
         "forbid_if" => Ok(PolicyEffectSpec::ForbidIf(check)),
         "forbid_unless" => Ok(PolicyEffectSpec::ForbidUnless(check)),
-        _ => Err(Error::new_spanned(
-            auth_ident,
-            "expected `authorize_if`, `authorize_unless`, `forbid_if`, or `forbid_unless` statement",
-        )),
+        _ => {
+            const POLICY_EFFECTS: &[&str] = &[
+                "authorize_if",
+                "authorize_unless",
+                "forbid_if",
+                "forbid_unless",
+            ];
+            Err(crate::ast_helpers::unknown_ident_error(
+                &auth_ident,
+                POLICY_EFFECTS,
+                "policy statement",
+            ))
+        }
     }
 }
 
@@ -117,17 +131,22 @@ pub fn parse_whens(input: ParseStream) -> Result<Vec<PolicyWhenSpec>> {
                 "destroy" => ActionKind::Destroy,
                 "generic" => ActionKind::Generic,
                 _ => {
-                    return Err(Error::new_spanned(
-                        kind_ident,
-                        "unknown action type; expected read, create, update, destroy, or generic",
+                    const ACTION_TYPES: &[&str] =
+                        &["read", "create", "update", "destroy", "generic"];
+                    return Err(crate::ast_helpers::unknown_ident_error(
+                        &kind_ident,
+                        ACTION_TYPES,
+                        "action type",
                     ));
                 }
             };
             whens.push(PolicyWhenSpec::ActionKind(kind));
         } else {
-            return Err(Error::new_spanned(
-                ident,
-                "expected `always`, `action(...)`, or `action_type(...)`",
+            const WHENS: &[&str] = &["always", "action", "action_type"];
+            return Err(crate::ast_helpers::unknown_ident_error(
+                &ident,
+                WHENS,
+                "policy when condition",
             ));
         }
 
@@ -210,10 +229,25 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
                         "expected `eq(field = value)` or `eq(field, value)`",
                     ))
                 }
-                other => Err(Error::new_spanned(
-                    func,
-                    format!("unknown policy check `{other}`"),
-                )),
+                _ => {
+                    const POLICY_CHECKS: &[&str] = &[
+                        "relates_to",
+                        "relates_to_actor",
+                        "is_nil",
+                        "actor_eq",
+                        "actor_attribute_equals",
+                        "eq",
+                    ];
+                    if let Some(ident) = p.path.get_ident() {
+                        Err(crate::ast_helpers::unknown_ident_error(
+                            ident,
+                            POLICY_CHECKS,
+                            "policy check",
+                        ))
+                    } else {
+                        Err(Error::new_spanned(func, "unknown policy check"))
+                    }
+                }
             }
         }
         Expr::Binary(ExprBinary {
