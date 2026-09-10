@@ -106,6 +106,7 @@ pub fn expand_action_builders(
         let act_name_str = act_name.to_string();
         let act_pascal = pascal_case(&act_name_str);
         let builder_name = format_ident!("{}{}Action", resource, act_pascal);
+        let outer_attrs = &act.outer_attrs;
 
         match act.kind {
             ActionKind::Create => {
@@ -161,6 +162,7 @@ pub fn expand_action_builders(
 
                 if act.persist_manual {
                     builders.push(quote! {
+                        #(#outer_attrs)*
                         pub struct #builder_name<'a, D> {
                             ctx: &'a ::ash_core::Context<D>,
                             #(#field_members,)*
@@ -206,6 +208,7 @@ pub fn expand_action_builders(
                     });
                 } else {
                     builders.push(quote! {
+                        #(#outer_attrs)*
                         pub struct #builder_name<'a, D> {
                             ctx: &'a ::ash_core::Context<D>,
                             tenant_override: ::std::option::Option<::std::string::String>,
@@ -399,10 +402,12 @@ pub fn expand_action_builders(
 
                 let build_act_name = format_ident!("build_{}", act_name);
                 resource_methods.push(quote! {
+                    #(#outer_attrs)*
                     pub fn #act_name<'a, D: ::ash_core::DataLayer>(ctx: &'a ::ash_core::Context<D>) -> #builder_name<'a, D> {
                         #builder_name::new(ctx)
                     }
 
+                    #(#outer_attrs)*
                     pub fn #build_act_name() -> #builder_name<'static, ::ash_memory::Memory> {
                         static DUMMY: ::std::sync::OnceLock<::ash_core::Context<::ash_memory::Memory>> = ::std::sync::OnceLock::new();
                         let ctx = DUMMY.get_or_init(|| ::ash_core::Context::new(::ash_memory::Memory::new()));
@@ -470,6 +475,7 @@ pub fn expand_action_builders(
                         Existing(#resource),
                     }
 
+                    #(#outer_attrs)*
                     pub struct #builder_name<'a, D> {
                         ctx: &'a ::ash_core::Context<D>,
                         target: #target_enum,
@@ -706,14 +712,23 @@ pub fn expand_action_builders(
                 let build_act_name = format_ident!("build_{}", act_name);
 
                 resource_methods.push(quote! {
-                    pub fn #act_name<'a, D: ::ash_core::DataLayer>(ctx: &'a ::ash_core::Context<D>, id: ::uuid::Uuid) -> #builder_name<'a, D> {
-                        #builder_name::for_id(ctx, id)
+                    #(#outer_attrs)*
+                    pub fn #act_name<'a, D: ::ash_core::DataLayer>(
+                        ctx: &'a ::ash_core::Context<D>,
+                        target: impl ::std::convert::Into<::ash_core::ActionTarget<Self>>,
+                    ) -> #builder_name<'a, D> {
+                        match target.into() {
+                            ::ash_core::ActionTarget::Id(id) => #builder_name::for_id(ctx, id),
+                            ::ash_core::ActionTarget::Record(rec) => #builder_name::for_existing(ctx, rec),
+                        }
                     }
 
+                    #(#outer_attrs)*
                     pub fn #act_on_name<'a, D: ::ash_core::DataLayer>(&self, ctx: &'a ::ash_core::Context<D>) -> #builder_name<'a, D> {
                         #builder_name::for_existing(ctx, self.clone())
                     }
 
+                    #(#outer_attrs)*
                     pub fn #build_act_name(&self) -> #builder_name<'static, ::ash_memory::Memory> {
                         static DUMMY: ::std::sync::OnceLock<::ash_core::Context<::ash_memory::Memory>> = ::std::sync::OnceLock::new();
                         let ctx = DUMMY.get_or_init(|| ::ash_core::Context::new(::ash_memory::Memory::new()));
@@ -722,6 +737,7 @@ pub fn expand_action_builders(
                 });
 
                 trait_methods.push(quote! {
+                    #(#outer_attrs)*
                     fn #act_name<'a, D: ::ash_core::DataLayer>(&self, ctx: &'a ::ash_core::Context<D>) -> #builder_name<'a, D>;
                 });
 
@@ -735,16 +751,25 @@ pub fn expand_action_builders(
             ActionKind::Destroy => {
                 let act_on_name = format_ident!("{}_on", act_name);
                 resource_methods.push(quote! {
-                    pub async fn #act_name<D: ::ash_core::DataLayer>(ctx: &::ash_core::Context<D>, id: ::uuid::Uuid) -> ::ash_core::Result<()> {
-                        ::ash_core::destroy::<#resource, D>(ctx, #act_name_str, id).await
+                    #(#outer_attrs)*
+                    pub async fn #act_name<D: ::ash_core::DataLayer>(
+                        ctx: &::ash_core::Context<D>,
+                        target: impl ::std::convert::Into<::ash_core::ActionTarget<Self>>,
+                    ) -> ::ash_core::Result<()> {
+                        match target.into() {
+                            ::ash_core::ActionTarget::Id(id) => ::ash_core::destroy::<#resource, D>(ctx, #act_name_str, id).await,
+                            ::ash_core::ActionTarget::Record(rec) => ::ash_core::destroy_existing::<#resource, D>(ctx, #act_name_str, rec).await,
+                        }
                     }
 
+                    #(#outer_attrs)*
                     pub async fn #act_on_name<D: ::ash_core::DataLayer>(&self, ctx: &::ash_core::Context<D>) -> ::ash_core::Result<()> {
                         ::ash_core::destroy_existing::<#resource, D>(ctx, #act_name_str, self.clone()).await
                     }
                 });
 
                 trait_methods.push(quote! {
+                    #(#outer_attrs)*
                     fn #act_name<D: ::ash_core::DataLayer>(&self, ctx: &::ash_core::Context<D>) -> impl ::std::future::Future<Output = ::ash_core::Result<()>> + Send;
                 });
 
@@ -835,6 +860,7 @@ pub fn expand_action_builders(
                         }
                     }
 
+                    #(#outer_attrs)*
                     pub struct #builder_name<'a, D> {
                         ctx: &'a ::ash_core::Context<D>,
                         #(#field_members,)*
@@ -893,6 +919,7 @@ pub fn expand_action_builders(
                 });
 
                 resource_methods.push(quote! {
+                    #(#outer_attrs)*
                     pub fn #act_name<'a, D: ::ash_core::DataLayer>(ctx: &'a ::ash_core::Context<D>) -> #builder_name<'a, D> {
                         #builder_name::new(ctx)
                     }

@@ -76,9 +76,7 @@ resource! {
         }
 
         update close {
-            changes [
-                set(status = "closed"),
-            ]
+            change set(status = "closed");
         }
 
         generic analyze_subject {
@@ -98,10 +96,8 @@ resource! {
             accept {
                 subject: String,
             }
-            changes [
-                set(status = "open"),
-                relate_actor(opener_id),
-            ]
+            change set(status = "open");
+            change relate_actor(opener_id);
             persist manual;
         }
     }

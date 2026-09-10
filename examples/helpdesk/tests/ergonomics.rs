@@ -69,6 +69,32 @@ async fn static_update_by_id() {
 }
 
 #[tokio::test]
+async fn static_update_by_record_reference() {
+    let ctx = ctx();
+    let alice = Representative::create(&ctx).name("Alice").await.unwrap();
+    let customer_id = Uuid::new_v4();
+    let as_customer = ctx.with_actor(actor_customer(customer_id));
+    let as_alice = ctx.with_actor(actor_representative(alice.id));
+
+    let ticket = Ticket::open(&as_customer)
+        .subject("Keyboard issue")
+        .await
+        .unwrap();
+
+    // Calling by record reference statically without importing TicketActions
+    let ticket = Ticket::assign(&as_alice, &ticket)
+        .representative_id(alice.id)
+        .await
+        .unwrap();
+    assert_eq!(ticket.representative_id, Some(alice.id));
+
+    let ticket = Ticket::close(&as_alice, &ticket)
+        .await
+        .unwrap();
+    assert_eq!(ticket.status, Status::Closed);
+}
+
+#[tokio::test]
 async fn fluent_filter_composition_and_rel_accessors() {
     let ctx = ctx();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();

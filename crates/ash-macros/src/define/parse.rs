@@ -60,6 +60,7 @@ impl Parse for ResourceDefinition {
         let mut store = None;
         let mut timestamps = None;
         let mut multitenancy = None;
+        let mut warnings = Vec::new();
 
         while !input.is_empty() {
             let section_ident: Ident = input.parse()?;
@@ -90,7 +91,7 @@ impl Parse for ResourceDefinition {
                 aggregates = aggregates::parse_aggregates(&content)?;
             } else if section_ident == "actions" {
                 parse_braced!(input, content);
-                actions = actions::parse_actions(&content)?;
+                actions = actions::parse_actions(&content, &mut warnings)?;
             } else if section_ident == "policies" {
                 parse_braced!(input, content);
                 policies = policies::parse_policies(&content)?;
@@ -251,9 +252,29 @@ impl Parse for ResourceDefinition {
                     updated_at,
                 });
             } else {
-                return Err(Error::new_spanned(
-                    section_ident,
-                    "expected `table`, `attributes`, `relationships`, `calculations`, `aggregates`, `actions`, `policies`, `field_policies`, `extensions`, `notifiers`, `extend`, `optimistic_lock`, `identities`, `embedded`, `data_layer`, `store`, or `timestamps`",
+                const SECTION_NAMES: &[&str] = &[
+                    "table",
+                    "attributes",
+                    "relationships",
+                    "calculations",
+                    "aggregates",
+                    "actions",
+                    "policies",
+                    "field_policies",
+                    "extensions",
+                    "notifiers",
+                    "extend",
+                    "optimistic_lock",
+                    "identities",
+                    "embedded",
+                    "data_layer",
+                    "store",
+                    "timestamps",
+                ];
+                return Err(crate::ast_helpers::unknown_ident_error(
+                    &section_ident,
+                    SECTION_NAMES,
+                    "resource section",
                 ));
             }
         }
@@ -314,6 +335,130 @@ impl Parse for ResourceDefinition {
             store,
             timestamps,
             multitenancy,
+            warnings,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    fn parse_err(tokens: proc_macro2::TokenStream) -> syn::Error {
+        match syn::parse2::<ResourceDefinition>(tokens) {
+            Err(e) => e,
+            Ok(_) => panic!("expected parse error"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_section_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            action {
+                create create;
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `actions`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_action_kind_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                creat add;
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `create`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_action_item_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validats [present(title)];
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `validate`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_unknown_validation_typo_suggests_correction() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validate presence(title);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("Did you mean `present`?"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_string_length_min_greater_than_max_fails() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validate string_length(title, min = 10, max = 2);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("min (10) cannot be greater than max (2)"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_numericality_min_greater_than_max_fails() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validate numericality(age, min = 100, max = 18);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(err.to_string().contains("min (100) cannot be greater than max (18)"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_deprecated_syntax_emits_synthetic_warnings() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    arguments {
+                        title: String,
+                    }
+                    validations [
+                        present(title),
+                    ]
+                    changes [
+                        set(status = "open"),
+                    ]
+                }
+            }
+        };
+        let def = match syn::parse2::<ResourceDefinition>(tokens) {
+            Ok(d) => d,
+            Err(e) => panic!("parse failed: {}", e),
+        };
+        assert_eq!(def.warnings.len(), 3);
+        let warnings = &def.warnings;
+        let warn_str = quote! { #(#warnings)* }.to_string();
+        assert!(warn_str.contains("arguments { ... }"));
+        assert!(warn_str.contains("validations [...]"));
+        assert!(warn_str.contains("changes [...]"));
     }
 }

@@ -29,7 +29,7 @@ mod types;
 mod value;
 
 pub use action::{
-    ActionDef, ActionKind, AfterActionFn, AfterTransactionFn, ArgumentDef, BeforeActionFn, Change,
+    ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef, BeforeActionFn, Change,
     ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
     DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, PersistKind,
     PreparationDef, Validation, ValidationContext,

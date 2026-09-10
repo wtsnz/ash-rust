@@ -57,9 +57,7 @@ resource! {
         }
 
         update archive {
-            changes [
-                set(archived = true),
-            ]
+            change set(archived = true);
         }
     }
 
