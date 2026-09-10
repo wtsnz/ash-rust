@@ -6,9 +6,11 @@ use crate::define::ast::CalculationExprSpec;
 pub fn calc_expr_to_tokens(expr: &CalculationExprSpec) -> TokenStream {
     match expr {
         CalculationExprSpec::Arg(a) => {
+            let a = a.to_string();
             quote! { ::ash_core::Expr::Arg(#a) }
         }
         CalculationExprSpec::StringLength(s) => {
+            let s = s.to_string();
             quote! { ::ash_core::Expr::StringLength(#s) }
         }
         CalculationExprSpec::Field(f) => {

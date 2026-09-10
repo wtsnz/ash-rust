@@ -194,6 +194,80 @@ mod permissive {
 
 use permissive::PermissiveTicket;
 
+mod comment {
+    use super::*;
+
+    resource! {
+        resource Comment;
+        table "dx_comments";
+
+        attributes {
+            id: Uuid [pk],
+            post_id: Uuid,
+            body: String,
+            amount: i64,
+        }
+
+        actions {
+            create create {
+                accept [post_id, body, amount];
+            }
+
+            read read {
+                primary;
+            }
+        }
+    }
+}
+
+mod post {
+    use super::comment::Comment;
+    use super::*;
+
+    resource! {
+        resource Post;
+        table "dx_posts";
+
+        attributes {
+            id: Uuid [pk],
+            title: String,
+        }
+
+        relationships {
+            has_many comments: Vec<Comment> [fk: post_id];
+        }
+
+        aggregates {
+            first_body: Option<String> = first(comments, body);
+            total_amount: Option<i64> = sum(comments, amount);
+        }
+
+        calculations {
+            title_len: i64 = string_length(title);
+        }
+
+        actions {
+            create create {
+                accept [title];
+                validate string_length(title, min = 1);
+            }
+
+            read read {
+                primary;
+            }
+
+            generic preview {
+                argument suffix: String;
+                returns String;
+                run |input| async move { Ok(input.suffix) };
+            }
+        }
+    }
+}
+
+use comment::Comment;
+use post::Post;
+
 #[test]
 fn test_field_constants_and_relationship_probe_compile() {
     let _ = Ticket::title;
@@ -236,4 +310,28 @@ async fn test_permissive_punctuation_and_empty_sections() {
 
     let fetched = PermissiveTicket::get(&ctx, ticket.id).await.unwrap();
     assert_eq!(fetched.title, ticket.title);
+}
+
+#[tokio::test]
+async fn test_destination_aggregates_and_generic_run_probe() {
+    let ctx = Context::new(Memory::new());
+
+    let post = Post::create(&ctx).title("Hello").await.unwrap();
+    assert_eq!(post.title, "Hello");
+
+    let comment = Comment::create(&ctx)
+        .post_id(post.id)
+        .body("Nice post")
+        .amount(3)
+        .await
+        .unwrap();
+    assert_eq!(comment.body, "Nice post");
+
+    let preview = Post::preview(&ctx).suffix("!").await.unwrap();
+    assert_eq!(preview, "!");
+
+    let _ = Post::title;
+    let _ = Post::comments;
+    let _ = Comment::body;
+    let _ = Comment::amount;
 }

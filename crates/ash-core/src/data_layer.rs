@@ -23,6 +23,11 @@ pub struct CompiledQuery {
     pub tenant: Option<String>,
 }
 
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a valid Ash DataLayer",
+    label = "not a DataLayer",
+    note = "use Memory, Sqlite, Postgres, or implement DataLayer"
+)]
 pub trait DataLayer: Send + Sync {
     fn create(
         &self,

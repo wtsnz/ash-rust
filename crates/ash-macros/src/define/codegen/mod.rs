@@ -4,15 +4,17 @@ pub mod policies;
 pub mod probe;
 pub mod resource;
 
-use crate::ast_helpers::{find_closest_match, unknown_ident_error};
+use crate::ast_helpers::{
+    find_closest_match, is_i64, is_integer, is_string, option_inner, unknown_ident_error,
+};
 use crate::define::ast::{
     ActionKind, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, RelType,
-    ResourceDefinition,
+    ResourceDefinition, ValidationSpec,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::collections::HashSet;
-use syn::{Error, Ident, Result};
+use syn::{Error, Ident, Result, Type};
 
 fn ident_refs(names: &[String]) -> Vec<&str> {
     names.iter().map(String::as_str).collect()
@@ -20,10 +22,6 @@ fn ident_refs(names: &[String]) -> Vec<&str> {
 
 fn unknown_field(ident: &Ident, names: &[String], kind: &str) -> Error {
     unknown_ident_error(ident, &ident_refs(names), kind)
-}
-
-fn ident_from_name(name: &str) -> Ident {
-    syn::parse_str(name).unwrap_or_else(|_| Ident::new("unknown", proc_macro2::Span::call_site()))
 }
 
 fn attr_and_rel_names(def: &ResourceDefinition) -> Vec<String> {
@@ -37,8 +35,8 @@ fn validate_policy_check(check: &PolicyCheckExpr, field_names: &[String]) -> Res
         PolicyCheckExpr::RelatesToActor(field)
         | PolicyCheckExpr::IsNil(field)
         | PolicyCheckExpr::Eq { field, .. } => {
-            if !field_names.iter().any(|n| n == field) {
-                return Err(unknown_field(&ident_from_name(field), field_names, "field"));
+            if !field_names.iter().any(|n| n == &field.to_string()) {
+                return Err(unknown_field(field, field_names, "field"));
             }
         }
         PolicyCheckExpr::And(parts) | PolicyCheckExpr::Or(parts) => {
@@ -81,8 +79,8 @@ fn validate_calc_fields(
             }
         }
         CalculationExprSpec::StringLength(field) => {
-            if !candidates.iter().any(|n| n == field) {
-                return Err(unknown_field(&ident_from_name(field), &candidates, "field"));
+            if !candidates.iter().any(|n| n == &field.to_string()) {
+                return Err(unknown_field(field, &candidates, "field"));
             }
         }
         CalculationExprSpec::Add(left, right)
@@ -188,14 +186,15 @@ fn validate_cross_section(def: &ResourceDefinition) -> Result<()> {
         if rel.kind != RelType::BelongsTo {
             continue;
         }
-        let fk = rel
+        let fk_ident = rel
             .fk
             .clone()
-            .unwrap_or_else(|| format!("{}_id", rel.ident));
+            .unwrap_or_else(|| Ident::new(&format!("{}_id", rel.ident), rel.ident.span()));
+        let fk = fk_ident.to_string();
         if attr_names.iter().any(|n| n == &fk) {
             continue;
         }
-        let span = rel.fk_span.unwrap_or_else(|| rel.ident.span());
+        let span = fk_ident.span();
         let suggestion = find_closest_match(&fk, ident_refs(&attr_names));
         let msg = if let Some(closest) = suggestion {
             format!(
@@ -223,6 +222,44 @@ fn validate_cross_section(def: &ResourceDefinition) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn type_label(ty: &Type) -> String {
+    quote!(#ty).to_string().replace(' ', "")
+}
+
+fn is_string_type(ty: &Type) -> bool {
+    is_string(ty) || option_inner(ty).is_some_and(is_string)
+}
+
+fn is_numeric_type(ty: &Type) -> bool {
+    is_i64(ty)
+        || is_integer(ty)
+        || option_inner(ty).is_some_and(|inner| is_i64(inner) || is_integer(inner))
+}
+
+fn lint_uncovered_actions(def: &mut ResourceDefinition) {
+    if def.policies.is_empty() {
+        return;
+    }
+    for act in &def.actions {
+        let covered = def.policies.iter().any(|pol| {
+            pol.whens.iter().any(|when| match when {
+                PolicyWhenSpec::Always => true,
+                PolicyWhenSpec::ActionKind(kind) => *kind == act.kind,
+                PolicyWhenSpec::ActionName(name) => name == &act.name,
+            })
+        });
+        if !covered {
+            def.warnings.push(crate::ast_helpers::make_deprecated_warning(
+                act.name.span(),
+                &format!(
+                    "Action '{}' has no matching policy rule and will always be forbidden at runtime",
+                    act.name
+                ),
+            ));
+        }
+    }
 }
 
 fn check_unique_idents<'a>(idents: impl IntoIterator<Item = &'a Ident>, kind: &str) -> Result<()> {
@@ -369,16 +406,16 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
 
         for val in &action.validations {
             let field = match val {
-                crate::define::ast::ValidationSpec::Present { field }
-                | crate::define::ast::ValidationSpec::StringLength { field, .. }
-                | crate::define::ast::ValidationSpec::OneOf { field, .. }
-                | crate::define::ast::ValidationSpec::Numericality { field, .. } => Some(field),
+                ValidationSpec::Present { field }
+                | ValidationSpec::StringLength { field, .. }
+                | ValidationSpec::OneOf { field, .. }
+                | ValidationSpec::Numericality { field, .. } => Some(field),
                 _ => None,
             };
             if let Some(field) = field {
-                let is_attr = def.attributes.iter().any(|a| a.ident == *field);
+                let attr = def.attributes.iter().find(|a| a.ident == *field);
                 let is_arg = action.arguments.iter().any(|a| a.name == *field);
-                if !is_attr && !is_arg {
+                if attr.is_none() && !is_arg {
                     let mut candidates: Vec<String> =
                         def.attributes.iter().map(|a| a.ident.to_string()).collect();
                     candidates.extend(action.arguments.iter().map(|a| a.name.to_string()));
@@ -388,6 +425,39 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
                         &cand_refs,
                         "attribute or argument",
                     ));
+                }
+                if let Some(attr) = attr {
+                    match val {
+                        ValidationSpec::StringLength { .. } if !is_string_type(&attr.ty) => {
+                            return Err(Error::new_spanned(
+                                field,
+                                format!(
+                                    "string_length validation cannot be applied to attribute '{field}' of type '{}'",
+                                    type_label(&attr.ty)
+                                ),
+                            ));
+                        }
+                        ValidationSpec::Numericality { min, max, .. } => {
+                            if min.is_none() && max.is_none() {
+                                return Err(Error::new_spanned(
+                                    field,
+                                    format!(
+                                        "numericality validation for '{field}' must specify at least one of 'min' or 'max'"
+                                    ),
+                                ));
+                            }
+                            if !is_numeric_type(&attr.ty) {
+                                return Err(Error::new_spanned(
+                                    field,
+                                    format!(
+                                        "numericality validation cannot be applied to attribute '{field}' of non-numeric type '{}'",
+                                        type_label(&attr.ty)
+                                    ),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -409,6 +479,7 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
     }
 
     validate_cross_section(&def)?;
+    lint_uncovered_actions(&mut def);
 
     let resource = &def.resource;
     let struct_and_resource_tokens = resource::expand_resource_struct(&def)?;
@@ -985,6 +1056,208 @@ mod tests {
         assert!(
             msg.contains("multiple primary actions of kind 'create' on resource 'Ticket' ('open' and 'draft')"),
             "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_string_length_on_integer_attribute_fails() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                count: i64,
+            }
+            actions {
+                create open {
+                    validate string_length(count, min = 1);
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains(
+                "string_length validation cannot be applied to attribute 'count' of type 'i64'"
+            ),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_numericality_on_string_attribute_fails() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+            }
+            actions {
+                create open {
+                    validate numericality(title, min = 1);
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains(
+                "numericality validation cannot be applied to attribute 'title' of non-numeric type 'String'"
+            ),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_string_length_on_bool_or_uuid_attribute_fails() {
+        let bool_def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                active: bool,
+            }
+            actions {
+                create open {
+                    validate string_length(active, min = 1);
+                }
+            }
+        });
+        let err = expand_err(bool_def);
+        assert!(
+            err.to_string().contains(
+                "string_length validation cannot be applied to attribute 'active' of type 'bool'"
+            ),
+            "got: {}",
+            err
+        );
+
+        let uuid_def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open {
+                    validate string_length(id, min = 1);
+                }
+            }
+        });
+        let err = expand_err(uuid_def);
+        assert!(
+            err.to_string().contains(
+                "string_length validation cannot be applied to attribute 'id' of type 'Uuid'"
+            ),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_numericality_on_bool_attribute_fails() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                active: bool,
+            }
+            actions {
+                create open {
+                    validate numericality(active, min = 0);
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains(
+                "numericality validation cannot be applied to attribute 'active' of non-numeric type 'bool'"
+            ),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_numericality_on_uuid_attribute_fails() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open {
+                    validate numericality(id, min = 1);
+                }
+            }
+        });
+        let err = expand_err(def);
+        assert!(
+            err.to_string().contains(
+                "numericality validation cannot be applied to attribute 'id' of non-numeric type 'Uuid'"
+            ),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_uncovered_action_emits_forbidden_warning() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                title: String,
+            }
+            actions {
+                create open { primary; accept [title]; }
+                read read { primary; }
+                update assign { accept [title]; }
+            }
+            policies {
+                policy action(open) {
+                    authorize_if always;
+                }
+                policy action_type(read) {
+                    authorize_if always;
+                }
+            }
+        });
+        let out = expand_define(def).expect("expand").to_string();
+        assert!(
+            out.contains(
+                "Action 'assign' has no matching policy rule and will always be forbidden at runtime"
+            ),
+            "missing uncovered action warning: {out}"
+        );
+        assert!(
+            !out.contains("Action 'open' has no matching policy rule"),
+            "open should be covered: {out}"
+        );
+        assert!(
+            !out.contains("Action 'read' has no matching policy rule"),
+            "read should be covered: {out}"
+        );
+    }
+
+    #[test]
+    fn test_policy_always_covers_all_actions() {
+        let def = parse_def(quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+            }
+            actions {
+                create open { primary; }
+                read read { primary; }
+            }
+            policies {
+                policy always {
+                    authorize_if always;
+                }
+            }
+        });
+        let out = expand_define(def).expect("expand").to_string();
+        assert!(
+            !out.contains("has no matching policy rule"),
+            "always should cover all actions: {out}"
         );
     }
 

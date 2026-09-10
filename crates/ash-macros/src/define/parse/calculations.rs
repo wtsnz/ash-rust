@@ -3,7 +3,12 @@ use syn::{Error, Expr, Ident, Result, Token, Type};
 
 use crate::define::ast::{ArgumentSpec, CalculationExprSpec, CalculationSpec};
 
-pub fn parse_calculations(input: ParseStream) -> Result<Vec<CalculationSpec>> {
+use super::helpers::ident_from_string;
+
+pub fn parse_calculations(
+    input: ParseStream,
+    warnings: &mut Vec<proc_macro2::TokenStream>,
+) -> Result<Vec<CalculationSpec>> {
     let mut calcs = Vec::new();
     while !input.is_empty() {
         let outer_attrs = input.call(syn::Attribute::parse_outer)?;
@@ -39,7 +44,11 @@ pub fn parse_calculations(input: ParseStream) -> Result<Vec<CalculationSpec>> {
                 .strip_prefix("string_length(")
                 .and_then(|s| s.strip_suffix(')'))
             {
-                CalculationExprSpec::StringLength(stripped.trim().to_string())
+                warnings.push(crate::ast_helpers::make_deprecated_warning(
+                    lit.span(),
+                    "Quoted calculation strings like \"string_length(subject)\" are deprecated; prefer unquoted `string_length(subject)`",
+                ));
+                CalculationExprSpec::StringLength(ident_from_string(stripped.trim(), lit.span())?)
             } else {
                 CalculationExprSpec::LitString(val)
             }
@@ -108,13 +117,17 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                             let f = p
                                 .path
                                 .get_ident()
-                                .ok_or_else(|| Error::new_spanned(p, "expected identifier"))?;
-                            Ok(CalculationExprSpec::Arg(f.to_string()))
+                                .ok_or_else(|| Error::new_spanned(p, "expected identifier"))?
+                                .clone();
+                            Ok(CalculationExprSpec::Arg(f))
                         }
                         syn::Expr::Lit(syn::ExprLit {
                             lit: syn::Lit::Str(s),
                             ..
-                        }) => Ok(CalculationExprSpec::Arg(s.value())),
+                        }) => Ok(CalculationExprSpec::Arg(ident_from_string(
+                            &s.value(),
+                            s.span(),
+                        )?)),
                         other => Err(Error::new_spanned(
                             other,
                             "expected argument identifier or string literal",
@@ -131,13 +144,17 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                             let f = p
                                 .path
                                 .get_ident()
-                                .ok_or_else(|| Error::new_spanned(p, "expected field"))?;
-                            Ok(CalculationExprSpec::StringLength(f.to_string()))
+                                .ok_or_else(|| Error::new_spanned(p, "expected field"))?
+                                .clone();
+                            Ok(CalculationExprSpec::StringLength(f))
                         }
                         syn::Expr::Lit(syn::ExprLit {
                             lit: syn::Lit::Str(s),
                             ..
-                        }) => Ok(CalculationExprSpec::StringLength(s.value())),
+                        }) => Ok(CalculationExprSpec::StringLength(ident_from_string(
+                            &s.value(),
+                            s.span(),
+                        )?)),
                         other => {
                             let inner = parse_calc_expr(other)?;
                             Ok(CalculationExprSpec::Length(Box::new(inner)))

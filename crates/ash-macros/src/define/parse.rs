@@ -87,7 +87,7 @@ impl Parse for ResourceDefinition {
                 helpers::optional_semi(input)?;
             } else if section_ident == "calculations" {
                 parse_braced!(input, content);
-                calculations = calculations::parse_calculations(&content)?;
+                calculations = calculations::parse_calculations(&content, &mut warnings)?;
                 helpers::optional_semi(input)?;
             } else if section_ident == "aggregates" {
                 parse_braced!(input, content);
@@ -658,6 +658,59 @@ mod tests {
         assert_eq!(def.actions.len(), 2);
         assert_eq!(def.actions[0].accept.len(), 1);
         assert_eq!(def.actions[0].validations.len(), 1);
+    }
+
+    #[test]
+    fn test_quoted_calculation_string_emits_deprecation_warning() {
+        use crate::define::ast::CalculationExprSpec;
+
+        let tokens = quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk],
+                subject: String,
+            }
+            calculations {
+                subject_len: i64 = "string_length(subject)";
+            }
+        };
+        let def = match syn::parse2::<ResourceDefinition>(tokens) {
+            Ok(d) => d,
+            Err(e) => panic!("parse failed: {e}"),
+        };
+        assert_eq!(def.warnings.len(), 1);
+        let warnings = &def.warnings;
+        let warn_str = quote! { #(#warnings)* }.to_string();
+        assert!(
+            warn_str.contains("string_length(subject)"),
+            "missing quoted calc deprecation: {warn_str}"
+        );
+        match &def.calculations[0].expr {
+            CalculationExprSpec::StringLength(field) => {
+                assert_eq!(field.to_string(), "subject");
+            }
+            other => panic!("expected StringLength ident, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_vacuous_numericality_fails() {
+        let tokens = quote! {
+            resource TestResource;
+            actions {
+                create open {
+                    validate numericality(age);
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string().contains(
+                "numericality validation for 'age' must specify at least one of 'min' or 'max'"
+            ),
+            "got: {}",
+            err
+        );
     }
 
     #[test]

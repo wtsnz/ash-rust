@@ -80,8 +80,7 @@ pub struct RelationshipSpec {
     pub ident: Ident,
     pub dest: Ident,
     pub struct_field_ty: Type,
-    pub fk: Option<String>,
-    pub fk_span: Option<proc_macro2::Span>,
+    pub fk: Option<Ident>,
     pub through: Option<Ident>,
     pub source_attribute_on_join_resource: Option<String>,
     pub destination_attribute_on_join_resource: Option<String>,
@@ -98,8 +97,8 @@ pub struct CalculationSpec {
 
 #[derive(Clone, Debug)]
 pub enum CalculationExprSpec {
-    Arg(String),
-    StringLength(String),
+    Arg(Ident),
+    StringLength(Ident),
     Field(Ident),
     LitInt(i64),
     LitString(String),
@@ -293,10 +292,10 @@ pub enum PolicyEffectSpec {
 pub enum PolicyCheckExpr {
     Always,
     ActorPresent,
-    RelatesToActor(String),
-    IsNil(String),
-    ActorAttributeEquals { attr: String, value: Lit },
-    Eq { field: String, value: Lit },
+    RelatesToActor(Ident),
+    IsNil(Ident),
+    ActorAttributeEquals { attr: Ident, value: Lit },
+    Eq { field: Ident, value: Lit },
     And(Vec<PolicyCheckExpr>),
     Or(Vec<PolicyCheckExpr>),
 }

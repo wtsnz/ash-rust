@@ -29,7 +29,6 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
         let ty: Type = input.parse()?;
 
         let mut fk = None;
-        let mut fk_span = None;
         let mut through = None;
         let mut source_attribute_on_join_resource = None;
         let mut destination_attribute_on_join_resource = None;
@@ -49,12 +48,10 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
                         }
                         if flags_content.peek(syn::LitStr) {
                             let s: syn::LitStr = flags_content.parse()?;
-                            fk_span = Some(s.span());
-                            fk = Some(s.value());
+                            fk = Some(super::helpers::ident_from_string(&s.value(), s.span())?);
                         } else {
                             let id: Ident = flags_content.parse()?;
-                            fk_span = Some(id.span());
-                            fk = Some(id.to_string());
+                            fk = Some(id);
                         }
                     }
                     "through" => {
@@ -191,7 +188,6 @@ pub fn parse_relationships(input: ParseStream) -> Result<Vec<RelationshipSpec>> 
             dest,
             struct_field_ty,
             fk,
-            fk_span,
             through,
             source_attribute_on_join_resource,
             destination_attribute_on_join_resource,

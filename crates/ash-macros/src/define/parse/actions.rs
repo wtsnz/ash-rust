@@ -696,6 +696,15 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 }
             }
 
+            if min.is_none() && max.is_none() {
+                return Err(Error::new_spanned(
+                    &field,
+                    format!(
+                        "numericality validation for '{field}' must specify at least one of 'min' or 'max'"
+                    ),
+                ));
+            }
+
             if let (Some(min_v), Some(max_v)) = (min, max)
                 && min_v > max_v
             {
