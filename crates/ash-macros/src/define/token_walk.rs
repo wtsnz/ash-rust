@@ -119,6 +119,38 @@ fn walk(stream: TokenStream, out: &mut Walked) {
                     i += 2;
                     continue;
                 }
+                i += 1;
+                while i < tokens.len() {
+                    match &tokens[i] {
+                        TokenTree::Ident(id) if is_keyword(&id.to_string()) => break,
+                        TokenTree::Ident(id) if is_field_ident(id) => {
+                            out.fields.push(id.clone());
+                            i += 1;
+                        }
+                        TokenTree::Punct(p) if p.as_char() == ';' => break,
+                        TokenTree::Group(_) => break,
+                        _ => i += 1,
+                    }
+                }
+                continue;
+            } else if name == "action" {
+                if let Some(TokenTree::Group(g)) = next
+                    && g.delimiter() == Delimiter::Parenthesis
+                {
+                    collect_comma_idents(g.stream(), &mut out.fields);
+                    i += 2;
+                    continue;
+                }
+            } else if matches!(name.as_str(), "count" | "exists" | "first" | "sum") {
+                if let Some(TokenTree::Group(g)) = next
+                    && g.delimiter() == Delimiter::Parenthesis
+                {
+                    if let Some(field) = first_field_ident(g.stream()) {
+                        out.fields.push(field);
+                    }
+                    i += 2;
+                    continue;
+                }
             } else if name == "set" || name == "set_new" {
                 if let Some(TokenTree::Group(g)) = next
                     && g.delimiter() == Delimiter::Parenthesis
@@ -239,10 +271,35 @@ mod tests {
         assert!(out.contains("sub"), "missing accept ident: {out}");
         assert!(out.contains("statu"), "missing set lhs: {out}");
         assert!(out.contains("archived"), "missing filter field: {out}");
+        assert!(out.contains("open"), "missing policy action: {out}");
         assert!(
             out.contains("__ash_token_walk_probes"),
             "missing walk helper: {out}"
         );
+    }
+
+    #[test]
+    fn test_walk_accept_without_brackets_and_aggregates() {
+        let tokens = quote! {
+            Ticket {
+                attributes {
+                    id: Uuid [pk];
+                    subject: String;
+                }
+                aggregates {
+                    comment_count: Option<i64> = count(comments);
+                }
+                actions {
+                    create open {
+                        accept subject
+                    }
+                }
+            }
+        };
+        let resource = Ident::new("Ticket", proc_macro2::Span::call_site());
+        let out = expand_probes(&tokens, Some(&resource)).to_string();
+        assert!(out.contains("subject"), "missing unbracketed accept: {out}");
+        assert!(out.contains("comments"), "missing count rel: {out}");
     }
 
     #[test]
