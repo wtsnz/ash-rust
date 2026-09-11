@@ -86,6 +86,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut preparations = Vec::new();
     let mut persist_manual = false;
     let mut run_expr = None;
+    let mut accept_kw = None;
+    let mut change_kw = None;
+    let mut validate_kw = None;
+    let mut prepare_kw = None;
+    let mut persist_kw = None;
+    let mut returns_kw = None;
+    let mut run_kw = None;
 
     if input.peek(Token![;]) {
         let _: Token![;] = input.parse()?;
@@ -157,6 +164,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     }
                 }
                 "accept" => {
+                    if accept_kw.is_none() {
+                        accept_kw = Some(item_ident.clone());
+                    }
                     if body.peek(Token![:]) {
                         let _: Token![:] = body.parse()?;
                     }
@@ -196,6 +206,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "accept");
                 }
                 "change" => {
+                    if change_kw.is_none() {
+                        change_kw = Some(item_ident.clone());
+                    }
                     let expr: Expr = body.parse()?;
                     changes.push(parse_change(&expr)?);
                     require_semi(&body, errors, "change");
@@ -216,6 +229,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "after_transaction");
                 }
                 "changes" => {
+                    if change_kw.is_none() {
+                        change_kw = Some(item_ident.clone());
+                    }
                     errors.push(Error::new_spanned(
                         &item_ident,
                         "use `change <action>;`, not `changes [...]`",
@@ -234,6 +250,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     }
                 }
                 "validate" | "validation" => {
+                    if validate_kw.is_none() {
+                        validate_kw = Some(item_ident.clone());
+                    }
                     if item_ident == "validation" {
                         errors.push(Error::new_spanned(
                             &item_ident,
@@ -258,6 +277,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "validate");
                 }
                 "validations" => {
+                    if validate_kw.is_none() {
+                        validate_kw = Some(item_ident.clone());
+                    }
                     errors.push(Error::new_spanned(
                         &item_ident,
                         "use `validate <rule>;`, not `validations [...]`",
@@ -278,6 +300,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     }
                 }
                 "prepare" | "preparation" => {
+                    if prepare_kw.is_none() {
+                        prepare_kw = Some(item_ident.clone());
+                    }
                     if item_ident == "preparation" {
                         errors.push(Error::new_spanned(
                             &item_ident,
@@ -302,6 +327,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "prepare");
                 }
                 "preparations" => {
+                    if prepare_kw.is_none() {
+                        prepare_kw = Some(item_ident.clone());
+                    }
                     errors.push(Error::new_spanned(
                         &item_ident,
                         "use `prepare <item>;`, not `preparations [...]`",
@@ -322,6 +350,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     }
                 }
                 "persist" => {
+                    if persist_kw.is_none() {
+                        persist_kw = Some(item_ident.clone());
+                    }
                     if body.peek(Token![:]) {
                         let _: Token![:] = body.parse()?;
                     }
@@ -334,6 +365,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "persist");
                 }
                 "returns" => {
+                    if returns_kw.is_none() {
+                        returns_kw = Some(item_ident.clone());
+                    }
                     if body.peek(Token![:]) {
                         let _: Token![:] = body.parse()?;
                     }
@@ -342,6 +376,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "returns");
                 }
                 "run" => {
+                    if run_kw.is_none() {
+                        run_kw = Some(item_ident.clone());
+                    }
                     let expr: Expr = body.parse()?;
                     run_expr = Some(expr);
                     require_semi(&body, errors, "run");
@@ -392,6 +429,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         persist_manual,
         returns,
         run_expr,
+        accept_kw,
+        change_kw,
+        validate_kw,
+        prepare_kw,
+        persist_kw,
+        returns_kw,
+        run_kw,
     })
 }
 

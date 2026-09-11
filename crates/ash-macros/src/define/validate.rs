@@ -313,54 +313,62 @@ fn validate_kind_gates(action: &crate::define::ast::ActionSpec, errors: &mut Vec
     use crate::define::ast::ChangeSpec;
     let kind = action.kind;
     let kind_name = kind.as_str();
+    let name = &action.name;
+    let prepare_at = action.prepare_kw.as_ref().unwrap_or(name);
+    let accept_at = action.accept_kw.as_ref().unwrap_or(name);
+    let change_at = action.change_kw.as_ref().unwrap_or(name);
+    let validate_at = action.validate_kw.as_ref().unwrap_or(name);
+    let persist_at = action.persist_kw.as_ref().unwrap_or(name);
+    let returns_at = action.returns_kw.as_ref().unwrap_or(name);
+    let run_at = action.run_kw.as_ref().unwrap_or(name);
 
     if !action.preparations.is_empty() && kind != ActionKind::Read {
         errors.push(Error::new_spanned(
-            &action.name,
+            prepare_at,
             format!("`prepare` is only valid on `read` actions, not `{kind_name}`"),
         ));
     }
     if !action.accept.is_empty() && kind == ActionKind::Read {
         errors.push(Error::new_spanned(
-            &action.name,
+            accept_at,
             "`accept` is not valid on `read` actions",
         ));
     }
     if !action.changes.is_empty() && kind == ActionKind::Read {
         errors.push(Error::new_spanned(
-            &action.name,
+            change_at,
             "`change` is not valid on `read` actions",
         ));
     }
     if !action.validations.is_empty() && kind == ActionKind::Read {
         errors.push(Error::new_spanned(
-            &action.name,
+            validate_at,
             "`validate` is not valid on `read` actions",
         ));
     }
     if action.persist_manual && kind != ActionKind::Create {
         errors.push(Error::new_spanned(
-            &action.name,
+            persist_at,
             "`persist manual` is only valid on `create` actions",
         ));
     }
     if action.returns.is_some() && kind != ActionKind::Generic {
         errors.push(Error::new_spanned(
-            &action.name,
+            returns_at,
             "`returns` is only valid on `generic` actions",
         ));
     }
     if action.run_expr.is_some() && kind != ActionKind::Generic {
         errors.push(Error::new_spanned(
-            &action.name,
+            run_at,
             "`run` is only valid on `generic` actions",
         ));
     }
     if kind == ActionKind::Generic {
         for chg in &action.changes {
-            if matches!(chg, ChangeSpec::RelateActor { .. }) {
+            if let ChangeSpec::RelateActor { field } = chg {
                 errors.push(Error::new_spanned(
-                    &action.name,
+                    field,
                     "`relate_actor` is not valid on `generic` actions",
                 ));
             }
@@ -1275,6 +1283,23 @@ mod tests {
         assert!(
             msg.contains("`prepare` is only valid on `read` actions, not `create`"),
             "got: {msg}"
+        );
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    archived: bool;
+                }
+                actions {
+                    create open {
+                        prepare filter(archived == false);
+                    }
+                }
+            }
+        });
+        assert!(
+            def.actions[0].prepare_kw.is_some(),
+            "kind-gate errors should underline `prepare`, not the action name"
         );
     }
 
