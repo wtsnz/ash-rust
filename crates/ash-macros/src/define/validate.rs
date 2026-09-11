@@ -1,6 +1,5 @@
 use crate::ast_helpers::{
-    find_closest_match, is_bool, is_i64, is_integer, is_string, is_uuid, option_inner,
-    unknown_ident_error,
+    find_closest_match, is_bool, is_integer, is_string, is_uuid, option_inner, unknown_ident_error,
 };
 use crate::define::ast::{
     ActionKind, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, RelType,
@@ -18,6 +17,96 @@ fn unknown_field(ident: &Ident, names: &[String], kind: &str) -> Error {
     unknown_ident_error(ident, &ident_refs(names), kind)
 }
 
+fn slot_hint(expected: &str, actual: &str) -> &'static str {
+    match (expected, actual) {
+        ("attribute", "relationship") => {
+            " `accept` and `change set` take persisted attributes; use `change manage(...)` for related records."
+        }
+        ("attribute", "calculation") | ("attribute", "aggregate") => {
+            " calculations and aggregates are computed, not written."
+        }
+        ("relationship", "attribute") => {
+            " use the relationship name (`has_many comments`), not a foreign-key attribute."
+        }
+        ("action", _) => " `policy action(...)` takes an action name from this resource.",
+        _ => "",
+    }
+}
+
+struct SlotNames {
+    attrs: Vec<String>,
+    rels: Vec<String>,
+    calcs: Vec<String>,
+    aggs: Vec<String>,
+    actions: Vec<String>,
+}
+
+fn slot_names(def: &ResourceDefinition) -> SlotNames {
+    SlotNames {
+        attrs: def.attributes.iter().map(|a| a.ident.to_string()).collect(),
+        rels: def.relationships.iter().map(|r| r.ident.to_string()).collect(),
+        calcs: def.calculations.iter().map(|c| c.ident.to_string()).collect(),
+        aggs: def.aggregates.iter().map(|a| a.ident.to_string()).collect(),
+        actions: def.actions.iter().map(|a| a.name.to_string()).collect(),
+    }
+}
+
+fn slot_error(
+    ident: &Ident,
+    expected: &str,
+    candidates: &[String],
+    names: &SlotNames,
+) -> Error {
+    unknown_or_wrong_slot(
+        ident,
+        expected,
+        candidates,
+        &names.attrs,
+        &names.rels,
+        &names.calcs,
+        &names.aggs,
+        &names.actions,
+    )
+}
+
+fn unknown_or_wrong_slot(
+    ident: &Ident,
+    expected: &str,
+    candidates: &[String],
+    attrs: &[String],
+    rels: &[String],
+    calcs: &[String],
+    aggs: &[String],
+    actions: &[String],
+) -> Error {
+    let name = ident.to_string();
+    let actual = if attrs.iter().any(|n| n == &name) {
+        Some("attribute")
+    } else if rels.iter().any(|n| n == &name) {
+        Some("relationship")
+    } else if calcs.iter().any(|n| n == &name) {
+        Some("calculation")
+    } else if aggs.iter().any(|n| n == &name) {
+        Some("aggregate")
+    } else if actions.iter().any(|n| n == &name) {
+        Some("action")
+    } else {
+        None
+    };
+    if let Some(actual) = actual
+        && actual != expected
+    {
+        return Error::new_spanned(
+            ident,
+            format!(
+                "`{name}` is a {actual}, not an {expected}.{}",
+                slot_hint(expected, actual)
+            ),
+        );
+    }
+    unknown_field(ident, candidates, expected)
+}
+
 fn attr_and_rel_names(def: &ResourceDefinition) -> Vec<String> {
     let mut names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
     names.extend(def.relationships.iter().map(|r| r.ident.to_string()));
@@ -33,9 +122,7 @@ fn is_string_type(ty: &Type) -> bool {
 }
 
 fn is_numeric_type(ty: &Type) -> bool {
-    is_i64(ty)
-        || is_integer(ty)
-        || option_inner(ty).is_some_and(|inner| is_i64(inner) || is_integer(inner))
+    is_integer(ty) || option_inner(ty).is_some_and(is_integer)
 }
 
 fn check_unique_idents<'a>(
@@ -213,6 +300,7 @@ fn check_multiple_primary_actions(def: &ResourceDefinition, errors: &mut Vec<Err
 
 fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
     check_multiple_primary_actions(def, errors);
+    let names = slot_names(def);
 
     let action_names: Vec<String> = def.actions.iter().map(|a| a.name.to_string()).collect();
     let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
@@ -228,7 +316,12 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             if let PolicyWhenSpec::ActionName(act_name) = when
                 && !action_names.iter().any(|n| n == &act_name.to_string())
             {
-                errors.push(unknown_field(act_name, &action_names, "action"));
+                errors.push(slot_error(
+                    act_name,
+                    "action",
+                    &action_names,
+                    &names,
+                ));
             }
         }
         for check in &pol.checks {
@@ -238,7 +331,12 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
 
     for fp in &def.field_policies {
         if !attr_names.iter().any(|n| n == &fp.field.to_string()) {
-            errors.push(unknown_field(&fp.field, &attr_names, "attribute"));
+            errors.push(slot_error(
+                &fp.field,
+                "attribute",
+                &attr_names,
+                &names,
+            ));
         }
         for check in &fp.checks {
             validate_policy_effect(check, &policy_fields, def.actor.as_ref(), errors);
@@ -280,7 +378,12 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
 
     for agg in &def.aggregates {
         if !rel_names.iter().any(|n| n == &agg.relationship.to_string()) {
-            errors.push(unknown_field(&agg.relationship, &rel_names, "relationship"));
+            errors.push(slot_error(
+                &agg.relationship,
+                "relationship",
+                &rel_names,
+                &names,
+            ));
         }
     }
 }
@@ -377,6 +480,7 @@ fn validate_kind_gates(action: &crate::define::ast::ActionSpec, errors: &mut Vec
 }
 
 fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
+    let names = slot_names(def);
     for action in &mut def.actions {
         validate_kind_gates(action, errors);
         if action.kind != ActionKind::Generic {
@@ -391,10 +495,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                 } else {
                     let attr_names: Vec<String> =
                         def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                    errors.push(unknown_ident_error(
+                    errors.push(slot_error(
                         &acc.name,
-                        &ident_refs(&attr_names),
                         "attribute",
+                        &attr_names,
+                        &names,
                     ));
                 }
             }
@@ -409,10 +514,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(unknown_ident_error(
+                        errors.push(slot_error(
                             field,
-                            &ident_refs(&attr_names),
                             "attribute",
+                            &attr_names,
+                            &names,
                         ));
                     } else {
                         kept_changes.push(chg);
@@ -423,10 +529,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(unknown_ident_error(
+                        errors.push(slot_error(
                             field,
-                            &ident_refs(&attr_names),
                             "attribute",
+                            &attr_names,
+                            &names,
                         ));
                         keep = false;
                     }
@@ -451,10 +558,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(unknown_ident_error(
+                        errors.push(slot_error(
                             field,
-                            &ident_refs(&attr_names),
                             "attribute",
+                            &attr_names,
+                            &names,
                         ));
                     } else {
                         kept_changes.push(chg);
@@ -467,10 +575,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                             .iter()
                             .map(|r| r.ident.to_string())
                             .collect();
-                        errors.push(unknown_ident_error(
+                        errors.push(slot_error(
                             relationship,
-                            &ident_refs(&rel_names),
                             "relationship",
+                            &rel_names,
+                            &names,
                         ));
                     } else {
                         kept_changes.push(chg);
@@ -487,10 +596,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
             {
                 let attr_names: Vec<String> =
                     def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                errors.push(unknown_ident_error(
+                errors.push(slot_error(
                     field,
-                    &ident_refs(&attr_names),
                     "attribute",
+                    &attr_names,
+                    &names,
                 ));
             }
         }
@@ -510,10 +620,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     let mut candidates: Vec<String> =
                         def.attributes.iter().map(|a| a.ident.to_string()).collect();
                     candidates.extend(action.arguments.iter().map(|a| a.name.to_string()));
-                    errors.push(unknown_ident_error(
+                    errors.push(slot_error(
                         field,
-                        &ident_refs(&candidates),
-                        "attribute or argument",
+                        "attribute",
+                        &candidates,
+                        &names,
                     ));
                 }
                 if let Some(attr) = attr {
@@ -568,10 +679,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
             if def.attributes.iter().all(|a| a.ident != *key) {
                 let attr_names: Vec<String> =
                     def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                errors.push(unknown_ident_error(
+                errors.push(slot_error(
                     key,
-                    &ident_refs(&attr_names),
                     "attribute",
+                    &attr_names,
+                    &names,
                 ));
             }
         }
@@ -586,7 +698,7 @@ fn validate_attributes(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             continue;
         }
         let inner = option_inner(&attr.ty).unwrap_or(&attr.ty);
-        if is_uuid(inner) || is_string(inner) || is_i64(inner) || is_bool(inner) {
+        if is_uuid(inner) || is_string(inner) || is_integer(inner) || is_bool(inner) {
             errors.push(Error::new_spanned(
                 &attr.ty,
                 "`[enum]` requires a type that implements `AshEnum`, not a builtin scalar",
@@ -645,6 +757,57 @@ mod tests {
             }
         }});
         assert!(msg.contains("Did you mean `subject`?"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_accept_relationship_names_the_wrong_slot() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                    author_id: Uuid;
+                }
+                relationships {
+                    belongs_to author: User [fk: author_id];
+                    has_many comments: Comment;
+                }
+                actions {
+                    create open {
+                        accept [comments];
+                    }
+                }
+            }
+        });
+        assert!(
+            msg.contains("`comments` is a relationship, not an attribute"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("change manage"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_set_calculation_names_the_wrong_slot() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                }
+                calculations {
+                    title_length: Option<i64> = string_length(title);
+                }
+                actions {
+                    create open {
+                        change set(title_length = 1);
+                    }
+                }
+            }
+        });
+        assert!(
+            msg.contains("`title_length` is a calculation, not an attribute"),
+            "got: {msg}"
+        );
     }
 
     #[test]
