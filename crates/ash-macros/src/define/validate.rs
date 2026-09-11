@@ -107,6 +107,46 @@ fn unknown_or_wrong_slot(
     unknown_field(ident, candidates, expected)
 }
 
+fn is_filter_field_ident(id: &Ident) -> bool {
+    let name = id.to_string();
+    !matches!(name.as_str(), "true" | "false" | "Self" | "Some" | "None")
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_lowercase())
+}
+
+fn collect_filter_idents<'a>(expr: &'a syn::Expr, out: &mut Vec<&'a Ident>) {
+    match expr {
+        syn::Expr::Binary(b) => {
+            collect_filter_idents(&b.left, out);
+            collect_filter_idents(&b.right, out);
+        }
+        syn::Expr::MethodCall(m) => {
+            collect_filter_idents(&m.receiver, out);
+            for arg in &m.args {
+                collect_filter_idents(arg, out);
+            }
+        }
+        syn::Expr::Unary(u) => collect_filter_idents(&u.expr, out),
+        syn::Expr::Paren(p) => collect_filter_idents(&p.expr, out),
+        syn::Expr::Group(g) => collect_filter_idents(&g.expr, out),
+        syn::Expr::Path(p) => {
+            if let Some(id) = p.path.get_ident() {
+                if is_filter_field_ident(id) {
+                    out.push(id);
+                }
+            } else if p.path.segments.len() == 2 && p.path.segments[0].ident == "Self" {
+                let id = &p.path.segments[1].ident;
+                if is_filter_field_ident(id) {
+                    out.push(id);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn attr_and_rel_names(def: &ResourceDefinition) -> Vec<String> {
     let mut names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
     names.extend(def.relationships.iter().map(|r| r.ident.to_string()));
@@ -591,17 +631,48 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
         action.changes = kept_changes;
 
         for prep in &action.preparations {
-            if let crate::define::ast::PreparationSpec::Sort { field, .. } = prep
-                && def.attributes.iter().all(|a| a.ident != *field)
-            {
-                let attr_names: Vec<String> =
-                    def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                errors.push(slot_error(
-                    field,
-                    "attribute",
-                    &attr_names,
-                    &names,
-                ));
+            match prep {
+                crate::define::ast::PreparationSpec::Sort { field, .. } => {
+                    if def.attributes.iter().all(|a| a.ident != *field) {
+                        let attr_names: Vec<String> =
+                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                        errors.push(slot_error(
+                            field,
+                            "attribute",
+                            &attr_names,
+                            &names,
+                        ));
+                    }
+                }
+                crate::define::ast::PreparationSpec::Filter { expr } => {
+                    let mut fields = Vec::new();
+                    collect_filter_idents(expr, &mut fields);
+                    let mut filterable = names.attrs.clone();
+                    filterable.extend(names.calcs.iter().cloned());
+                    filterable.extend(names.aggs.iter().cloned());
+                    for field in fields {
+                        let name = field.to_string();
+                        if filterable.iter().any(|n| n == &name) {
+                            continue;
+                        }
+                        if names.rels.iter().any(|n| n == &name) {
+                            errors.push(Error::new_spanned(
+                                field,
+                                format!(
+                                    "`{name}` is a relationship, not a filter field. `prepare filter` runs on this resource's attributes, calculations, and aggregates."
+                                ),
+                            ));
+                        } else {
+                            errors.push(unknown_ident_error(
+                                field,
+                                &ident_refs(&filterable),
+                                "filter field",
+                            ));
+                        }
+                    }
+                }
+                crate::define::ast::PreparationSpec::Limit(_)
+                | crate::define::ast::PreparationSpec::Offset(_) => {}
             }
         }
 
@@ -980,6 +1051,49 @@ mod tests {
             }
         }});
         assert!(msg.contains("Did you mean `subject`?"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_filter_preparation_unknown_attribute_suggests_did_you_mean() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+                archived: bool;
+            }
+            actions {
+                read read {
+                    primary;
+                    prepare filter(archved == false);
+                }
+            }
+        }});
+        assert!(msg.contains("Did you mean `archived`?"), "got: {msg}");
+        assert!(msg.contains("filter field"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_filter_preparation_relationship_is_wrong_slot() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                    author_id: Uuid;
+                }
+                relationships {
+                    belongs_to author: User;
+                    has_many comments: Comment;
+                }
+                actions {
+                    read read {
+                        primary;
+                        prepare filter(comments == true);
+                    }
+                }
+            }
+        });
+        assert!(msg.contains("relationship, not a filter field"), "got: {msg}");
     }
 
     #[test]
