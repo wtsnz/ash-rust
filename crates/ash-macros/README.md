@@ -31,7 +31,7 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
   - **Zero-Import Field Operators**: `Article::title.eq("Rust")` directly on the resource struct.
   - **Typed Action Builders**: `Article::publish(&ctx).title("...").tag("rust").await?`.
   - **Zero-Import Action Invocations**: Update and destroy actions accept IDs, records, and record references (`Ticket::assign(&ctx, id)`, `Ticket::assign(&ctx, &ticket)`, `Ticket::destroy(&ctx, &ticket)`) without importing action traits.
-  - **IDE Autocomplete & Diagnostics**: Hidden static typecheck probe enables instant LSP autocomplete for `accept [...]`, jump-to-definition, and refactoring renames.
+  - **IDE Autocomplete & Diagnostics**: Slot-specific typecheck probes complete `accept [...]`, relationship names, and `policy action(...)` without offering every method on the resource. Jump-to-definition and rename still follow the original tokens. Kind-gate errors underline the illegal keyword. Wrong-slot names (`accept` a relationship) are called out explicitly. Semantic lints (`present` on a required field, accept overwritten by `set`, unused arguments) show as rustc warnings.
   - **Intelligent Error Guidance**: Levenshtein distance suggestions ("Did you mean?") for section typos, action kinds, validations, and field references.
   - **Changeset Interoperability**: Generated action builders automatically implement `IntoChangeset` for direct use in `Multi` pipelines.
 
@@ -88,8 +88,8 @@ domain! {
     Catalog {
         resources {
             Product {
-                define create_product, action: create;
-                define get_product, action: read;
+                define create_product action: create;
+                define get_product action: read;
             };
         }
     }

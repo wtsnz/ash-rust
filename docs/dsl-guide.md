@@ -111,7 +111,13 @@ resource! {
 
 If any `policies { ... }` block is present, every action must be covered by `policy always`, `policy action(name)`, or `policy action_type(kind)`. Uncovered actions are compile errors.
 
-`prepare` is only valid on `read`. `accept` / `change` / `validate` are not valid on `read`. `persist manual` is only valid on `create`. `returns` / `run` are only valid on `generic`. `relate_actor` is not valid on `generic`.
+`prepare` is only valid on `read`. `accept` / `change` / `validate` are not valid on `read`. `persist manual` is only valid on `create`. `returns` / `run` are only valid on `generic`. `relate_actor` is not valid on `generic`. Those errors underline the illegal keyword, not the action name.
+
+Typos get a "Did you mean?" plus the names that belong in that slot. Using a relationship or calculation where an attribute is required is a distinct error (`accept [comments]` says `comments` is a relationship).
+
+`validate present(title)` on a non-`Option` field, `accept [status]` together with `change set(status = ...)`, and unused `argument`s are rustc **warnings** (via `#[deprecated]`), not errors.
+
+IDE completion inside `accept [...]`, `policy action(...)`, aggregates, and identity keys is scoped to the names valid in that slot. Action builders are `#[must_use]` until `.await` / `.call()`. A missing `StoreTag` / `HasStore<T>` bound names the store to register.
 
 ---
 
@@ -124,6 +130,7 @@ Attributes represent persisted state or fields on the underlying data layer. Eac
 | `id: Uuid [pk];` | Primary key for the resource |
 | `field: String;` | Non-nullable string attribute |
 | `field: Option<i64>;` | Nullable integer attribute |
+| `priority: i32;` | Integer attribute (`i8`/`u32`/… store as `Integer`) |
 | `version: i64 [version];` | Optimistic locking concurrency attribute |
 | `status: String = "draft";` | Default static value on create |
 | `views: i64 [default: 0];` | Bracket syntax for defaults |
@@ -382,7 +389,7 @@ let results = ctx.multi()
 
 ## 7. Defining Domains (`domain!`)
 
-Canonical header is `Name { ... }`, matching `resource!`. Resource entries and code interfaces end with `;`. `action: open` probes `Ticket::open` so F12 goes to the action.
+Canonical header is `Name { ... }`, matching `resource!`. Resource entries and code interfaces end with `;`. Code interface options are space-separated (`define open_ticket action: open`), not comma-separated. `action: open` probes `Ticket::open` so F12 goes to the action.
 
 ```rust
 use ash_core::domain;
@@ -391,8 +398,8 @@ domain! {
     Blog {
         resources {
             Post {
-                define create_post, action: create, args: [title: String];
-                define get_post, action: read, get_by: id;
+                define create_post action: create args: [title: String];
+                define get_post action: read get_by: id;
             };
             Author;
             Tag;
