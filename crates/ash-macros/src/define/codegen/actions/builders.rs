@@ -504,6 +504,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         #need_traits
 
                         #(#outer_attrs)*
+                        #[must_use = "this action is not executed unless you `.await` or `.call()` it"]
                         pub struct #builder_name<'a, D #struct_params> {
                             ctx: &'a ::ash_core::Context<D>,
                             #(#field_members,)*
@@ -552,6 +553,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         #need_traits
 
                         #(#outer_attrs)*
+                        #[must_use = "this action is not executed unless you `.await` or `.call()` it"]
                         pub struct #builder_name<'a, D #struct_params> {
                             ctx: &'a ::ash_core::Context<D>,
                             tenant_override: ::std::option::Option<::std::string::String>,
@@ -894,6 +896,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #(#outer_attrs)*
+                    #[must_use = "this action is not executed unless you `.await` or `.call()` it"]
                     pub struct #builder_name<'a, D #struct_params> {
                         ctx: &'a ::ash_core::Context<D>,
                         target: #target_enum,
@@ -1329,6 +1332,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #(#outer_attrs)*
+                    #[must_use = "this action is not executed unless you `.await` or `.call()` it"]
                     pub struct #builder_name<'a, D #struct_params> {
                         ctx: &'a ::ash_core::Context<D>,
                         #(#field_members,)*
