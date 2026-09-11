@@ -555,6 +555,14 @@ fn check_ref(effect: &PolicyEffectSpec) -> &PolicyCheckExpr {
     }
 }
 
+fn policy_slot_probe(def: &ResourceDefinition, field: &Ident) -> TokenStream {
+    if def.relationships.iter().any(|r| r.ident == *field) {
+        ns_field_probe(&Ident::new("__ash_rel", field.span()), field)
+    } else {
+        ns_field_probe(&Ident::new("__ash_accept", field.span()), field)
+    }
+}
+
 fn collect_policy_check_probes(
     def: &ResourceDefinition,
     _resource: &Ident,
@@ -562,6 +570,23 @@ fn collect_policy_check_probes(
     probes: &mut Vec<TokenStream>,
 ) {
     match check {
+        PolicyCheckExpr::RelatesToActor(field) | PolicyCheckExpr::IsNil(field) => {
+            probes.push(policy_slot_probe(def, field));
+        }
+        PolicyCheckExpr::Eq { field, value } => {
+            probes.push(policy_slot_probe(def, field));
+            if let Some(attr) = def.attributes.iter().find(|a| a.ident == *field) {
+                if option_inner(&attr.ty).is_some() {
+                    probes.push(quote_spanned! { value.span() =>
+                        __ash_assert_assignable_optional(&__ash_record.#field, &#value);
+                    });
+                } else {
+                    probes.push(quote_spanned! { value.span() =>
+                        __ash_assert_assignable(&__ash_record.#field, &#value);
+                    });
+                }
+            }
+        }
         PolicyCheckExpr::ActorAttributeEquals { attr, value } => {
             if def.actor.is_some() {
                 probes.push(ns_field_probe(
@@ -584,7 +609,7 @@ fn collect_policy_check_probes(
                 collect_policy_check_probes(def, _resource, part, probes);
             }
         }
-        _ => {}
+        PolicyCheckExpr::Always | PolicyCheckExpr::ActorPresent => {}
     }
 }
 
@@ -986,6 +1011,49 @@ mod tests {
         assert!(out.contains("eq"), "missing eq operator: {out}");
         assert!(out.contains("Filter"), "missing Filter type: {out}");
         assert!(out.contains("TestResource"), "missing resource path: {out}");
+    }
+
+    #[test]
+    fn test_probe_policy_eq_is_nil_and_relates_to() {
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    author_id: Uuid;
+                    assignee_id: Option<Uuid>;
+                    status: String;
+                }
+                relationships {
+                    belongs_to author: User [fk: author_id];
+                }
+                actions {
+                    read read { primary; }
+                }
+                policies {
+                    policy always {
+                        authorize_if relates_to(author);
+                        authorize_if is_nil(assignee_id);
+                        authorize_if eq(status, "open");
+                    }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("author"), "missing relates_to rel: {out}");
+        assert!(
+            out.contains("__ash_rel"),
+            "relates_to should complete from the relationship namespace: {out}"
+        );
+        assert!(
+            out.contains("assignee_id"),
+            "missing is_nil field: {out}"
+        );
+        assert!(out.contains("status"), "missing eq field: {out}");
+        assert!(
+            out.contains("__ash_assert_assignable"),
+            "missing eq literal type check: {out}"
+        );
+        assert!(out.contains("open"), "missing eq literal: {out}");
     }
 
     #[test]
