@@ -166,10 +166,11 @@ resource! {
 
 // 2. Declarative Domain
 domain! {
-    domain Helpdesk;
-    resources {
-        Ticket,
-        Representative,
+    Helpdesk {
+        resources {
+            Ticket;
+            Representative;
+        }
     }
 }
 

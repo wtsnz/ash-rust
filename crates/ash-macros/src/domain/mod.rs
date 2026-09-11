@@ -1,38 +1,41 @@
 pub mod ast;
 pub mod codegen;
 pub mod parse;
+mod validate;
 
-pub use ast::DomainDefinition;
 pub use codegen::expand_domain;
+
+use crate::ast_helpers::combine_errors;
 
 pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let extracted = crate::ast_helpers::extract_domain_ident(&input);
-    match syn::parse2::<DomainDefinition>(input) {
-        Ok(def) => {
-            let name = def.domain_name.clone();
-            match expand_domain(def) {
-                Ok(tokens) => tokens,
-                Err(err) => error_with_fallback_stub(err, Some(&name)),
+    let mut parsed = parse::parse_domain(input);
+    parsed.errors.extend(validate::validate(&parsed.def));
+
+    let stub = fallback_domain_stub(extracted.as_ref().unwrap_or(&parsed.def.domain_name));
+
+    match expand_domain(parsed.def) {
+        Ok(tokens) => {
+            if let Some(err) = combine_errors(parsed.errors) {
+                let compile_error = err.to_compile_error();
+                quote::quote! {
+                    #compile_error
+                    #tokens
+                }
+            } else {
+                tokens
             }
         }
-        Err(err) => error_with_fallback_stub(err, extracted.as_ref()),
-    }
-}
-
-fn error_with_fallback_stub(
-    err: syn::Error,
-    domain: Option<&syn::Ident>,
-) -> proc_macro2::TokenStream {
-    let compile_error = err.to_compile_error();
-    match domain {
-        Some(domain_name) => {
-            let stub = fallback_domain_stub(domain_name);
+        Err(err) => {
+            parsed.errors.push(err);
+            let compile_error = combine_errors(parsed.errors)
+                .map(|e| e.to_compile_error())
+                .unwrap_or_default();
             quote::quote! {
                 #compile_error
                 #stub
             }
         }
-        None => compile_error,
     }
 }
 
@@ -59,9 +62,10 @@ mod tests {
     #[test]
     fn test_parse_error_emits_fallback_stub() {
         let tokens = quote! {
-            domain Broken;
-            resourcez {
-                Ticket
+            Broken {
+                resourcez {
+                    Ticket;
+                }
             }
         };
         let out = expand_dsl(tokens).to_string();
@@ -71,5 +75,57 @@ mod tests {
         );
         assert!(out.contains("struct Broken"), "missing stub struct: {out}");
         assert!(out.contains("Did you mean"), "missing suggestion: {out}");
+    }
+
+    #[test]
+    fn test_recovery_keeps_good_resources() {
+        let tokens = quote! {
+            Helpdesk {
+                resources {
+                    Ticket {
+                        defin broken, action: open;
+                        define open_ticket, action: open, args: [subject: String];
+                    };
+                    Representative;
+                }
+            }
+        };
+        let out = expand_dsl(tokens).to_string();
+        assert!(
+            out.contains("compile_error"),
+            "missing compile_error: {out}"
+        );
+        assert!(out.contains("Did you mean"), "missing suggestion: {out}");
+        assert!(out.contains("struct Helpdesk"), "missing struct: {out}");
+        assert!(out.contains("Ticket"), "missing Ticket: {out}");
+        assert!(
+            out.contains("Representative"),
+            "missing Representative: {out}"
+        );
+        assert!(
+            out.contains("open"),
+            "missing recovered open interface: {out}"
+        );
+    }
+
+    #[test]
+    fn test_old_header_still_expands_with_error() {
+        let tokens = quote! {
+            domain Helpdesk;
+            resources {
+                Ticket;
+            }
+        };
+        let out = expand_dsl(tokens).to_string();
+        assert!(
+            out.contains("compile_error"),
+            "missing compile_error: {out}"
+        );
+        assert!(
+            out.contains("not `domain Name;`") || out.contains("domain Name"),
+            "missing header error: {out}"
+        );
+        assert!(out.contains("struct Helpdesk"), "missing struct: {out}");
+        assert!(out.contains("Ticket"), "missing recovered resource: {out}");
     }
 }

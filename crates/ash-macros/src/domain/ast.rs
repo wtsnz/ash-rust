@@ -6,6 +6,16 @@ pub struct DomainDefinition {
     pub resources: Vec<DomainResourceSpec>,
 }
 
+impl DomainDefinition {
+    pub fn empty(domain_name: Ident) -> Self {
+        Self {
+            outer_attrs: Vec::new(),
+            domain_name,
+            resources: Vec::new(),
+        }
+    }
+}
+
 pub struct DomainResourceSpec {
     pub resource: Ident,
     pub interfaces: Vec<CodeInterfaceSpec>,

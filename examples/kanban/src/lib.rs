@@ -17,63 +17,65 @@ pub use workspaces::{
 };
 
 domain! {
-    domain Workspaces;
-    resources {
-        User {
-            define register_user, action: register, args: [name: String, email: String];
-            define get_user, action: read, get_by: id;
-            define list_users, action: read;
-        },
-        Workspace {
-            define create_workspace, action: create, args: [name: String, slug: String];
-            define get_workspace, action: read, get_by: id;
-            define list_workspaces, action: read;
-        },
-        WorkspaceMember {
-            define add_member, action: add, args: [workspace_id: ::uuid::Uuid, user_id: ::uuid::Uuid, role: String];
-            define remove_member, action: destroy, on: record;
-            define list_members, action: read;
-        },
+    Workspaces {
+        resources {
+            User {
+                define register_user, action: register, args: [name: String, email: String];
+                define get_user, action: read, get_by: id;
+                define list_users, action: read;
+            };
+            Workspace {
+                define create_workspace, action: create, args: [name: String, slug: String];
+                define get_workspace, action: read, get_by: id;
+                define list_workspaces, action: read;
+            };
+            WorkspaceMember {
+                define add_member, action: add, args: [workspace_id: ::uuid::Uuid, user_id: ::uuid::Uuid, role: String];
+                define remove_member, action: destroy, on: record;
+                define list_members, action: read;
+            };
+        }
     }
 }
 
 domain! {
-    domain Kanban;
-    resources {
-        Board {
-            define create_board, action: create, args: [workspace_id: ::uuid::Uuid, name: String, description: Option<String>];
-            define get_board, action: read, get_by: id;
-            define list_boards, action: read;
-            define archive_board, action: archive, on: record;
-        },
-        List {
-            define create_list, action: create, args: [board_id: ::uuid::Uuid, title: String, position: i64];
-            define get_list, action: read, get_by: id;
-            define list_lists, action: read;
-            define rename_list, action: rename, on: record, args: [title: String];
-            define move_list, action: move_position, on: record, args: [position: i64];
-            define archive_list, action: archive, on: record;
-        },
-        Card {
-            define create_card, action: create, args: [board_id: ::uuid::Uuid, list_id: ::uuid::Uuid, title: String, description: Option<String>, position: i64];
-            define get_card, action: read, get_by: id;
-            define list_cards, action: read;
-            define move_card, action: move_to_list, on: record, args: [list_id: ::uuid::Uuid, position: i64];
-            define assign_card, action: assign, on: record, args: [assignee_id: Option<::uuid::Uuid>];
-            define archive_card, action: archive, on: record;
-        },
-        ChecklistItem {
-            define add_checklist_item, action: create, args: [card_id: ::uuid::Uuid, title: String, position: i64];
-            define toggle_checklist_item, action: toggle, on: record, args: [completed: bool];
-            define delete_checklist_item, action: destroy, on: record;
-            define list_checklist_items, action: read;
-        },
-        Comment {
-            define add_comment, action: create, args: [card_id: ::uuid::Uuid, body: String];
-            define update_comment, action: update_body, on: record, args: [body: String];
-            define delete_comment, action: destroy, on: record;
-            define list_comments, action: read;
-        },
+    Kanban {
+        resources {
+            Board {
+                define create_board, action: create, args: [workspace_id: ::uuid::Uuid, name: String, description: Option<String>];
+                define get_board, action: read, get_by: id;
+                define list_boards, action: read;
+                define archive_board, action: archive, on: record;
+            };
+            List {
+                define create_list, action: create, args: [board_id: ::uuid::Uuid, title: String, position: i64];
+                define get_list, action: read, get_by: id;
+                define list_lists, action: read;
+                define rename_list, action: rename, on: record, args: [title: String];
+                define move_list, action: move_position, on: record, args: [position: i64];
+                define archive_list, action: archive, on: record;
+            };
+            Card {
+                define create_card, action: create, args: [board_id: ::uuid::Uuid, list_id: ::uuid::Uuid, title: String, description: Option<String>, position: i64];
+                define get_card, action: read, get_by: id;
+                define list_cards, action: read;
+                define move_card, action: move_to_list, on: record, args: [list_id: ::uuid::Uuid, position: i64];
+                define assign_card, action: assign, on: record, args: [assignee_id: Option<::uuid::Uuid>];
+                define archive_card, action: archive, on: record;
+            };
+            ChecklistItem {
+                define add_checklist_item, action: create, args: [card_id: ::uuid::Uuid, title: String, position: i64];
+                define toggle_checklist_item, action: toggle, on: record, args: [completed: bool];
+                define delete_checklist_item, action: destroy, on: record;
+                define list_checklist_items, action: read;
+            };
+            Comment {
+                define add_comment, action: create, args: [card_id: ::uuid::Uuid, body: String];
+                define update_comment, action: update_body, on: record, args: [body: String];
+                define delete_comment, action: destroy, on: record;
+                define list_comments, action: read;
+            };
+        }
     }
 }
 

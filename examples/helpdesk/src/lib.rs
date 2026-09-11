@@ -14,20 +14,21 @@ use ash_core::{DomainDef, domain};
 use ash_sqlite::Sqlite;
 
 domain! {
-    domain Helpdesk;
-    resources {
-        Ticket {
-            define open_ticket, action: open, args: [subject: String];
-            define close_ticket, action: close, on: record;
-            define assign_ticket, action: assign, on: record, args: [representative_id: ::uuid::Uuid];
-            define get_ticket, action: read, get_by: id;
-            define list_tickets, action: read;
-        },
-        Representative {
-            define create_representative, action: create, args: [name: String];
-            define list_representatives, action: read;
-            define get_representative, action: read, get_by: id;
-        },
+    Helpdesk {
+        resources {
+            Ticket {
+                define open_ticket, action: open, args: [subject: String];
+                define close_ticket, action: close, on: record;
+                define assign_ticket, action: assign, on: record, args: [representative_id: ::uuid::Uuid];
+                define get_ticket, action: read, get_by: id;
+                define list_tickets, action: read;
+            };
+            Representative {
+                define create_representative, action: create, args: [name: String];
+                define list_representatives, action: read;
+                define get_representative, action: read, get_by: id;
+            };
+        }
     }
 }
 

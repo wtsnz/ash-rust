@@ -20,10 +20,11 @@ use std::path::Path;
 // --- Domain Definition via domain! DSL ---
 
 domain! {
-    domain Helpdesk;
-    resources {
-        Ticket,
-        Representative,
+    Helpdesk {
+        resources {
+            Ticket;
+            Representative;
+        }
     }
 }
 
