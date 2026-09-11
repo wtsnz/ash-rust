@@ -7,15 +7,15 @@ use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
 resource! {
-    resource Article;
-    table "articles";
+    Article {
+        table "articles";
 
     attributes {
-        id: Uuid [pk],
-        title: String,
-        body: String,
-        slug: Option<String>,
-        view_count: i64 [default: 0],
+        id: Uuid [pk];
+        title: String;
+        body: String;
+        slug: Option<String>;
+        view_count: i64 [default: 0];
     }
 
     actions {
@@ -33,7 +33,7 @@ resource! {
             accept [title, body, slug, view_count];
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_before_action_mutates_attributes() -> Result<()> {

@@ -15,12 +15,12 @@
 //!
 //! #[state_machine]
 //! resource! {
-//!     resource Order;
+//!     Order {
 //!     table "orders";
 //!
 //!     attributes {
-//!         id: Uuid [pk],
-//!         amount: i64,
+//!         id: Uuid [pk];
+//!         amount: i64;
 //!         // `status` is automatically injected by the transformer!
 //!     }
 //!
@@ -42,6 +42,7 @@
 //!         update submit {}
 //!         update pay {}
 //!         update cancel {}
+//!     }
 //!     }
 //! }
 //! ```

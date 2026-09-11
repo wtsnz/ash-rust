@@ -3,24 +3,24 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    resource Product;
-    table "products";
+    Product {
+        table "products";
 
     attributes {
-        id: Uuid [pk],
-        name: String,
-        category: String,
-        price: i64,
-        status: String,
+        id: Uuid [pk];
+        name: String;
+        category: String;
+        price: i64;
+        status: String;
     }
 
     actions {
         create create {
             accept [name, category, price, status];
             validate present(name);
-            validate string_length(name, min = 3, max = 20);
+            validate string_length(name, min: 3, max: 20);
             validate one_of(category, ["electronics", "books", "clothing"]);
-            validate numericality(price, min = 1, max = 10000);
+            validate numericality(price, min: 1, max: 10000);
             change set_new(status = "draft");
         }
 
@@ -29,16 +29,16 @@ resource! {
         }
 
         read read {
-            primary
+            primary;
         }
     }
 
     policies {
         policy always {
-            authorize_if always
+            authorize_if always;
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn validation_present_and_string_length() {
@@ -219,7 +219,7 @@ async fn helpdesk_ticket_and_representative_validations() {
     let desk = Helpdesk::new(mem);
     let as_customer = desk.with_actor(actor_customer(Uuid::new_v4()));
 
-    // 1. Subject with 1 character fails string_length(min = 2)
+    // 1. Subject with 1 character fails string_length(min: 2)
     let err = Ticket::open(&as_customer)
         .subject("x")
         .await

@@ -8,7 +8,7 @@ use crate::define::ast::{
     ActionKind, ActionSpec, ArgumentSpec, ChangeSpec, FieldAccept, PreparationSpec, ValidationSpec,
 };
 
-use super::helpers::{expr_to_ident, expr_to_lit, parse_i64};
+use super::helpers::{expr_to_ident, parse_i64, require_semi};
 
 macro_rules! parse_braced {
     ($input:expr, $content:ident) => {
@@ -98,15 +98,21 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                 "primary" => {
                     primary = true;
                     if body.peek(Token![:]) || body.peek(Token![=]) {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "use `primary;`, not `primary true`",
+                        ));
                         let _ = body.parse::<proc_macro2::TokenTree>()?;
                     }
                     if body.peek(syn::LitBool) {
                         let lit: syn::LitBool = body.parse()?;
+                        errors.push(Error::new_spanned(
+                            &lit,
+                            "use `primary;`, not `primary true`",
+                        ));
                         primary = lit.value;
                     }
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "`primary`");
                 }
                 "argument" => {
                     let a_name: Ident = body.parse()?;
@@ -119,9 +125,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         ty: a_ty,
                         allow_nil,
                     });
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "argument");
                 }
                 "arguments" => {
                     errors.push(Error::new_spanned(
@@ -189,37 +193,27 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                             });
                         }
                     }
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "accept");
                 }
                 "change" => {
                     let expr: Expr = body.parse()?;
                     changes.push(parse_change(&expr)?);
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "change");
                 }
                 "before_action" => {
                     let expr: Expr = body.parse()?;
                     changes.push(ChangeSpec::BeforeAction(expr));
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "before_action");
                 }
                 "after_action" => {
                     let expr: Expr = body.parse()?;
                     changes.push(ChangeSpec::AfterAction(expr));
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "after_action");
                 }
                 "after_transaction" => {
                     let expr: Expr = body.parse()?;
                     changes.push(ChangeSpec::AfterTransaction(expr));
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "after_transaction");
                 }
                 "changes" => {
                     errors.push(Error::new_spanned(
@@ -253,17 +247,15 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         let items;
                         let _ = syn::bracketed!(items in body);
                         while !items.is_empty() {
-                            validations.push(parse_validation(&items)?);
+                            validations.push(parse_validation(&items, errors)?);
                             if items.peek(Token![,]) {
                                 let _: Token![,] = items.parse()?;
                             }
                         }
                     } else {
-                        validations.push(parse_validation(&body)?);
+                        validations.push(parse_validation(&body, errors)?);
                     }
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "validate");
                 }
                 "validations" => {
                     errors.push(Error::new_spanned(
@@ -276,7 +268,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     let items;
                     let _ = syn::bracketed!(items in body);
                     while !items.is_empty() {
-                        validations.push(parse_validation(&items)?);
+                        validations.push(parse_validation(&items, errors)?);
                         if items.peek(Token![,]) {
                             let _: Token![,] = items.parse()?;
                         }
@@ -307,9 +299,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     } else {
                         preparations.push(parse_preparation(&body)?);
                     }
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "prepare");
                 }
                 "preparations" => {
                     errors.push(Error::new_spanned(
@@ -341,9 +331,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     } else {
                         return Err(Error::new_spanned(mode, "expected `manual`"));
                     }
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "persist");
                 }
                 "returns" => {
                     if body.peek(Token![:]) {
@@ -351,16 +339,12 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     }
                     let ret_ty: Type = body.parse()?;
                     returns = Some(ret_ty);
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "returns");
                 }
                 "run" => {
                     let expr: Expr = body.parse()?;
                     run_expr = Some(expr);
-                    if body.peek(Token![;]) {
-                        let _: Token![;] = body.parse()?;
-                    }
+                    require_semi(&body, errors, "run");
                 }
                 _ => {
                     const ACTION_ITEM_NAMES: &[&str] = &[
@@ -411,6 +395,19 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     })
 }
 
+fn arg_call_ident(expr: &Expr) -> Option<Ident> {
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    let Expr::Path(func) = &*call.func else {
+        return None;
+    };
+    if func.path.get_ident()?.to_string() != "arg" {
+        return None;
+    }
+    expr_to_ident(call.args.first()?).ok()
+}
+
 pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
     let Expr::Call(call) = expr else {
         return Err(Error::new_spanned(
@@ -433,13 +430,23 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
             if call.args.len() == 1 {
                 if let Some(Expr::Assign(assign)) = call.args.first() {
                     let field = expr_to_ident(&assign.left)?;
-                    let value = expr_to_lit(&assign.right)?;
-                    return Ok(ChangeSpec::Set { field, value });
+                    if let Some(argument) = arg_call_ident(&assign.right) {
+                        return Ok(ChangeSpec::SetFromArg { field, argument });
+                    }
+                    return Ok(ChangeSpec::Set {
+                        field,
+                        value: (*assign.right).clone(),
+                    });
                 }
             } else if call.args.len() == 2 {
                 let field = expr_to_ident(&call.args[0])?;
-                let value = expr_to_lit(&call.args[1])?;
-                return Ok(ChangeSpec::Set { field, value });
+                if let Some(argument) = arg_call_ident(&call.args[1]) {
+                    return Ok(ChangeSpec::SetFromArg { field, argument });
+                }
+                return Ok(ChangeSpec::Set {
+                    field,
+                    value: call.args[1].clone(),
+                });
             }
             Err(Error::new_spanned(
                 call,
@@ -450,13 +457,17 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
             if call.args.len() == 1 {
                 if let Some(Expr::Assign(assign)) = call.args.first() {
                     let field = expr_to_ident(&assign.left)?;
-                    let value = expr_to_lit(&assign.right)?;
-                    return Ok(ChangeSpec::SetNew { field, value });
+                    return Ok(ChangeSpec::SetNew {
+                        field,
+                        value: (*assign.right).clone(),
+                    });
                 }
             } else if call.args.len() == 2 {
                 let field = expr_to_ident(&call.args[0])?;
-                let value = expr_to_lit(&call.args[1])?;
-                return Ok(ChangeSpec::SetNew { field, value });
+                return Ok(ChangeSpec::SetNew {
+                    field,
+                    value: call.args[1].clone(),
+                });
             }
             Err(Error::new_spanned(
                 call,
@@ -574,7 +585,62 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
     }
 }
 
-pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
+fn parse_named_usize(content: ParseStream, errors: &mut Vec<Error>) -> Result<(Ident, usize)> {
+    if content.peek(syn::LitInt) {
+        let lit: syn::LitInt = content.parse()?;
+        errors.push(Error::new_spanned(
+            &lit,
+            "use `min: N` / `max: N`, not positional integers",
+        ));
+        return Ok((Ident::new("min", lit.span()), lit.base10_parse()?));
+    }
+    let key: Ident = content.parse()?;
+    if content.peek(Token![=]) {
+        errors.push(Error::new_spanned(
+            &key,
+            format!("use `{key}: N`, not `{key} = N`"),
+        ));
+        let _: Token![=] = content.parse()?;
+    } else if content.peek(Token![:]) {
+        let _: Token![:] = content.parse()?;
+    } else {
+        return Err(Error::new_spanned(
+            &key,
+            format!("expected `:` after `{key}`"),
+        ));
+    }
+    let lit: syn::LitInt = content.parse()?;
+    Ok((key, lit.base10_parse()?))
+}
+
+fn parse_named_i64(content: ParseStream, errors: &mut Vec<Error>) -> Result<(Ident, i64)> {
+    if content.peek(syn::LitInt) || content.peek(Token![-]) {
+        let span_ident = Ident::new("min", content.span());
+        errors.push(Error::new(
+            content.span(),
+            "use `min: N` / `max: N`, not positional integers",
+        ));
+        return Ok((span_ident, parse_i64(content)?));
+    }
+    let key: Ident = content.parse()?;
+    if content.peek(Token![=]) {
+        errors.push(Error::new_spanned(
+            &key,
+            format!("use `{key}: N`, not `{key} = N`"),
+        ));
+        let _: Token![=] = content.parse()?;
+    } else if content.peek(Token![:]) {
+        let _: Token![:] = content.parse()?;
+    } else {
+        return Err(Error::new_spanned(
+            &key,
+            format!("expected `:` after `{key}`"),
+        ));
+    }
+    Ok((key, parse_i64(content)?))
+}
+
+pub fn parse_validation(input: ParseStream, errors: &mut Vec<Error>) -> Result<ValidationSpec> {
     let func_name: Ident = input.parse()?;
     let content;
     syn::parenthesized!(content in input);
@@ -594,38 +660,17 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 if content.is_empty() {
                     break;
                 }
-                if content.peek(syn::LitInt) {
-                    let lit: syn::LitInt = content.parse()?;
-                    let val: usize = lit.base10_parse()?;
-                    if min.is_none() {
-                        min = Some(val);
-                    } else if max.is_none() {
-                        max = Some(val);
-                    } else {
-                        return Err(Error::new_spanned(lit, "unexpected extra argument"));
-                    }
-                } else {
-                    let key: Ident = content.parse()?;
-                    if content.peek(Token![=]) {
-                        let _: Token![=] = content.parse()?;
-                    } else if content.peek(Token![:]) {
-                        let _: Token![:] = content.parse()?;
-                    } else {
-                        return Err(Error::new_spanned(key, "expected `=` or `:` after key"));
-                    }
-                    let lit: syn::LitInt = content.parse()?;
-                    let val: usize = lit.base10_parse()?;
-                    match key.to_string().as_str() {
-                        "min" => min = Some(val),
-                        "max" => max = Some(val),
-                        other => {
-                            return Err(Error::new_spanned(
-                                key,
-                                format!(
-                                    "unknown string_length option `{other}`, expected `min` or `max`"
-                                ),
-                            ));
-                        }
+                let (key, val) = parse_named_usize(&content, errors)?;
+                match key.to_string().as_str() {
+                    "min" => min = Some(val),
+                    "max" => max = Some(val),
+                    other => {
+                        return Err(Error::new_spanned(
+                            key,
+                            format!(
+                                "unknown string_length option `{other}`, expected `min` or `max`"
+                            ),
+                        ));
                     }
                 }
             }
@@ -708,36 +753,17 @@ pub fn parse_validation(input: ParseStream) -> Result<ValidationSpec> {
                 if content.is_empty() {
                     break;
                 }
-                if content.peek(syn::LitInt) || content.peek(Token![-]) {
-                    let val = parse_i64(&content)?;
-                    if min.is_none() {
-                        min = Some(val);
-                    } else if max.is_none() {
-                        max = Some(val);
-                    } else {
-                        return Err(Error::new_spanned(field, "unexpected extra argument"));
-                    }
-                } else {
-                    let key: Ident = content.parse()?;
-                    if content.peek(Token![=]) {
-                        let _: Token![=] = content.parse()?;
-                    } else if content.peek(Token![:]) {
-                        let _: Token![:] = content.parse()?;
-                    } else {
-                        return Err(Error::new_spanned(key, "expected `=` or `:` after key"));
-                    }
-                    let val = parse_i64(&content)?;
-                    match key.to_string().as_str() {
-                        "min" => min = Some(val),
-                        "max" => max = Some(val),
-                        other => {
-                            return Err(Error::new_spanned(
-                                key,
-                                format!(
-                                    "unknown numericality option `{other}`, expected `min` or `max`"
-                                ),
-                            ));
-                        }
+                let (key, val) = parse_named_i64(&content, errors)?;
+                match key.to_string().as_str() {
+                    "min" => min = Some(val),
+                    "max" => max = Some(val),
+                    other => {
+                        return Err(Error::new_spanned(
+                            key,
+                            format!(
+                                "unknown numericality option `{other}`, expected `min` or `max`"
+                            ),
+                        ));
                     }
                 }
             }

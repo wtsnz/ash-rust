@@ -7,15 +7,15 @@ pub mod post {
     use super::*;
 
     resource! {
-        resource Post;
+        Post {
         table "posts";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            status: String = "draft",
-            views: i64 = 0,
-            archived: bool = false,
+            id: Uuid [pk];
+            title: String;
+            status: String = "draft";
+            views: i64 = 0;
+            archived: bool = false;
         }
 
         actions {
@@ -44,7 +44,7 @@ pub mod post {
                 prepare limit(2);
             }
         }
-    }
+    }}
 }
 
 pub use post::Post;

@@ -1,21 +1,21 @@
 pub mod representative;
 pub mod ticket;
 
-pub use representative::{Representative, REPRESENTATIVE_DEF};
-pub use ticket::{Ticket, TicketActions, TICKET_DEF};
+pub use representative::{REPRESENTATIVE_DEF, Representative};
+pub use ticket::{TICKET_DEF, Ticket, TicketActions, TicketStatus};
 
-use std::path::Path;
-use ash_core::{domain, Context};
+use ash_core::{Context, domain};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::PubSub;
 use ash_typescript::{TypeScriptConfig, TypeScriptGenerator};
+use axum::Router;
 use axum::extract::Request;
-use axum::http::{header, Method, StatusCode};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use std::path::Path;
 
 // --- Domain Definition via domain! DSL ---
 
@@ -62,15 +62,25 @@ pub async fn cors_middleware(req: Request, next: Next) -> Response {
             .status(StatusCode::OK)
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS")
-            .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, Authorization")
+            .header(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                "Content-Type, Authorization",
+            )
             .body(axum::body::Body::empty())
             .unwrap();
     }
 
     let mut res = next.run(req).await;
-    res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
-    res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS".parse().unwrap());
-    res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, Authorization".parse().unwrap());
+    res.headers_mut()
+        .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+    res.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        "GET, POST, OPTIONS".parse().unwrap(),
+    );
+    res.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        "Content-Type, Authorization".parse().unwrap(),
+    );
     res
 }
 
@@ -102,15 +112,17 @@ pub async fn build_app() -> Result<Router, Box<dyn std::error::Error>> {
     Ticket::open(&ctx)
         .title("Postgres connection pool exhaustion during traffic spike")
         .description("API gateway latency spiked to 2.4s. Connection pool maxed at 50.")
-        .status("IN_PROGRESS")
+        .status(crate::ticket::TicketStatus::InProgress)
         .priority(1i64)
         .author_id(rep2.id)
         .await?;
 
     Ticket::open(&ctx)
         .title("Password reset token expires prematurely on mobile Safari")
-        .description("Multiple customer reports of 401 token expired within 2 minutes of requesting.")
-        .status("OPEN")
+        .description(
+            "Multiple customer reports of 401 token expired within 2 minutes of requesting.",
+        )
+        .status(crate::ticket::TicketStatus::Open)
         .priority(2i64)
         .author_id(rep1.id)
         .await?;
@@ -118,7 +130,7 @@ pub async fn build_app() -> Result<Router, Box<dyn std::error::Error>> {
     Ticket::open(&ctx)
         .title("Nightly customer SLA CSV report delivery timed out")
         .description("Cron job failed at 03:00 UTC. Email notification dispatched.")
-        .status("RESOLVED")
+        .status(crate::ticket::TicketStatus::Resolved)
         .priority(4i64)
         .author_id(rep1.id)
         .await?;

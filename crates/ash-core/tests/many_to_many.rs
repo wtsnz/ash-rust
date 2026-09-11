@@ -7,12 +7,12 @@ pub mod tag {
     use super::*;
 
     resource! {
-        resource Tag;
+        Tag {
         table "tags";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         actions {
@@ -25,20 +25,20 @@ pub mod tag {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod post_tag {
     use super::*;
 
     resource! {
-        resource PostTag;
+        PostTag {
         table "post_tags";
 
         attributes {
-            id: Uuid [pk],
-            post_id: Uuid,
-            tag_id: Uuid,
+            id: Uuid [pk];
+            post_id: Uuid;
+            tag_id: Uuid;
         }
 
         actions {
@@ -51,7 +51,7 @@ pub mod post_tag {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod post {
@@ -60,12 +60,12 @@ pub mod post {
     use super::tag::Tag;
 
     resource! {
-        resource Post;
+        Post {
         table "posts";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
+            id: Uuid [pk];
+            title: String;
         }
 
         relationships {
@@ -87,7 +87,7 @@ pub mod post {
                 primary;
             }
         }
-    }
+    }}
 }
 
 use post::Post;

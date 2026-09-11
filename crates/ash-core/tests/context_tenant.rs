@@ -35,14 +35,14 @@ pub mod tenant_models {
     }
 
     resource! {
-        resource Document;
+        Document {
         table "documents";
 
         attributes {
-            id: Uuid [pk],
-            tenant_id: String,
-            title: String,
-            body: Option<String>,
+            id: Uuid [pk];
+            tenant_id: String;
+            title: String;
+            body: Option<String>;
         }
 
         actions {
@@ -81,10 +81,10 @@ pub mod tenant_models {
                         .unwrap_or("unknown");
 
                     Ok(format!("tenant:{tenant}|req:{req_id}|tag:{}", input.extra_tag))
-                }
+                };
             }
         }
-    }
+    }}
 }
 
 use tenant_models::Document;

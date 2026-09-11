@@ -173,6 +173,17 @@ pub fn apply_changes_with_context(
                     fields.insert((*field).to_string(), val.clone());
                 }
             }
+            Change::SetAttributeFn { field, value } => {
+                fields.insert((*field).to_string(), value());
+            }
+            Change::SetNewAttributeFn { field, value } => {
+                match fields.get(*field) {
+                    None | Some(Value::Null) => {
+                        fields.insert((*field).to_string(), value());
+                    }
+                    _ => {}
+                }
+            }
             Change::BeforeAction(hook) => {
                 before_actions.push(Box::new(*hook));
             }

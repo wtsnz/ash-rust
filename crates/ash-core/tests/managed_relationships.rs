@@ -9,25 +9,25 @@ pub mod line_item_mod {
     use super::*;
 
     resource! {
-        resource LineItem;
+        LineItem {
         table "line_items";
 
         attributes {
-            id: Uuid [pk],
-            order_id: Uuid,
-            item: String,
-            price: i64,
+            id: Uuid [pk];
+            order_id: Uuid;
+            item: String;
+            price: i64;
         }
 
         relationships {
-            belongs_to order: order_mod::Order [fk: order_id],
+            belongs_to order: order_mod::Order [fk: order_id];
         }
 
         actions {
             create create {
                 primary;
                 accept [order_id, item, price];
-                validate numericality(price, min = 0);
+                validate numericality(price, min: 0);
             }
 
             read read {
@@ -37,30 +37,30 @@ pub mod line_item_mod {
             update update {
                 primary;
                 accept [item, price];
-                validate numericality(price, min = 0);
+                validate numericality(price, min: 0);
             }
 
             destroy destroy {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod order_mod {
     use super::*;
 
     resource! {
-        resource Order;
+        Order {
         table "orders";
 
         attributes {
-            id: Uuid [pk],
-            customer: String,
+            id: Uuid [pk];
+            customer: String;
         }
 
         relationships {
-            has_many items: line_item_mod::LineItem [fk: order_id],
+            has_many items: line_item_mod::LineItem [fk: order_id];
         }
 
         actions {
@@ -88,24 +88,24 @@ pub mod order_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod player_mod {
     use super::*;
 
     resource! {
-        resource Player;
+        Player {
         table "players";
 
         attributes {
-            id: Uuid [pk],
-            team_id: Option<Uuid>,
-            name: String,
+            id: Uuid [pk];
+            team_id: Option<Uuid>;
+            name: String;
         }
 
         relationships {
-            belongs_to team: team_mod::Team [fk: team_id],
+            belongs_to team: team_mod::Team [fk: team_id];
         }
 
         actions {
@@ -127,23 +127,23 @@ pub mod player_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod team_mod {
     use super::*;
 
     resource! {
-        resource Team;
+        Team {
         table "teams";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         relationships {
-            has_many players: player_mod::Player [fk: team_id, on_delete: nilify],
+            has_many players: player_mod::Player [fk: team_id, on_delete: nilify];
         }
 
         actions {
@@ -165,19 +165,19 @@ pub mod team_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod profile_mod {
     use super::*;
 
     resource! {
-        resource Profile;
+        Profile {
         table "profiles";
 
         attributes {
-            id: Uuid [pk],
-            bio: String,
+            id: Uuid [pk];
+            bio: String;
         }
 
         actions {
@@ -195,24 +195,24 @@ pub mod profile_mod {
                 accept [bio];
             }
         }
-    }
+    }}
 }
 
 pub mod user_mod {
     use super::*;
 
     resource! {
-        resource User;
+        User {
         table "users";
 
         attributes {
-            id: Uuid [pk],
-            profile_id: Option<Uuid>,
-            username: String,
+            id: Uuid [pk];
+            profile_id: Option<Uuid>;
+            username: String;
         }
 
         relationships {
-            belongs_to profile: profile_mod::Profile [fk: profile_id],
+            belongs_to profile: profile_mod::Profile [fk: profile_id];
         }
 
         actions {
@@ -230,19 +230,19 @@ pub mod user_mod {
                 accept [username];
             }
         }
-    }
+    }}
 }
 
 pub mod tag_mod {
     use super::*;
 
     resource! {
-        resource Tag;
+        Tag {
         table "tags";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         actions {
@@ -255,20 +255,20 @@ pub mod tag_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod article_tag_mod {
     use super::*;
 
     resource! {
-        resource ArticleTag;
+        ArticleTag {
         table "article_tags";
 
         attributes {
-            id: Uuid [pk],
-            article_id: Uuid,
-            tag_id: Uuid,
+            id: Uuid [pk];
+            article_id: Uuid;
+            tag_id: Uuid;
         }
 
         actions {
@@ -285,7 +285,7 @@ pub mod article_tag_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod article_mod {
@@ -294,12 +294,12 @@ pub mod article_mod {
     use super::tag_mod::Tag;
 
     resource! {
-        resource Article;
+        Article {
         table "articles";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
+            id: Uuid [pk];
+            title: String;
         }
 
         relationships {
@@ -307,7 +307,7 @@ pub mod article_mod {
                 through: ArticleTag,
                 source_fk: article_id,
                 dest_fk: tag_id,
-            ],
+            ];
         }
 
         actions {
@@ -325,7 +325,7 @@ pub mod article_mod {
                 accept [title];
             }
         }
-    }
+    }}
 }
 
 use article_mod::Article;

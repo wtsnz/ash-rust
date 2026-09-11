@@ -103,73 +103,81 @@ mod tests {
     #[test]
     fn test_belongs_to_matching_fk_expands() {
         let _ = expand_ok(quote! {
-            resource TestResource;
-            attributes {
-                id: Uuid [pk],
-                author_id: Uuid,
-            }
-            relationships {
-                belongs_to author: User [fk: author_id];
-            }
-            actions {
-                read read { primary; }
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    author_id: Uuid;
+                }
+                relationships {
+                    belongs_to author: User [fk: author_id];
+                }
+                actions {
+                    read read { primary; }
+                }
             }
         });
     }
 
     #[test]
-    fn test_uncovered_action_emits_forbidden_warning() {
-        let out = expand_ok(quote! {
-            resource TestResource;
-            attributes {
-                id: Uuid [pk],
-                title: String,
-            }
-            actions {
-                create open { primary; accept [title]; }
-                read read { primary; }
-                update assign { accept [title]; }
-            }
-            policies {
-                policy action(open) {
-                    authorize_if always;
+    fn test_uncovered_action_is_a_validation_error() {
+        let mut def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
                 }
-                policy action_type(read) {
-                    authorize_if always;
+                actions {
+                    create open { primary; accept [title]; }
+                    read read { primary; }
+                    update assign { accept [title]; }
+                }
+                policies {
+                    policy action(open) {
+                        authorize_if always;
+                    }
+                    policy action_type(read) {
+                        authorize_if always;
+                    }
                 }
             }
-        })
-        .to_string();
+        });
+        let errors = crate::define::validate::validate(&mut def);
+        let msg = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            out.contains(
+            msg.contains(
                 "Action 'assign' has no matching policy rule and will always be forbidden at runtime"
             ),
-            "missing uncovered action warning: {out}"
+            "missing uncovered action error: {msg}"
         );
         assert!(
-            !out.contains("Action 'open' has no matching policy rule"),
-            "open should be covered: {out}"
+            !msg.contains("Action 'open' has no matching policy rule"),
+            "open should be covered: {msg}"
         );
         assert!(
-            !out.contains("Action 'read' has no matching policy rule"),
-            "read should be covered: {out}"
+            !msg.contains("Action 'read' has no matching policy rule"),
+            "read should be covered: {msg}"
         );
     }
 
     #[test]
     fn test_policy_always_covers_all_actions() {
         let out = expand_ok(quote! {
-            resource TestResource;
-            attributes {
-                id: Uuid [pk],
-            }
-            actions {
-                create open { primary; }
-                read read { primary; }
-            }
-            policies {
-                policy always {
-                    authorize_if always;
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                }
+                actions {
+                    create open { primary; }
+                    read read { primary; }
+                }
+                policies {
+                    policy always {
+                        authorize_if always;
+                    }
                 }
             }
         })
@@ -183,17 +191,18 @@ mod tests {
     #[test]
     fn test_attribute_docs_copied_to_field_consts_and_setters() {
         let out = expand_ok(quote! {
-            resource TestResource;
-            attributes {
-                id: Uuid [pk],
-                /// The ticket subject
-                subject: String,
-            }
-            actions {
-                create open {
-                    accept [subject];
-                    /// Reason supplied by the caller
-                    argument reason: String;
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    /// The ticket subject
+                    subject: String;
+                }
+                actions {
+                    create open {
+                        accept [subject];
+                        /// Reason supplied by the caller
+                        argument reason: String;
+                    }
                 }
             }
         })

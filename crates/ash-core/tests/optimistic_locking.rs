@@ -4,14 +4,14 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    resource BankAccount;
-    table "bank_accounts";
+    BankAccount {
+        table "bank_accounts";
 
     attributes {
-        id: Uuid [pk],
-        holder: String,
-        balance: i64,
-        version: i64 [version],
+        id: Uuid [pk];
+        holder: String;
+        balance: i64;
+        version: i64 [version];
     }
 
     actions {
@@ -24,7 +24,7 @@ resource! {
             accept [balance];
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_optimistic_locking_memory_increments_and_detects_conflict() {

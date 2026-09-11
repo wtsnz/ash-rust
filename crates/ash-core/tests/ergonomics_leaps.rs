@@ -7,25 +7,25 @@ use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 use ash_sqlite::Sqlite;
 
 resource! {
-    resource Article;
-    table "articles";
+    Article {
+        table "articles";
 
     attributes {
-        id: Uuid [pk],
-        title: String,
-        content: String,
-        views: i64,
-        archived: bool,
-        tag: Option<String>,
+        id: Uuid [pk];
+        title: String;
+        content: String;
+        views: i64;
+        archived: bool;
+        tag: Option<String>;
     }
 
     actions {
         read read {
-            primary true;
+            primary;
         }
 
         create publish {
-            primary true;
+            primary;
             // Leap 1: DRY Action `accept [field1, field2]` without repeating types!
             accept [title, content, tag];
             change set(views = 0);
@@ -38,10 +38,10 @@ resource! {
         }
 
         destroy delete {
-            primary true;
+            primary;
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_leap1_and_leap2_dry_accept_and_zero_import_operators() {

@@ -24,14 +24,14 @@ pub mod primary_res {
     use super::*;
 
     resource! {
-        resource Customer;
+        Customer {
         table "customers";
         store PrimaryDb;
 
         attributes {
-            id: Uuid [pk],
-            email: String,
-            name: String,
+            id: Uuid [pk];
+            email: String;
+            name: String;
         }
 
         actions {
@@ -44,20 +44,20 @@ pub mod primary_res {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod audit_res {
     use super::*;
 
     resource! {
-        resource AuditLog;
+        AuditLog {
         table "audit_logs";
         store AuditDb;
 
         attributes {
-            id: Uuid [pk],
-            action: String,
+            id: Uuid [pk];
+            action: String;
         }
 
         actions {
@@ -70,7 +70,7 @@ pub mod audit_res {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub use audit_res::AuditLog;
@@ -178,13 +178,13 @@ pub mod account_res {
     use super::*;
 
     resource! {
-        resource Account;
+        Account {
         table "accounts";
         store PersistentStore;
 
         attributes {
-            id: Uuid [pk],
-            username: String,
+            id: Uuid [pk];
+            username: String;
         }
 
         actions {
@@ -194,21 +194,21 @@ pub mod account_res {
             }
             read read { primary; }
         }
-    }
+    }}
 }
 
 pub mod session_res {
     use super::*;
 
     resource! {
-        resource SessionToken;
+        SessionToken {
         table "session_tokens";
         store EphemeralStore;
 
         attributes {
-            id: Uuid [pk],
-            token: String,
-            account_id: Uuid,
+            id: Uuid [pk];
+            token: String;
+            account_id: Uuid;
         }
 
         actions {
@@ -218,7 +218,7 @@ pub mod session_res {
             }
             read read { primary; }
         }
-    }
+    }}
 }
 
 pub use account_res::Account;
@@ -312,14 +312,14 @@ pub mod kv_res {
     use super::*;
 
     resource! {
-        resource KeyValueItem;
+        KeyValueItem {
         table "kv_items";
         store KeyValueDb;
 
         attributes {
-            id: Uuid [pk],
-            key: String,
-            value: String,
+            id: Uuid [pk];
+            key: String;
+            value: String;
         }
 
         actions {
@@ -330,7 +330,7 @@ pub mod kv_res {
             read read { primary; }
             destroy destroy { primary; }
         }
-    }
+    }}
 }
 
 pub use kv_res::KeyValueItem;
@@ -370,13 +370,13 @@ pub mod orphan_res {
     use super::*;
 
     resource! {
-        resource Orphan;
+        Orphan {
         table "orphans";
         store UnregisteredDb;
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         actions {
@@ -385,7 +385,7 @@ pub mod orphan_res {
                 accept [name];
             }
         }
-    }
+    }}
 }
 
 pub use orphan_res::Orphan;
@@ -413,12 +413,12 @@ pub mod default_res {
     use super::*;
 
     resource! {
-        resource DefaultTarget;
+        DefaultTarget {
         table "default_targets";
 
         attributes {
-            id: Uuid [pk],
-            content: String,
+            id: Uuid [pk];
+            content: String;
         }
 
         actions {
@@ -428,7 +428,7 @@ pub mod default_res {
             }
             read read { primary; }
         }
-    }
+    }}
 }
 
 pub use default_res::DefaultTarget;

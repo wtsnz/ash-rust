@@ -77,9 +77,15 @@ fn parse_one_calculation(input: ParseStream, errors: &mut Vec<Error>) -> Result<
     };
 
     if input.peek(Token![,]) {
+        errors.push(Error::new(
+            input.span(),
+            "use `;` after calculation, not `,`",
+        ));
         let _: Token![,] = input.parse()?;
     } else if input.peek(Token![;]) {
         let _: Token![;] = input.parse()?;
+    } else {
+        errors.push(Error::new(input.span(), "expected `;` after calculation"));
     }
 
     Ok(CalculationSpec {

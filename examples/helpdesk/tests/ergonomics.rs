@@ -123,7 +123,7 @@ async fn fluent_filter_composition_and_rel_accessors() {
     ticket3.close(&as_customer).await.unwrap();
 
     // Filter composition using overloaded operators (&, |, !)
-    let open_condition = t::status.eq("open");
+    let open_condition = t::status.eq(Status::Open);
     let printer_condition = t::subject.eq("Printer broken");
     let network_condition = t::subject.eq("Network down");
 

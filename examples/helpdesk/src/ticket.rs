@@ -2,30 +2,13 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::representative::Representative;
-use ash_core::{Actor, Result, resource};
+use ash_core::{Actor, AshEnum, resource};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(AshEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Open,
     Closed,
-}
-
-impl Status {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Closed => "closed",
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "open" => Ok(Self::Open),
-            "closed" => Ok(Self::Closed),
-            other => Err(ash_core::Error::Invalid(format!("unknown status {other}"))),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,82 +18,87 @@ pub struct Analysis {
 }
 
 resource! {
-    resource Ticket;
-    table "tickets";
+    Ticket {
+        table "tickets";
 
-    attributes {
-        id: Uuid [pk],
-        subject: String,
-        status: Status [atom: "open,closed"],
-        opener_id: Uuid,
-        representative_id: Option<Uuid>,
-    }
-
-    relationships {
-        belongs_to representative: Representative,
-    }
-
-    calculations {
-        subject_length: Option<i64> = string_length(subject),
-    }
-
-    actions {
-        create open {
-            accept [subject];
-            validate present(subject);
-            validate string_length(subject, min = 2);
-            change set(status = "open");
-            change relate_actor(opener_id);
+        actor {
+            role: String;
         }
 
-        read read {
-            primary
+        attributes {
+            id: Uuid [pk];
+            subject: String;
+            status: Status [enum];
+            opener_id: Uuid;
+            representative_id: Option<Uuid>;
         }
 
-        update assign {
-            accept [representative_id];
+        relationships {
+            belongs_to representative: Representative;
         }
 
-        update close {
-            change set(status = "closed");
+        calculations {
+            subject_length: Option<i64> = string_length(subject);
         }
 
-        generic analyze_subject {
-            accept {
-                text: String,
+        actions {
+            create open {
+                accept [subject];
+                validate present(subject);
+                validate string_length(subject, min: 2);
+                change set(status = Status::Open);
+                change relate_actor(opener_id);
             }
-            returns Analysis;
-            run |input| async move {
-                Ok(Analysis {
-                    word_count: input.text.split_whitespace().count(),
-                    urgent: input.text.contains('!'),
-                })
+
+            read read {
+                primary;
+            }
+
+            update assign {
+                accept [representative_id];
+            }
+
+            update close {
+                change set(status = Status::Closed);
+            }
+
+            generic analyze_subject {
+                accept {
+                    text: String,
+                };
+                returns Analysis;
+                run |input| async move {
+                    Ok(Analysis {
+                        word_count: input.text.split_whitespace().count(),
+                        urgent: input.text.contains('!'),
+                    })
+                };
+            }
+
+            create intake {
+                accept [subject];
+                change set(status = Status::Open);
+                change relate_actor(opener_id);
+                persist manual;
             }
         }
 
-        create intake {
-            accept [subject];
-            change set(status = "open");
-            change relate_actor(opener_id);
-            persist manual;
-        }
-    }
-
-    policies {
-        policy action(open) | action(analyze_subject) | action(intake) {
-            authorize_if actor_present
-        }
-        policy action_type(read) {
-            authorize_if relates_to(opener_id)
-            authorize_if relates_to(representative_id)
-            authorize_if is_nil(representative_id) && actor_eq(role = "representative")
-        }
-        policy action(assign) {
-            authorize_if actor_eq(role = "representative")
-        }
-        policy action(close) {
-            authorize_if relates_to(opener_id)
-            authorize_if relates_to(representative_id)
+        policies {
+            policy action(open) | action(analyze_subject) | action(intake) {
+                authorize_if actor_present;
+            }
+            policy action_type(read) {
+                authorize_if relates_to(opener_id);
+                authorize_if relates_to(representative_id);
+                authorize_if is_nil(representative_id) && actor_eq(role = "representative");
+            }
+            policy action(assign) {
+                authorize_if actor_eq(role = "representative");
+            }
+            policy action(close) {
+                authorize_if relates_to(opener_id);
+                authorize_if relates_to(representative_id);
+            }
         }
     }
 }

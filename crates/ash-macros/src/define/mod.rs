@@ -145,14 +145,14 @@ mod tests {
     #[test]
     fn test_parse_error_emits_fallback_stub() {
         let tokens = quote! {
-            resource Broken;
+            Broken {
             attributes {
-                id: Uuid [pk],
+                id: Uuid [pk];
             }
             actions {
                 creat open;
             }
-        };
+        }};
         let out = expand_dsl(tokens).to_string();
         assert!(
             out.contains("compile_error"),
@@ -165,17 +165,17 @@ mod tests {
     #[test]
     fn test_expand_error_emits_fallback_stub() {
         let tokens = quote! {
-            resource Broken;
+            Broken {
             attributes {
-                id: Uuid [pk],
-                subject: String,
+                id: Uuid [pk];
+                subject: String;
             }
             actions {
                 create open {
                     accept [subjet];
                 }
             }
-        };
+        }};
         let out = expand_dsl(tokens).to_string();
         assert!(
             out.contains("compile_error"),
@@ -197,10 +197,10 @@ mod tests {
     #[test]
     fn test_recovery_keeps_good_actions_and_reports_bad_one() {
         let tokens = quote! {
-            resource Ticket;
+            Ticket {
             attributes {
-                id: Uuid [pk],
-                subject: String,
+                id: Uuid [pk];
+                subject: String;
             }
             actions {
                 creat broken;
@@ -208,7 +208,7 @@ mod tests {
                     accept [subject];
                 }
             }
-        };
+        }};
         let out = expand_dsl(tokens).to_string();
         assert!(
             out.contains("compile_error"),
@@ -225,10 +225,10 @@ mod tests {
     #[test]
     fn test_multiple_semantic_errors_are_combined() {
         let tokens = quote! {
-            resource Ticket;
+            Ticket {
             attributes {
-                id: Uuid [pk],
-                subject: String,
+                id: Uuid [pk];
+                subject: String;
             }
             actions {
                 create open {
@@ -236,7 +236,7 @@ mod tests {
                     change set(statu = "open");
                 }
             }
-        };
+        }};
         let out = expand_dsl(tokens).to_string();
         assert!(out.contains("subjet"), "missing subjet error: {out}");
         assert!(out.contains("statu"), "missing statu error: {out}");

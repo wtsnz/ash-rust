@@ -3,18 +3,18 @@ use ash_core::resource;
 use uuid::Uuid;
 
 resource! {
-    resource Comment;
-    table "comments";
+    Comment {
+        table "comments";
 
     attributes {
-        id: Uuid [pk],
-        card_id: Uuid,
-        author_id: Option<Uuid>,
-        body: String,
+        id: Uuid [pk];
+        card_id: Uuid;
+        author_id: Option<Uuid>;
+        body: String;
     }
 
     relationships {
-        belongs_to card: Card [fk: card_id],
+        belongs_to card: Card [fk: card_id];
     }
 
     actions {
@@ -25,7 +25,7 @@ resource! {
         }
 
         read read {
-            primary
+            primary;
         }
 
         update update_body {
@@ -38,7 +38,7 @@ resource! {
 
     policies {
         policy always {
-            authorize_if always
+            authorize_if always;
         }
     }
-}
+    }}

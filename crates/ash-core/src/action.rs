@@ -386,6 +386,16 @@ pub enum Change {
         field: &'static str,
         argument: &'static str,
     },
+    /// Runtime `set` of a non-literal value (enum variant, path, etc.).
+    SetAttributeFn {
+        field: &'static str,
+        value: fn() -> crate::value::Value,
+    },
+    /// Runtime `set_new` of a non-literal value.
+    SetNewAttributeFn {
+        field: &'static str,
+        value: fn() -> crate::value::Value,
+    },
     ManageRelationship {
         relationship: &'static str,
         rel_type: ManagedRelType,
@@ -438,6 +448,14 @@ impl std::fmt::Debug for Change {
                 .debug_struct("SetFromArgument")
                 .field("field", field)
                 .field("argument", argument)
+                .finish(),
+            Self::SetAttributeFn { field, .. } => f
+                .debug_struct("SetAttributeFn")
+                .field("field", field)
+                .finish(),
+            Self::SetNewAttributeFn { field, .. } => f
+                .debug_struct("SetNewAttributeFn")
+                .field("field", field)
                 .finish(),
             Self::ManageRelationship {
                 relationship,

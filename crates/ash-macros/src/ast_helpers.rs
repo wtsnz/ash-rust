@@ -210,7 +210,43 @@ pub fn unknown_ident_error(typo: &Ident, candidates: &[&str], kind: &str) -> syn
 }
 
 pub fn extract_resource_ident(input: &proc_macro2::TokenStream) -> Option<Ident> {
-    extract_ident_after_keyword(input, &["resource", "name"])
+    let tokens: Vec<proc_macro2::TokenTree> = input.clone().into_iter().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            proc_macro2::TokenTree::Punct(p) if p.as_char() == '#' => {
+                i += 1;
+                if matches!(tokens.get(i), Some(proc_macro2::TokenTree::Group(_))) {
+                    i += 1;
+                }
+            }
+            proc_macro2::TokenTree::Ident(id) if id == "embedded" => {
+                i += 1;
+                if matches!(
+                    tokens.get(i),
+                    Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == ';'
+                ) {
+                    i += 1;
+                }
+            }
+            proc_macro2::TokenTree::Ident(id) if id == "resource" || id == "name" => {
+                if let Some(proc_macro2::TokenTree::Ident(name)) = tokens.get(i + 1) {
+                    return Some(name.clone());
+                }
+                return None;
+            }
+            proc_macro2::TokenTree::Ident(name) => {
+                if let Some(proc_macro2::TokenTree::Group(g)) = tokens.get(i + 1)
+                    && g.delimiter() == proc_macro2::Delimiter::Brace
+                {
+                    return Some(name.clone());
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 pub fn extract_domain_ident(input: &proc_macro2::TokenStream) -> Option<Ident> {
@@ -233,17 +269,6 @@ fn extract_ident_after_keyword(
         i += 1;
     }
     None
-}
-
-pub fn make_deprecated_warning(span: proc_macro2::Span, msg: &str) -> proc_macro2::TokenStream {
-    quote::quote_spanned! { span =>
-        const _: () = {
-            #[deprecated(note = #msg)]
-            #[allow(non_upper_case_globals)]
-            const DEPRECATED_SYNTAX: () = ();
-            let _ = DEPRECATED_SYNTAX;
-        };
-    }
 }
 
 #[cfg(test)]
@@ -330,10 +355,9 @@ mod tests {
     #[test]
     fn test_extract_resource_ident_from_header() {
         let tokens = quote::quote! {
-            /// docs
-            resource Ticket;
+            Ticket {
             attributes { id: Uuid [pk] }
-        };
+        }};
         let ident = extract_resource_ident(&tokens).expect("resource ident");
         assert_eq!(ident.to_string(), "Ticket");
     }

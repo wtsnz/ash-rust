@@ -10,12 +10,12 @@ use uuid::Uuid;
 
 #[authentication]
 ash_core::resource! {
-    resource User;
-    table "users";
+    User {
+        table "users";
 
     attributes {
-        id: Uuid [pk],
-        email: String,
+        id: Uuid [pk];
+        email: String;
     }
 
     authentication {
@@ -43,7 +43,7 @@ ash_core::resource! {
             accept [api_key_hash];
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_declarative_authentication_registration_and_sign_in() -> Result<()> {

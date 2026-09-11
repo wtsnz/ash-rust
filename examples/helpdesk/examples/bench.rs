@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 use ash_memory::Memory;
 use helpdesk::ticket::fields as t;
-use helpdesk::{Helpdesk, Ticket, actor_customer};
+use helpdesk::{Helpdesk, Status, Ticket, actor_customer};
 use uuid::Uuid;
 
 async fn run_bench<F, Fut>(name: &str, warmup_dur: Duration, bench_dur: Duration, mut op: F)
@@ -93,7 +93,7 @@ async fn main() {
             Duration::from_secs(5),
             || async {
                 let _ = Ticket::query(&customer)
-                    .filter(t::status.eq("open"))
+                    .filter(t::status.eq(Status::Open))
                     .all()
                     .await
                     .unwrap();

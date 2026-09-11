@@ -7,15 +7,19 @@ pub mod user_profile_mod {
     use super::*;
 
     resource! {
-        resource UserProfile;
+        UserProfile {
         table "user_profiles";
 
+        actor {
+            role: String;
+        }
+
         attributes {
-            id: Uuid [pk],
-            user_id: Uuid,
-            name: String,
-            ssn: Option<String>,
-            salary: Option<i64>,
+            id: Uuid [pk];
+            user_id: Uuid;
+            name: String;
+            ssn: Option<String>;
+            salary: Option<i64>;
         }
 
         policies {
@@ -49,7 +53,7 @@ pub mod user_profile_mod {
                 accept [name, ssn, salary];
             }
         }
-    }
+    }}
 }
 pub use user_profile_mod::UserProfile;
 
@@ -57,13 +61,13 @@ pub mod department_mod {
     use super::*;
 
     resource! {
-        resource Department;
+        Department {
         table "departments";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            manager_id: Option<Uuid>,
+            id: Uuid [pk];
+            title: String;
+            manager_id: Option<Uuid>;
         }
 
         relationships {
@@ -86,7 +90,7 @@ pub mod department_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 pub use department_mod::Department;
 
@@ -197,7 +201,10 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
 
     assert_eq!(fetched_by_alice.name, "Alice Smith");
     assert_eq!(fetched_by_alice.ssn, Some("123-45-6789".into()));
-    assert_eq!(fetched_by_alice.salary, None, "salary must be redacted for non-admin");
+    assert_eq!(
+        fetched_by_alice.salary, None,
+        "salary must be redacted for non-admin"
+    );
 
     // 3. Bob reads Alice's profile:
     // Neither ssn nor salary are permitted for Bob -> both redacted to None!
@@ -210,14 +217,20 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
 
     assert_eq!(fetched_by_bob.name, "Alice Smith");
     assert_eq!(fetched_by_bob.ssn, None, "ssn must be redacted for bob");
-    assert_eq!(fetched_by_bob.salary, None, "salary must be redacted for bob");
+    assert_eq!(
+        fetched_by_bob.salary, None,
+        "salary must be redacted for bob"
+    );
 
     // 4. Alice attempts to update salary -> must be rejected by field policy on write
     let update_res = UserProfile::update(&alice_ctx, fetched_by_alice.id)
         .salary(Some(150_000))
         .await;
 
-    assert!(matches!(update_res, Err(Error::Forbidden)), "alice cannot write to salary");
+    assert!(
+        matches!(update_res, Err(Error::Forbidden)),
+        "alice cannot write to salary"
+    );
 
     // 5. Alice updating permitted field (name) -> succeeds
     let alice_update_ok = UserProfile::update(&alice_ctx, fetched_by_alice.id)
@@ -263,7 +276,9 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
     // User context in SQLite
     let user_ctx = Context::new(sqlite.clone()).with_actor(user);
 
-    let user_view = ash_core::get::<UserProfile, _>(&user_ctx, profile.id).await.unwrap();
+    let user_view = ash_core::get::<UserProfile, _>(&user_ctx, profile.id)
+        .await
+        .unwrap();
     assert_eq!(user_view.ssn, Some("987-65-4321".into()));
     assert_eq!(user_view.salary, None, "salary redacted in sqlite");
 
@@ -281,7 +296,13 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
     assert_eq!(updated.name, "Charlie Brown");
 
     // Admin verifies salary was preserved in SQLite
-    let admin_view = ash_core::get::<UserProfile, _>(&admin_ctx, profile.id).await.unwrap();
+    let admin_view = ash_core::get::<UserProfile, _>(&admin_ctx, profile.id)
+        .await
+        .unwrap();
     assert_eq!(admin_view.name, "Charlie Brown");
-    assert_eq!(admin_view.salary, Some(95_000), "salary preserved in sqlite");
+    assert_eq!(
+        admin_view.salary,
+        Some(95_000),
+        "salary preserved in sqlite"
+    );
 }

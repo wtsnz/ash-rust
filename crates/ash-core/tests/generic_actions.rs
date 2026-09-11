@@ -7,81 +7,85 @@ use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
 resource! {
-    resource CommunicationService;
+CommunicationService {
     table "communication_services";
 
-    attributes {
-        id: Uuid [pk],
-        name: String,
+actor {
+    role: String;
+}
+
+attributes {
+    id: Uuid [pk];
+    name: String;
+}
+
+actions {
+    create create {
+        primary;
+        accept [name];
     }
 
-    actions {
-        create create {
-            primary;
-            accept [name];
-        }
+    read read {
+        primary;
+    }
 
-        read read {
-            primary;
-        }
+    // 1. Generic action with inline run closure:
+    generic send_message, bool {
+        argument recipient: String;
+        argument message: String;
+        argument priority: Option<String>;
 
-        // 1. Generic action with inline run closure:
-        generic send_message, bool {
-            argument recipient: String;
-            argument message: String;
-            argument priority: Option<String>;
-
-            run |input| async move {
-                // Accessing input fields and context/actor:
-                let is_urgent = input.priority.as_deref() == Some("high");
-                let _sender = input.actor();
-                let _has_recipient = !input.recipient.is_empty();
-                let _has_body = !input.message.is_empty();
+        run |input| async move {
+            // Accessing input fields and context/actor:
+            let is_urgent = input.priority.as_deref() == Some("high");
+            let _sender = input.actor();
+            let _has_recipient = !input.recipient.is_empty();
+            let _has_body = !input.message.is_empty();
 
                 Ok(is_urgent)
-            }
+            };
         }
 
-        // 2. Generic action returning a computation (i64):
-        generic calculate_total, i64 {
-            argument quantity: i64;
-            argument unit_price: i64;
-            argument discount: Option<i64>;
+    // 2. Generic action returning a computation (i64):
+    generic calculate_total, i64 {
+        argument quantity: i64;
+        argument unit_price: i64;
+        argument discount: Option<i64>;
 
-            run |input| async move {
-                let base = input.quantity * input.unit_price;
-                let final_amount = base - input.discount.unwrap_or(0);
-                Ok(final_amount)
-            }
-        }
-
-        // 3. Generic action without inline run (runner provided dynamically via `.run(...)`):
-        generic dynamic_operation, String {
-            argument payload: String;
-        }
-
-        // 4. Generic action protected by policy:
-        generic admin_purge, bool {
-            argument reason: String;
-
-            run |_input| async move {
-                Ok(true)
-            }
-        }
+        run |input| async move {
+            let base = input.quantity * input.unit_price;
+            let final_amount = base - input.discount.unwrap_or(0);
+            Ok(final_amount)
+        };
     }
 
-    policies {
-        // Allow public access to read and create:
-        policy action_type(read) | action(create) | action(send_message) | action(calculate_total) | action(dynamic_operation) {
-            authorize_if always;
-        }
+    // 3. Generic action without inline run (runner provided dynamically via `.run(...)`):
+    generic dynamic_operation, String {
+        argument payload: String;
+    }
 
-        // Restrict admin_purge to admin role:
-        policy action(admin_purge) {
-            authorize_if actor_attribute_equals(role, "admin");
-        }
+    // 4. Generic action protected by policy:
+    generic admin_purge, bool {
+        argument reason: String;
+
+        run |_input| async move {
+            Ok(true)
+        };
     }
 }
+
+policies {
+    // Allow public access to read and create:
+    policy action_type(read) | action(create) | action(send_message) | action(calculate_total) | action(dynamic_operation) {
+        authorize_if always;
+    }
+
+    // Restrict admin_purge to admin role:
+    policy action(admin_purge) {
+        authorize_if actor_attribute_equals(role, "admin");
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_generic_action_send_message_execution() {
@@ -105,22 +109,6 @@ async fn test_generic_action_send_message_execution() {
         .unwrap();
 
     assert!(!not_urgent);
-}
-
-#[tokio::test]
-async fn test_generic_action_missing_required_argument_fails() {
-    let ctx = Context::new(Memory::new());
-
-    // Omit required `message` argument:
-    let err = CommunicationService::send_message(&ctx)
-        .recipient("user@example.com")
-        .await
-        .unwrap_err();
-
-    match err {
-        Error::Missing { field } => assert_eq!(field, "message"),
-        other => panic!("expected Error::Missing, got: {other:?}"),
-    }
 }
 
 #[tokio::test]

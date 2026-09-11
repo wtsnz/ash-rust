@@ -10,19 +10,19 @@ use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
 resource! {
-    resource Product;
-    table "products";
+    Product {
+        table "products";
 
     attributes {
-        id: Uuid [pk],
-        sku: String,
-        title: String,
-        price: i64,
-        category: String,
+        id: Uuid [pk];
+        sku: String;
+        title: String;
+        price: i64;
+        category: String;
     }
 
     identities {
-        identity unique_sku [sku],
+        identity unique_sku [sku];
     }
 
     actions {
@@ -44,7 +44,7 @@ resource! {
             primary;
         }
     }
-}
+    }}
 
 async fn setup_sqlite() -> Context<Sqlite> {
     let sqlite = Sqlite::memory().await.unwrap();

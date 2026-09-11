@@ -4,13 +4,13 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    resource Document;
-    table "documents";
+    Document {
+        table "documents";
 
     attributes {
-        id: Uuid [pk],
-        title: String,
-        status: Option<String>,
+        id: Uuid [pk];
+        title: String;
+        status: Option<String>;
     }
 
     actions {
@@ -23,7 +23,7 @@ resource! {
             primary;
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_null_inequality_identical_in_memory_and_sqlite() {

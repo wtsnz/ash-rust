@@ -892,6 +892,17 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             "embedded" => quote! { ::ash_core::DataLayerKind::Embedded },
             _ => quote! { ::ash_core::DataLayerKind::Custom(#s) },
         }
+    } else if let Some(store_ty) = &def.store {
+        let s = quote!(#store_ty).to_string().replace(' ', "");
+        if s.ends_with("SqliteStore") {
+            quote! { ::ash_core::DataLayerKind::Sqlite }
+        } else if s.ends_with("PostgresStore") {
+            quote! { ::ash_core::DataLayerKind::Postgres }
+        } else if s.ends_with("MemoryStore") {
+            quote! { ::ash_core::DataLayerKind::Memory }
+        } else {
+            quote! { ::ash_core::DataLayerKind::Memory }
+        }
     } else {
         quote! { ::ash_core::DataLayerKind::Memory }
     };

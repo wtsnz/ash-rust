@@ -464,7 +464,7 @@ impl RelationshipDef {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not an Ash resource",
     label = "not an Ash resource",
-    note = "define it with `resource! {{ resource {Self}; ... }}` or check imports"
+    note = "define it with `resource! {{ {Self} {{ ... }} }}` or check imports"
 )]
 pub trait Resource: Sized + Clone + Send + Sync + 'static {
     type Store: crate::store::StoreTag;

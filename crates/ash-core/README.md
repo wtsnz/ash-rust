@@ -29,7 +29,7 @@ It provides the abstractions for static resource metadata, action pipelines, val
 - **Transactional Pipelines (`Multi`)**: Composable atomic batches inspired by `Ash.Multi`. Steps can create, update, destroy, or compute derived data, guaranteeing all-or-nothing rollback on failure.
 - **Bulk & Batch Operations**: High-throughput `bulk_create` and `bulk_destroy` with chunking, upserting, cascading deletes, and chunked query streaming.
 - **Declarative Action Lifecycle Hooks**: `before_action`, `after_action`, and `after_transaction` hooks at the action level, via `Change`, and inside `CustomChange` plugins.
-- **Generic Actions**: Type-safe arbitrary domain operations (`action <name>, <return_type> { ... }`) with strongly-typed arguments, policies, and notification dispatch.
+- **Generic Actions**: Type-safe arbitrary domain operations (`generic <name>, <return_type> { ... }`) with strongly-typed arguments, policies, and notification dispatch.
 - **Managed Relationships**: Declarative and nested writes (`manage_relationship`) across `has_many`, `belongs_to`, and `many_to_many`.
 - **Event Notification Primitives**: Core `Notification` payload and `Notifier` trait. Notifications generated during `Multi` pipelines are atomically buffered and only dispatched after database commit.
 - **Record Lifecycle Helpers (`ResourceExt`)**: Fluent helpers including `record.reload(&ctx)` and `record.destroy(&ctx)`.
@@ -66,35 +66,36 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    resource Article;
-    table "articles";
+    Article {
+        table "articles";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        views: i64,
-        archived: bool,
-    }
-
-    actions {
-        create publish {
-            primary;
-            accept [title];
-            change set(views = 0);
-            change set(archived = false);
-            validation present(title);
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            views: i64;
+            archived: bool;
         }
 
-        read read {
-            primary;
-        }
+        actions {
+            create publish {
+                primary;
+                accept [title];
+                change set(views = 0);
+                change set(archived = false);
+                validate present(title);
+            }
 
-        update archive {
-            change set(archived = true);
-        }
+            read read {
+                primary;
+            }
 
-        destroy delete {
-            primary;
+            update archive {
+                change set(archived = true);
+            }
+
+            destroy delete {
+                primary;
+            }
         }
     }
 }

@@ -1,6 +1,31 @@
 use syn::parse::ParseStream;
 use syn::{Error, Expr, ExprPath, Ident, Lit, Result, Token};
 
+pub fn require_semi(input: ParseStream, errors: &mut Vec<Error>, what: &str) {
+    if input.peek(Token![;]) {
+        let _ = input.parse::<Token![;]>();
+        return;
+    }
+    if input.peek(Token![,]) {
+        let comma: Token![,] = match input.parse() {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(e);
+                return;
+            }
+        };
+        errors.push(Error::new(
+            comma.span,
+            format!("use `;` after {what}, not `,`"),
+        ));
+        return;
+    }
+    errors.push(Error::new(
+        input.span(),
+        format!("expected `;` after {what}"),
+    ));
+}
+
 pub fn expr_to_ident(expr: &Expr) -> Result<Ident> {
     match expr {
         Expr::Path(ExprPath { path, .. }) => path
@@ -17,7 +42,9 @@ pub fn ident_from_string(name: &str, span: proc_macro2::Span) -> Result<Ident> {
     Ok(Ident::new(&parsed.to_string(), span))
 }
 
-pub fn expr_to_field_ident(expr: &Expr) -> Result<Ident> {
+/// Recover a field identifier, recording an error for quoted names so later
+/// validation/codegen can still run.
+pub fn expr_to_field_ident_recover(expr: &Expr, errors: &mut Vec<Error>) -> Result<Ident> {
     match expr {
         Expr::Path(ExprPath { path, .. }) => path
             .get_ident()
@@ -25,7 +52,13 @@ pub fn expr_to_field_ident(expr: &Expr) -> Result<Ident> {
             .ok_or_else(|| Error::new_spanned(expr, "expected field identifier")),
         Expr::Lit(syn::ExprLit {
             lit: Lit::Str(s), ..
-        }) => ident_from_string(&s.value(), s.span()),
+        }) => {
+            errors.push(Error::new_spanned(
+                s,
+                format!("use `{}`, not a string literal", s.value()),
+            ));
+            ident_from_string(&s.value(), s.span())
+        }
         other => Err(Error::new_spanned(other, "expected field identifier")),
     }
 }

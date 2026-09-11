@@ -48,29 +48,30 @@ use ash_state_machine::state_machine;
 
 #[state_machine]
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
-    attributes {
-        id: Uuid [pk],
-        amount: i64,
-        // `status: String` is auto-injected by #[state_machine]!
-    }
+        attributes {
+            id: Uuid [pk];
+            amount: i64;
+            // `status: String` is auto-injected by #[state_machine]!
+        }
 
-    state_machine {
-        state_attribute status;
-        initial: "pending";
-        transition submit, from: ["pending"], to: "submitted";
-        transition pay, from: ["submitted"], to: "paid";
-        transition cancel, from: ["pending", "submitted"], to: "cancelled";
-    }
+        state_machine {
+            state_attribute status;
+            initial: "pending";
+            transition submit, from: ["pending"], to: "submitted";
+            transition pay, from: ["submitted"], to: "paid";
+            transition cancel, from: ["pending", "submitted"], to: "cancelled";
+        }
 
-    actions {
-        create create { primary; accept { amount: i64 } }
-        read read { primary; }
-        update submit {}
-        update pay {}
-        update cancel {}
+        actions {
+            create create { primary; accept [amount]; }
+            read read { primary; }
+            update submit {}
+            update pay {}
+            update cancel {}
+        }
     }
 }
 ```
@@ -103,18 +104,19 @@ Prevents concurrent updates from overwriting each other by tagging an integer at
 
 ```rust
 resource! {
-    resource BankAccount;
-    table "bank_accounts";
+    BankAccount {
+        table "bank_accounts";
 
-    attributes {
-        id: Uuid [pk],
-        balance: i64,
-        version: i64 [version],
-    }
+        attributes {
+            id: Uuid [pk];
+            balance: i64;
+            version: i64 [version];
+        }
 
-    actions {
-        create open { primary; accept { balance: i64 } }
-        update deposit { accept { balance: i64 } }
+        actions {
+            create open { primary; accept [balance]; }
+            update deposit { accept [balance]; }
+        }
     }
 }
 ```
@@ -191,33 +193,38 @@ While resource-level `policies` authorize whole-record access, `field_policies` 
 
 ```rust
 resource! {
-    resource Employee;
-    table "employees";
+    Employee {
+        table "employees";
 
-    attributes {
-        id: Uuid [pk],
-        user_id: Uuid,
-        name: String,
-        ssn: Option<String>,
-        salary: Option<i64>,
-    }
-
-    policies {
-        policy authenticated {
-            authorize_if actor_present;
-        }
-    }
-
-    field_policies {
-        // ssn visible only to the employee themselves or HR admins
-        field ssn {
-            authorize_if relates_to_actor(user_id);
-            authorize_if actor_attribute_equals(role, "admin");
+        actor {
+            role: String;
         }
 
-        // salary visible only to admins
-        field salary {
-            authorize_if actor_attribute_equals(role, "admin");
+        attributes {
+            id: Uuid [pk];
+            user_id: Uuid;
+            name: String;
+            ssn: Option<String>;
+            salary: Option<i64>;
+        }
+
+        policies {
+            policy authenticated {
+                authorize_if actor_present;
+            }
+        }
+
+        field_policies {
+            // ssn visible only to the employee themselves or HR admins
+            field ssn {
+                authorize_if relates_to_actor(user_id);
+                authorize_if actor_attribute_equals(role, "admin");
+            }
+
+            // salary visible only to admins
+            field salary {
+                authorize_if actor_attribute_equals(role, "admin");
+            }
         }
     }
 }
@@ -386,30 +393,31 @@ Preparations allow read actions to declare default query constraints (filters, s
 
 ```rust
 resource! {
-    resource Post;
-    table "posts";
+    Post {
+        table "posts";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        status: String = "draft",
-        views: i64 = 0,
-        archived: bool = false,
-    }
-
-    actions {
-        // Primary read filters out archived posts by default
-        read read {
-            primary;
-            prepare filter(archived == false);
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            status: String = "draft";
+            views: i64 = 0;
+            archived: bool = false;
         }
 
-        // Custom read action with default filter, descending sort, and limit
-        read leaderboard {
-            prepare filter(status == "published");
-            prepare filter(archived == false);
-            prepare sort(views, desc);
-            prepare limit(10);
+        actions {
+            // Primary read filters out archived posts by default
+            read read {
+                primary;
+                prepare filter(archived == false);
+            }
+
+            // Custom read action with default filter, descending sort, and limit
+            read leaderboard {
+                prepare filter(status == "published");
+                prepare filter(archived == false);
+                prepare sort(views, desc);
+                prepare limit(10);
+            }
         }
     }
 }
@@ -443,18 +451,18 @@ fn custom_discount(fields: &FieldMap) -> ash_core::Result<Value> {
 }
 
 resource! {
-    resource Product;
-    table "products";
+    Product {
+        table "products";
 
-    attributes {
-        id: Uuid [pk],
-        name: String,
-        code: String,
-        price: i64,
-        quantity: i64,
-        views: i64 = 0,
-        nickname: Option<String>,
-    }
+        attributes {
+            id: Uuid [pk];
+            name: String;
+            code: String;
+            price: i64;
+            quantity: i64;
+            views: i64 = 0;
+            nickname: Option<String>;
+        }
 
     calculations {
         // Arithmetic expressions:
@@ -471,6 +479,7 @@ resource! {
 
         // Custom Rust function calculation:
         discount_tier: String = custom(custom_discount);
+    }
     }
 }
 ```
@@ -511,34 +520,36 @@ impl StoreTag for AuditDb {}
 
 // 2. Tag resources with their target store
 resource! {
-    resource User;
-    table "users";
-    store PrimaryDb; // <--- Type-level store binding
+    User {
+        table "users";
+        store PrimaryDb; // <--- Type-level store binding
 
-    attributes {
-        id: Uuid [pk],
-        email: String,
-    }
+        attributes {
+            id: Uuid [pk];
+            email: String;
+        }
 
-    actions {
-        create create { primary; accept [email]; }
-        read read { primary; }
+        actions {
+            create create { primary; accept [email]; }
+            read read { primary; }
+        }
     }
 }
 
 resource! {
-    resource AuditLog;
-    table "audit_logs";
-    store AuditDb; // <--- Separate SQLite instance or external store
+    AuditLog {
+        table "audit_logs";
+        store AuditDb; // <--- Separate SQLite instance or external store
 
-    attributes {
-        id: Uuid [pk],
-        action: String,
-    }
+        attributes {
+            id: Uuid [pk];
+            action: String;
+        }
 
-    actions {
-        create create { primary; accept [action]; }
-        read read { primary; }
+        actions {
+            create create { primary; accept [action]; }
+            read read { primary; }
+        }
     }
 }
 ```
@@ -570,7 +581,7 @@ ctx.multi()
     .await?;
 ```
 
-*(Note: Legacy `data_layer sqlite;` and `data_layer memory;` directives remain fully supported as aliases to `SqliteStore` and `MemoryStore`, and `DataLayerRegistry` is a type alias to `StoreRegistry`.)*
+`DataLayerRegistry` is a type alias to `StoreRegistry`. Write `store SqliteStore;` / `MemoryStore` / `PostgresStore` (or a custom `StoreTag`); `data_layer sqlite` is an error.
 
 ---
 
@@ -597,19 +608,20 @@ pub enum TicketStatus {
 Mark attributes with `[enum]` or `[enum, default: ...]`:
 ```rust
 resource! {
-    resource Ticket;
-    table "tickets";
+    Ticket {
+        table "tickets";
 
-    attributes {
-        id: Uuid [pk],
-        subject: String,
-        status: TicketStatus [enum, default: TicketStatus::Draft],
-        priority: Option<Priority> [enum],
-    }
+        attributes {
+            id: Uuid [pk];
+            subject: String;
+            status: TicketStatus [enum, default: TicketStatus::Draft];
+            priority: Option<Priority> [enum];
+        }
 
-    actions {
-        create create {
-            accept [subject, status, priority];
+        actions {
+            create create {
+                accept [subject, status, priority];
+            }
         }
     }
 }
@@ -735,62 +747,65 @@ Relationships declare delete behavior. When a parent entity is destroyed via an 
 ### Resource Definition
 ```rust
 resource! {
-    resource Author;
-    table "authors";
+    Author {
+        table "authors";
 
-    attributes {
-        id: Uuid [pk],
-        name: String,
-    }
+        attributes {
+            id: Uuid [pk];
+            name: String;
+        }
 
-    relationships {
-        // Multi-level recursive cascade
-        has_many posts: Post [fk: "author_id", on_delete: cascade],
-    }
+        relationships {
+            // Multi-level recursive cascade
+            has_many posts: Post [fk: author_id, on_delete: cascade];
+        }
 
-    actions {
-        create create { accept [name]; }
-        destroy destroy { primary; }
-    }
-}
-
-resource! {
-    resource Department;
-    table "departments";
-
-    attributes {
-        id: Uuid [pk],
-        name: String,
-    }
-
-    relationships {
-        // Aborts parent deletion if employees still exist
-        has_many employees: Employee [fk: "dept_id", on_delete: restrict],
-    }
-
-    actions {
-        create create { accept [name]; }
-        destroy destroy { primary; }
+        actions {
+            create create { accept [name]; }
+            destroy destroy { primary; }
+        }
     }
 }
 
 resource! {
-    resource Team;
-    table "teams";
+    Department {
+        table "departments";
 
-    attributes {
-        id: Uuid [pk],
-        name: String,
+        attributes {
+            id: Uuid [pk];
+            name: String;
+        }
+
+        relationships {
+            // Aborts parent deletion if employees still exist
+            has_many employees: Employee [fk: dept_id, on_delete: restrict];
+        }
+
+        actions {
+            create create { accept [name]; }
+            destroy destroy { primary; }
+        }
     }
+}
 
-    relationships {
-        // Sets player.team_id = null when team is deleted
-        has_many players: Player [fk: "team_id", on_delete: nilify],
-    }
+resource! {
+    Team {
+        table "teams";
 
-    actions {
-        create create { accept [name]; }
-        destroy destroy { primary; }
+        attributes {
+            id: Uuid [pk];
+            name: String;
+        }
+
+        relationships {
+            // Sets player.team_id = null when team is deleted
+            has_many players: Player [fk: team_id, on_delete: nilify];
+        }
+
+        actions {
+            create create { accept [name]; }
+            destroy destroy { primary; }
+        }
     }
 }
 ```
@@ -856,24 +871,25 @@ Actions can accept arguments and declaratively manage the relationship:
 
 ```rust
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
-    attributes {
-        id: Uuid [pk],
-        customer: String,
-    }
+        attributes {
+            id: Uuid [pk];
+            customer: String;
+        }
 
-    relationships {
-        has_many items: LineItem [fk: "order_id"],
-    }
+        relationships {
+            has_many items: LineItem [fk: order_id];
+        }
 
-    actions {
-        create create_with_items {
-            primary;
-            accept [customer];
-            argument items: Vec<FieldMap>;
-            change manage_relationship(items, create);
+        actions {
+            create create_with_items {
+                primary;
+                accept [customer];
+                argument items: Vec<FieldMap>;
+                change manage_relationship(items, create);
+            }
         }
     }
 }
@@ -970,14 +986,14 @@ fn send_welcome_email(fields: &mut FieldMap) -> Result<()> {
 }
 
 resource! {
-    resource User;
-    table "users";
+    User {
+        table "users";
 
-    attributes {
-        id: Uuid [pk],
-        email: String,
-        status: String = "active",
-    }
+        attributes {
+            id: Uuid [pk];
+            email: String;
+            status: String = "active";
+        }
 
     actions {
         create register {
@@ -1015,17 +1031,18 @@ resource! {
             };
         }
     }
+    }
 }
 ```
 
 ---
 
-## 19. Generic Actions (`action <name>, <return_type>` / `run |input|`)
+## 19. Generic Actions (`generic <name>, <return_type>` / `run |input|`)
 
 In Ash Elixir, not all actions correspond to database CRUD operations. Generic actions represent arbitrary business workflows, computations, remote API calls, or email dispatches that benefit from the Ash action machinery: strongly-typed arguments, actor policies, input validation, and event notifications.
 
 ### Capabilities
-- **Declarative Signature**: Defined using `action <name>, <return_type> { ... }` or `generic <name>, <return_type> { ... }`.
+- **Declarative Signature**: Defined using `generic <name>, <return_type> { ... }`. `action` is an error.
 - **Strongly Typed Arguments**: Supports `argument <name>: <type>;`, with automatic inference for optional (`Option<T>`) parameters via `IntoOption`.
 - **Auto-Generated Input Struct**: Generates a typed `ActionInput<'a, D>` struct giving clean field access (`input.arg`), actor extraction (`input.actor()`), and execution context (`input.context()`).
 - **Inline or Dynamic Runner**: Provide business logic inline with `run |input| async move { ... }` or pass a custom runner dynamically using `.run(|input| async move { ... })`.
@@ -1035,21 +1052,21 @@ In Ash Elixir, not all actions correspond to database CRUD operations. Generic a
 ### Example Usage
 ```rust
 resource! {
-    resource Messenger;
+    Messenger {
+        actions {
+            generic send_message, String {
+                argument recipient: String;
+                argument content: String;
+                argument priority: Option<String>;
 
-    actions {
-        action send_message, String {
-            argument recipient: String;
-            argument content: String;
-            argument priority: Option<String>;
-
-            run |input| async move {
-                let prio = input.priority.unwrap_or_else(|| "normal".into());
-                let sender = match input.actor() {
-                    Some(actor) => format!("user-{}", actor.id),
-                    None => "anonymous".into(),
+                run |input| async move {
+                    let prio = input.priority.unwrap_or_else(|| "normal".into());
+                    let sender = match input.actor() {
+                        Some(actor) => format!("user-{}", actor.id),
+                        None => "anonymous".into(),
+                    };
+                    Ok(format!("[{}] From {}: '{}' to {}", prio, sender, input.content, input.recipient))
                 };
-                Ok(format!("[{}] From {}: '{}' to {}", prio, sender, input.content, input.recipient))
             }
         }
     }

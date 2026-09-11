@@ -1,6 +1,7 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::Result;
+use syn::spanned::Spanned;
 
 use super::super::policies::lit_to_const_value;
 use crate::ast_helpers::{is_bool, is_i64, is_string, is_uuid, option_inner};
@@ -11,41 +12,73 @@ pub(crate) fn filter_expr_to_tokens(expr: &syn::Expr, resource: &syn::Ident) -> 
         syn::Expr::Binary(b) => {
             let left = filter_expr_to_tokens(&b.left, resource);
             let right = filter_expr_to_tokens(&b.right, resource);
-            match b.op {
-                syn::BinOp::Eq(_) => quote! { (#left).eq(#right) },
-                syn::BinOp::Ne(_) => quote! { (#left).ne(#right) },
-                syn::BinOp::Lt(_) => quote! { (#left).lt(#right) },
-                syn::BinOp::Le(_) => quote! { (#left).lte(#right) },
-                syn::BinOp::Gt(_) => quote! { (#left).gt(#right) },
-                syn::BinOp::Ge(_) => quote! { (#left).gte(#right) },
-                syn::BinOp::And(_) | syn::BinOp::BitAnd(_) => quote! { (#left) & (#right) },
-                syn::BinOp::Or(_) | syn::BinOp::BitOr(_) => quote! { (#left) | (#right) },
-                _ => quote! { #expr },
+            match &b.op {
+                syn::BinOp::Eq(_) => quote_spanned! { b.span() => (#left).eq(#right) },
+                syn::BinOp::Ne(_) => quote_spanned! { b.span() => (#left).ne(#right) },
+                syn::BinOp::Lt(_) => quote_spanned! { b.span() => (#left).lt(#right) },
+                syn::BinOp::Le(_) => quote_spanned! { b.span() => (#left).lte(#right) },
+                syn::BinOp::Gt(_) => quote_spanned! { b.span() => (#left).gt(#right) },
+                syn::BinOp::Ge(_) => quote_spanned! { b.span() => (#left).gte(#right) },
+                syn::BinOp::And(_) | syn::BinOp::BitAnd(_) => {
+                    quote_spanned! { b.span() => (#left) & (#right) }
+                }
+                syn::BinOp::Or(_) | syn::BinOp::BitOr(_) => {
+                    quote_spanned! { b.span() => (#left) | (#right) }
+                }
+                _ => quote_spanned! { expr.span() => #expr },
             }
         }
         syn::Expr::MethodCall(m) => {
             let receiver = filter_expr_to_tokens(&m.receiver, resource);
             let method = &m.method;
             let args = &m.args;
-            quote! { (#receiver).#method(#args) }
+            quote_spanned! { m.span() => (#receiver).#method(#args) }
         }
         syn::Expr::Path(p) if p.path.get_ident().is_some() => {
             let id = p.path.get_ident().unwrap();
             if id == "Self" {
-                quote! { #resource }
+                quote_spanned! { id.span() => #resource }
             } else {
-                quote! { #resource::#id }
+                quote_spanned! { id.span() => #resource::#id }
             }
         }
         syn::Expr::Path(p) if p.path.segments.len() == 2 && p.path.segments[0].ident == "Self" => {
             let id = &p.path.segments[1].ident;
-            quote! { #resource::#id }
+            quote_spanned! { id.span() => #resource::#id }
         }
         syn::Expr::Paren(p) => {
             let inner = filter_expr_to_tokens(&p.expr, resource);
-            quote! { (#inner) }
+            quote_spanned! { p.span() => (#inner) }
         }
-        _ => quote! { #expr },
+        _ => quote_spanned! { expr.span() => #expr },
+    }
+}
+
+fn set_change_tokens(field: &syn::Ident, value: &syn::Expr, new: bool) -> Result<TokenStream> {
+    let field_str = field.to_string();
+    if let syn::Expr::Lit(syn::ExprLit { lit, .. }) = value {
+        let const_val = lit_to_const_value(lit)?;
+        if new {
+            Ok(
+                quote! { ::ash_core::Change::SetNewAttribute { field: #field_str, value: #const_val } },
+            )
+        } else {
+            Ok(quote! { ::ash_core::Change::SetAttribute { field: #field_str, value: #const_val } })
+        }
+    } else if new {
+        Ok(quote_spanned! { value.span() =>
+            ::ash_core::Change::SetNewAttributeFn {
+                field: #field_str,
+                value: || ::ash_core::Value::from(#value),
+            }
+        })
+    } else {
+        Ok(quote_spanned! { value.span() =>
+            ::ash_core::Change::SetAttributeFn {
+                field: #field_str,
+                value: || ::ash_core::Value::from(#value),
+            }
+        })
     }
 }
 
@@ -101,20 +134,8 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                 .changes
                 .iter()
                 .map(|ch| match ch {
-                    ChangeSpec::Set { field, value } => {
-                        let field_str = field.to_string();
-                        let const_val = lit_to_const_value(value)?;
-                        Ok(
-                            quote! { ::ash_core::Change::SetAttribute { field: #field_str, value: #const_val } },
-                        )
-                    }
-                    ChangeSpec::SetNew { field, value } => {
-                        let field_str = field.to_string();
-                        let const_val = lit_to_const_value(value)?;
-                        Ok(
-                            quote! { ::ash_core::Change::SetNewAttribute { field: #field_str, value: #const_val } },
-                        )
-                    }
+                    ChangeSpec::Set { field, value } => set_change_tokens(field, value, false),
+                    ChangeSpec::SetNew { field, value } => set_change_tokens(field, value, true),
                     ChangeSpec::RelateActor { field } => {
                         let field_str = field.to_string();
                         Ok(quote! { ::ash_core::Change::RelateActor { field: #field_str } })

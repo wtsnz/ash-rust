@@ -34,36 +34,37 @@ use ash_authentication::authentication;
 
 #[authentication]
 ash_core::resource! {
-    resource User;
-    table "users";
+    User {
+        table "users";
 
-    attributes {
-        id: Uuid [pk],
-        email: String,
-        // `hashed_password: Option<String>` injected automatically!
-    }
-
-    authentication {
-        strategy password {
-            identity_field: email;
-            hashed_password_field: hashed_password;
-            min_password_length: 8;
-            require_confirmation: true;
+        attributes {
+            id: Uuid [pk];
+            email: String;
+            // `hashed_password: Option<String>` injected automatically!
         }
 
-        strategy tokens {
-            token_lifetime_secs: 3600;
+        authentication {
+            strategy password {
+                identity_field: email;
+                hashed_password_field: hashed_password;
+                min_password_length: 8;
+                require_confirmation: true;
+            }
+
+            strategy tokens {
+                token_lifetime_secs: 3600;
+            }
+
+            strategy api_key {
+                api_key_field: api_key_hash;
+                key_prefix: "ash_live_";
+            }
         }
 
-        strategy api_key {
-            api_key_field: api_key_hash;
-            key_prefix: "ash_live_";
+        actions {
+            read read { primary; }
+            // `register_with_password` action injected automatically!
         }
-    }
-
-    actions {
-        read read { primary; }
-        // `register_with_password` action injected automatically!
     }
 }
 ```

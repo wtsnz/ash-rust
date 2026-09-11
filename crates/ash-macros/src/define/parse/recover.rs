@@ -21,6 +21,7 @@ pub const SECTION_NAMES: &[&str] = &[
     "store",
     "timestamps",
     "multitenancy",
+    "actor",
 ];
 
 pub const ACTION_KINDS: &[&str] = &["create", "read", "update", "destroy", "generic"];
@@ -149,6 +150,68 @@ pub fn skip_until_section_or_end(input: ParseStream) {
             || skip_group(input, Delimiter::Parenthesis)
         {
             continue;
+        }
+        if !skip_one_tree(input) {
+            return;
+        }
+    }
+}
+
+/// Skip a broken `policy` / `bypass` item. Stops before the next one.
+pub fn skip_policy(input: ParseStream) {
+    while !input.is_empty() {
+        if peek_ident_is(input, &["policy", "bypass"]) {
+            return;
+        }
+        if skip_group(input, Delimiter::Brace) {
+            let _ = input.parse::<Token![;]>();
+            return;
+        }
+        if input.peek(Token![;]) {
+            let _ = input.parse::<Token![;]>();
+            return;
+        }
+        if !skip_one_tree(input) {
+            return;
+        }
+    }
+}
+
+/// Skip a broken `field` policy. Stops before the next `field`.
+pub fn skip_field_policy(input: ParseStream) {
+    while !input.is_empty() {
+        if peek_ident_is(input, &["field"]) {
+            return;
+        }
+        if skip_group(input, Delimiter::Brace) {
+            let _ = input.parse::<Token![;]>();
+            return;
+        }
+        if input.peek(Token![;]) {
+            let _ = input.parse::<Token![;]>();
+            return;
+        }
+        if !skip_one_tree(input) {
+            return;
+        }
+    }
+}
+
+/// Skip a broken `identity` item. Stops before the next `identity`.
+pub fn skip_identity(input: ParseStream) {
+    while !input.is_empty() {
+        if peek_ident_is(input, &["identity"]) {
+            return;
+        }
+        if skip_group(input, Delimiter::Brace)
+            || skip_group(input, Delimiter::Bracket)
+            || skip_group(input, Delimiter::Parenthesis)
+        {
+            continue;
+        }
+        if input.peek(Token![;]) {
+            let _ = input.parse::<Token![;]>();
+            return;
         }
         if !skip_one_tree(input) {
             return;

@@ -77,6 +77,14 @@ pub use value::{
     required_uuid,
 };
 
+/// Typestate marker: a required action input has not been set yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputUnset;
+
+/// Typestate marker: a required action input has been set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputSet;
+
 #[macro_export]
 macro_rules! fields {
     ($($key:expr => $value:expr),* $(,)?) => {{
