@@ -113,11 +113,11 @@ If any `policies { ... }` block is present, every action must be covered by `pol
 
 `prepare` is only valid on `read`. `accept` / `change` / `validate` are not valid on `read`. `persist manual` is only valid on `create`. `returns` / `run` are only valid on `generic`. `relate_actor` is not valid on `generic`. Those errors underline the illegal keyword, not the action name.
 
-Typos get a "Did you mean?" plus the names that belong in that slot. Using a relationship or calculation where an attribute is required is a distinct error (`accept [comments]` says `comments` is a relationship).
+Typos get a "Did you mean?" plus the names that belong in that slot, including `prepare filter(archved == false)`. Using a relationship or calculation where an attribute is required is a distinct error (`accept [comments]` says `comments` is a relationship). `prepare filter(comments == ...)` is the same kind of wrong-slot error.
 
 `validate present(title)` on a non-`Option` field, `accept [status]` together with `change set(status = ...)`, and unused `argument`s are rustc **warnings** (via `#[deprecated]`), not errors.
 
-IDE completion inside `accept [...]`, `policy action(...)`, aggregates, and identity keys is scoped to the names valid in that slot. Action builders are `#[must_use]` until `.await` / `.call()`. A missing `StoreTag` / `HasStore<T>` bound names the store to register.
+IDE completion inside `accept [...]` (including empty `[]`), `policy action(...)`, aggregates, and identity keys is scoped to the names valid in that slot. `string_length` / `length` / `lower` / `upper` calculations require a string field; arithmetic and string ops are type-checked against the declared calculation type (`Option<T>` may wrap `T`). Action builders are `#[must_use]` until `.await` / `.call()`. A missing `StoreTag` / `HasStore<T>` bound names the store to register.
 
 ---
 
@@ -253,8 +253,11 @@ many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
 ```rust
 calculations {
     title_length: Option<i64> = string_length(title);
+    total: i64 = price * quantity;
 }
 ```
+
+`string_length(title)` is a compile error if `title` is not a string. Declared `Option<i64>` may wrap a non-optional `i64` result.
 
 ### Aggregates
 
@@ -389,7 +392,7 @@ let results = ctx.multi()
 
 ## 7. Defining Domains (`domain!`)
 
-Canonical header is `Name { ... }`, matching `resource!`. Resource entries and code interfaces end with `;`. Code interface options are space-separated (`define open_ticket action: open`), not comma-separated. `action: open` probes `Ticket::open` so F12 goes to the action.
+Canonical header is `Name { ... }`, matching `resource!`. Resource entries and code interfaces end with `;`. Code interface options are space-separated (`define open_ticket action: open`), not comma-separated. `action: open` probes `Ticket::open` so F12 goes to the action. If the `domain!` body is incomplete, a first-pass token walk still type-checks resource names and `action:` values so rust-analyzer can complete them.
 
 ```rust
 use ash_core::domain;
