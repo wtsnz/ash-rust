@@ -157,7 +157,10 @@ impl<D> Context<D> {
     }
 
     /// Attach multiple [`Notifier`]s to this execution context.
-    pub fn with_notifiers(mut self, notifiers: impl IntoIterator<Item = Arc<dyn Notifier>>) -> Self {
+    pub fn with_notifiers(
+        mut self,
+        notifiers: impl IntoIterator<Item = Arc<dyn Notifier>>,
+    ) -> Self {
         self.notifiers.extend(notifiers);
         self
     }
@@ -216,8 +219,14 @@ impl<D: TransactionSupport> Context<D> {
         let tenant = self.tenant.clone();
         let metadata = self.metadata.clone();
         let notifiers = self.notifiers.clone();
-        let notification_queue = self.notification_queue.clone();
-        self.data
+        let created_queue = self.notification_queue.is_none();
+        let queue = self
+            .notification_queue
+            .clone()
+            .unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let tx_queue = Arc::clone(&queue);
+        let result = self
+            .data
             .transaction(move |tx_data| {
                 let tx_ctx = Context {
                     actor,
@@ -225,11 +234,22 @@ impl<D: TransactionSupport> Context<D> {
                     metadata,
                     data: Arc::new(tx_data.clone()),
                     notifiers,
-                    notification_queue,
+                    notification_queue: Some(tx_queue),
                 };
                 f(tx_ctx)
             })
-            .await
+            .await;
+
+        if created_queue {
+            match &result {
+                Ok(_) => crate::notifier::flush_queued_notifications(&queue, &self.notifiers).await,
+                Err(_) => {
+                    queue.lock().unwrap().clear();
+                }
+            }
+        }
+
+        result
     }
 }
 

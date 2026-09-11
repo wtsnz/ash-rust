@@ -8,13 +8,13 @@ use crate::data_layer::{CompiledQuery, DataLayer, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::keys::{AggregateName, CalcName, FieldName, RelName};
-use crate::pipeline::{pk_name, read_action};
+use crate::pipeline::{and_filters, apply_tenant_scope, pk_name, read_action};
 use crate::policy::compile_read_filter;
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
-use super::pagination::{build_keyset_filter, cursor_for_record, KeysetCursor, Page};
+use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record};
 use super::relations::attach_relationships;
 
 pub struct Query<'a, R, D> {
@@ -192,26 +192,43 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self
     }
 
-    pub async fn load(self) -> Result<Vec<R>> {
-        let action = read_action(&R::DEF, self.action)?;
-        let mut this = self.apply_preparations(action);
-
-        for (arg_name, arg_val) in &this.arguments {
-            if R::DEF.attributes.iter().any(|a| a.name == arg_name.as_str()) {
+    fn apply_argument_filters(&self, mut filter: Option<Filter>) -> Option<Filter> {
+        for (arg_name, arg_val) in &self.arguments {
+            if R::DEF
+                .attributes
+                .iter()
+                .any(|a| a.name == arg_name.as_str())
+            {
                 let attr_filter = Filter::eq(arg_name.as_str(), arg_val.clone());
-                this.filter = match this.filter {
-                    Some(f) => Some(Filter::and([f, attr_filter])),
-                    None => Some(attr_filter),
-                };
+                filter = Some(match filter {
+                    Some(existing) => Filter::and([existing, attr_filter]),
+                    None => attr_filter,
+                });
             }
         }
+        filter
+    }
 
-        let policy_filter = compile_read_filter(&R::DEF, action, this.ctx.actor.as_ref())?;
-        let filter = match (this.filter, policy_filter) {
-            (None, None) => None,
-            (Some(filter), None) | (None, Some(filter)) => Some(filter),
-            (Some(user), Some(policy)) => Some(Filter::and([user, policy])),
-        };
+    fn scoped_filter(
+        &self,
+        action: &crate::action::ActionDef,
+    ) -> Result<(Option<Filter>, Option<String>)> {
+        let policy_filter = compile_read_filter(&R::DEF, action, self.ctx.actor.as_ref())?;
+        let filter = and_filters(
+            self.apply_argument_filters(self.filter.clone()),
+            policy_filter,
+        );
+        let tenant = self
+            .tenant
+            .clone()
+            .or_else(|| self.ctx.tenant().map(|s| s.to_string()));
+        apply_tenant_scope(&R::DEF, filter, tenant)
+    }
+
+    pub async fn load(self) -> Result<Vec<R>> {
+        let action = read_action(&R::DEF, self.action)?;
+        let this = self.apply_preparations(action);
+        let (filter, tenant) = this.scoped_filter(action)?;
 
         for name in &this.calculations {
             if R::DEF.calculation(name).is_none() {
@@ -228,30 +245,6 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                     "unknown aggregate `{name}` on {}",
                     R::DEF.name
                 )));
-            }
-        }
-
-        let tenant = this.tenant.clone().or_else(|| this.ctx.tenant().map(|s| s.to_string()));
-        let mut filter = filter;
-
-        if let Some(mt) = R::DEF.multitenancy {
-            match mt.strategy {
-                crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
-                    if let Some(ref t) = tenant {
-                        let tenant_filter = Filter::eq(attr_name, Value::String(t.clone()));
-                        filter = match filter {
-                            Some(existing) => Some(Filter::and([existing, tenant_filter])),
-                            None => Some(tenant_filter),
-                        };
-                    } else if !mt.global {
-                        return Err(Error::TenantRequired { resource: R::DEF.name });
-                    }
-                }
-                crate::resource::MultitenancyStrategy::Context => {
-                    if tenant.is_none() && !mt.global {
-                        return Err(Error::TenantRequired { resource: R::DEF.name });
-                    }
-                }
             }
         }
 
@@ -303,12 +296,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     pub async fn count(self) -> Result<usize> {
         let action = read_action(&R::DEF, self.action)?;
         let this = self.apply_preparations(action);
-        let policy_filter = compile_read_filter(&R::DEF, action, this.ctx.actor.as_ref())?;
-        let filter = match (this.filter, policy_filter) {
-            (None, None) => None,
-            (Some(filter), None) | (None, Some(filter)) => Some(filter),
-            (Some(user), Some(policy)) => Some(Filter::and([user, policy])),
-        };
+        let (filter, tenant) = this.scoped_filter(action)?;
 
         let rows = this
             .ctx
@@ -323,7 +311,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                     aggregates: Vec::new(),
                     limit: None,
                     offset: None,
-                    tenant: this.tenant,
+                    tenant,
                 },
             )
             .await?;
@@ -456,8 +444,12 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             results.reverse();
         }
 
-        let after_cursor = results.last().map(|r| cursor_for_record(r, &effective_sort));
-        let before_cursor = results.first().map(|r| cursor_for_record(r, &effective_sort));
+        let after_cursor = results
+            .last()
+            .map(|r| cursor_for_record(r, &effective_sort));
+        let before_cursor = results
+            .first()
+            .map(|r| cursor_for_record(r, &effective_sort));
 
         Ok(Page {
             results,
@@ -482,11 +474,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     }
 
     /// Chunked streaming over offset-based pagination for large datasets.
-    pub async fn chunked<F, Fut>(
-        self,
-        chunk_size: usize,
-        mut handler: F,
-    ) -> Result<usize>
+    pub async fn chunked<F, Fut>(self, chunk_size: usize, mut handler: F) -> Result<usize>
     where
         F: FnMut(Vec<R>) -> Fut,
         Fut: Future<Output = Result<()>>,
@@ -498,10 +486,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let mut total = 0;
 
         loop {
-            let page = self
-                .clone()
-                .page_offset(chunk_size, offset, false)
-                .await?;
+            let page = self.clone().page_offset(chunk_size, offset, false).await?;
 
             let count = page.results.len();
             if count == 0 {
@@ -523,11 +508,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     }
 
     /// Keyset-based chunking for high-performance iteration over ordered large datasets.
-    pub async fn chunked_keyset<F, Fut>(
-        self,
-        chunk_size: usize,
-        mut handler: F,
-    ) -> Result<usize>
+    pub async fn chunked_keyset<F, Fut>(self, chunk_size: usize, mut handler: F) -> Result<usize>
     where
         F: FnMut(Vec<R>) -> Fut,
         Fut: Future<Output = Result<()>>,

@@ -173,7 +173,12 @@ impl<D: DataLayer + 'static> Multi<D> {
                     let val = func(ctx, results).await?;
                     Ok(Arc::new(val) as Arc<dyn std::any::Any + Send + Sync>)
                 })
-                    as std::pin::Pin<Box<dyn Future<Output = Result<Arc<dyn std::any::Any + Send + Sync>>> + Send>>
+                    as std::pin::Pin<
+                        Box<
+                            dyn Future<Output = Result<Arc<dyn std::any::Any + Send + Sync>>>
+                                + Send,
+                        >,
+                    >
             })),
             _phantom: PhantomData,
         }));
@@ -192,7 +197,10 @@ impl<D: DataLayer + 'static> Multi<D> {
         I: IntoIterator<Item = F> + Send + 'static,
         F: IntoFieldMap,
     {
-        let field_maps: Vec<FieldMap> = inputs.into_iter().map(IntoFieldMap::into_field_map).collect();
+        let field_maps: Vec<FieldMap> = inputs
+            .into_iter()
+            .map(IntoFieldMap::into_field_map)
+            .collect();
         self.steps.push(Box::new(BulkCreateStep::<R> {
             name: name.into(),
             action,
@@ -241,18 +249,7 @@ impl<D: DataLayer + 'static> Multi<D> {
         let (buffered_ctx, queue) = ctx.with_notification_buffer();
         let result = self.run_pipeline(&buffered_ctx).await?;
 
-        let queued = {
-            let mut q = queue.lock().unwrap();
-            std::mem::take(&mut *q)
-        };
-        for item in queued {
-            for notifier in &ctx.notifiers {
-                let _ = notifier.notify(&item.notification).await;
-            }
-            for notifier in item.resource_notifiers {
-                let _ = notifier.notify(&item.notification).await;
-            }
-        }
+        crate::notifier::flush_queued_notifications(&queue, &ctx.notifiers).await;
 
         Ok(result)
     }
@@ -277,19 +274,7 @@ impl<D: TransactionSupport + 'static> Multi<D> {
             })
             .await?;
 
-        // Transaction successfully committed! Dispatch all accumulated notifications.
-        let queued = {
-            let mut q = queue.lock().unwrap();
-            std::mem::take(&mut *q)
-        };
-        for item in queued {
-            for notifier in &ctx.notifiers {
-                let _ = notifier.notify(&item.notification).await;
-            }
-            for notifier in item.resource_notifiers {
-                let _ = notifier.notify(&item.notification).await;
-            }
-        }
+        crate::notifier::flush_queued_notifications(&queue, &ctx.notifiers).await;
 
         Ok(result)
     }
