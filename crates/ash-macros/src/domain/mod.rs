@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod codegen;
 pub mod parse;
+mod token_walk;
 mod validate;
 
 pub use codegen::expand_domain;
@@ -9,6 +10,7 @@ use crate::ast_helpers::combine_errors;
 
 pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let extracted = crate::ast_helpers::extract_domain_ident(&input);
+    let walk_probes = token_walk::expand_probes(&input);
     let mut parsed = parse::parse_domain(input);
     parsed.errors.extend(validate::validate(&parsed.def));
 
@@ -20,6 +22,7 @@ pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
                 let compile_error = err.to_compile_error();
                 quote::quote! {
                     #compile_error
+                    #walk_probes
                     #tokens
                 }
             } else {
@@ -34,6 +37,7 @@ pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
             quote::quote! {
                 #compile_error
                 #stub
+                #walk_probes
             }
         }
     }
@@ -84,7 +88,7 @@ mod tests {
                 resources {
                     Ticket {
                         defin broken, action: open;
-                        define open_ticket, action: open, args: [subject: String];
+                        define open_ticket action: open args: [subject: String];
                     };
                     Representative;
                 }
@@ -105,6 +109,10 @@ mod tests {
         assert!(
             out.contains("open"),
             "missing recovered open interface: {out}"
+        );
+        assert!(
+            out.contains("__ash_domain_token_walk"),
+            "missing token walk probes: {out}"
         );
     }
 
