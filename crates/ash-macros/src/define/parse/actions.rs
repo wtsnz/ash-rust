@@ -93,6 +93,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut persist_kw = None;
     let mut returns_kw = None;
     let mut run_kw = None;
+    let mut accept_span = None;
 
     if input.peek(Token![;]) {
         let _: Token![;] = input.parse()?;
@@ -173,6 +174,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     if body.peek(syn::token::Bracket) {
                         let items;
                         let _ = syn::bracketed!(items in body);
+                        accept_span = Some(items.span());
                         let list = Punctuated::<Ident, Token![,]>::parse_terminated(&items)?;
                         for item in list {
                             accept.push(FieldAccept {
@@ -436,6 +438,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         persist_kw,
         returns_kw,
         run_kw,
+        accept_span,
     })
 }
 

@@ -121,6 +121,17 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 ));
             }
         }
+        if action.accept.is_empty()
+            && let Some(span) = action.accept_span
+        {
+            let dummy = Ident::new("__ash_slot", span);
+            field_probes.push(quote! {
+                #[cfg(rust_analyzer)]
+                {
+                    let _ = &__ash_accept.#dummy;
+                }
+            });
+        }
 
         // 3. Validation fields: attribute namespace, or the argument local.
         for val in &action.validations {
@@ -1061,5 +1072,32 @@ mod tests {
         assert!(out.contains("PrimaryDb"), "missing store type: {out}");
         assert!(out.contains("PostTag"), "missing through type: {out}");
         assert!(out.contains("gen_token"), "missing default_fn: {out}");
+    }
+
+    #[test]
+    fn test_probe_empty_accept_emits_slot_cursor() {
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    subject: String;
+                }
+                actions {
+                    create open {
+                        accept [];
+                    }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("__ash_slot"), "missing empty accept cursor: {out}");
+        assert!(
+            out.contains("rust_analyzer"),
+            "empty accept cursor must be rust-analyzer only: {out}"
+        );
+        assert!(
+            out.contains("__ash_accept"),
+            "empty accept should complete from the attribute namespace: {out}"
+        );
     }
 }

@@ -1,9 +1,12 @@
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
 use syn::Ident;
 
 struct Walked {
     fields: Vec<Ident>,
+    action_names: Vec<Ident>,
+    empty_accept: Vec<Span>,
+    empty_action: Vec<Span>,
 }
 
 fn is_keyword(name: &str) -> bool {
@@ -71,6 +74,10 @@ fn is_field_ident(id: &Ident) -> bool {
         .is_some_and(|c| c == '_' || c.is_lowercase())
 }
 
+fn group_is_empty(g: &proc_macro2::Group) -> bool {
+    g.stream().into_iter().next().is_none()
+}
+
 fn collect_comma_idents(stream: TokenStream, out: &mut Vec<Ident>) {
     for tree in stream {
         match tree {
@@ -114,8 +121,13 @@ fn walk(stream: TokenStream, out: &mut Walked) {
                 if let Some(TokenTree::Group(g)) = next
                     && g.delimiter() == Delimiter::Bracket
                 {
-                    collect_comma_idents(g.stream(), &mut out.fields);
-                    walk(g.stream(), out);
+                    if group_is_empty(g) {
+                        out.empty_accept.push(g.span_open());
+                        out.empty_accept.push(g.span_close());
+                    } else {
+                        collect_comma_idents(g.stream(), &mut out.fields);
+                        walk(g.stream(), out);
+                    }
                     i += 2;
                     continue;
                 }
@@ -137,9 +149,23 @@ fn walk(stream: TokenStream, out: &mut Walked) {
                 if let Some(TokenTree::Group(g)) = next
                     && g.delimiter() == Delimiter::Parenthesis
                 {
-                    collect_comma_idents(g.stream(), &mut out.fields);
+                    if group_is_empty(g) {
+                        out.empty_action.push(g.span_open());
+                        out.empty_action.push(g.span_close());
+                    } else {
+                        collect_comma_idents(g.stream(), &mut out.fields);
+                    }
                     i += 2;
                     continue;
+                }
+            } else if matches!(
+                name.as_str(),
+                "create" | "read" | "update" | "destroy" | "generic"
+            ) {
+                if let Some(TokenTree::Ident(id)) = next
+                    && is_field_ident(id)
+                {
+                    out.action_names.push(id.clone());
                 }
             } else if matches!(name.as_str(), "count" | "exists" | "first" | "sum") {
                 if let Some(TokenTree::Group(g)) = next
@@ -205,15 +231,39 @@ pub fn expand_probes(input: &TokenStream, resource: Option<&Ident>) -> TokenStre
     let Some(resource) = resource else {
         return quote! {};
     };
-    let mut walked = Walked { fields: Vec::new() };
+    let mut walked = Walked {
+        fields: Vec::new(),
+        action_names: Vec::new(),
+        empty_accept: Vec::new(),
+        empty_action: Vec::new(),
+    };
     walk(input.clone(), &mut walked);
-    if walked.fields.is_empty() {
+    if walked.fields.is_empty()
+        && walked.action_names.is_empty()
+        && walked.empty_accept.is_empty()
+        && walked.empty_action.is_empty()
+    {
         return quote! {};
     }
 
     let field_probes = walked.fields.iter().map(|id| {
         quote_spanned! { id.span() =>
             let _ = &__ash_record.#id;
+        }
+    });
+    let action_fields = walked.action_names.iter().map(|id| {
+        quote! { pub #id: () }
+    });
+    let empty_accept = walked.empty_accept.iter().map(|span| {
+        let dummy = Ident::new("__ash_slot", *span);
+        quote_spanned! { *span =>
+            let _ = &__ash_record.#dummy;
+        }
+    });
+    let empty_action = walked.empty_action.iter().map(|span| {
+        let dummy = Ident::new("__ash_slot", *span);
+        quote_spanned! { *span =>
+            let _ = &__ash_walk_actions.#dummy;
         }
     });
 
@@ -228,8 +278,16 @@ pub fn expand_probes(input: &TokenStream, resource: Option<&Ident>) -> TokenStre
                 clippy::all,
                 clippy::pedantic
             )]
+            #[cfg(rust_analyzer)]
             fn __ash_token_walk_probes(__ash_record: &#resource) {
+                #[allow(dead_code, non_camel_case_types)]
+                struct __AshWalkActions {
+                    #(#action_fields,)*
+                }
+                let __ash_walk_actions: &__AshWalkActions = loop {};
                 #(#field_probes)*
+                #(#empty_accept)*
+                #(#empty_action)*
             }
         };
     }
@@ -324,5 +382,39 @@ mod tests {
             !out.contains(". change") && !out.contains(".change"),
             "should not probe keyword `change`: {out}"
         );
+    }
+
+    #[test]
+    fn test_walk_empty_accept_and_action_groups() {
+        let tokens = quote! {
+            Ticket {
+                attributes {
+                    id: Uuid [pk];
+                    subject: String;
+                }
+                actions {
+                    create open {
+                        accept [];
+                    }
+                }
+                policies {
+                    policy action() {
+                        authorize_if always;
+                    }
+                }
+            }
+        };
+        let resource = Ident::new("Ticket", proc_macro2::Span::call_site());
+        let out = expand_probes(&tokens, Some(&resource)).to_string();
+        assert!(out.contains("__ash_slot"), "missing empty-slot cursor: {out}");
+        assert!(
+            out.contains("rust_analyzer"),
+            "empty slots must be rust-analyzer only: {out}"
+        );
+        assert!(
+            out.contains("__AshWalkActions"),
+            "missing walked action namespace: {out}"
+        );
+        assert!(out.contains("open"), "missing walked action name: {out}");
     }
 }
