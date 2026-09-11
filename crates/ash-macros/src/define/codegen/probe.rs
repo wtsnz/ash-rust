@@ -154,7 +154,17 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         ));
                     }
                 }
-                _ => {}
+                ValidationSpec::Custom(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: &'static dyn ::ash_core::CustomValidation = #expr;
+                    });
+                }
+                ValidationSpec::Func(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: fn(&::ash_core::ValidationContext<'_>) -> ::ash_core::Result<()> =
+                            #expr;
+                    });
+                }
             }
         }
 
@@ -202,7 +212,32 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         relationship,
                     ));
                 }
-                _ => {}
+                ChangeSpec::BeforeAction(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: ::ash_core::BeforeActionFn = #expr;
+                    });
+                }
+                ChangeSpec::AfterAction(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: ::ash_core::AfterActionFn = #expr;
+                    });
+                }
+                ChangeSpec::AfterTransaction(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: ::ash_core::AfterTransactionFn = #expr;
+                    });
+                }
+                ChangeSpec::Custom(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: &'static dyn ::ash_core::CustomChange = #expr;
+                    });
+                }
+                ChangeSpec::Func(expr) => {
+                    field_probes.push(quote_spanned! { expr.span() =>
+                        let _: fn(&mut ::ash_core::ChangeContext<'_>) -> ::ash_core::Result<()> =
+                            #expr;
+                    });
+                }
             }
         }
 
@@ -665,8 +700,12 @@ fn collect_calc_field_probes(expr: &CalculationExprSpec, probes: &mut Vec<TokenS
         CalculationExprSpec::LitInt(_)
         | CalculationExprSpec::LitString(_)
         | CalculationExprSpec::LitBool(_)
-        | CalculationExprSpec::Null
-        |         CalculationExprSpec::Custom(_) => {}
+        | CalculationExprSpec::Null => {}
+        CalculationExprSpec::Custom(path) => {
+            probes.push(quote_spanned! { path.span() =>
+                let _: fn(&::ash_core::FieldMap) -> ::ash_core::Result<::ash_core::Value> = #path;
+            });
+        }
     }
 }
 
@@ -1054,6 +1093,71 @@ mod tests {
             "missing eq literal type check: {out}"
         );
         assert!(out.contains("open"), "missing eq literal: {out}");
+    }
+
+    #[test]
+    fn test_probe_custom_and_before_action_paths() {
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                }
+                calculations {
+                    ranked: Option<String> = custom(my_rank_calculator);
+                }
+                actions {
+                    create open {
+                        primary;
+                        accept [title];
+                        change before_action(normalize_title);
+                        change custom(&AuditLogger);
+                        change func(audit_logger);
+                        validate custom(&MyValidator);
+                        validate func(check_title);
+                    }
+                    read read { primary; }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(
+            out.contains("BeforeActionFn"),
+            "missing before_action type: {out}"
+        );
+        assert!(
+            out.contains("normalize_title"),
+            "missing before_action path: {out}"
+        );
+        assert!(
+            out.contains("CustomChange"),
+            "missing CustomChange bound: {out}"
+        );
+        assert!(out.contains("AuditLogger"), "missing custom change path: {out}");
+        assert!(
+            out.contains("ChangeContext"),
+            "missing change func context: {out}"
+        );
+        assert!(
+            out.contains("CustomValidation"),
+            "missing CustomValidation bound: {out}"
+        );
+        assert!(
+            out.contains("MyValidator"),
+            "missing custom validation path: {out}"
+        );
+        assert!(
+            out.contains("ValidationContext"),
+            "missing validation func context: {out}"
+        );
+        assert!(
+            out.contains("my_rank_calculator"),
+            "missing calc custom path: {out}"
+        );
+        assert!(
+            out.contains("FieldMap"),
+            "missing calc custom signature: {out}"
+        );
     }
 
     #[test]
