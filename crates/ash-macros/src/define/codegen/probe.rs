@@ -125,12 +125,21 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
             }
         }
 
-        // 5. Preparation fields (sort)
+        // 5. Preparation fields (sort + filter)
         for prep in &action.preparations {
-            if let PreparationSpec::Sort { field, .. } = prep {
-                field_probes.push(quote_spanned! { field.span() =>
-                    let _ = &__ash_record.#field;
-                });
+            match prep {
+                PreparationSpec::Sort { field, .. } => {
+                    field_probes.push(quote_spanned! { field.span() =>
+                        let _ = &__ash_record.#field;
+                    });
+                }
+                PreparationSpec::Filter { expr } => {
+                    let filter_tokens = super::actions::filter_expr_to_tokens(expr, resource);
+                    field_probes.push(quote! {
+                        let _: ::ash_core::Filter = #filter_tokens;
+                    });
+                }
+                PreparationSpec::Limit(_) | PreparationSpec::Offset(_) => {}
             }
         }
 
@@ -635,5 +644,28 @@ mod tests {
             out.contains("TestResourceSummarizeInput"),
             "missing generic input type: {out}"
         );
+    }
+
+    #[test]
+    fn test_probe_emits_filter_expr_like_set() {
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    archived: bool;
+                }
+                actions {
+                    read read {
+                        primary;
+                        prepare filter(archived == false);
+                    }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("archived"), "missing filter field: {out}");
+        assert!(out.contains("eq"), "missing eq operator: {out}");
+        assert!(out.contains("Filter"), "missing Filter type: {out}");
+        assert!(out.contains("TestResource"), "missing resource path: {out}");
     }
 }
