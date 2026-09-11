@@ -21,7 +21,7 @@ resource! {
         create create {
             primary;
             accept [customer, amount];
-            change set_attribute(status, "pending");
+            change set(status, "pending");
         }
 
         read read {
@@ -29,7 +29,7 @@ resource! {
         }
 
         update complete {
-            change set_attribute(status, "completed");
+            change set(status, "completed");
         }
     }
     }}

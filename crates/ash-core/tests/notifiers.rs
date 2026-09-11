@@ -35,7 +35,7 @@ resource! {
         create create {
             primary;
             accept [customer, amount];
-            change set_attribute(status, "pending");
+            change set(status = "pending");
             validate present(customer);
             validate numericality(amount, min: 1);
         }
@@ -45,7 +45,7 @@ resource! {
         }
 
         update complete {
-            change set_attribute(status, "completed");
+            change set(status = "completed");
         }
 
         destroy cancel {
