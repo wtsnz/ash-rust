@@ -5,7 +5,7 @@ use crate::define::ast::{
     ActionKind, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, RelType,
     ResourceDefinition, ValidationSpec,
 };
-use quote::quote;
+use quote::{quote, quote_spanned};
 use std::collections::HashSet;
 use syn::{Error, Ident, Type};
 
@@ -707,6 +707,83 @@ fn validate_attributes(def: &ResourceDefinition, errors: &mut Vec<Error>) {
     }
 }
 
+fn lint_warning(span: proc_macro2::Span, note: &str) -> proc_macro2::TokenStream {
+    quote_spanned! { span =>
+        const _: fn() = {
+            fn __ash_lint() {
+                #[deprecated(note = #note)]
+                fn __ash_note() {}
+                __ash_note();
+            }
+            __ash_lint
+        };
+    }
+}
+
+fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
+    use crate::define::ast::ChangeSpec;
+    let mut warnings = Vec::new();
+    for action in &def.actions {
+        let overwritten: HashSet<String> = action
+            .changes
+            .iter()
+            .filter_map(|chg| match chg {
+                ChangeSpec::Set { field, .. } | ChangeSpec::SetNew { field, .. } => {
+                    Some(field.to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        for acc in &action.accept {
+            if overwritten.contains(&acc.name.to_string()) {
+                let note = format!(
+                    "`accept [{}]` is overwritten by `change set({})` on this action",
+                    acc.name, acc.name
+                );
+                warnings.push(lint_warning(acc.name.span(), &note));
+            }
+        }
+        for val in &action.validations {
+            if let ValidationSpec::Present { field } = val
+                && let Some(attr) = def.attributes.iter().find(|a| a.ident == *field)
+                && option_inner(&attr.ty).is_none()
+            {
+                let note = format!(
+                    "`present({field})` is always true because `{field}` is not `Option`"
+                );
+                warnings.push(lint_warning(field.span(), &note));
+            }
+        }
+        if action.run_expr.is_some() {
+            continue;
+        }
+        for arg in &action.arguments {
+            let name = arg.name.to_string();
+            let used_in_change = action.changes.iter().any(|chg| match chg {
+                ChangeSpec::SetFromArg { argument, .. } => argument == &arg.name,
+                ChangeSpec::Set { value, .. } | ChangeSpec::SetNew { field: _, value } => {
+                    quote!(#value).to_string().contains(&name)
+                }
+                _ => false,
+            });
+            let used_in_validate = action.validations.iter().any(|val| match val {
+                ValidationSpec::Present { field }
+                | ValidationSpec::StringLength { field, .. }
+                | ValidationSpec::OneOf { field, .. }
+                | ValidationSpec::Numericality { field, .. } => field == &arg.name,
+                _ => false,
+            });
+            if !used_in_change && !used_in_validate {
+                let note = format!(
+                    "argument `{name}` is never used in `change`, `validate`, or `run`"
+                );
+                warnings.push(lint_warning(arg.name.span(), &note));
+            }
+        }
+    }
+    warnings
+}
+
 pub fn validate(def: &mut ResourceDefinition) -> Vec<Error> {
     let mut errors = Vec::new();
     check_name_collisions(def, &mut errors);
@@ -714,6 +791,8 @@ pub fn validate(def: &mut ResourceDefinition) -> Vec<Error> {
     validate_actions(def, &mut errors);
     validate_cross_section(def, &mut errors);
     lint_uncovered_actions(def, &mut errors);
+    let extra_warnings = lint_semantic(def);
+    def.warnings.extend(extra_warnings);
     errors
 }
 
@@ -1584,5 +1663,63 @@ mod tests {
         });
         let errors = validate(&mut def);
         assert!(errors.is_empty(), "unexpected: {errors:?}");
+    }
+
+    #[test]
+    fn test_present_on_required_field_emits_warning() {
+        let mut def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                }
+                actions {
+                    create open {
+                        accept [title];
+                        validate present(title);
+                    }
+                }
+            }
+        });
+        let errors = validate(&mut def);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let notes = def
+            .warnings
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<String>();
+        assert!(
+            notes.contains("always true") && notes.contains("deprecated"),
+            "missing present() warning: {notes}"
+        );
+    }
+
+    #[test]
+    fn test_accept_overwritten_by_set_emits_warning() {
+        let mut def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: String;
+                }
+                actions {
+                    create open {
+                        accept [status];
+                        change set(status = "open");
+                    }
+                }
+            }
+        });
+        let errors = validate(&mut def);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let notes = def
+            .warnings
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<String>();
+        assert!(
+            notes.contains("overwritten") && notes.contains("status"),
+            "missing overwrite warning: {notes}"
+        );
     }
 }
