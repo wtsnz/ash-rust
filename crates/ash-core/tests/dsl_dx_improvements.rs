@@ -1,4 +1,4 @@
-use ash_core::{ActionTarget, Context, resource};
+use ash_core::{ActionTarget, AttrType, Context, Resource, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -334,4 +334,66 @@ async fn test_destination_aggregates_and_generic_run_probe() {
     let _ = Post::comments;
     let _ = Comment::body;
     let _ = Comment::amount;
+}
+
+mod scored {
+    use super::*;
+
+    resource! {
+        ScoredItem {
+            table "scored_items";
+
+            attributes {
+                id: Uuid [pk];
+                priority: i32;
+                count: Option<u32>;
+            }
+
+            actions {
+                create create {
+                    primary;
+                    accept [priority, count];
+                }
+
+                read read {
+                    primary;
+                }
+            }
+        }
+    }
+}
+
+use scored::ScoredItem;
+
+#[tokio::test]
+async fn test_non_i64_integers_round_trip() {
+    let ctx = Context::new(Memory::new());
+
+    let item = ScoredItem::create(&ctx)
+        .priority(3)
+        .count(7u32)
+        .await
+        .unwrap();
+    assert_eq!(item.priority, 3);
+    assert_eq!(item.count, Some(7));
+    assert_eq!(
+        ScoredItem::DEF.attribute("priority").map(|a| a.ty),
+        Some(AttrType::Integer)
+    );
+    assert_eq!(
+        ScoredItem::DEF.attribute("count").map(|a| a.ty),
+        Some(AttrType::Integer)
+    );
+
+    let fetched = ScoredItem::get(&ctx, item.id).await.unwrap();
+    assert_eq!(fetched.priority, 3);
+    assert_eq!(fetched.count, Some(7));
+
+    let matched = ScoredItem::query(&ctx)
+        .filter(ScoredItem::priority.eq(3))
+        .all()
+        .await
+        .unwrap();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].id, item.id);
 }

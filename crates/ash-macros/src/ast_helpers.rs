@@ -67,26 +67,26 @@ pub fn is_bool(ty: &Type) -> bool {
 
 pub fn is_builtin_attr_type(ty: &Type) -> bool {
     let inner = option_inner(ty).unwrap_or(ty);
-    is_uuid(inner) || is_string(inner) || is_i64(inner) || is_bool(inner)
+    is_uuid(inner) || is_string(inner) || is_integer(inner) || is_bool(inner)
 }
 
 pub fn is_integer(ty: &Type) -> bool {
-    last_ident(ty).is_some_and(|i| {
-        matches!(
-            i.to_string().as_str(),
-            "i8" | "i16"
-                | "i32"
-                | "i64"
-                | "i128"
-                | "isize"
-                | "u8"
-                | "u16"
-                | "u32"
-                | "u64"
-                | "u128"
-                | "usize"
-        )
-    })
+    is_i64(ty)
+        || last_ident(ty).is_some_and(|i| {
+            matches!(
+                i.to_string().as_str(),
+                "i8" | "i16"
+                    | "i32"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+            )
+        })
 }
 
 pub fn generic_arg0(ty: &Type) -> Option<&Type> {
@@ -343,10 +343,10 @@ mod tests {
             Some("string_length")
         );
 
-        let changes = &["set", "set_attribute", "relate_actor", "set_from_arg"];
+        let changes = &["set", "relate_actor", "set_from_arg"];
         assert_eq!(
-            find_closest_match("set_attr", changes.iter().copied()),
-            Some("set_attribute")
+            find_closest_match("sett", changes.iter().copied()),
+            Some("set")
         );
     }
 

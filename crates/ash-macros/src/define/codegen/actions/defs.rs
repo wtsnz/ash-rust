@@ -4,7 +4,7 @@ use syn::Result;
 use syn::spanned::Spanned;
 
 use super::super::policies::lit_to_const_value;
-use crate::ast_helpers::{is_bool, is_i64, is_string, is_uuid, option_inner};
+use crate::ast_helpers::{is_bool, is_integer, is_string, is_uuid, option_inner};
 use crate::define::ast::{ChangeSpec, PreparationSpec, ResourceDefinition, ValidationSpec};
 
 pub(crate) fn filter_expr_to_tokens(expr: &syn::Expr, resource: &syn::Ident) -> TokenStream {
@@ -110,7 +110,7 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                         quote! { ::ash_core::AttrType::Uuid }
                     } else if is_string(inner) {
                         quote! { ::ash_core::AttrType::String }
-                    } else if is_i64(inner) {
+                    } else if is_integer(inner) {
                         quote! { ::ash_core::AttrType::Integer }
                     } else if is_bool(inner) {
                         quote! { ::ash_core::AttrType::Boolean }
