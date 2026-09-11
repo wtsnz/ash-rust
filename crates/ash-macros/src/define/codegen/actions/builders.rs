@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::ast_helpers::{option_inner, pascal_case};
-use crate::define::ast::{ActionKind, ActionSpec, ResourceDefinition};
+use crate::define::ast::{ActionKind, ActionSpec, ChangeSpec, ResourceDefinition};
 
 fn docs_for_input_name<'a>(
     def: &'a ResourceDefinition,
@@ -24,6 +24,175 @@ fn arg_docs_for_name<'a>(act: &'a ActionSpec, name: &syn::Ident) -> &'a [syn::At
         .find(|a| a.name == *name)
         .map(|a| a.outer_attrs.as_slice())
         .unwrap_or(&[])
+}
+
+fn tuple_ty(parts: &[TokenStream]) -> TokenStream {
+    match parts.len() {
+        0 => quote! { () },
+        1 => {
+            let p = &parts[0];
+            quote! { (#p,) }
+        }
+        _ => quote! { (#(#parts),*) },
+    }
+}
+
+fn is_required_accept(
+    def: &ResourceDefinition,
+    act: &ActionSpec,
+    name: &syn::Ident,
+    ty: &syn::Type,
+) -> bool {
+    if option_inner(ty).is_some() {
+        return false;
+    }
+    if matches!(act.kind, ActionKind::Update | ActionKind::Destroy) {
+        return false;
+    }
+    if let Some(attr) = def.attributes.iter().find(|a| a.ident == *name) {
+        if attr.default.is_some() || attr.default_fn.is_some() || attr.pk || attr.generated {
+            return false;
+        }
+    }
+    if act.changes.iter().any(|chg| match chg {
+        ChangeSpec::Set { field, .. }
+        | ChangeSpec::SetNew { field, .. }
+        | ChangeSpec::SetFromArg { field, .. }
+        | ChangeSpec::RelateActor { field } => field == name,
+        _ => false,
+    }) {
+        return false;
+    }
+    true
+}
+
+fn required_input_names<'a>(
+    def: &'a ResourceDefinition,
+    act: &'a ActionSpec,
+) -> Vec<&'a syn::Ident> {
+    let mut names = Vec::new();
+    for acc in &act.accept {
+        if is_required_accept(def, act, &acc.name, &acc.ty) {
+            names.push(&acc.name);
+        }
+    }
+    for arg in &act.arguments {
+        if option_inner(&arg.ty).is_none() {
+            names.push(&arg.name);
+        }
+    }
+    names
+}
+
+fn typestate_types(n: usize) -> (TokenStream, TokenStream, TokenStream) {
+    if n == 0 {
+        return (quote! {}, quote! {}, quote! {});
+    }
+    let unsets = vec![quote! { ::ash_core::InputUnset }; n];
+    let sets = vec![quote! { ::ash_core::InputSet }; n];
+    let unset_ty = tuple_ty(&unsets);
+    let ready_ty = tuple_ty(&sets);
+    let struct_params = quote! { , S = #unset_ty };
+    (struct_params, unset_ty, ready_ty)
+}
+
+fn into_fieldmap_ref_impl(builder_name: &syn::Ident, has_state: bool) -> TokenStream {
+    if has_state {
+        quote! {
+            impl<'a, D: ::ash_core::DataLayer, S> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D, S> {
+                fn into_field_map(self) -> ::ash_core::FieldMap {
+                    self.into_fields()
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
+                fn into_field_map(self) -> ::ash_core::FieldMap {
+                    self.into_fields()
+                }
+            }
+        }
+    }
+}
+
+fn required_setter_impls(
+    builder_name: &syn::Ident,
+    required: &[(syn::Ident, syn::Type, bool, TokenStream)],
+    extra_moves: &[TokenStream],
+    all_input_names: &[syn::Ident],
+) -> Vec<TokenStream> {
+    let n = required.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let type_params: Vec<syn::Ident> = (0..n).map(|i| format_ident!("TS{i}")).collect();
+    let mut impls = Vec::new();
+    for i in 0..n {
+        let (name, ty, is_option, docs) = &required[i];
+        let mut from_parts = Vec::new();
+        let mut to_parts = Vec::new();
+        let mut generics = Vec::new();
+        for (j, tp) in type_params.iter().enumerate() {
+            if j == i {
+                from_parts.push(quote! { ::ash_core::InputUnset });
+                to_parts.push(quote! { ::ash_core::InputSet });
+            } else {
+                from_parts.push(quote! { #tp });
+                to_parts.push(quote! { #tp });
+                generics.push(tp.clone());
+            }
+        }
+        let from_ty = tuple_ty(&from_parts);
+        let to_ty = tuple_ty(&to_parts);
+        let generic_list = if generics.is_empty() {
+            quote! {}
+        } else {
+            quote! { , #(#generics),* }
+        };
+        let input_moves: Vec<TokenStream> = all_input_names
+            .iter()
+            .map(|fname| {
+                if fname == name {
+                    quote! { #name: ::std::option::Option::Some(value) }
+                } else {
+                    quote! { #fname: self.#fname }
+                }
+            })
+            .collect();
+        let setter_sig = if *is_option {
+            let inner = option_inner(ty).unwrap_or(ty);
+            quote! {
+                #docs
+                pub fn #name(self, value: impl ::ash_core::IntoOption<#inner>) -> #builder_name<'a, D, #to_ty> {
+                    let value = value.into_option();
+                    #builder_name {
+                        #(#extra_moves,)*
+                        #(#input_moves,)*
+                        _state: ::std::marker::PhantomData,
+                    }
+                }
+            }
+        } else {
+            quote! {
+                #docs
+                pub fn #name(self, value: impl ::std::convert::Into<#ty>) -> #builder_name<'a, D, #to_ty> {
+                    let value = value.into();
+                    #builder_name {
+                        #(#extra_moves,)*
+                        #(#input_moves,)*
+                        _state: ::std::marker::PhantomData,
+                    }
+                }
+            }
+        };
+        impls.push(quote! {
+            impl<'a, D: ::ash_core::DataLayer #generic_list> #builder_name<'a, D, #from_ty> {
+                #setter_sig
+            }
+        });
+    }
+    impls
 }
 
 pub struct ActionCodegen {
@@ -139,8 +308,23 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
             ActionKind::Create => {
                 let mut field_members = Vec::new();
                 let mut field_inits = Vec::new();
-                let mut field_setters = Vec::new();
+                let mut optional_setters = Vec::new();
                 let mut into_fields_inserts = Vec::new();
+                let mut required_info = Vec::new();
+                let mut all_input_names = Vec::new();
+                let required_names = required_input_names(def, act);
+                let (struct_params, _unset_ty, ready_ty) = typestate_types(required_names.len());
+                let has_state = !required_names.is_empty();
+                let phantom_field = if has_state {
+                    quote! { _state: ::std::marker::PhantomData<S>, }
+                } else {
+                    quote! {}
+                };
+                let phantom_init = if has_state {
+                    quote! { _state: ::std::marker::PhantomData, }
+                } else {
+                    quote! {}
+                };
 
                 let all_inputs: Vec<(&syn::Ident, &syn::Type)> = act
                     .accept
@@ -152,16 +336,36 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 for (name, ty) in all_inputs {
                     let s = name.to_string();
                     let docs = docs_for_input_name(def, act, name);
+                    all_input_names.push(name.clone());
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
-                    if let Some(inner) = option_inner(ty) {
-                        field_setters.push(quote! {
+                    let is_req = required_names.iter().any(|n| *n == name);
+                    if is_req {
+                        let docs_ts = quote! { #(#docs)* };
+                        required_info.push((
+                            name.clone(),
+                            ty.clone(),
+                            option_inner(ty).is_some(),
+                            docs_ts,
+                        ));
+                    } else if let Some(inner) = option_inner(ty) {
+                        optional_setters.push(quote! {
                             #(#docs)*
                             pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into_option());
                                 self
                             }
                         });
+                    } else {
+                        optional_setters.push(quote! {
+                            #(#docs)*
+                            pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
+                                self.#name = ::std::option::Option::Some(value.into());
+                                self
+                            }
+                        });
+                    }
+                    if let Some(_inner) = option_inner(ty) {
                         into_fields_inserts.push(quote! {
                             if let ::std::option::Option::Some(opt_val) = &self.#name {
                                 match opt_val {
@@ -175,13 +379,6 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         });
                     } else {
-                        field_setters.push(quote! {
-                            #(#docs)*
-                            pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
-                                self.#name = ::std::option::Option::Some(value.into());
-                                self
-                            }
-                        });
                         into_fields_inserts.push(quote! {
                             if let ::std::option::Option::Some(val) = &self.#name {
                                 map.insert(::std::string::String::from(#s), ::ash_core::Value::from(val.clone()));
@@ -190,30 +387,95 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
                 }
 
+                let extra_moves_manual = vec![quote! { ctx: self.ctx }];
+                let required_impls_manual = required_setter_impls(
+                    &builder_name,
+                    &required_info,
+                    &extra_moves_manual,
+                    &all_input_names,
+                );
+                let extra_moves_create = vec![
+                    quote! { ctx: self.ctx },
+                    quote! { tenant_override: self.tenant_override },
+                    quote! { upsert_spec: self.upsert_spec },
+                    quote! { before_actions: self.before_actions },
+                    quote! { after_actions: self.after_actions },
+                    quote! { after_transactions: self.after_transactions },
+                    quote! { managed_relationships: self.managed_relationships },
+                ];
+                let required_impls_create = required_setter_impls(
+                    &builder_name,
+                    &required_info,
+                    &extra_moves_create,
+                    &all_input_names,
+                );
+                let impl_generic = if has_state {
+                    quote! { impl<'a, D: ::ash_core::DataLayer, S> #builder_name<'a, D, S> }
+                } else {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
+                };
+                let impl_ready = if has_state {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D, #ready_ty> }
+                } else {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
+                };
+                let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
+                let into_future_ty = if has_state {
+                    quote! { #builder_name<'a, D, #ready_ty> }
+                } else {
+                    quote! { #builder_name<'a, D> }
+                };
+                let into_fieldmap_owned = if has_state {
+                    quote! {
+                        impl<'a, D: ::ash_core::DataLayer, S> ::ash_core::IntoFieldMap for #builder_name<'a, D, S> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
+                    }
+                };
+                let into_fieldmap_ref = into_fieldmap_ref_impl(&builder_name, has_state);
+
                 if act.persist_manual {
                     builders.push(quote! {
                         #(#outer_attrs)*
-                        pub struct #builder_name<'a, D> {
+                        pub struct #builder_name<'a, D #struct_params> {
                             ctx: &'a ::ash_core::Context<D>,
                             #(#field_members,)*
+                            #phantom_field
                         }
 
-                        impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> {
+                        #impl_new {
                             pub fn new(ctx: &'a ::ash_core::Context<D>) -> Self {
                                 Self {
                                     ctx,
                                     #(#field_inits,)*
+                                    #phantom_init
                                 }
                             }
+                        }
 
-                            #(#field_setters)*
+                        #impl_generic {
+                            #(#optional_setters)*
 
                             pub fn into_fields(&self) -> ::ash_core::FieldMap {
                                 let mut map = ::ash_core::FieldMap::new();
                                 #(#into_fields_inserts)*
                                 map
                             }
+                        }
 
+                        #(#required_impls_manual)*
+
+                        #impl_ready {
                             pub async fn persist<F, Fut>(self, f: F) -> ::ash_core::Result<#resource>
                             where
                                 F: ::std::ops::FnOnce(&::ash_core::Context<D>, #resource) -> Fut,
@@ -224,22 +486,14 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         }
 
-                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
-                            fn into_field_map(self) -> ::ash_core::FieldMap {
-                                self.into_fields()
-                            }
-                        }
+                        #into_fieldmap_owned
 
-                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
-                            fn into_field_map(self) -> ::ash_core::FieldMap {
-                                self.into_fields()
-                            }
-                        }
+                        #into_fieldmap_ref
                     });
                 } else {
                     builders.push(quote! {
                         #(#outer_attrs)*
-                        pub struct #builder_name<'a, D> {
+                        pub struct #builder_name<'a, D #struct_params> {
                             ctx: &'a ::ash_core::Context<D>,
                             tenant_override: ::std::option::Option<::std::string::String>,
                             upsert_spec: ::std::option::Option<(&'static str, ::std::vec::Vec<::std::string::String>)>,
@@ -248,9 +502,10 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
                             managed_relationships: ::std::vec::Vec<::ash_core::ManagedRelationshipSpec>,
                             #(#field_members,)*
+                            #phantom_field
                         }
 
-                        impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> {
+                        #impl_new {
                             pub fn new(ctx: &'a ::ash_core::Context<D>) -> Self {
                                 Self {
                                     ctx,
@@ -261,9 +516,12 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                                     after_transactions: ::std::vec::Vec::new(),
                                     managed_relationships: ::std::vec::Vec::new(),
                                     #(#field_inits,)*
+                                    #phantom_init
                                 }
                             }
+                        }
 
+                        #impl_generic {
                             /// Explicitly override the tenant on this action builder.
                             pub fn tenant(mut self, tenant: impl ::std::convert::Into<::std::string::String>) -> Self {
                                 self.tenant_override = ::std::option::Option::Some(tenant.into());
@@ -342,14 +600,18 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                             #(#rel_methods)*
 
-                            #(#field_setters)*
+                            #(#optional_setters)*
 
                             pub fn into_fields(&self) -> ::ash_core::FieldMap {
                                 let mut map = ::ash_core::FieldMap::new();
                                 #(#into_fields_inserts)*
                                 map
                             }
+                        }
 
+                        #(#required_impls_create)*
+
+                        #impl_ready {
                             pub fn changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
                                 let ctx_owned;
                                 let ctx = if let ::std::option::Option::Some(ref t) = self.tenant_override {
@@ -401,19 +663,11 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         }
 
-                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
-                            fn into_field_map(self) -> ::ash_core::FieldMap {
-                                self.into_fields()
-                            }
-                        }
+                        #into_fieldmap_owned
 
-                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
-                            fn into_field_map(self) -> ::ash_core::FieldMap {
-                                self.into_fields()
-                            }
-                        }
+                        #into_fieldmap_ref
 
-                        impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #builder_name<'a, D> {
+                        impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #into_future_ty {
                             type Output = ::ash_core::Result<#resource>;
                             type IntoFuture = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = Self::Output> + ::std::marker::Send + 'a>>;
 
@@ -422,7 +676,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         }
 
-                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D> {
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #into_future_ty {
                             fn into_changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
                                 self.changeset()
                             }
@@ -451,8 +705,57 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                 let mut field_members = Vec::new();
                 let mut field_inits = Vec::new();
-                let mut field_setters = Vec::new();
+                let mut optional_setters = Vec::new();
                 let mut into_fields_inserts = Vec::new();
+                let mut required_info = Vec::new();
+                let mut all_input_names = Vec::new();
+                let required_names = required_input_names(def, act);
+                let (struct_params, _unset_ty, ready_ty) = typestate_types(required_names.len());
+                let has_state = !required_names.is_empty();
+                let phantom_field = if has_state {
+                    quote! { _state: ::std::marker::PhantomData<S>, }
+                } else {
+                    quote! {}
+                };
+                let phantom_init = if has_state {
+                    quote! { _state: ::std::marker::PhantomData, }
+                } else {
+                    quote! {}
+                };
+                let impl_generic = if has_state {
+                    quote! { impl<'a, D: ::ash_core::DataLayer, S> #builder_name<'a, D, S> }
+                } else {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
+                };
+                let impl_ready = if has_state {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D, #ready_ty> }
+                } else {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
+                };
+                let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
+                let into_future_ty = if has_state {
+                    quote! { #builder_name<'a, D, #ready_ty> }
+                } else {
+                    quote! { #builder_name<'a, D> }
+                };
+                let into_fieldmap_owned = if has_state {
+                    quote! {
+                        impl<'a, D: ::ash_core::DataLayer, S> ::ash_core::IntoFieldMap for #builder_name<'a, D, S> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
+                            fn into_field_map(self) -> ::ash_core::FieldMap {
+                                self.into_fields()
+                            }
+                        }
+                    }
+                };
+                let into_fieldmap_ref = into_fieldmap_ref_impl(&builder_name, has_state);
 
                 let all_inputs: Vec<(&syn::Ident, &syn::Type)> = act
                     .accept
@@ -464,16 +767,36 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 for (name, ty) in all_inputs {
                     let s = name.to_string();
                     let docs = docs_for_input_name(def, act, name);
+                    all_input_names.push(name.clone());
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
-                    if let Some(inner) = option_inner(ty) {
-                        field_setters.push(quote! {
+                    let is_req = required_names.iter().any(|n| *n == name);
+                    if is_req {
+                        let docs_ts = quote! { #(#docs)* };
+                        required_info.push((
+                            name.clone(),
+                            ty.clone(),
+                            option_inner(ty).is_some(),
+                            docs_ts,
+                        ));
+                    } else if let Some(inner) = option_inner(ty) {
+                        optional_setters.push(quote! {
                             #(#docs)*
                             pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into_option());
                                 self
                             }
                         });
+                    } else {
+                        optional_setters.push(quote! {
+                            #(#docs)*
+                            pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
+                                self.#name = ::std::option::Option::Some(value.into());
+                                self
+                            }
+                        });
+                    }
+                    if option_inner(ty).is_some() {
                         into_fields_inserts.push(quote! {
                             if let ::std::option::Option::Some(opt_val) = &self.#name {
                                 match opt_val {
@@ -487,13 +810,6 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         });
                     } else {
-                        field_setters.push(quote! {
-                            #(#docs)*
-                            pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
-                                self.#name = ::std::option::Option::Some(value.into());
-                                self
-                            }
-                        });
                         into_fields_inserts.push(quote! {
                             if let ::std::option::Option::Some(val) = &self.#name {
                                 map.insert(::std::string::String::from(#s), ::ash_core::Value::from(val.clone()));
@@ -502,6 +818,22 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
                 }
 
+                let extra_moves_update = vec![
+                    quote! { ctx: self.ctx },
+                    quote! { target: self.target },
+                    quote! { tenant_override: self.tenant_override },
+                    quote! { before_actions: self.before_actions },
+                    quote! { after_actions: self.after_actions },
+                    quote! { after_transactions: self.after_transactions },
+                    quote! { managed_relationships: self.managed_relationships },
+                ];
+                let required_impls_update = required_setter_impls(
+                    &builder_name,
+                    &required_info,
+                    &extra_moves_update,
+                    &all_input_names,
+                );
+
                 builders.push(quote! {
                     pub enum #target_enum {
                         Id(::uuid::Uuid),
@@ -509,7 +841,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #(#outer_attrs)*
-                    pub struct #builder_name<'a, D> {
+                    pub struct #builder_name<'a, D #struct_params> {
                         ctx: &'a ::ash_core::Context<D>,
                         target: #target_enum,
                         tenant_override: ::std::option::Option<::std::string::String>,
@@ -518,9 +850,10 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         after_transactions: ::std::vec::Vec<::ash_core::AfterTransactionHook<#resource>>,
                         managed_relationships: ::std::vec::Vec<::ash_core::ManagedRelationshipSpec>,
                         #(#field_members,)*
+                        #phantom_field
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> {
+                    #impl_new {
                         pub fn for_id(ctx: &'a ::ash_core::Context<D>, id: ::uuid::Uuid) -> Self {
                             Self {
                                 ctx,
@@ -531,6 +864,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                                 after_transactions: ::std::vec::Vec::new(),
                                 managed_relationships: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
+                                #phantom_init
                             }
                         }
 
@@ -544,8 +878,12 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                                 after_transactions: ::std::vec::Vec::new(),
                                 managed_relationships: ::std::vec::Vec::new(),
                                 #(#field_inits,)*
+                                #phantom_init
                             }
                         }
+                    }
+
+                    #impl_generic {
 
                         /// Explicitly override the tenant on this action builder.
                         pub fn tenant(mut self, tenant: impl ::std::convert::Into<::std::string::String>) -> Self {
@@ -613,14 +951,18 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                         #(#rel_methods)*
 
-                        #(#field_setters)*
+                        #(#optional_setters)*
 
                         pub fn into_fields(&self) -> ::ash_core::FieldMap {
                             let mut map = ::ash_core::FieldMap::new();
                             #(#into_fields_inserts)*
                             map
                         }
+                    }
 
+                    #(#required_impls_update)*
+
+                    #impl_ready {
                         pub fn changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
                             let ctx_owned;
                             let ctx = if let ::std::option::Option::Some(ref t) = self.tenant_override {
@@ -713,19 +1055,11 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         }
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for #builder_name<'a, D> {
-                        fn into_field_map(self) -> ::ash_core::FieldMap {
-                            self.into_fields()
-                        }
-                    }
+                    #into_fieldmap_owned
 
-                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoFieldMap for &'a #builder_name<'a, D> {
-                        fn into_field_map(self) -> ::ash_core::FieldMap {
-                            self.into_fields()
-                        }
-                    }
+                    #into_fieldmap_ref
 
-                    impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #builder_name<'a, D> {
+                    impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #into_future_ty {
                         type Output = ::ash_core::Result<#resource>;
                         type IntoFuture = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = Self::Output> + ::std::marker::Send + 'a>>;
 
@@ -734,7 +1068,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         }
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D> {
+                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #into_future_ty {
                         fn into_changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
                             self.changeset()
                         }
@@ -819,9 +1153,40 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                 let mut field_members = Vec::new();
                 let mut field_inits = Vec::new();
-                let mut field_setters = Vec::new();
+                let mut optional_setters = Vec::new();
                 let mut input_struct_fields = Vec::new();
                 let mut input_extracts = Vec::new();
+                let mut required_info = Vec::new();
+                let mut all_input_names = Vec::new();
+                let required_names = required_input_names(def, act);
+                let (struct_params, _unset_ty, ready_ty) = typestate_types(required_names.len());
+                let has_state = !required_names.is_empty();
+                let phantom_field = if has_state {
+                    quote! { _state: ::std::marker::PhantomData<S>, }
+                } else {
+                    quote! {}
+                };
+                let phantom_init = if has_state {
+                    quote! { _state: ::std::marker::PhantomData, }
+                } else {
+                    quote! {}
+                };
+                let impl_generic = if has_state {
+                    quote! { impl<'a, D: ::ash_core::DataLayer, S> #builder_name<'a, D, S> }
+                } else {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
+                };
+                let impl_ready = if has_state {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D, #ready_ty> }
+                } else {
+                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
+                };
+                let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
+                let into_future_ty = if has_state {
+                    quote! { #builder_name<'a, D, #ready_ty> }
+                } else {
+                    quote! { #builder_name<'a, D> }
+                };
 
                 let all_inputs: Vec<(&syn::Ident, &syn::Type)> = act
                     .accept
@@ -834,34 +1199,56 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     let s = name.to_string();
                     let docs = docs_for_input_name(def, act, name);
                     let arg_docs = arg_docs_for_name(act, name);
+                    all_input_names.push(name.clone());
                     input_struct_fields.push(quote! { #(#arg_docs)* pub #name: #ty });
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
+                    let is_req = required_names.iter().any(|n| *n == name);
 
-                    if let Some(inner) = option_inner(ty) {
-                        field_setters.push(quote! {
+                    if is_req {
+                        let docs_ts = quote! { #(#docs)* };
+                        required_info.push((
+                            name.clone(),
+                            ty.clone(),
+                            option_inner(ty).is_some(),
+                            docs_ts,
+                        ));
+                    } else if let Some(inner) = option_inner(ty) {
+                        optional_setters.push(quote! {
                             #(#docs)*
                             pub fn #name(mut self, value: impl ::ash_core::IntoOption<#inner>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into_option());
                                 self
                             }
                         });
-                        input_extracts.push(quote! {
-                            #name: self.#name.unwrap_or(::std::option::Option::None)
-                        });
                     } else {
-                        field_setters.push(quote! {
+                        optional_setters.push(quote! {
                             #(#docs)*
                             pub fn #name(mut self, value: impl ::std::convert::Into<#ty>) -> Self {
                                 self.#name = ::std::option::Option::Some(value.into());
                                 self
                             }
                         });
+                    }
+
+                    if option_inner(ty).is_some() {
+                        input_extracts.push(quote! {
+                            #name: self.#name.unwrap_or(::std::option::Option::None)
+                        });
+                    } else {
                         input_extracts.push(quote! {
                             #name: self.#name.ok_or_else(|| ::ash_core::Error::Missing { field: #s.into() })?
                         });
                     }
                 }
+
+                let extra_moves = vec![quote! { ctx: self.ctx }];
+                let required_impls = required_setter_impls(
+                    &builder_name,
+                    &required_info,
+                    &extra_moves,
+                    &all_input_names,
+                );
 
                 let run_impl = if let Some(expr) = &act.run_expr {
                     quote! {
@@ -895,20 +1282,24 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #(#outer_attrs)*
-                    pub struct #builder_name<'a, D> {
+                    pub struct #builder_name<'a, D #struct_params> {
                         ctx: &'a ::ash_core::Context<D>,
                         #(#field_members,)*
+                        #phantom_field
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> {
+                    #impl_new {
                         pub fn new(ctx: &'a ::ash_core::Context<D>) -> Self {
                             Self {
                                 ctx,
                                 #(#field_inits,)*
+                                #phantom_init
                             }
                         }
+                    }
 
-                        #(#field_setters)*
+                    #impl_generic {
+                        #(#optional_setters)*
 
                         fn __run_action<F, Fut>(f: F, input: #input_struct_name<'a, D>) -> Fut
                         where
@@ -917,7 +1308,11 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         {
                             f(input)
                         }
+                    }
 
+                    #(#required_impls)*
+
+                    #impl_ready {
                         pub async fn run<F, Fut>(self, runner: F) -> ::ash_core::Result<#returns_ty>
                         where
                             F: ::std::ops::FnOnce(#input_struct_name<'a, D>) -> Fut,
@@ -942,7 +1337,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         }
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #builder_name<'a, D> {
+                    impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #into_future_ty {
                         type Output = ::ash_core::Result<#returns_ty>;
                         type IntoFuture = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = Self::Output> + ::std::marker::Send + 'a>>;
 

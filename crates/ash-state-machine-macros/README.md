@@ -35,33 +35,34 @@ use uuid::Uuid;
 
 #[state_machine]
 resource! {
-    resource Invoice;
-    table "invoices";
+    Invoice {
+        table "invoices";
 
-    attributes {
-        id: Uuid [pk],
-        amount: i64,
-    }
-
-    state_machine {
-        state_attribute status;
-        initial: "draft";
-        transition send_invoice, from: ["draft"], to: "sent";
-        transition pay, from: ["sent"], to: "paid";
-    }
-
-    actions {
-        create draft {
-            primary;
-            accept [amount];
+        attributes {
+            id: Uuid [pk];
+            amount: i64;
         }
 
-        read read {
-            primary;
+        state_machine {
+            state_attribute status;
+            initial: "draft";
+            transition send_invoice, from: ["draft"], to: "sent";
+            transition pay, from: ["sent"], to: "paid";
         }
 
-        update send_invoice {}
-        update pay {}
+        actions {
+            create draft {
+                primary;
+                accept [amount];
+            }
+
+            read read {
+                primary;
+            }
+
+            update send_invoice {}
+            update pay {}
+        }
     }
 }
 ```

@@ -1,73 +1,91 @@
 use syn::parse::ParseStream;
+use syn::parse::discouraged::Speculative;
 use syn::{Error, Ident, Lit, Result, Token, Type};
 
 use crate::define::ast::{AggregateFilterSpec, AggregateKindSpec, AggregateSpec};
 
-pub fn parse_aggregates(input: ParseStream) -> Result<Vec<AggregateSpec>> {
+use super::helpers::require_semi;
+
+pub fn parse_aggregates(input: ParseStream, errors: &mut Vec<Error>) -> Vec<AggregateSpec> {
     let mut aggs = Vec::new();
     while !input.is_empty() {
-        let outer_attrs = input.call(syn::Attribute::parse_outer)?;
-        let ident: Ident = input.parse()?;
-        let _: Token![:] = input.parse()?;
-        let ty: Type = input.parse()?;
-        let _: Token![=] = input.parse()?;
-
-        let func: Ident = input.parse()?;
-        let content;
-        syn::parenthesized!(content in input);
-
-        let func_str = func.to_string();
-        let (kind, relationship, filter) = match func_str.as_str() {
-            "count" => {
-                let relationship: Ident = content.parse()?;
-                let filter = parse_optional_aggregate_filter(&content)?;
-                (AggregateKindSpec::Count, relationship, filter)
-            }
-            "exists" => {
-                let relationship: Ident = content.parse()?;
-                let filter = parse_optional_aggregate_filter(&content)?;
-                (AggregateKindSpec::Exists, relationship, filter)
-            }
-            "first" => {
-                let relationship: Ident = content.parse()?;
-                let _: Token![,] = content.parse()?;
-                let field: Ident = content.parse()?;
-                let filter = parse_optional_aggregate_filter(&content)?;
-                (AggregateKindSpec::First { field }, relationship, filter)
-            }
-            "sum" => {
-                let relationship: Ident = content.parse()?;
-                let _: Token![,] = content.parse()?;
-                let field: Ident = content.parse()?;
-                let filter = parse_optional_aggregate_filter(&content)?;
-                (AggregateKindSpec::Sum { field }, relationship, filter)
-            }
-            other => {
-                return Err(Error::new_spanned(
-                    func,
-                    format!(
-                        "unknown aggregate function `{other}`, expected `count`, `exists`, `first`, or `sum`"
-                    ),
-                ));
-            }
-        };
-
-        if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
-        } else if input.peek(Token![;]) {
-            let _: Token![;] = input.parse()?;
+        if input.peek(Token![,]) || input.peek(Token![;]) {
+            let _ = input.parse::<proc_macro2::TokenTree>();
+            continue;
         }
-
-        aggs.push(AggregateSpec {
-            outer_attrs,
-            ident,
-            ty,
-            relationship,
-            kind,
-            filter,
-        });
+        let fork = input.fork();
+        match parse_one_aggregate(&fork, errors) {
+            Ok(agg) => {
+                input.advance_to(&fork);
+                aggs.push(agg);
+            }
+            Err(e) => {
+                errors.push(e);
+                input.advance_to(&fork);
+                super::recover::skip_item(input);
+            }
+        }
     }
-    Ok(aggs)
+    aggs
+}
+
+fn parse_one_aggregate(input: ParseStream, errors: &mut Vec<Error>) -> Result<AggregateSpec> {
+    let outer_attrs = input.call(syn::Attribute::parse_outer)?;
+    let ident: Ident = input.parse()?;
+    let _: Token![:] = input.parse()?;
+    let ty: Type = input.parse()?;
+    let _: Token![=] = input.parse()?;
+
+    let func: Ident = input.parse()?;
+    let content;
+    syn::parenthesized!(content in input);
+
+    let func_str = func.to_string();
+    let (kind, relationship, filter) = match func_str.as_str() {
+        "count" => {
+            let relationship: Ident = content.parse()?;
+            let filter = parse_optional_aggregate_filter(&content)?;
+            (AggregateKindSpec::Count, relationship, filter)
+        }
+        "exists" => {
+            let relationship: Ident = content.parse()?;
+            let filter = parse_optional_aggregate_filter(&content)?;
+            (AggregateKindSpec::Exists, relationship, filter)
+        }
+        "first" => {
+            let relationship: Ident = content.parse()?;
+            let _: Token![,] = content.parse()?;
+            let field: Ident = content.parse()?;
+            let filter = parse_optional_aggregate_filter(&content)?;
+            (AggregateKindSpec::First { field }, relationship, filter)
+        }
+        "sum" => {
+            let relationship: Ident = content.parse()?;
+            let _: Token![,] = content.parse()?;
+            let field: Ident = content.parse()?;
+            let filter = parse_optional_aggregate_filter(&content)?;
+            (AggregateKindSpec::Sum { field }, relationship, filter)
+        }
+        other => {
+            return Err(Error::new_spanned(
+                func,
+                format!(
+                    "unknown aggregate function `{other}`, expected `count`, `exists`, `first`, or `sum`"
+                ),
+            ));
+        }
+    };
+
+    require_semi(input, errors, "aggregate");
+
+    Ok(AggregateSpec {
+        outer_attrs,
+        ident,
+        ty,
+        relationship,
+        kind,
+        filter,
+    })
 }
 
 pub fn parse_optional_aggregate_filter(

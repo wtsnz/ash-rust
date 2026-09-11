@@ -133,6 +133,10 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
                     }
                     let val_str = if flags_content.peek(syn::LitStr) {
                         let s: syn::LitStr = flags_content.parse()?;
+                        errors.push(Error::new_spanned(
+                            &s,
+                            "use `on_delete: cascade`, not a string literal",
+                        ));
                         s.value()
                     } else {
                         let id: Ident = flags_content.parse()?;
@@ -177,9 +181,15 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
     }
 
     if input.peek(Token![,]) {
+        errors.push(Error::new(
+            input.span(),
+            "use `;` after relationship, not `,`",
+        ));
         let _: Token![,] = input.parse()?;
     } else if input.peek(Token![;]) {
         let _: Token![;] = input.parse()?;
+    } else {
+        errors.push(Error::new(input.span(), "expected `;` after relationship"));
     }
 
     let (dest, struct_field_ty) = match kind {

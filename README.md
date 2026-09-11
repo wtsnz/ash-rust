@@ -71,38 +71,39 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    resource Task;
-    table "tasks";
+    Task {
+        table "tasks";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        completed: bool,
-        priority: i64,
-        version: i64 [version], // Optimistic concurrency control
-    }
-
-    actions {
-        create create {
-            primary;
-            accept [title]; // DRY: inferred from attributes
-            change set_attribute(completed, false);
-            change set_attribute(priority, 1);
-            validation present(title);
-            validation string_length(title, min: 3, max: 100);
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            completed: bool;
+            priority: i64;
+            version: i64 [version];
         }
 
-        read read {
-            primary;
-        }
+        actions {
+            create create {
+                primary;
+                accept [title];
+                change set(completed = false);
+                change set(priority = 1);
+                validate present(title);
+                validate string_length(title, min: 3, max: 100);
+            }
 
-        update complete {
-            change set_attribute(completed, true);
-        }
+            read read {
+                primary;
+            }
 
-        update update_priority {
-            accept [priority];
-            validation numericality(priority, min: 1, max: 5);
+            update complete {
+                change set(completed = true);
+            }
+
+            update update_priority {
+                accept [priority];
+                validate numericality(priority, min: 1, max: 5);
+            }
         }
     }
 }

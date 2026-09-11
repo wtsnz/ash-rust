@@ -17,12 +17,12 @@ use uuid::Uuid;
 
 #[authentication]
 ash_core::resource! {
-    resource Account;
-    table "accounts";
+    Account {
+        table "accounts";
 
     attributes {
-        id: Uuid [pk],
-        email: String,
+        id: Uuid [pk];
+        email: String;
     }
 
     authentication {
@@ -41,7 +41,7 @@ ash_core::resource! {
     actions {
         read read { primary; }
     }
-}
+    }}
 
 #[derive(Clone)]
 struct AppState {

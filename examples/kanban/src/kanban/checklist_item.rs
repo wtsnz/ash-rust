@@ -3,19 +3,19 @@ use ash_core::resource;
 use uuid::Uuid;
 
 resource! {
-    resource ChecklistItem;
-    table "checklist_items";
+    ChecklistItem {
+        table "checklist_items";
 
     attributes {
-        id: Uuid [pk],
-        card_id: Uuid,
-        title: String,
-        completed: bool,
-        position: i64,
+        id: Uuid [pk];
+        card_id: Uuid;
+        title: String;
+        completed: bool;
+        position: i64;
     }
 
     relationships {
-        belongs_to card: Card [fk: card_id],
+        belongs_to card: Card [fk: card_id];
     }
 
     actions {
@@ -26,7 +26,7 @@ resource! {
         }
 
         read read {
-            primary
+            primary;
         }
 
         update toggle {
@@ -38,7 +38,7 @@ resource! {
 
     policies {
         policy always {
-            authorize_if always
+            authorize_if always;
         }
     }
-}
+    }}

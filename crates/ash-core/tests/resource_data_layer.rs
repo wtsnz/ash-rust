@@ -9,14 +9,14 @@ pub mod sqlite_user {
     use super::*;
 
     resource! {
-        resource User;
+        User {
         table "users";
-        data_layer sqlite;
+        store SqliteStore;
 
         attributes {
-            id: Uuid [pk],
-            email: String,
-            name: String,
+            id: Uuid [pk];
+            email: String;
+            name: String;
         }
 
         actions {
@@ -29,21 +29,21 @@ pub mod sqlite_user {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod memory_session {
     use super::*;
 
     resource! {
-        resource Session;
+        Session {
         table "sessions";
-        data_layer memory;
+        store MemoryStore;
 
         attributes {
-            id: Uuid [pk],
-            token: String,
-            user_id: Uuid,
+            id: Uuid [pk];
+            token: String;
+            user_id: Uuid;
         }
 
         actions {
@@ -56,7 +56,7 @@ pub mod memory_session {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub use memory_session::Session;

@@ -16,17 +16,17 @@ pub mod item {
     use super::*;
 
     resource! {
-        resource Item;
+        Item {
         table "items";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
-            code: String,
-            price: i64,
-            quantity: i64,
-            views: i64 = 0,
-            nickname: Option<String>,
+            id: Uuid [pk];
+            name: String;
+            code: String;
+            price: i64;
+            quantity: i64;
+            views: i64 = 0;
+            nickname: Option<String>;
         }
 
         calculations {
@@ -50,7 +50,7 @@ pub mod item {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub use item::Item;

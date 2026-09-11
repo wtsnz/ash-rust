@@ -4,60 +4,66 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    resource Document;
+Document {
     table "documents";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        author_id: Uuid,
-        classified: bool [default: false],
-        confidential_notes: Option<String>,
+actor {
+    role: String;
+    status: String;
+    clearance: String;
+}
+
+attributes {
+    id: Uuid [pk];
+    title: String;
+    author_id: Uuid;
+    classified: bool [default: false];
+    confidential_notes: Option<String>;
+}
+
+actions {
+    create create {
+        primary;
+        accept [title, author_id, classified, confidential_notes];
     }
 
-    actions {
-        create create {
-            primary true;
-            accept [title, author_id, classified, confidential_notes];
-        }
-
-        read read {
-            primary true;
-        }
-
-        update update {
-            primary true;
-            accept [title, classified, confidential_notes];
-        }
+    read read {
+        primary;
     }
 
-    policies {
-        // 1. Bypass block: Admins bypass all subsequent restrictions completely
-        bypass {
-            authorize_if actor_attribute_equals(role, "admin");
-        }
-
-        // 2. Hard forbid: Banned actors can NEVER read or write anything, even if they are the author
-        policy {
-            forbid_if actor_attribute_equals(status, "banned");
-            authorize_if relates_to_actor(author_id);
-        }
-
-        // 3. Negative check: Only unclassified documents can be accessed unless actor has security clearance
-        policy action_type(read) {
-            forbid_unless relates_to_actor(author_id);
-            authorize_unless eq(classified, true);
-        }
-    }
-
-    field_policies {
-        // 4. Field level policy: confidential_notes is hidden if the actor is not security officer
-        field confidential_notes {
-            forbid_unless actor_attribute_equals(clearance, "top_secret");
-            authorize_if always;
-        }
+    update update {
+        primary;
+        accept [title, classified, confidential_notes];
     }
 }
+
+policies {
+    // 1. Bypass block: Admins bypass all subsequent restrictions completely
+    bypass {
+        authorize_if actor_attribute_equals(role, "admin");
+    }
+
+    // 2. Hard forbid: Banned actors can NEVER read or write anything, even if they are the author
+    policy {
+        forbid_if actor_attribute_equals(status, "banned");
+        authorize_if relates_to_actor(author_id);
+    }
+
+    // 3. Negative check: Only unclassified documents can be accessed unless actor has security clearance
+    policy action_type(read) {
+        forbid_unless relates_to_actor(author_id);
+        authorize_unless eq(classified, true);
+    }
+}
+
+field_policies {
+    // 4. Field level policy: confidential_notes is hidden if the actor is not security officer
+    field confidential_notes {
+        forbid_unless actor_attribute_equals(clearance, "top_secret");
+        authorize_if always;
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_bypass_policy_in_memory() {
@@ -93,7 +99,11 @@ async fn test_bypass_policy_in_memory() {
     let admin_ctx = ctx.with_actor(admin_actor);
 
     let admin_docs = Document::query(&admin_ctx).all().await.unwrap();
-    assert_eq!(admin_docs.len(), 1, "Admin bypasses check and sees all documents");
+    assert_eq!(
+        admin_docs.len(),
+        1,
+        "Admin bypasses check and sees all documents"
+    );
     assert_eq!(admin_docs[0].id, doc.id);
 
     // Admin can also update, bypassing author ownership check
@@ -130,7 +140,11 @@ async fn test_forbid_if_blocks_even_author() {
     let banned_ctx = ctx.with_actor(banned_author);
 
     let banned_docs = Document::query(&banned_ctx).all().await.unwrap();
-    assert_eq!(banned_docs.len(), 0, "Banned author is forbidden from querying");
+    assert_eq!(
+        banned_docs.len(),
+        0,
+        "Banned author is forbidden from querying"
+    );
 
     let write_res = Document::update(&banned_ctx, doc.id)
         .title("Hacked Title")
@@ -168,7 +182,10 @@ async fn test_field_policy_forbid_unless() {
             .with_attr("clearance", "standard"),
     );
     let read_doc = Document::get(&author_ctx, doc.id).await.unwrap();
-    assert_eq!(read_doc.confidential_notes, None, "confidential_notes should be redacted");
+    assert_eq!(
+        read_doc.confidential_notes, None,
+        "confidential_notes should be redacted"
+    );
 
     // Officer with top_secret clearance sees confidential_notes intact
     let officer_ctx = ctx.with_actor(

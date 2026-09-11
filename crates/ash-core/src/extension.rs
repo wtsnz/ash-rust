@@ -23,23 +23,24 @@
 //! Inside `resource!`, you can add one or more `extend` blocks:
 //! ```text
 //! resource! {
-//!     resource Product;
+//!     Product {
 //!     table "products";
 //!
 //!     attributes {
-//!         id: Uuid [pk],
-//!         name: String,
-//!         price: i64,
+//!         id: Uuid [pk];
+//!         name: String;
+//!         price: i64;
 //!     }
 //!
 //!     actions {
-//!         create create { primary }
-//!         read read { primary }
+//!         create create { primary; }
+//!         read read { primary; }
 //!     }
 //!
 //!     // Forwarded verbatim to the external macro!
 //!     extend my_audit::audit! {
 //!         track: [price];
+//!     }
 //!     }
 //! }
 //! ```
@@ -71,12 +72,12 @@
 //! ```text
 //! #[ash_state_machine::state_machine]
 //! resource! {
-//!     resource Order;
+//!     Order {
 //!     table "orders";
 //!
 //!     attributes {
-//!         id: Uuid [pk],
-//!         amount: i64,
+//!         id: Uuid [pk];
+//!         amount: i64;
 //!         // `status` is auto-injected by the state machine transformer!
 //!     }
 //!
@@ -87,8 +88,9 @@
 //!     }
 //!
 //!     actions {
-//!         create create { primary }
+//!         create create { primary; }
 //!         update pay {} // `status = "paid"` change is auto-injected!
+//!     }
 //!     }
 //! }
 //! ```

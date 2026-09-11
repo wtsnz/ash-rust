@@ -19,7 +19,7 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
   - Rich expressions in calculations (`total = price * quantity`, `display = coalesce(...)`, `badge = if_else(...)`).
   - Custom action arguments (`argument name: Type`), validations (`present`, `string_length`, `numericality`, `one_of`), and changes (`set`, `set_new`).
   - Optimistic locking configuration (`[version]`).
-  - Per-resource data layer declarations (`data_layer sqlite;` or `data_layer memory;`).
+  - Per-resource storage (`store SqliteStore;` / `MemoryStore` / `PostgresStore`, or a custom `StoreTag`).
   - Extension token forwarding (`extend <macro>! { ... }`) for zero-coupling 3rd-party integrations (Pattern 1).
 - **`domain!` Macro**:
   - Groups related resources into a bounded context.
@@ -46,33 +46,34 @@ use ash_core::resource;
 use uuid::Uuid;
 
 resource! {
-    resource Product;
-    table "products";
+    Product {
+        table "products";
 
-    attributes {
-        id: Uuid [pk],
-        sku: String,
-        name: String,
-        price: i64,
-        description: Option<String>,
-        active: bool,
-    }
-
-    actions {
-        create create {
-            primary;
-            accept [sku, name, price, description];
-            change set(active = true);
-            validate present(sku);
-            validate numericality(price, min = 1);
+        attributes {
+            id: Uuid [pk];
+            sku: String;
+            name: String;
+            price: i64;
+            description: Option<String>;
+            active: bool;
         }
 
-        read read {
-            primary;
-        }
+        actions {
+            create create {
+                primary;
+                accept [sku, name, price, description];
+                change set(active = true);
+                validate present(sku);
+                validate numericality(price, min: 1);
+            }
 
-        update deactivate {
-            change set(active = false);
+            read read {
+                primary;
+            }
+
+            update deactivate {
+                change set(active = false);
+            }
         }
     }
 }

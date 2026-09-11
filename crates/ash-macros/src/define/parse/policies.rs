@@ -1,11 +1,12 @@
 use syn::parse::ParseStream;
+use syn::parse::discouraged::Speculative;
 use syn::{BinOp, Error, Expr, ExprBinary, ExprCall, ExprParen, ExprPath, Ident, Result, Token};
 
 use crate::define::ast::{
     ActionKind, FieldPolicySpec, PolicyCheckExpr, PolicyEffectSpec, PolicySpec, PolicyWhenSpec,
 };
 
-use super::helpers::{expr_to_field_ident, expr_to_lit};
+use super::helpers::{expr_to_field_ident_recover, expr_to_lit, require_semi};
 
 macro_rules! parse_braced {
     ($input:expr, $content:ident) => {
@@ -14,82 +15,151 @@ macro_rules! parse_braced {
     };
 }
 
-pub fn parse_policies(input: ParseStream) -> Result<Vec<PolicySpec>> {
+pub fn parse_policies(input: ParseStream, errors: &mut Vec<Error>) -> Vec<PolicySpec> {
     let mut policies = Vec::new();
 
     while !input.is_empty() {
-        let policy_kw: Ident = input.parse()?;
-        let (bypass, whens) = if policy_kw == "policy" {
-            let whens = if input.peek(syn::token::Brace) {
-                vec![PolicyWhenSpec::Always]
-            } else {
-                parse_whens(input)?
-            };
-            (false, whens)
-        } else if policy_kw == "bypass" {
-            let whens = if input.peek(syn::token::Brace) {
-                vec![PolicyWhenSpec::Always]
-            } else {
-                parse_whens(input)?
-            };
-            (true, whens)
-        } else {
-            const POLICY_DECLS: &[&str] = &["policy", "bypass"];
-            return Err(crate::ast_helpers::unknown_ident_error(
-                &policy_kw,
-                POLICY_DECLS,
-                "policy declaration",
-            ));
-        };
-
-        parse_braced!(input, checks_block);
-        let mut checks = Vec::new();
-
-        while !checks_block.is_empty() {
-            checks.push(parse_policy_effect(&checks_block)?);
+        if input.peek(Token![,]) || input.peek(Token![;]) {
+            let _ = input.parse::<proc_macro2::TokenTree>();
+            continue;
         }
-
-        super::helpers::optional_semi(input)?;
-
-        policies.push(PolicySpec {
-            bypass,
-            whens,
-            checks,
-        });
+        let fork = input.fork();
+        match parse_one_policy(&fork, errors) {
+            Ok(policy) => {
+                input.advance_to(&fork);
+                policies.push(policy);
+            }
+            Err(e) => {
+                errors.push(e);
+                input.advance_to(&fork);
+                super::recover::skip_policy(input);
+            }
+        }
     }
 
-    Ok(policies)
+    policies
 }
 
-pub fn parse_field_policies(input: ParseStream) -> Result<Vec<FieldPolicySpec>> {
+fn parse_one_policy(input: ParseStream, errors: &mut Vec<Error>) -> Result<PolicySpec> {
+    let policy_kw: Ident = input.parse()?;
+    let (bypass, whens) = if policy_kw == "policy" {
+        let whens = if input.peek(syn::token::Brace) {
+            vec![PolicyWhenSpec::Always]
+        } else {
+            parse_whens(input)?
+        };
+        (false, whens)
+    } else if policy_kw == "bypass" {
+        let whens = if input.peek(syn::token::Brace) {
+            vec![PolicyWhenSpec::Always]
+        } else {
+            parse_whens(input)?
+        };
+        (true, whens)
+    } else {
+        const POLICY_DECLS: &[&str] = &["policy", "bypass"];
+        return Err(crate::ast_helpers::unknown_ident_error(
+            &policy_kw,
+            POLICY_DECLS,
+            "policy declaration",
+        ));
+    };
+
+    parse_braced!(input, checks_block);
+    let mut checks = Vec::new();
+
+    while !checks_block.is_empty() {
+        if checks_block.peek(Token![;]) || checks_block.peek(Token![,]) {
+            let _ = checks_block.parse::<proc_macro2::TokenTree>();
+            continue;
+        }
+        let fork = checks_block.fork();
+        match parse_policy_effect(&fork, errors) {
+            Ok(check) => {
+                checks_block.advance_to(&fork);
+                checks.push(check);
+            }
+            Err(e) => {
+                errors.push(e);
+                checks_block.advance_to(&fork);
+                super::recover::skip_item(&checks_block);
+            }
+        }
+    }
+
+    let _ = input.parse::<Token![;]>();
+
+    Ok(PolicySpec {
+        bypass,
+        whens,
+        checks,
+    })
+}
+
+pub fn parse_field_policies(input: ParseStream, errors: &mut Vec<Error>) -> Vec<FieldPolicySpec> {
     let mut fps = Vec::new();
 
     while !input.is_empty() {
-        let kw: Ident = input.parse()?;
-        if kw != "field" {
-            return Err(Error::new_spanned(kw, "expected `field`"));
+        if input.peek(Token![,]) || input.peek(Token![;]) {
+            let _ = input.parse::<proc_macro2::TokenTree>();
+            continue;
         }
-        let field: Ident = input.parse()?;
-        parse_braced!(input, checks_block);
-        let mut checks = Vec::new();
-        while !checks_block.is_empty() {
-            checks.push(parse_policy_effect(&checks_block)?);
+        let fork = input.fork();
+        match parse_one_field_policy(&fork, errors) {
+            Ok(fp) => {
+                input.advance_to(&fork);
+                fps.push(fp);
+            }
+            Err(e) => {
+                errors.push(e);
+                input.advance_to(&fork);
+                super::recover::skip_field_policy(input);
+            }
         }
-        super::helpers::optional_semi(input)?;
-        fps.push(FieldPolicySpec { field, checks });
     }
 
-    Ok(fps)
+    fps
 }
 
-pub fn parse_policy_effect(checks_block: ParseStream) -> Result<PolicyEffectSpec> {
+fn parse_one_field_policy(input: ParseStream, errors: &mut Vec<Error>) -> Result<FieldPolicySpec> {
+    let kw: Ident = input.parse()?;
+    if kw != "field" {
+        return Err(Error::new_spanned(kw, "expected `field`"));
+    }
+    let field: Ident = input.parse()?;
+    parse_braced!(input, checks_block);
+    let mut checks = Vec::new();
+    while !checks_block.is_empty() {
+        if checks_block.peek(Token![;]) || checks_block.peek(Token![,]) {
+            let _ = checks_block.parse::<proc_macro2::TokenTree>();
+            continue;
+        }
+        let fork = checks_block.fork();
+        match parse_policy_effect(&fork, errors) {
+            Ok(check) => {
+                checks_block.advance_to(&fork);
+                checks.push(check);
+            }
+            Err(e) => {
+                errors.push(e);
+                checks_block.advance_to(&fork);
+                super::recover::skip_item(&checks_block);
+            }
+        }
+    }
+    let _ = input.parse::<Token![;]>();
+    Ok(FieldPolicySpec { field, checks })
+}
+
+pub fn parse_policy_effect(
+    checks_block: ParseStream,
+    errors: &mut Vec<Error>,
+) -> Result<PolicyEffectSpec> {
     let auth_ident: Ident = checks_block.parse()?;
     let auth_str = auth_ident.to_string();
     let check_expr: Expr = checks_block.parse()?;
-    let check = parse_check_expr(&check_expr)?;
-    if checks_block.peek(Token![;]) {
-        let _: Token![;] = checks_block.parse()?;
-    }
+    let check = parse_check_expr(&check_expr, errors)?;
+    require_semi(checks_block, errors, "policy check");
     match auth_str.as_str() {
         "authorize_if" => Ok(PolicyEffectSpec::AuthorizeIf(check)),
         "authorize_unless" => Ok(PolicyEffectSpec::AuthorizeUnless(check)),
@@ -165,7 +235,7 @@ pub fn parse_whens(input: ParseStream) -> Result<Vec<PolicyWhenSpec>> {
     Ok(whens)
 }
 
-pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
+pub fn parse_check_expr(expr: &Expr, errors: &mut Vec<Error>) -> Result<PolicyCheckExpr> {
     match expr {
         Expr::Path(ExprPath { path, .. }) if path.is_ident("always") => Ok(PolicyCheckExpr::Always),
         Expr::Path(ExprPath { path, .. }) if path.is_ident("actor_present") => {
@@ -186,25 +256,25 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
                     let arg = args
                         .first()
                         .ok_or_else(|| Error::new_spanned(args, "expected field"))?;
-                    let field = expr_to_field_ident(arg)?;
+                    let field = expr_to_field_ident_recover(arg, errors)?;
                     Ok(PolicyCheckExpr::RelatesToActor(field))
                 }
                 "is_nil" => {
                     let arg = args
                         .first()
                         .ok_or_else(|| Error::new_spanned(args, "expected field"))?;
-                    let field = expr_to_field_ident(arg)?;
+                    let field = expr_to_field_ident_recover(arg, errors)?;
                     Ok(PolicyCheckExpr::IsNil(field))
                 }
                 "actor_eq" | "actor_attribute_equals" => {
                     if args.len() == 1 {
                         if let Some(Expr::Assign(assign)) = args.first() {
-                            let attr = expr_to_field_ident(&assign.left)?;
+                            let attr = expr_to_field_ident_recover(&assign.left, errors)?;
                             let value = expr_to_lit(&assign.right)?;
                             return Ok(PolicyCheckExpr::ActorAttributeEquals { attr, value });
                         }
                     } else if args.len() == 2 {
-                        let attr = expr_to_field_ident(&args[0])?;
+                        let attr = expr_to_field_ident_recover(&args[0], errors)?;
                         let value = expr_to_lit(&args[1])?;
                         return Ok(PolicyCheckExpr::ActorAttributeEquals { attr, value });
                     }
@@ -216,12 +286,12 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
                 "eq" => {
                     if args.len() == 1 {
                         if let Some(Expr::Assign(assign)) = args.first() {
-                            let field = expr_to_field_ident(&assign.left)?;
+                            let field = expr_to_field_ident_recover(&assign.left, errors)?;
                             let value = expr_to_lit(&assign.right)?;
                             return Ok(PolicyCheckExpr::Eq { field, value });
                         }
                     } else if args.len() == 2 {
-                        let field = expr_to_field_ident(&args[0])?;
+                        let field = expr_to_field_ident_recover(&args[0], errors)?;
                         let value = expr_to_lit(&args[1])?;
                         return Ok(PolicyCheckExpr::Eq { field, value });
                     }
@@ -258,11 +328,11 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
             ..
         }) => {
             let mut parts = Vec::new();
-            match parse_check_expr(left)? {
+            match parse_check_expr(left, errors)? {
                 PolicyCheckExpr::And(sub) => parts.extend(sub),
                 other => parts.push(other),
             }
-            match parse_check_expr(right)? {
+            match parse_check_expr(right, errors)? {
                 PolicyCheckExpr::And(sub) => parts.extend(sub),
                 other => parts.push(other),
             }
@@ -275,17 +345,17 @@ pub fn parse_check_expr(expr: &Expr) -> Result<PolicyCheckExpr> {
             ..
         }) => {
             let mut parts = Vec::new();
-            match parse_check_expr(left)? {
+            match parse_check_expr(left, errors)? {
                 PolicyCheckExpr::Or(sub) => parts.extend(sub),
                 other => parts.push(other),
             }
-            match parse_check_expr(right)? {
+            match parse_check_expr(right, errors)? {
                 PolicyCheckExpr::Or(sub) => parts.extend(sub),
                 other => parts.push(other),
             }
             Ok(PolicyCheckExpr::Or(parts))
         }
-        Expr::Paren(ExprParen { expr, .. }) => parse_check_expr(expr),
+        Expr::Paren(ExprParen { expr, .. }) => parse_check_expr(expr, errors),
         other => Err(Error::new_spanned(
             other,
             "unsupported policy check; expected relates_to, is_nil, actor_eq, actor_present, always, &&, or ||",

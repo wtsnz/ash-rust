@@ -6,49 +6,49 @@ use ash_core::resource;
 use uuid::Uuid;
 
 resource! {
-    resource Card;
-    table "cards";
+    Card {
+        table "cards";
 
     attributes {
-        id: Uuid [pk],
-        board_id: Uuid,
-        list_id: Uuid,
-        title: String,
-        description: Option<String>,
-        position: i64,
-        archived: bool,
-        creator_id: Option<Uuid>,
-        assignee_id: Option<Uuid>,
+        id: Uuid [pk];
+        board_id: Uuid;
+        list_id: Uuid;
+        title: String;
+        description: Option<String>;
+        position: i64;
+        archived: bool;
+        creator_id: Option<Uuid>;
+        assignee_id: Option<Uuid>;
     }
 
     relationships {
-        belongs_to list: List [fk: list_id],
-        belongs_to board: Board [fk: board_id],
-        has_many checklist_items: ChecklistItem [fk: card_id],
-        has_many comments: Comment [fk: card_id],
+        belongs_to list: List [fk: list_id];
+        belongs_to board: Board [fk: board_id];
+        has_many checklist_items: ChecklistItem [fk: card_id];
+        has_many comments: Comment [fk: card_id];
     }
 
     calculations {
-        title_length: Option<i64> = string_length(title),
+        title_length: Option<i64> = string_length(title);
     }
 
     aggregates {
-        checklist_count: Option<i64> = count(checklist_items),
-        completed_checklist_count: Option<i64> = count(checklist_items, filter: completed == true),
-        comment_count: Option<i64> = count(comments),
+        checklist_count: Option<i64> = count(checklist_items);
+        completed_checklist_count: Option<i64> = count(checklist_items, filter: completed == true);
+        comment_count: Option<i64> = count(comments);
     }
 
     actions {
         create create {
             accept [board_id, list_id, title, description, position];
             validate present(title);
-            validate string_length(title, min = 1);
+            validate string_length(title, min: 1);
             change set(archived = false);
             change relate_actor(creator_id);
         }
 
         read read {
-            primary
+            primary;
         }
 
         update update_details {
@@ -70,7 +70,7 @@ resource! {
 
     policies {
         policy always {
-            authorize_if always
+            authorize_if always;
         }
     }
-}
+    }}

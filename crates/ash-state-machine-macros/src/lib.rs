@@ -113,7 +113,9 @@ impl Parse for StateMachineBlock {
                 other => {
                     return Err(Error::new_spanned(
                         key,
-                        format!("unknown state_machine directive `{other}`, expected `state_attribute`, `initial`, or `transition`"),
+                        format!(
+                            "unknown state_machine directive `{other}`, expected `state_attribute`, `initial`, or `transition`"
+                        ),
                     ));
                 }
             }
@@ -148,61 +150,58 @@ struct ResourceDslInput {
     state_machine: Option<StateMachineBlock>,
 }
 
+const DSL_SECTIONS: &[&str] = &[
+    "table",
+    "attributes",
+    "relationships",
+    "calculations",
+    "aggregates",
+    "actions",
+    "policies",
+    "field_policies",
+    "extensions",
+    "notifiers",
+    "extend",
+    "optimistic_lock",
+    "identities",
+    "embedded",
+    "data_layer",
+    "store",
+    "timestamps",
+    "multitenancy",
+    "actor",
+];
+
 impl Parse for ResourceDslInput {
     fn parse(input: ParseStream) -> Result<Self> {
         let outer_attrs = input.call(syn::Attribute::parse_outer)?;
-        let mut resource_ident = None;
-        let mut sections = Vec::new();
-        let mut state_machine = None;
-
-        while !input.is_empty() {
-            let ident: Ident = input.parse()?;
-            if ident == "resource" {
-                let r: Ident = input.parse()?;
-                resource_ident = Some(r);
+        if input.peek(Ident) {
+            let fork = input.fork();
+            if let Ok(id) = fork.parse::<Ident>()
+                && id == "embedded"
+            {
+                let _: Ident = input.parse()?;
                 if input.peek(Token![;]) {
                     let _: Token![;] = input.parse()?;
                 }
-            } else if ident == "state_machine" {
-                let content;
-                syn::braced!(content in input);
-                let sm: StateMachineBlock = content.parse()?;
-                state_machine = Some(sm);
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
-            } else if input.peek(syn::token::Brace) {
-                let content;
-                syn::braced!(content in input);
-                let inner: TokenStream2 = content.parse()?;
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
-                sections.push(RawSection {
-                    name: ident,
-                    tokens: inner,
-                    has_brace: true,
-                });
-            } else {
-                // e.g. table "orders"; or optimistic_lock :version;
-                let mut tok_vec = Vec::new();
-                while !input.is_empty() && !input.peek(Token![;]) {
-                    tok_vec.push(input.parse::<proc_macro2::TokenTree>()?);
-                }
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
-                let tokens = tok_vec.into_iter().collect();
-                sections.push(RawSection {
-                    name: ident,
-                    tokens,
-                    has_brace: false,
-                });
             }
         }
 
+        let mut resource_ident = None;
+        let mut sections = Vec::new();
+        let mut state_machine = None;
+        parse_sm_dsl_body(
+            input,
+            &mut resource_ident,
+            &mut sections,
+            &mut state_machine,
+        )?;
+
         let resource_ident = resource_ident.ok_or_else(|| {
-            Error::new(proc_macro2::Span::call_site(), "missing `resource <Name>;`")
+            Error::new(
+                proc_macro2::Span::call_site(),
+                "expected `Name { ... }` resource header",
+            )
         })?;
 
         Ok(Self {
@@ -212,6 +211,64 @@ impl Parse for ResourceDslInput {
             state_machine,
         })
     }
+}
+
+fn parse_sm_dsl_body(
+    input: ParseStream,
+    resource_ident: &mut Option<Ident>,
+    sections: &mut Vec<RawSection>,
+    state_machine: &mut Option<StateMachineBlock>,
+) -> Result<()> {
+    while !input.is_empty() {
+        let ident: Ident = input.parse()?;
+        if ident == "resource" || ident == "name" {
+            let r: Ident = input.parse()?;
+            *resource_ident = Some(r);
+            if input.peek(Token![;]) {
+                let _: Token![;] = input.parse()?;
+            }
+        } else if ident == "state_machine" {
+            let content;
+            syn::braced!(content in input);
+            let sm: StateMachineBlock = content.parse()?;
+            *state_machine = Some(sm);
+            if input.peek(Token![;]) {
+                let _: Token![;] = input.parse()?;
+            }
+        } else if input.peek(syn::token::Brace) {
+            let content;
+            syn::braced!(content in input);
+            if resource_ident.is_none() && !DSL_SECTIONS.iter().any(|s| ident == *s) {
+                *resource_ident = Some(ident);
+                parse_sm_dsl_body(&content, resource_ident, sections, state_machine)?;
+            } else {
+                let inner: TokenStream2 = content.parse()?;
+                if input.peek(Token![;]) {
+                    let _: Token![;] = input.parse()?;
+                }
+                sections.push(RawSection {
+                    name: ident,
+                    tokens: inner,
+                    has_brace: true,
+                });
+            }
+        } else {
+            let mut tok_vec = Vec::new();
+            while !input.is_empty() && !input.peek(Token![;]) {
+                tok_vec.push(input.parse::<proc_macro2::TokenTree>()?);
+            }
+            if input.peek(Token![;]) {
+                let _: Token![;] = input.parse()?;
+            }
+            let tokens = tok_vec.into_iter().collect();
+            sections.push(RawSection {
+                name: ident,
+                tokens,
+                has_brace: false,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Pattern 2: Transformative Macro Decorator (`#[state_machine] resource! { ... }`)
@@ -259,15 +316,15 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
             let existing_tokens = &attr_sec.tokens;
             attr_sec.tokens = quote! {
                 #existing_tokens
-                #state_attr_ident: String,
+                #state_attr_ident: String;
             };
         }
     } else {
         dsl.sections.push(RawSection {
             name: format_ident!("attributes"),
             tokens: quote! {
-                id: ::uuid::Uuid [pk],
-                #state_attr_ident: String,
+                id: ::uuid::Uuid [pk];
+                #state_attr_ident: String;
             },
             has_brace: true,
         });
@@ -278,19 +335,17 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
     //    - For each transition: inject transition validation + change
     let actions_section_opt = dsl.sections.iter().find(|s| s.name == "actions");
     let mut actions: Vec<ActionBlock> = match actions_section_opt {
-        Some(act_sec) => {
-            syn::parse::Parser::parse2(
-                |input: syn::parse::ParseStream| {
-                    let mut list = Vec::new();
-                    while !input.is_empty() {
-                        list.push(input.parse::<ActionBlock>()?);
-                    }
-                    Ok(list)
-                },
-                act_sec.tokens.clone(),
-            )
-            .unwrap_or_default()
-        }
+        Some(act_sec) => syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream| {
+                let mut list = Vec::new();
+                while !input.is_empty() {
+                    list.push(input.parse::<ActionBlock>()?);
+                }
+                Ok(list)
+            },
+            act_sec.tokens.clone(),
+        )
+        .unwrap_or_default(),
         None => Vec::new(),
     };
 
@@ -447,7 +502,6 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
     }
 
     let outer_attrs = &dsl.outer_attrs;
-    let resource_stmt = quote! { resource #resource_ident; };
 
     // 5. Generate HasStateMachine implementation and can_<action> helper methods
     let transitions_tokens = sm.transitions.iter().map(|t| {
@@ -472,8 +526,9 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
     Ok(quote! {
         #(#outer_attrs)*
         ::ash_core::resource! {
-            #resource_stmt
-            #(#reconstructed_sections)*
+            #resource_ident {
+                #(#reconstructed_sections)*
+            }
         }
 
         impl ::ash_state_machine::HasStateMachine for #resource_ident {

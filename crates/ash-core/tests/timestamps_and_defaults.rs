@@ -11,16 +11,16 @@ pub mod article {
     use super::*;
 
     resource! {
-        resource Article;
+        Article {
         table "articles";
         timestamps;
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            status: String = "draft",
-            views: i64 = 0,
-            tracking_code: String [default_fn: generate_tracking_code],
+            id: Uuid [pk];
+            title: String;
+            status: String = "draft";
+            views: i64 = 0;
+            tracking_code: String [default_fn: generate_tracking_code];
         }
 
         actions {
@@ -38,7 +38,7 @@ pub mod article {
                 accept [title, status];
             }
         }
-    }
+    }}
 }
 pub use article::{Article, ArticleActions};
 
@@ -148,13 +148,12 @@ pub mod audit_log {
     use super::*;
 
     resource! {
-        embedded;
-        resource AuditLog;
+        embedded AuditLog {
         timestamps;
 
         attributes {
-            action: String,
-            severity: String = "info",
+            action: String;
+            severity: String = "info";
         }
 
         actions {
@@ -163,7 +162,7 @@ pub mod audit_log {
                 accept [action, severity];
             }
         }
-    }
+    }}
 }
 pub use audit_log::AuditLog;
 

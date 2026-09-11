@@ -56,13 +56,13 @@ macro_rules! searchable {
 
 // Define resource using Pattern 1 `extend` blocks
 resource! {
-    resource Product;
-    table "products";
+    Product {
+        table "products";
 
     attributes {
-        id: Uuid [pk],
-        title: String,
-        price: i64,
+        id: Uuid [pk];
+        title: String;
+        price: i64;
     }
 
     actions {
@@ -85,7 +85,7 @@ resource! {
     extend searchable! {
         index: "products_v1";
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_pattern1_extend_companion_traits_and_crud() {

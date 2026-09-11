@@ -1,23 +1,20 @@
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
-use syn::{Ident, Type};
+use syn::Ident;
 
-use crate::ast_helpers::{is_bool, is_i64, is_string, is_uuid, option_inner, pascal_case};
+use crate::ast_helpers::{option_inner, pascal_case};
 use crate::define::ast::{
-    ActionKind, AggregateKindSpec, CalculationExprSpec, ChangeSpec, PreparationSpec, RelType,
-    ResourceDefinition, ValidationSpec,
+    ActionKind, AggregateKindSpec, CalculationExprSpec, ChangeSpec, PolicyCheckExpr,
+    PolicyEffectSpec, PolicyWhenSpec, PreparationSpec, RelType, ResourceDefinition, ValidationSpec,
 };
 use quote::format_ident;
+use syn::spanned::Spanned;
 
 fn record_has_field(def: &ResourceDefinition, name: &Ident) -> bool {
     def.attributes.iter().any(|a| a.ident == *name)
         || def.calculations.iter().any(|c| c.ident == *name)
         || def.aggregates.iter().any(|a| a.ident == *name)
         || def.relationships.iter().any(|r| r.ident == *name)
-}
-
-fn is_plain_assignable_inner(ty: &Type) -> bool {
-    is_string(ty) || is_i64(ty) || is_bool(ty) || is_uuid(ty)
 }
 
 pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
@@ -87,14 +84,12 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 ChangeSpec::Set { field, value } => {
                     let attr = def.attributes.iter().find(|a| a.ident == *field);
                     match attr {
-                        Some(attr)
-                            if option_inner(&attr.ty).is_some_and(is_plain_assignable_inner) =>
-                        {
+                        Some(attr) if option_inner(&attr.ty).is_some() => {
                             field_probes.push(quote_spanned! { value.span() =>
                                 __ash_assert_assignable_optional(&__ash_record.#field, &#value);
                             });
                         }
-                        Some(attr) if is_plain_assignable_inner(&attr.ty) => {
+                        Some(_) => {
                             field_probes.push(quote_spanned! { value.span() =>
                                 __ash_assert_assignable(&__ash_record.#field, &#value);
                             });
@@ -106,12 +101,17 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         }
                     }
                 }
+                ChangeSpec::SetNew { field, value } => {
+                    field_probes.push(quote_spanned! { value.span() =>
+                        __ash_assert_assignable(&__ash_record.#field, &#value);
+                    });
+                }
                 ChangeSpec::SetFromArg { field, argument } => {
                     field_probes.push(quote_spanned! { argument.span() =>
                         __ash_assert_assignable(&__ash_record.#field, &#argument);
                     });
                 }
-                ChangeSpec::SetNew { field, .. } | ChangeSpec::RelateActor { field } => {
+                ChangeSpec::RelateActor { field } => {
                     field_probes.push(quote_spanned! { field.span() =>
                         let _ = &__ash_record.#field;
                     });
@@ -222,6 +222,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
 
 fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     let mut probes = Vec::new();
+    let resource = &def.resource;
 
     for rel in &def.relationships {
         let dest = &rel.dest;
@@ -271,6 +272,42 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
         probes.push(quote_spanned! { field.span() =>
             let _ = &__ash_record.#field;
         });
+        for check in &fp.checks {
+            collect_policy_check_probes(def, resource, check_ref(check), &mut probes);
+        }
+    }
+
+    for pol in &def.policies {
+        for when in &pol.whens {
+            if let PolicyWhenSpec::ActionName(name) = when {
+                let method = quote_spanned! { name.span() => #name };
+                let act = def.actions.iter().find(|a| a.name == *name);
+                let probe = match act.map(|a| a.kind) {
+                    Some(ActionKind::Read) => quote_spanned! { name.span() =>
+                        if false {
+                            let _ = #resource::query::<::ash_memory::Memory>;
+                        }
+                    },
+                    Some(ActionKind::Update) | Some(ActionKind::Destroy) => quote! {
+                        if false {
+                            let ctx: &::ash_core::Context<::ash_memory::Memory> = loop {};
+                            let rec: #resource = loop {};
+                            let _ = #resource::#method(ctx, rec);
+                        }
+                    },
+                    _ => quote! {
+                        if false {
+                            let ctx: &::ash_core::Context<::ash_memory::Memory> = loop {};
+                            let _ = #resource::#method(ctx);
+                        }
+                    },
+                };
+                probes.push(probe);
+            }
+        }
+        for check in &pol.checks {
+            collect_policy_check_probes(def, resource, check_ref(check), &mut probes);
+        }
     }
 
     for calc in &def.calculations {
@@ -292,6 +329,42 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     }
 
     probes
+}
+
+fn check_ref(effect: &PolicyEffectSpec) -> &PolicyCheckExpr {
+    match effect {
+        PolicyEffectSpec::AuthorizeIf(c)
+        | PolicyEffectSpec::AuthorizeUnless(c)
+        | PolicyEffectSpec::ForbidIf(c)
+        | PolicyEffectSpec::ForbidUnless(c) => c,
+    }
+}
+
+fn collect_policy_check_probes(
+    def: &ResourceDefinition,
+    _resource: &Ident,
+    check: &PolicyCheckExpr,
+    probes: &mut Vec<TokenStream>,
+) {
+    match check {
+        PolicyCheckExpr::ActorAttributeEquals { attr, value } => {
+            if let Some(actor) = &def.actor
+                && let Some(field) = actor.fields.iter().find(|f| f.name == *attr)
+            {
+                let ty = &field.ty;
+                probes.push(quote_spanned! { value.span() =>
+                    let __ash_actor_field: #ty = loop {};
+                    __ash_assert_assignable(&__ash_actor_field, &#value);
+                });
+            }
+        }
+        PolicyCheckExpr::And(parts) | PolicyCheckExpr::Or(parts) => {
+            for part in parts {
+                collect_policy_check_probes(def, _resource, part, probes);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_calc_field_probes(expr: &CalculationExprSpec, probes: &mut Vec<TokenStream>) {
@@ -383,17 +456,17 @@ mod tests {
     #[test]
     fn test_probe_emits_assignable_assert_for_set() {
         let def = parse_def(quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                status: String,
+                id: Uuid [pk];
+                status: String;
             }
             actions {
                 create open {
                     change set(status = "open");
                 }
             }
-        });
+        }});
         let out = expand_ide_probe(&def).to_string();
         assert!(
             out.contains("__ash_assert_assignable"),
@@ -405,10 +478,10 @@ mod tests {
     #[test]
     fn test_probe_emits_assignable_assert_for_set_from_arg() {
         let def = parse_def(quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                reason: String,
+                id: Uuid [pk];
+                reason: String;
             }
             actions {
                 create open {
@@ -416,7 +489,7 @@ mod tests {
                     change set_from_arg(reason, reason_input);
                 }
             }
-        });
+        }});
         let out = expand_ide_probe(&def).to_string();
         assert!(
             out.contains("__ash_assert_assignable"),
@@ -428,11 +501,11 @@ mod tests {
     #[test]
     fn test_probe_covers_relationships_aggregates_identities_and_calculations() {
         let def = parse_def(quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                author_id: Uuid,
-                title: String,
+                id: Uuid [pk];
+                author_id: Uuid;
+                title: String;
             }
             relationships {
                 belongs_to author: User [fk: author_id];
@@ -456,7 +529,7 @@ mod tests {
             actions {
                 read read { primary; }
             }
-        });
+        }});
         let out = expand_ide_probe(&def).to_string();
         assert!(out.contains("author_id"), "missing fk probe: {out}");
         assert!(out.contains("comments"), "missing aggregate rel: {out}");
@@ -478,9 +551,9 @@ mod tests {
     #[test]
     fn test_probe_emits_dest_fk_for_has_many() {
         let def = parse_def(quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
+                id: Uuid [pk];
             }
             relationships {
                 has_many comments: Comment [fk: ticket_id];
@@ -488,7 +561,7 @@ mod tests {
             actions {
                 read read { primary; }
             }
-        });
+        }});
         let out = expand_ide_probe(&def).to_string();
         assert!(out.contains("ticket_id"), "missing dest fk: {out}");
         assert!(out.contains("Comment"), "missing dest type: {out}");
@@ -501,21 +574,21 @@ mod tests {
     #[test]
     fn test_probe_covers_generic_action_inputs_and_run_expr() {
         let def = parse_def(quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
+                id: Uuid [pk];
             }
             actions {
                 generic summarize {
                     argument notes: String;
                     accept {
                         extra: String,
-                    }
+                    };
                     returns String;
                     run |input| async move { Ok(input.notes) };
                 }
             }
-        });
+        }});
         let out = expand_ide_probe(&def).to_string();
         assert!(out.contains("notes"), "missing generic arg: {out}");
         assert!(out.contains("extra"), "missing generic accept: {out}");

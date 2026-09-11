@@ -122,27 +122,28 @@ Inside `resource!`, you can add one or more `extend` blocks referencing any macr
 use ash_core::resource;
 
 resource! {
-    resource Product;
-    table "products";
+    Product {
+        table "products";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        price: i64,
-    }
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            price: i64;
+        }
 
-    actions {
-        create create { primary; accept { title: String, price: i64 } }
-        read read { primary; }
-    }
+        actions {
+            create create { primary; accept [title, price]; }
+            read read { primary; }
+        }
 
-    // Pattern 1: Forwarded to 3rd-party macro
-    extend audit_trail! {
-        track: [price];
-    }
+        // Pattern 1: Forwarded to 3rd-party macro
+        extend audit_trail! {
+            track: [price];
+        }
 
-    extend searchable! {
-        index: "products_v1";
+        extend searchable! {
+            index: "products_v1";
+        }
     }
 }
 ```
@@ -180,35 +181,36 @@ use ash_state_machine::state_machine;
 
 #[state_machine]
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
-    attributes {
-        id: Uuid [pk],
-        amount: i64,
-        // `status` is omitted; the transformer automatically injects it!
-    }
-
-    state_machine {
-        state_attribute status;
-        initial: "pending";
-        transition submit, from: ["pending"], to: "submitted";
-        transition pay, from: ["submitted"], to: "paid";
-        transition cancel, from: ["pending", "submitted"], to: "cancelled";
-    }
-
-    actions {
-        create create {
-            primary;
-            accept { amount: i64 }
+        attributes {
+            id: Uuid [pk];
+            amount: i64;
+            // `status` is omitted; the transformer automatically injects it!
         }
 
-        read read { primary; }
+        state_machine {
+            state_attribute status;
+            initial: "pending";
+            transition submit, from: ["pending"], to: "submitted";
+            transition pay, from: ["submitted"], to: "paid";
+            transition cancel, from: ["pending", "submitted"], to: "cancelled";
+        }
 
-        // Validations and state changes are injected automatically!
-        update submit {}
-        update pay {}
-        // Omitted actions (like cancel) are automatically synthesized!
+        actions {
+            create create {
+                primary;
+                accept [amount];
+            }
+
+            read read { primary; }
+
+            // Validations and state changes are injected automatically!
+            update submit {}
+            update pay {}
+            // Omitted actions (like cancel) are automatically synthesized!
+        }
     }
 }
 ```

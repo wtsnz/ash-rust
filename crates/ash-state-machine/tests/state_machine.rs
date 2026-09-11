@@ -37,13 +37,13 @@ static CANCEL_CHANGE: TransitionChange = TransitionChange::new("status", "cancel
 static DEFAULT_DRAFT_CHANGE: DefaultStateChange = DefaultStateChange::new("status", "draft");
 
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
     attributes {
-        id: Uuid [pk],
-        total: i64,
-        status: String,
+        id: Uuid [pk];
+        total: i64;
+        status: String;
     }
 
     extensions [
@@ -77,7 +77,7 @@ resource! {
             change custom(&CANCEL_CHANGE);
         }
     }
-}
+    }}
 
 impl HasStateMachine for Order {
     const STATE_MACHINE: StateMachineDef = ORDER_STATE_MACHINE;

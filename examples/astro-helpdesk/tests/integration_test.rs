@@ -1,8 +1,8 @@
-use std::process::Command;
-use astro_helpdesk::{build_app, emit_typescript_sdk, TicketActions};
+use astro_helpdesk::{TicketActions, build_app, emit_typescript_sdk};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use std::process::Command;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -50,7 +50,10 @@ async fn test_fullstack_helpdesk_server_crud() {
     assert_eq!(res.status(), StatusCode::OK);
     let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(body.get("errors").is_none(), "GraphQL query failed: {body:?}");
+    assert!(
+        body.get("errors").is_none(),
+        "GraphQL query failed: {body:?}"
+    );
 
     let tickets = body["data"]["listTickets"].as_array().unwrap();
     assert_eq!(tickets.len(), 3, "Expected 3 initial seeded tickets");
@@ -137,7 +140,9 @@ async fn test_fullstack_helpdesk_server_crud() {
     let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(
-        body["data"]["changeStatusTicket"]["result"]["status"].as_str().unwrap(),
+        body["data"]["changeStatusTicket"]["result"]["status"]
+            .as_str()
+            .unwrap(),
         "RESOLVED"
     );
 
@@ -225,14 +230,14 @@ async fn test_rust_resource_and_context_dsl() {
     let ticket = astro_helpdesk::Ticket::open(&ctx)
         .title("Flaky websocket disconnects in EU cluster")
         .description("Heartbeat latency spikes over 5000ms.")
-        .status("OPEN")
+        .status(astro_helpdesk::TicketStatus::Open)
         .priority(2i64)
         .author_id(rep.id)
         .await
         .expect("Failed to open ticket via Action DSL");
 
     assert_eq!(ticket.title, "Flaky websocket disconnects in EU cluster");
-    assert_eq!(ticket.status, "OPEN");
+    assert_eq!(ticket.status, astro_helpdesk::TicketStatus::Open);
     assert_eq!(ticket.priority, 2);
     assert_eq!(ticket.author_id, Some(rep.id));
 
@@ -249,11 +254,11 @@ async fn test_rust_resource_and_context_dsl() {
     // 4. Update ticket status using Instance Action DSL
     let updated = ticket
         .change_status(&ctx)
-        .status("IN_PROGRESS")
+        .status(astro_helpdesk::TicketStatus::InProgress)
         .await
         .expect("Failed to update status via Action DSL");
 
-    assert_eq!(updated.status, "IN_PROGRESS");
+    assert_eq!(updated.status, astro_helpdesk::TicketStatus::InProgress);
 
     // 5. Close/Destroy ticket using Instance Action DSL
     updated

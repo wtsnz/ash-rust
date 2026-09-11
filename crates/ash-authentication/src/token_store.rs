@@ -6,17 +6,17 @@ use uuid::Uuid;
 use crate::error::{AuthError, Result};
 
 ash_core::resource! {
-    resource AshToken;
-    table "ash_tokens";
+    AshToken {
+        table "ash_tokens";
 
     attributes {
-        id: Uuid [pk],
-        jti: String,
-        subject: Uuid,
-        purpose: String,
-        expires_at: i64,
-        revoked: bool = false,
-        extra: Option<String>,
+        id: Uuid [pk];
+        jti: String;
+        subject: Uuid;
+        purpose: String;
+        expires_at: i64;
+        revoked: bool = false;
+        extra: Option<String>;
     }
 
     actions {
@@ -38,7 +38,7 @@ ash_core::resource! {
             primary;
         }
     }
-}
+    }}
 
 /// Persistent token store backed by an Ash `DataLayer` (e.g. SQLite, PostgreSQL, Memory).
 #[derive(Clone)]

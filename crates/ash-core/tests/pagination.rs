@@ -4,13 +4,13 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    resource Article;
-    table "articles";
+    Article {
+        table "articles";
 
     attributes {
-        id: Uuid [pk],
-        title: String,
-        views: i64,
+        id: Uuid [pk];
+        title: String;
+        views: i64;
     }
 
     actions {
@@ -23,7 +23,7 @@ resource! {
             primary;
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_offset_pagination_in_memory() {

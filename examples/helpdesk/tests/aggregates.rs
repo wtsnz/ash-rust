@@ -11,24 +11,24 @@ mod order {
     use super::line_item::LineItem;
 
     resource! {
-        resource Order;
+        Order {
         table "orders";
 
         attributes {
-            id: Uuid [pk],
-            customer_name: String,
+            id: Uuid [pk];
+            customer_name: String;
         }
 
         relationships {
-            has_many line_items: LineItem [fk: order_id],
+            has_many line_items: LineItem [fk: order_id];
         }
 
         aggregates {
-            item_count: Option<i64> = count(line_items),
-            total_amount: Option<i64> = sum(line_items, amount),
-            paid_amount: Option<i64> = sum(line_items, amount, filter: status == "paid"),
-            has_items: Option<bool> = exists(line_items),
-            pending_item_sku: Option<String> = first(line_items, sku, filter: status == "pending"),
+            item_count: Option<i64> = count(line_items);
+            total_amount: Option<i64> = sum(line_items, amount);
+            paid_amount: Option<i64> = sum(line_items, amount, filter: status == "paid");
+            has_items: Option<bool> = exists(line_items);
+            pending_item_sku: Option<String> = first(line_items, sku, filter: status == "pending");
         }
 
         actions {
@@ -36,16 +36,16 @@ mod order {
                 accept [customer_name];
             }
             read read {
-                primary
+                primary;
             }
         }
 
         policies {
             policy always {
-                authorize_if always
+                authorize_if always;
             }
         }
-    }
+    }}
 }
 
 mod line_item {
@@ -55,19 +55,19 @@ mod line_item {
     use super::order::Order;
 
     resource! {
-        resource LineItem;
+        LineItem {
         table "line_items";
 
         attributes {
-            id: Uuid [pk],
-            order_id: Uuid,
-            sku: String,
-            amount: i64,
-            status: String,
+            id: Uuid [pk];
+            order_id: Uuid;
+            sku: String;
+            amount: i64;
+            status: String;
         }
 
         relationships {
-            belongs_to order: Order,
+            belongs_to order: Order;
         }
 
         actions {
@@ -75,16 +75,16 @@ mod line_item {
                 accept [order_id, sku, amount, status];
             }
             read read {
-                primary
+                primary;
             }
         }
 
         policies {
             policy always {
-                authorize_if always
+                authorize_if always;
             }
         }
-    }
+    }}
 }
 
 use line_item::LineItem;

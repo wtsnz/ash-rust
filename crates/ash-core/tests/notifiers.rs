@@ -17,14 +17,14 @@ const STATIC_NOTIFIER: SyncFnNotifier<fn(&Notification) -> ash_core::Result<()>>
     });
 
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
     attributes {
-        id: Uuid [pk],
-        customer: String,
-        amount: i64,
-        status: String,
+        id: Uuid [pk];
+        customer: String;
+        amount: i64;
+        status: String;
     }
 
     notifiers [
@@ -52,7 +52,7 @@ resource! {
             primary;
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_standalone_crud_notifications() {

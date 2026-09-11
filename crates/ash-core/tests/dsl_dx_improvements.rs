@@ -7,13 +7,13 @@ mod engineer {
 
     resource! {
         /// Engineer who can be assigned tickets
-        resource Engineer;
+        Engineer {
         table "engineers";
 
         attributes {
-            id: Uuid [pk],
+            id: Uuid [pk];
             /// Display name for the engineer
-            name: String,
+            name: String;
         }
 
         actions {
@@ -26,23 +26,23 @@ mod engineer {
                 primary;
             }
         }
-    }
+    }}
 }
 
 use engineer::Engineer;
 
 resource! {
     /// Ticket resource representation
-    resource Ticket;
-    table "tickets";
+    Ticket {
+        table "tickets";
 
     attributes {
-        id: Uuid [pk],
+        id: Uuid [pk];
         /// Short summary shown in the queue
-        title: String,
-        status: String,
-        assignee: Option<String>,
-        engineer_id: Option<Uuid>,
+        title: String;
+        status: String;
+        assignee: Option<String>;
+        engineer_id: Option<Uuid>;
     }
 
     relationships {
@@ -80,7 +80,7 @@ resource! {
             run |input| async move { Ok(input.notes) };
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_action_target_conversions() {
@@ -156,13 +156,13 @@ mod permissive {
     use super::*;
 
     resource! {
-        resource PermissiveTicket;
+        PermissiveTicket {
         table "permissive_tickets";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            status: String,
+            id: Uuid [pk];
+            title: String;
+            status: String;
         };
 
         relationships {};
@@ -189,7 +189,7 @@ mod permissive {
                 primary;
             };
         };
-    }
+    }}
 }
 
 use permissive::PermissiveTicket;
@@ -198,14 +198,14 @@ mod comment {
     use super::*;
 
     resource! {
-        resource Comment;
+        Comment {
         table "dx_comments";
 
         attributes {
-            id: Uuid [pk],
-            post_id: Uuid,
-            body: String,
-            amount: i64,
+            id: Uuid [pk];
+            post_id: Uuid;
+            body: String;
+            amount: i64;
         }
 
         actions {
@@ -217,7 +217,7 @@ mod comment {
                 primary;
             }
         }
-    }
+    }}
 }
 
 mod post {
@@ -225,12 +225,12 @@ mod post {
     use super::*;
 
     resource! {
-        resource Post;
+        Post {
         table "dx_posts";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
+            id: Uuid [pk];
+            title: String;
         }
 
         relationships {
@@ -249,7 +249,7 @@ mod post {
         actions {
             create create {
                 accept [title];
-                validate string_length(title, min = 1);
+                validate string_length(title, min: 1);
             }
 
             read read {
@@ -262,7 +262,7 @@ mod post {
                 run |input| async move { Ok(input.suffix) };
             }
         }
-    }
+    }}
 }
 
 use comment::Comment;

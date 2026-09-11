@@ -10,16 +10,16 @@ pub mod author_mod {
     use super::*;
 
     resource! {
-        resource Author;
+        Author {
         table "authors";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         relationships {
-            has_many posts: post_mod::Post [fk: author_id, on_delete: cascade],
+            has_many posts: post_mod::Post [fk: author_id, on_delete: cascade];
         }
 
         actions {
@@ -36,25 +36,25 @@ pub mod author_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod post_mod {
     use super::*;
 
     resource! {
-        resource Post;
+        Post {
         table "posts";
 
         attributes {
-            id: Uuid [pk],
-            author_id: Uuid,
-            title: String,
+            id: Uuid [pk];
+            author_id: Uuid;
+            title: String;
         }
 
         relationships {
-            belongs_to author: author_mod::Author [fk: author_id],
-            has_many comments: comment_mod::Comment [fk: post_id, on_delete: cascade],
+            belongs_to author: author_mod::Author [fk: author_id];
+            has_many comments: comment_mod::Comment [fk: post_id, on_delete: cascade];
         }
 
         actions {
@@ -71,24 +71,24 @@ pub mod post_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod comment_mod {
     use super::*;
 
     resource! {
-        resource Comment;
+        Comment {
         table "comments";
 
         attributes {
-            id: Uuid [pk],
-            post_id: Uuid,
-            content: String,
+            id: Uuid [pk];
+            post_id: Uuid;
+            content: String;
         }
 
         relationships {
-            belongs_to post: post_mod::Post [fk: post_id],
+            belongs_to post: post_mod::Post [fk: post_id];
         }
 
         actions {
@@ -105,23 +105,23 @@ pub mod comment_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod dept_mod {
     use super::*;
 
     resource! {
-        resource Department;
+        Department {
         table "departments";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         relationships {
-            has_many employees: emp_mod::Employee [fk: dept_id, on_delete: restrict],
+            has_many employees: emp_mod::Employee [fk: dept_id, on_delete: restrict];
         }
 
         actions {
@@ -138,24 +138,24 @@ pub mod dept_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod emp_mod {
     use super::*;
 
     resource! {
-        resource Employee;
+        Employee {
         table "employees";
 
         attributes {
-            id: Uuid [pk],
-            dept_id: Uuid,
-            name: String,
+            id: Uuid [pk];
+            dept_id: Uuid;
+            name: String;
         }
 
         relationships {
-            belongs_to department: dept_mod::Department [fk: dept_id],
+            belongs_to department: dept_mod::Department [fk: dept_id];
         }
 
         actions {
@@ -172,23 +172,23 @@ pub mod emp_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod team_mod {
     use super::*;
 
     resource! {
-        resource Team;
+        Team {
         table "teams";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         relationships {
-            has_many players: player_mod::Player [fk: team_id, on_delete: nilify],
+            has_many players: player_mod::Player [fk: team_id, on_delete: nilify];
         }
 
         actions {
@@ -205,24 +205,24 @@ pub mod team_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod player_mod {
     use super::*;
 
     resource! {
-        resource Player;
+        Player {
         table "players";
 
         attributes {
-            id: Uuid [pk],
-            team_id: Option<Uuid>,
-            name: String,
+            id: Uuid [pk];
+            team_id: Option<Uuid>;
+            name: String;
         }
 
         relationships {
-            belongs_to team: team_mod::Team [fk: team_id],
+            belongs_to team: team_mod::Team [fk: team_id];
         }
 
         actions {
@@ -239,19 +239,19 @@ pub mod player_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod tag_mod {
     use super::*;
 
     resource! {
-        resource Tag;
+        Tag {
         table "tags";
 
         attributes {
-            id: Uuid [pk],
-            label: String,
+            id: Uuid [pk];
+            label: String;
         }
 
         actions {
@@ -268,20 +268,20 @@ pub mod tag_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod join_mod {
     use super::*;
 
     resource! {
-        resource ArticleTag;
+        ArticleTag {
         table "article_tags";
 
         attributes {
-            id: Uuid [pk],
-            article_id: Uuid,
-            tag_id: Uuid,
+            id: Uuid [pk];
+            article_id: Uuid;
+            tag_id: Uuid;
         }
 
         actions {
@@ -298,7 +298,7 @@ pub mod join_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod article_mod {
@@ -307,12 +307,12 @@ pub mod article_mod {
     use super::tag_mod::Tag;
 
     resource! {
-        resource Article;
+        Article {
         table "articles";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
+            id: Uuid [pk];
+            title: String;
         }
 
         relationships {
@@ -321,7 +321,7 @@ pub mod article_mod {
                 source_fk: article_id,
                 dest_fk: tag_id,
                 on_delete: cascade,
-            ],
+            ];
         }
 
         actions {
@@ -338,7 +338,7 @@ pub mod article_mod {
                 primary;
             }
         }
-    }
+    }}
 }
 
 use article_mod::Article;

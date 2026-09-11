@@ -70,57 +70,150 @@ fn parse_braced_with<T>(
     }
 }
 
+fn with_body_stream(
+    input: ParseStream,
+    errors: &mut Vec<Error>,
+    f: impl FnOnce(ParseStream, &mut Vec<Error>),
+) {
+    if input.peek(syn::token::Brace) {
+        match take_brace(input) {
+            Ok(content) => f(&content, errors),
+            Err(e) => {
+                errors.push(e);
+                f(input, errors);
+            }
+        }
+    } else {
+        f(input, errors);
+    }
+}
+
+fn invalid_resource_ident() -> Ident {
+    Ident::new("__AshInvalidResource", proc_macro2::Span::call_site())
+}
+
+fn parse_header(input: ParseStream, errors: &mut Vec<Error>) -> (Ident, bool) {
+    let mut embedded = false;
+
+    if input.peek(Ident) {
+        let fork = input.fork();
+        if let Ok(id) = fork.parse::<Ident>()
+            && id == "embedded"
+        {
+            let kw: Ident = match input.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    errors.push(e);
+                    return (invalid_resource_ident(), false);
+                }
+            };
+            if input.peek(Token![;]) {
+                errors.push(Error::new_spanned(
+                    &kw,
+                    "put `embedded` before the resource name: `embedded Name { ... }`",
+                ));
+                let _ = input.parse::<Token![;]>();
+                embedded = true;
+            } else {
+                embedded = true;
+            }
+        }
+    }
+
+    let header: Ident = match input.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            errors.push(e);
+            return (invalid_resource_ident(), embedded);
+        }
+    };
+
+    if header == "resource" || header == "name" {
+        errors.push(Error::new_spanned(
+            &header,
+            "use `Name { ... }`, not `resource Name;`",
+        ));
+        let resource = match input.parse::<Ident>() {
+            Ok(id) => id,
+            Err(e) => {
+                errors.push(e);
+                invalid_resource_ident()
+            }
+        };
+        let _ = input.parse::<Token![;]>();
+        return (resource, embedded);
+    }
+
+    if !input.peek(syn::token::Brace) {
+        errors.push(Error::new_spanned(
+            &header,
+            "expected `Name { ... }` resource body",
+        ));
+    }
+
+    (header, embedded)
+}
+
+fn store_type_for_data_layer(dl: &Ident) -> Option<Type> {
+    match dl.to_string().as_str() {
+        "sqlite" => Some(syn::parse_quote!(::ash_core::SqliteStore)),
+        "memory" => Some(syn::parse_quote!(::ash_core::MemoryStore)),
+        "postgres" => Some(syn::parse_quote!(::ash_core::PostgresStore)),
+        _ => None,
+    }
+}
+
+fn qualify_builtin_store(ty: Type) -> Type {
+    let s = quote::quote!(#ty).to_string().replace(' ', "");
+    match s.as_str() {
+        "SqliteStore" => syn::parse_quote!(::ash_core::SqliteStore),
+        "MemoryStore" => syn::parse_quote!(::ash_core::MemoryStore),
+        "PostgresStore" => syn::parse_quote!(::ash_core::PostgresStore),
+        _ => ty,
+    }
+}
+
+fn parse_actor(input: ParseStream, errors: &mut Vec<Error>) -> crate::define::ast::ActorSpec {
+    let mut fields = Vec::new();
+    while !input.is_empty() {
+        if input.peek(Token![,]) || input.peek(Token![;]) {
+            let _ = input.parse::<proc_macro2::TokenTree>();
+            continue;
+        }
+        let name: Ident = match input.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                errors.push(e);
+                recover::skip_item(input);
+                continue;
+            }
+        };
+        if input.parse::<Token![:]>().is_err() {
+            errors.push(Error::new_spanned(&name, "expected `name: Type;` in actor"));
+            recover::skip_item(input);
+            continue;
+        }
+        let ty: Type = match input.parse() {
+            Ok(ty) => ty,
+            Err(e) => {
+                errors.push(e);
+                recover::skip_item(input);
+                continue;
+            }
+        };
+        helpers::require_semi(input, errors, "actor field");
+        fields.push(crate::define::ast::ActorFieldSpec { name, ty });
+    }
+    crate::define::ast::ActorSpec { fields }
+}
+
 fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDefinition {
     let outer_attrs = input.call(syn::Attribute::parse_outer).unwrap_or_else(|e| {
         errors.push(e);
         Vec::new()
     });
 
-    let mut embedded = false;
-    let mut header_kw: Ident = match input.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            errors.push(e);
-            return ResourceDefinition::empty(Ident::new(
-                "__AshInvalidResource",
-                proc_macro2::Span::call_site(),
-            ));
-        }
-    };
-    if header_kw == "embedded" {
-        embedded = true;
-        if input.peek(Token![;]) {
-            let _ = input.parse::<Token![;]>();
-        }
-        header_kw = match input.parse() {
-            Ok(id) => id,
-            Err(e) => {
-                errors.push(e);
-                return ResourceDefinition::empty(Ident::new(
-                    "__AshInvalidResource",
-                    proc_macro2::Span::call_site(),
-                ));
-            }
-        };
-    }
-    if header_kw == "name" {
-        errors.push(Error::new_spanned(
-            &header_kw,
-            "use `resource Name;`, not `name Name;`",
-        ));
-    } else if header_kw != "resource" {
-        errors.push(Error::new_spanned(&header_kw, "expected `resource Name;`"));
-    }
-    let resource: Ident = match input.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            errors.push(e);
-            Ident::new("__AshInvalidResource", proc_macro2::Span::call_site())
-        }
-    };
-    if input.peek(Token![;]) {
-        let _ = input.parse::<Token![;]>();
-    }
+    let (resource, mut embedded) = parse_header(input, errors);
 
     let mut table = None;
     let mut attributes = Vec::new();
@@ -139,335 +232,307 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     let mut store = None;
     let mut timestamps = None;
     let mut multitenancy = None;
+    let mut actor = None;
     let warnings = Vec::new();
 
-    while !input.is_empty() {
-        let section_ident: Ident = match input.parse() {
-            Ok(id) => id,
-            Err(e) => {
-                errors.push(e);
-                recover::skip_until_section_or_end(input);
-                continue;
-            }
-        };
-        if section_ident == "table" {
-            if input.peek(Token![:]) {
-                let _ = input.parse::<Token![:]>();
-            }
-            match input.parse::<syn::LitStr>() {
-                Ok(table_lit) => table = Some(table_lit.value()),
+    with_body_stream(input, errors, |input, errors| {
+        while !input.is_empty() {
+            let section_ident: Ident = match input.parse() {
+                Ok(id) => id,
                 Err(e) => {
                     errors.push(e);
-                    recover::skip_to_semi(input);
+                    recover::skip_until_section_or_end(input);
+                    continue;
                 }
-            }
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "attributes" {
-            if let Some((parsed_attrs, attr_ts)) =
-                parse_braced_with(
-                    input,
-                    errors,
-                    |c, errors| match attributes::parse_attributes(c) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            errors.push(e);
-                            (Vec::new(), None)
-                        }
-                    },
-                )
-            {
-                attributes = parsed_attrs;
-                if timestamps.is_none() {
-                    timestamps = attr_ts;
+            };
+            if section_ident == "table" {
+                if input.peek(Token![:]) {
+                    let _ = input.parse::<Token![:]>();
                 }
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "relationships" {
-            if let Some(parsed) =
-                parse_braced_with(input, errors, relationships::parse_relationships)
-            {
-                relationships = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "calculations" {
-            if let Some(parsed) = parse_braced_with(input, errors, calculations::parse_calculations)
-            {
-                calculations = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "aggregates" {
-            if let Some(parsed) =
-                parse_braced_with(
-                    input,
-                    errors,
-                    |c, errors| match aggregates::parse_aggregates(c) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            errors.push(e);
-                            Vec::new()
-                        }
-                    },
-                )
-            {
-                aggregates = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "actions" {
-            if let Some(parsed) = parse_braced_with(input, errors, actions::parse_actions) {
-                actions = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "policies" {
-            if let Some(parsed) = parse_braced_with(input, errors, |c, errors| {
-                match policies::parse_policies(c) {
-                    Ok(v) => v,
+                match input.parse::<syn::LitStr>() {
+                    Ok(table_lit) => table = Some(table_lit.value()),
                     Err(e) => {
                         errors.push(e);
-                        Vec::new()
+                        recover::skip_to_semi(input);
                     }
                 }
-            }) {
-                policies = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "field_policies" {
-            if let Some(parsed) =
-                parse_braced_with(
-                    input,
-                    errors,
-                    |c, errors| match policies::parse_field_policies(c) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            errors.push(e);
-                            Vec::new()
-                        }
-                    },
-                )
-            {
-                field_policies = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "extensions" {
-            if input.peek(syn::token::Bracket) {
-                match (|| -> Result<()> {
-                    let items;
-                    syn::bracketed!(items in input);
-                    let list = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
-                    for item in list {
-                        extensions.push(item);
-                    }
-                    Ok(())
-                })() {
-                    Ok(()) => {}
-                    Err(e) => errors.push(e),
-                }
-            } else if input.peek(syn::token::Brace) {
-                parse_braced_with(input, errors, |content, errors| {
-                    while !content.is_empty() {
-                        match content.parse::<Expr>() {
-                            Ok(expr) => extensions.push(expr),
-                            Err(e) => {
-                                errors.push(e);
-                                recover::skip_item(content);
-                            }
-                        }
-                        if content.peek(Token![,]) || content.peek(Token![;]) {
-                            let _ = content.parse::<proc_macro2::TokenTree>();
-                        }
-                    }
-                });
-            }
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "notifiers" {
-            if input.peek(syn::token::Bracket) {
-                match (|| -> Result<()> {
-                    let items;
-                    syn::bracketed!(items in input);
-                    let list = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
-                    for item in list {
-                        notifiers.push(item);
-                    }
-                    Ok(())
-                })() {
-                    Ok(()) => {}
-                    Err(e) => errors.push(e),
-                }
-            } else if input.peek(syn::token::Brace) {
-                parse_braced_with(input, errors, |content, errors| {
-                    while !content.is_empty() {
-                        match content.parse::<Expr>() {
-                            Ok(expr) => notifiers.push(expr),
-                            Err(e) => {
-                                errors.push(e);
-                                recover::skip_item(content);
-                            }
-                        }
-                        if content.peek(Token![,]) || content.peek(Token![;]) {
-                            let _ = content.parse::<proc_macro2::TokenTree>();
-                        }
-                    }
-                });
-            }
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "extend" {
-            match (|| -> Result<()> {
-                let macro_path: syn::Path = input.parse()?;
-                if input.peek(Token![!]) {
-                    let _: Token![!] = input.parse()?;
-                }
-                let content;
-                syn::braced!(content in input);
-                let tokens: proc_macro2::TokenStream = content.parse()?;
                 let _ = input.parse::<Token![;]>();
-                extends.push(crate::define::ast::ExtendSpec { macro_path, tokens });
-                Ok(())
-            })() {
-                Ok(()) => {}
-                Err(e) => {
-                    errors.push(e);
-                    recover::skip_section_body(input);
-                }
-            }
-        } else if section_ident == "optimistic_lock" {
-            if input.peek(Token![:]) {
-                let _ = input.parse::<Token![:]>();
-            }
-            match input.parse::<Ident>() {
-                Ok(opt_ident) => optimistic_lock = Some(opt_ident),
-                Err(e) => {
-                    errors.push(e);
-                    recover::skip_to_semi(input);
-                }
-            }
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "identities" {
-            if let Some(parsed) =
-                parse_braced_with(
-                    input,
-                    errors,
-                    |c, errors| match identities::parse_identities(c) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            errors.push(e);
-                            Vec::new()
-                        }
-                    },
-                )
-            {
-                identities = parsed;
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "embedded" {
-            embedded = true;
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "data_layer" {
-            if input.peek(Token![:]) {
-                let _ = input.parse::<Token![:]>();
-            }
-            match input.parse::<Ident>() {
-                Ok(dl_ident) => data_layer = Some(dl_ident),
-                Err(e) => {
-                    errors.push(e);
-                    recover::skip_to_semi(input);
-                }
-            }
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "store" {
-            if input.peek(Token![:]) {
-                let _ = input.parse::<Token![:]>();
-            }
-            match input.parse::<Type>() {
-                Ok(store_ty) => store = Some(store_ty),
-                Err(e) => {
-                    errors.push(e);
-                    recover::skip_to_semi(input);
-                }
-            }
-            let _ = input.parse::<Token![;]>();
-        } else if section_ident == "multitenancy" {
-            if let Some(parsed) = parse_braced_with(input, errors, |content, errors| {
-                let mut attribute = None;
-                let mut strategy = None;
-                let mut global = false;
-                while !content.is_empty() {
-                    let key_ident: Ident = match content.parse() {
-                        Ok(id) => id,
-                        Err(e) => {
-                            errors.push(e);
-                            recover::skip_item(content);
-                            continue;
-                        }
-                    };
-                    if content.peek(Token![:]) {
-                        let _ = content.parse::<Token![:]>();
+            } else if section_ident == "attributes" {
+                if let Some((parsed_attrs, attr_ts)) =
+                    parse_braced_with(input, errors, attributes::parse_attributes)
+                {
+                    attributes = parsed_attrs;
+                    if timestamps.is_none() {
+                        timestamps = attr_ts;
                     }
-                    if key_ident == "attribute" {
-                        if content.peek(syn::LitStr) {
-                            if let Ok(lit) = content.parse::<syn::LitStr>() {
-                                attribute = Some(lit.value());
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "relationships" {
+                if let Some(parsed) =
+                    parse_braced_with(input, errors, relationships::parse_relationships)
+                {
+                    relationships = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "calculations" {
+                if let Some(parsed) =
+                    parse_braced_with(input, errors, calculations::parse_calculations)
+                {
+                    calculations = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "aggregates" {
+                if let Some(parsed) = parse_braced_with(input, errors, aggregates::parse_aggregates)
+                {
+                    aggregates = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "actions" {
+                if let Some(parsed) = parse_braced_with(input, errors, actions::parse_actions) {
+                    actions = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "policies" {
+                if let Some(parsed) = parse_braced_with(input, errors, policies::parse_policies) {
+                    policies = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "field_policies" {
+                if let Some(parsed) =
+                    parse_braced_with(input, errors, policies::parse_field_policies)
+                {
+                    field_policies = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "extensions" {
+                if input.peek(syn::token::Bracket) {
+                    match (|| -> Result<()> {
+                        let items;
+                        syn::bracketed!(items in input);
+                        let list = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
+                        for item in list {
+                            extensions.push(item);
+                        }
+                        Ok(())
+                    })() {
+                        Ok(()) => {}
+                        Err(e) => errors.push(e),
+                    }
+                } else if input.peek(syn::token::Brace) {
+                    parse_braced_with(input, errors, |content, errors| {
+                        while !content.is_empty() {
+                            match content.parse::<Expr>() {
+                                Ok(expr) => extensions.push(expr),
+                                Err(e) => {
+                                    errors.push(e);
+                                    recover::skip_item(content);
+                                }
                             }
-                        } else if let Ok(attr_ident) = content.parse::<Ident>() {
-                            attribute = Some(attr_ident.to_string());
-                        }
-                    } else if key_ident == "strategy" {
-                        if content.peek(syn::LitStr) {
-                            if let Ok(lit) = content.parse::<syn::LitStr>() {
-                                strategy = Some(lit.value());
+                            if content.peek(Token![,]) || content.peek(Token![;]) {
+                                let _ = content.parse::<proc_macro2::TokenTree>();
                             }
-                        } else if let Ok(strat_ident) = content.parse::<Ident>() {
-                            strategy = Some(strat_ident.to_string());
                         }
-                    } else if key_ident == "global" {
-                        if let Ok(lit) = content.parse::<syn::LitBool>() {
-                            global = lit.value;
+                    });
+                }
+                let _ = input.parse::<Token![;]>();
+            } else if section_ident == "notifiers" {
+                if input.peek(syn::token::Bracket) {
+                    match (|| -> Result<()> {
+                        let items;
+                        syn::bracketed!(items in input);
+                        let list = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
+                        for item in list {
+                            notifiers.push(item);
                         }
+                        Ok(())
+                    })() {
+                        Ok(()) => {}
+                        Err(e) => errors.push(e),
                     }
-                    if content.peek(Token![,]) || content.peek(Token![;]) {
-                        let _ = content.parse::<proc_macro2::TokenTree>();
-                    }
+                } else if input.peek(syn::token::Brace) {
+                    parse_braced_with(input, errors, |content, errors| {
+                        while !content.is_empty() {
+                            match content.parse::<Expr>() {
+                                Ok(expr) => notifiers.push(expr),
+                                Err(e) => {
+                                    errors.push(e);
+                                    recover::skip_item(content);
+                                }
+                            }
+                            if content.peek(Token![,]) || content.peek(Token![;]) {
+                                let _ = content.parse::<proc_macro2::TokenTree>();
+                            }
+                        }
+                    });
                 }
-                crate::define::ast::MultitenancySpec {
-                    attribute,
-                    strategy,
-                    global,
-                }
-            }) {
-                multitenancy = Some(parsed);
-            }
-            let _ = helpers::optional_semi(input);
-        } else if section_ident == "timestamps" {
-            let mut created_at = syn::Ident::new("created_at", proc_macro2::Span::call_site());
-            let mut updated_at = syn::Ident::new("updated_at", proc_macro2::Span::call_site());
-            if input.peek(syn::token::Bracket) {
+                let _ = input.parse::<Token![;]>();
+            } else if section_ident == "extend" {
                 match (|| -> Result<()> {
-                    let names;
-                    syn::bracketed!(names in input);
-                    let list = Punctuated::<Ident, Token![,]>::parse_terminated(&names)?;
-                    let vec: Vec<Ident> = list.into_iter().collect();
-                    if vec.len() >= 2 {
-                        created_at = vec[0].clone();
-                        updated_at = vec[1].clone();
+                    let macro_path: syn::Path = input.parse()?;
+                    if input.peek(Token![!]) {
+                        let _: Token![!] = input.parse()?;
                     }
+                    let content;
+                    syn::braced!(content in input);
+                    let tokens: proc_macro2::TokenStream = content.parse()?;
+                    let _ = input.parse::<Token![;]>();
+                    extends.push(crate::define::ast::ExtendSpec { macro_path, tokens });
                     Ok(())
                 })() {
                     Ok(()) => {}
-                    Err(e) => errors.push(e),
+                    Err(e) => {
+                        errors.push(e);
+                        recover::skip_section_body(input);
+                    }
                 }
-            }
-            let _ = input.parse::<Token![;]>();
-            timestamps = Some(crate::define::ast::TimestampsSpec {
-                created_at,
-                updated_at,
-            });
-        } else {
-            errors.push(crate::ast_helpers::unknown_ident_error(
+            } else if section_ident == "optimistic_lock" {
+                if input.peek(Token![:]) {
+                    let _ = input.parse::<Token![:]>();
+                }
+                match input.parse::<Ident>() {
+                    Ok(opt_ident) => optimistic_lock = Some(opt_ident),
+                    Err(e) => {
+                        errors.push(e);
+                        recover::skip_to_semi(input);
+                    }
+                }
+                let _ = input.parse::<Token![;]>();
+            } else if section_ident == "identities" {
+                if let Some(parsed) = parse_braced_with(input, errors, identities::parse_identities)
+                {
+                    identities = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "actor" {
+                if let Some(parsed) = parse_braced_with(input, errors, parse_actor) {
+                    actor = Some(parsed);
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "embedded" {
+                errors.push(Error::new_spanned(
+                    &section_ident,
+                    "put `embedded` on the resource header: `embedded Name { ... }`",
+                ));
+                embedded = true;
+                let _ = input.parse::<Token![;]>();
+            } else if section_ident == "data_layer" {
+                errors.push(Error::new_spanned(
                 &section_ident,
-                recover::SECTION_NAMES,
-                "resource section",
+                "use `store SqliteStore;` (or `MemoryStore` / `PostgresStore`), not `data_layer sqlite`",
             ));
-            recover::skip_section_body(input);
+                if input.peek(Token![:]) {
+                    let _ = input.parse::<Token![:]>();
+                }
+                match input.parse::<Ident>() {
+                    Ok(dl_ident) => {
+                        if store.is_none() {
+                            store = store_type_for_data_layer(&dl_ident);
+                        }
+                        data_layer = Some(dl_ident);
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        recover::skip_to_semi(input);
+                    }
+                }
+                let _ = input.parse::<Token![;]>();
+            } else if section_ident == "store" {
+                if input.peek(Token![:]) {
+                    let _ = input.parse::<Token![:]>();
+                }
+                match input.parse::<Type>() {
+                    Ok(store_ty) => store = Some(qualify_builtin_store(store_ty)),
+                    Err(e) => {
+                        errors.push(e);
+                        recover::skip_to_semi(input);
+                    }
+                }
+                let _ = input.parse::<Token![;]>();
+            } else if section_ident == "multitenancy" {
+                if let Some(parsed) = parse_braced_with(input, errors, |content, errors| {
+                    let mut attribute = None;
+                    let mut strategy = None;
+                    let mut global = false;
+                    while !content.is_empty() {
+                        let key_ident: Ident = match content.parse() {
+                            Ok(id) => id,
+                            Err(e) => {
+                                errors.push(e);
+                                recover::skip_item(content);
+                                continue;
+                            }
+                        };
+                        if content.peek(Token![:]) {
+                            let _ = content.parse::<Token![:]>();
+                        }
+                        if key_ident == "attribute" {
+                            if content.peek(syn::LitStr) {
+                                if let Ok(lit) = content.parse::<syn::LitStr>() {
+                                    attribute = Some(lit.value());
+                                }
+                            } else if let Ok(attr_ident) = content.parse::<Ident>() {
+                                attribute = Some(attr_ident.to_string());
+                            }
+                        } else if key_ident == "strategy" {
+                            if content.peek(syn::LitStr) {
+                                if let Ok(lit) = content.parse::<syn::LitStr>() {
+                                    strategy = Some(lit.value());
+                                }
+                            } else if let Ok(strat_ident) = content.parse::<Ident>() {
+                                strategy = Some(strat_ident.to_string());
+                            }
+                        } else if key_ident == "global" {
+                            if let Ok(lit) = content.parse::<syn::LitBool>() {
+                                global = lit.value;
+                            }
+                        }
+                        if content.peek(Token![,]) || content.peek(Token![;]) {
+                            let _ = content.parse::<proc_macro2::TokenTree>();
+                        }
+                    }
+                    crate::define::ast::MultitenancySpec {
+                        attribute,
+                        strategy,
+                        global,
+                    }
+                }) {
+                    multitenancy = Some(parsed);
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "timestamps" {
+                let mut created_at = syn::Ident::new("created_at", proc_macro2::Span::call_site());
+                let mut updated_at = syn::Ident::new("updated_at", proc_macro2::Span::call_site());
+                if input.peek(syn::token::Bracket) {
+                    match (|| -> Result<()> {
+                        let names;
+                        syn::bracketed!(names in input);
+                        let list = Punctuated::<Ident, Token![,]>::parse_terminated(&names)?;
+                        let vec: Vec<Ident> = list.into_iter().collect();
+                        if vec.len() >= 2 {
+                            created_at = vec[0].clone();
+                            updated_at = vec[1].clone();
+                        }
+                        Ok(())
+                    })() {
+                        Ok(()) => {}
+                        Err(e) => errors.push(e),
+                    }
+                }
+                let _ = input.parse::<Token![;]>();
+                timestamps = Some(crate::define::ast::TimestampsSpec {
+                    created_at,
+                    updated_at,
+                });
+            } else {
+                errors.push(crate::ast_helpers::unknown_ident_error(
+                    &section_ident,
+                    recover::SECTION_NAMES,
+                    "resource section",
+                ));
+                recover::skip_section_body(input);
+            }
         }
-    }
+    });
 
     if let Some(ref ts) = timestamps {
         if !attributes.iter().any(|a| a.ident == ts.created_at) {
@@ -525,6 +590,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         store,
         timestamps,
         multitenancy,
+        actor,
         warnings,
     }
 }
@@ -544,11 +610,11 @@ mod tests {
     #[test]
     fn test_unknown_section_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             action {
                 create create;
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `actions`?"),
@@ -560,11 +626,11 @@ mod tests {
     #[test]
     fn test_unknown_action_kind_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 creat add;
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `create`?"),
@@ -576,13 +642,13 @@ mod tests {
     #[test]
     fn test_unknown_action_item_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
                     validats [present(title)];
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `validate`?"),
@@ -594,13 +660,13 @@ mod tests {
     #[test]
     fn test_unknown_validation_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
                     validate presence(title);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `present`?"),
@@ -612,13 +678,13 @@ mod tests {
     #[test]
     fn test_string_length_min_greater_than_max_fails() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
-                    validate string_length(title, min = 10, max = 2);
+                    validate string_length(title, min: 10, max: 2);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string()
@@ -631,13 +697,13 @@ mod tests {
     #[test]
     fn test_numericality_min_greater_than_max_fails() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
-                    validate numericality(age, min = 100, max = 18);
+                    validate numericality(age, min: 100, max: 18);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string()
@@ -650,7 +716,7 @@ mod tests {
     #[test]
     fn test_removed_plural_syntax_is_an_error() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
                     arguments {
@@ -664,7 +730,7 @@ mod tests {
                     ]
                 }
             }
-        };
+        }};
         let parsed = parse_resource(tokens);
         let msg: String = parsed
             .errors
@@ -689,10 +755,10 @@ mod tests {
     #[test]
     fn test_crud_brace_accept_is_an_error() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                subject: String,
+                id: Uuid [pk];
+                subject: String;
             }
             actions {
                 create open {
@@ -701,7 +767,7 @@ mod tests {
                     }
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         let msg = err.to_string();
         assert!(
@@ -713,16 +779,16 @@ mod tests {
     #[test]
     fn test_action_keyword_is_an_error() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
+                id: Uuid [pk];
             }
             actions {
                 action summarize {
                     argument notes: String;
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("use `generic`, not `action`"),
@@ -734,15 +800,15 @@ mod tests {
     #[test]
     fn test_string_fk_is_an_error() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                author_id: Uuid,
+                id: Uuid [pk];
+                author_id: Uuid;
             }
             relationships {
                 belongs_to author: User [fk: "author_id"];
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string()
@@ -755,15 +821,15 @@ mod tests {
     #[test]
     fn test_option_relationship_dest_is_an_error() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                author_id: Uuid,
+                id: Uuid [pk];
+                author_id: Uuid;
             }
             relationships {
                 belongs_to author: Option<User> [fk: author_id];
             }
-        };
+        }};
         let err = parse_err(tokens);
         let msg = err.to_string();
         assert!(
@@ -775,14 +841,14 @@ mod tests {
     #[test]
     fn test_vec_relationship_dest_is_an_error() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
+                id: Uuid [pk];
             }
             relationships {
                 has_many comments: Vec<Comment>;
             }
-        };
+        }};
         let err = parse_err(tokens);
         let msg = err.to_string();
         assert!(
@@ -796,15 +862,15 @@ mod tests {
         use crate::define::ast::CalculationExprSpec;
 
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                subject: String,
+                id: Uuid [pk];
+                subject: String;
             }
             calculations {
                 subject_len: i64 = "string_length(subject)";
             }
-        };
+        }};
         let parsed = parse_resource(tokens);
         assert!(
             parsed
@@ -825,11 +891,11 @@ mod tests {
     #[test]
     fn test_unknown_relationship_kind_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             relationships {
                 belongs_too author: User [fk: author_id];
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `belongs_to`?"),
@@ -841,11 +907,11 @@ mod tests {
     #[test]
     fn test_unknown_relationship_option_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             relationships {
                 belongs_to author: User [fkey: author_id];
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `fk`?"),
@@ -857,11 +923,11 @@ mod tests {
     #[test]
     fn test_unknown_attribute_option_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
                 id: Uuid [pkk];
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `pk`?"),
@@ -873,13 +939,13 @@ mod tests {
     #[test]
     fn test_unknown_policy_declaration_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             policies {
                 polisy always {
                     authorize_if always;
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `policy`?"),
@@ -891,13 +957,13 @@ mod tests {
     #[test]
     fn test_unknown_policy_statement_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             policies {
                 policy always {
                     authorize_iff always;
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `authorize_if`?"),
@@ -909,13 +975,13 @@ mod tests {
     #[test]
     fn test_unknown_policy_when_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             policies {
                 policy alwayz {
                     authorize_if always;
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `always`?"),
@@ -927,13 +993,13 @@ mod tests {
     #[test]
     fn test_unknown_policy_check_typo_suggests_correction() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             policies {
                 policy always {
                     authorize_if actor_eqq(author_id);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains("Did you mean `actor_eq`?"),
@@ -945,11 +1011,11 @@ mod tests {
     #[test]
     fn test_permissive_trailing_punctuation_and_empty_sections() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
-                title: String,
-                status: String,
+                id: Uuid [pk];
+                title: String;
+                status: String;
             };
             relationships {};
             policies {};
@@ -969,7 +1035,7 @@ mod tests {
                     primary;
                 };
             };
-        };
+        }};
         let def = match syn::parse2::<ResourceDefinition>(tokens) {
             Ok(d) => d,
             Err(e) => panic!("parse failed: {e}"),
@@ -991,13 +1057,13 @@ mod tests {
     #[test]
     fn test_vacuous_numericality_fails() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
                     validate numericality(age);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains(
@@ -1011,13 +1077,13 @@ mod tests {
     #[test]
     fn test_vacuous_string_length_fails() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
                     validate string_length(title);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string().contains(
@@ -1031,13 +1097,13 @@ mod tests {
     #[test]
     fn test_empty_one_of_fails() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             actions {
                 create open {
                     validate one_of(status, []);
                 }
             }
-        };
+        }};
         let err = parse_err(tokens);
         assert!(
             err.to_string()
@@ -1050,9 +1116,9 @@ mod tests {
     #[test]
     fn test_argument_doc_comments_are_parsed() {
         let tokens = quote! {
-            resource TestResource;
+            TestResource {
             attributes {
-                id: Uuid [pk],
+                id: Uuid [pk];
             }
             actions {
                 create open {
@@ -1066,7 +1132,7 @@ mod tests {
                     prefix: String
                 ): String = concat(arg(prefix), "x");
             }
-        };
+        }};
         let def = match syn::parse2::<ResourceDefinition>(tokens) {
             Ok(d) => d,
             Err(e) => panic!("parse failed: {e}"),
@@ -1080,6 +1146,86 @@ mod tests {
         assert!(
             !def.calculations[0].arguments[0].outer_attrs.is_empty(),
             "missing calculation argument docs"
+        );
+    }
+
+    #[test]
+    fn test_old_resource_header_is_an_error() {
+        let tokens = quote! {
+            resource TestResource;
+            attributes {
+                id: Uuid [pk];
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("use `Name { ... }`, not `resource Name;`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_atom_flag_is_an_error() {
+        let tokens = quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: String [atom: "open,closed"];
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("use `[enum]` with `#[derive(AshEnum)]`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_primary_true_is_an_error() {
+        let tokens = quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                }
+                actions {
+                    read read { primary true; }
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("use `primary;`, not `primary true`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_min_equals_is_an_error() {
+        let tokens = quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                }
+                actions {
+                    create open {
+                        validate string_length(title, min = 2);
+                    }
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string().contains("use `min: N`, not `min = N`"),
+            "got: {}",
+            err
         );
     }
 }

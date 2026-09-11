@@ -7,14 +7,14 @@ use ash_memory::Memory;
 use ash_pubsub::{PubSub, PubSubNotifier, topic_matches};
 
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
     attributes {
-        id: Uuid [pk],
-        customer: String,
-        amount: i64,
-        status: String,
+        id: Uuid [pk];
+        customer: String;
+        amount: i64;
+        status: String;
     }
 
     actions {
@@ -32,7 +32,7 @@ resource! {
             change set_attribute(status, "completed");
         }
     }
-}
+    }}
 
 #[test]
 fn test_topic_pattern_matching_rules() {

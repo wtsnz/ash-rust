@@ -2,129 +2,150 @@
 
 The `resource!` and `domain!` procedural macros in `ash-macros` provide an expressive, declarative domain-specific language for modeling resources, relationships, validations, and operations.
 
+Item terminators are `;`. Required create/generic inputs are typestate-gated: omitting them is a compile error.
+
 ---
 
 ## 1. Defining Resources (`resource!`)
 
-A complete resource declaration syntax:
+Canonical header is `Name { ... }`. Put `embedded` before the name when the resource is not persisted as its own table. Bind storage with `store Type;`.
 
 ```rust
-use ash_core::resource;
+use ash_core::{resource, AshEnum};
 use uuid::Uuid;
 
+#[derive(AshEnum, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PostStatus {
+    Draft,
+    Published,
+}
+
 resource! {
-    resource Post;
-    table "posts";
-    store PrimaryDb; // Optional: type-safe StoreTag binding (or data_layer sqlite;)
+    Post {
+        table "posts";
+        store PrimaryDb;
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        content: Option<String>,
-        views: i64,
-        version: i64 [version],
-    }
-
-    relationships {
-        belongs_to author: Author [destination_attribute: "id"];
-        has_many comments: Vec<Comment> [destination_attribute: "post_id"];
-        many_to_many tags: Vec<Tag> [through: PostTag, source_fk: "post_id", dest_fk: "tag_id"];
-    }
-
-    calculations {
-        title_length: Option<i64> = length(title);
-        total_price: Option<i64> = price * quantity;
-        display_label: Option<String> = coalesce(nickname, title, "Untitled");
-        badge: Option<String> = if_else(views >= 1000, "Trending", "Normal");
-        custom_rank: Option<String> = custom(my_rank_calculator);
-    }
-
-    aggregates {
-        comment_count: Option<i64> = count(comments);
-        has_tags: Option<bool> = exists(tags);
-    }
-
-    policies {
-        policy read_public {
-            authorize_if always;
+        actor {
+            role: String;
         }
-    }
 
-    field_policies {
-        field content {
-            authorize_if actor_present;
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            content: Option<String>;
+            views: i64;
+            status: PostStatus [enum, default: PostStatus::Draft];
+            version: i64 [version];
         }
-    }
 
-    notifiers [
-        &AUDIT_NOTIFIER
-    ]
+        relationships {
+            belongs_to author: Author [fk: author_id];
+            has_many comments: Comment [fk: post_id];
+            many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
+        }
 
-    actions {
-        create create {
-            primary;
-            accept {
-                title: String,
-                content: Option<String>,
+        calculations {
+            title_length: Option<i64> = string_length(title);
+            total_price: Option<i64> = price * quantity;
+            display_label: Option<String> = coalesce(nickname, title, "Untitled");
+            badge: Option<String> = if_else(views >= 1000, "Trending", "Normal");
+            custom_rank: Option<String> = custom(my_rank_calculator);
+        }
+
+        aggregates {
+            comment_count: Option<i64> = count(comments);
+            has_tags: Option<bool> = exists(tags);
+        }
+
+        policies {
+            policy action_type(read) {
+                authorize_if always;
             }
-            change set_attribute(views, 0);
-            validation present(title);
-            validation string_length(title, min: 3, max: 255);
+            policy action(create) | action(publish) | action(destroy) {
+                authorize_if actor_eq(role = "author");
+            }
         }
 
-        read read {
-            primary;
-            // Preparation: default filter for soft-deleted / archived records
-            prepare filter(archived == false);
+        field_policies {
+            field content {
+                authorize_if actor_present;
+            }
         }
 
-        read trending {
-            // Preparation: filter + sort + limit
-            prepare filter(views >= 100);
-            prepare sort(views, desc);
-            prepare limit(10);
-        }
+        notifiers [
+            &AUDIT_NOTIFIER
+        ]
 
-        update publish {
-            argument notify_subscribers: bool;
-            change set_attribute(views, 1);
-        }
+        actions {
+            create create {
+                primary;
+                accept [title, content];
+                change set(views = 0);
+                validate present(title);
+                validate string_length(title, min: 3, max: 255);
+            }
 
-        destroy destroy {
-            primary;
+            read read {
+                primary;
+                prepare filter(archived == false);
+            }
+
+            read trending {
+                prepare filter(views >= 100);
+                prepare sort(views, desc);
+                prepare limit(10);
+            }
+
+            update publish {
+                argument notify_subscribers: bool;
+                change set(status = PostStatus::Published);
+            }
+
+            destroy destroy {
+                primary;
+            }
         }
     }
 }
 ```
 
+If any `policies { ... }` block is present, every action must be covered by `policy always`, `policy action(name)`, or `policy action_type(kind)`. Uncovered actions are compile errors.
+
+`prepare` is only valid on `read`. `accept` / `change` / `validate` are not valid on `read`. `persist manual` is only valid on `create`. `returns` / `run` are only valid on `generic`. `relate_actor` is not valid on `generic`.
+
 ---
 
 ## 2. Attributes & Modifiers
 
-Attributes represent persisted state or fields on the underlying data layer:
+Attributes represent persisted state or fields on the underlying data layer. Each attribute ends with `;`.
 
 | Syntax | Description |
 | :--- | :--- |
-| `id: Uuid [pk]` | Primary key for the resource |
-| `field: String` | Non-nullable string attribute |
-| `field: Option<i64>` | Nullable integer attribute |
-| `version: i64 [version]` | Optimistic locking concurrency attribute |
-| `status: String = "draft"` | Default static value on create |
-| `views: i64 [default = 0]` | Alternative bracket syntax for defaults |
-| `token: String [default_fn: gen_token]` | Dynamic default generated by function |
+| `id: Uuid [pk];` | Primary key for the resource |
+| `field: String;` | Non-nullable string attribute |
+| `field: Option<i64>;` | Nullable integer attribute |
+| `version: i64 [version];` | Optimistic locking concurrency attribute |
+| `status: String = "draft";` | Default static value on create |
+| `views: i64 [default: 0];` | Bracket syntax for defaults |
+| `token: String [default_fn: gen_token];` | Dynamic default generated by a function |
+| `status: PostStatus [enum];` | Typed enum via `#[derive(AshEnum)]` |
+
+Do not use `[atom: "a,b"]`. Model closed sets as a Rust enum with `#[derive(AshEnum)]` and `[enum]`. `one_of` is invalid on `[enum]` fields — variants already constrain the value.
 
 ### Timestamps Shorthand
-Add `timestamps;` directly to your resource definition to automatically inject `created_at: String` and `updated_at: String` ISO-8601 attributes and manage them across create and update actions:
+
+Add `timestamps;` to inject `created_at: String` and `updated_at: String` ISO-8601 attributes:
 
 ```rust
 resource! {
-    resource Article;
-    table "articles";
-    timestamps; // Automatically injects and manages created_at and updated_at!
+    Article {
+        table "articles";
+        timestamps;
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
+        attributes {
+            id: Uuid [pk];
+            title: String;
+        }
     }
 }
 ```
@@ -133,37 +154,32 @@ resource! {
 
 ## 2b. Identities & Unique Constraints
 
-Declare unique identity constraints on single or composite fields:
-
 ```rust
 resource! {
-    resource User;
-    table "users";
+    User {
+        table "users";
 
-    attributes {
-        id: Uuid [pk],
-        organization_id: Uuid,
-        email: String,
-    }
+        attributes {
+            id: Uuid [pk];
+            organization_id: Uuid;
+            email: String;
+        }
 
-    identities {
-        identity unique_email: [email], message: "Email is already taken";
-        identity org_email: [organization_id, email];
+        identities {
+            identity unique_email: [email], message: "Email is already taken";
+            identity org_email: [organization_id, email];
+        }
     }
 }
 ```
 
 ### Auto-Generated Identity Lookups & Upserts
-The macro generates type-safe lookup methods:
+
 ```rust
-// Look up by single identity:
 let user = User::get_by_unique_email(&ctx, "alice@example.com").await?;
 let user_opt = User::find_by_unique_email(&ctx, "alice@example.com").await?;
-
-// Look up by composite identity:
 let user = User::get_by_org_email(&ctx, org_id, "alice@example.com").await?;
 
-// Upserting on conflict:
 let user = User::create(&ctx)
     .email("alice@example.com")
     .upsert_on(User::unique_email, &["name"])
@@ -175,68 +191,58 @@ let user = User::create(&ctx)
 
 ## 2c. Embedded Resources
 
-Model schema-validated nested data (maps/structs) stored within parent resource attributes without creating separate tables:
-
 ```rust
 resource! {
-    embedded;
-    resource Address;
+    embedded Address {
+        attributes {
+            street: String;
+            city: String;
+            postal_code: String;
+        }
 
-    attributes {
-        street: String,
-        city: String,
-        postal_code: String,
-    }
-
-    actions {
-        create create {
-            primary;
-            accept [street, city, postal_code];
-            validation present(street);
+        actions {
+            create create {
+                primary;
+                accept [street, city, postal_code];
+                validate present(street);
+            }
         }
     }
 }
-```
-
-Embedded resources can be validated and serialized into JSON columns or used directly in changesets:
-```rust
-let addr = Address::build_create()
-    .street("123 Main St")
-    .city("Portland")
-    .postal_code("97201")
-    .build()?;
 ```
 
 ---
 
 ## 3. Relationships
 
-Relationships establish links between resources and support eager-loading and aggregate computations:
+Foreign keys are identifiers, not strings. Destination types are the related resource, not `Option<T>` or `Vec<T>`.
 
 ### `belongs_to`
-Associates this record with a single destination record:
+
 ```rust
-belongs_to author: Author [destination_attribute: "id"];
+belongs_to author: Author [fk: author_id];
 ```
 
 ### `has_many`
-Associates this record with zero or more records where the destination stores the foreign key:
+
 ```rust
-has_many comments: Vec<Comment> [destination_attribute: "post_id"];
+has_many comments: Comment [fk: post_id];
 ```
 
 ### `many_to_many`
-Associates records through an intermediate join table:
+
 ```rust
-many_to_many tags: Vec<Tag> [through: PostTag, source_fk: "post_id", dest_fk: "tag_id"];
+many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
 ```
+
+`on_delete: cascade` (and related options) take identifiers, not `"cascade"` strings.
 
 ---
 
 ## 4. Calculations & Aggregates
 
 ### Calculations
-Calculations compute values dynamically:
+
 ```rust
 calculations {
     title_length: Option<i64> = string_length(title);
@@ -244,16 +250,17 @@ calculations {
 ```
 
 ### Aggregates
-Aggregates compute rollup metrics over relationships, compiled into efficient SQL `JOIN` queries or in-memory folds:
-- `count(relationship)`: Number of related records.
-- `exists(relationship)`: Boolean check if at least one related record exists.
-- `sum(relationship.field)`: Sum of numeric attribute.
-- `first(relationship.field)`: Value of first matching related record.
+
+- `count(relationship)`
+- `exists(relationship)`
+- `sum(relationship, field)`
+- `first(relationship, field)`
 
 ```rust
 aggregates {
     tag_count: Option<i64> = count(tags);
     has_comments: Option<bool> = exists(comments);
+    open_ticket_count: Option<i64> = count(tickets, filter: status == "open");
 }
 ```
 
@@ -261,96 +268,99 @@ aggregates {
 
 ## 5. Actions, Arguments, Validations, and Changes
 
-Actions define the only valid ways to mutate or read resource state.
-
 ### Action Kinds
+
 - `create`: Inserts a new record.
-- `read`: Queries records.
+- `read`: Queries records. May use `prepare filter(...)` / `sort` / `limit`.
 - `update`: Mutates an existing record.
 - `destroy`: Deletes a record.
-- `generic`: Executes custom logic with an actor context without mutating a table.
+- `generic`: Custom logic. Typed `accept { name: Type }` is allowed here only. May omit `run` when the caller supplies `.run(...)`.
 
-### Non-Attribute Arguments
-Actions can accept arguments that are not saved directly as attributes:
-```rust
-update transfer_ownership {
-    argument new_owner_id: Uuid;
-    argument send_invite_email: bool;
+### Inputs
 
-    change set_from_arg(owner_id, new_owner_id);
-    change custom(&SendInviteChange);
-}
-```
-
-### Actions and Inputs
-Actions declare allowed inputs with either DRY lists (where types are inferred directly from resource `attributes`) or explicit types:
+Create/update/destroy use DRY lists; types come from attributes. `read` cannot `accept`, `change`, or `validate`.
 
 ```rust
 actions {
     create create {
         primary;
-        // DRY: types inferred directly from attributes!
-        accept [title, content, tag];
-        change set(status = "draft");
+        accept [title, content];
+        change set(status = PostStatus::Draft);
     }
 
     update publish {
-        // Accepts only specific fields, type inferred:
         accept [tag];
-        // Non-attribute runtime arguments:
         argument notify_subscribers: bool;
-        change set(status = "published");
+        change set(status = PostStatus::Published);
     }
 }
 ```
 
-Optional fields (`Option<T>`) generated setters accept:
-- Bare values: `.tag("rust")`
-- Explicit option: `.tag(Some("rust".to_string()))`
-- Unset: `.tag(None)`
+Required create accept fields and non-`Option` arguments are typestate-required. Update accept fields are never required (partial updates). Optional (`Option<T>`) setters accept a bare value, `Some(...)`, or `None`.
+
+`primary;` is a flag with no boolean. Write `min: 3`, not `min = 3` or positional integers.
 
 ### Built-in Validations
-- `validation present(field);`
-- `validation string_length(field, min: X, max: Y);`
-- `validation numericality(field, min: X, max: Y);`
-- `validation one_of(field, ["opt1", "opt2"]);`
-- `validation custom(&MyValidator);`
-- `validation func(|ctx| { ... });`
+
+- `validate present(field);`
+- `validate string_length(field, min: X, max: Y);`
+- `validate numericality(field, min: X, max: Y);`
+- `validate one_of(field, ["opt1", "opt2"]);` — not on `[enum]` attributes
+- `validate custom(&MyValidator);`
+- `validate func(|ctx| { ... });`
 
 ### Built-in Changes
-- `change set_attribute(field, value);` (or `set(field = value);`)
-- `change set_new_attribute(field, value);` (sets value only if not already supplied)
-- `change relate_actor(field);` (sets foreign key to `ctx.actor.id`)
-- `change set_from_arg(field, argument_name);`
+
+`set(...)` is real Rust. Literals become `Change::SetAttribute`; paths/enums become `SetAttributeFn`.
+
+- `change set(field = value);`
+- `change set_new(field = value);`
+- `change relate_actor(field);`
+- `change set_from_arg(field, argument_name);` or `change set(field = arg(name));`
 - `change manage_relationship(rel);`
-- `change func(my_fn);` (or `change func(|ctx| { ... });`) — zero boilerplate function receiving `&mut ChangeContext`.
-- `change custom(&MyChange);` — unit struct reference or static implementing `CustomChange`. Direct unit structs like `&AuditLogger` promote to `'static` without needing a separate `const`.
+- `change func(my_fn);`
+- `change custom(&MyChange);`
+
+### Policies
+
+Every check ends with `;`. `policy action(name)` is go-to-definition on the action. `actor_eq` / `actor_attribute_equals` require an `actor { field: Type; }` block on the resource.
+
+```rust
+actor {
+    role: String;
+}
+
+policies {
+    policy action_type(read) {
+        authorize_if always;
+    }
+    policy action(create) {
+        authorize_if actor_eq(role = "admin");
+    }
+}
+```
 
 ### Notifiers Block
-Resources can declare static notifiers directly in the DSL:
+
 ```rust
 notifiers [
     &AUDIT_LOG_NOTIFIER,
-    &METRICS_NOTIFIER,
+    &METRICS_NOTIFIER
 ]
 ```
-Alternatively, notifiers can be dynamically attached per-request via `ctx.with_notifier(Arc::new(PubSubNotifier::new(pubsub)))`.
+
+Alternatively, attach notifiers per-request via `ctx.with_notifier(...)`.
 
 ---
 
 ## 6. Generated Ergonomic APIs
 
-`ash-macros` automatically generates typed builders for all declared actions:
-
 ```rust
-// 1. Typed create action builder (with DRY inferred types):
 let post = Post::create(&ctx)
     .title("My Post")
     .content("Hello World")
-    .tag("rust") // accepts &str directly for Option<String>!
     .await?;
 
-// 2. Zero-Import Field Operators directly on Post struct:
 let posts = Post::query(&ctx)
     .filter(Post::views.gt(10) & Post::archived.eq(false))
     .load_rel(Post::tags)
@@ -358,11 +368,9 @@ let posts = Post::query(&ctx)
     .all()
     .await?;
 
-// 3. Record lifecycle helpers:
 let reloaded = post.reload(&ctx).await?;
 post.destroy(&ctx).await?;
 
-// 4. Fluid Multi pipeline (no .changeset(), no .unwrap()):
 let results = ctx.multi()
     .create("author", Author::create(&ctx).name("Alice"))
     .create("post", Post::create(&ctx).title("First Post").content("Content"))
@@ -373,8 +381,6 @@ let results = ctx.multi()
 ---
 
 ## 7. Defining Domains (`domain!`)
-
-Domains represent bounded contexts that group related resources and expose clean code interfaces:
 
 ```rust
 use ash_core::domain;
@@ -389,13 +395,8 @@ domain! {
     }
 }
 
-// Instantiate domain with any DataLayer:
 let blog = Blog::new(Sqlite::connect("sqlite://blog.db").await?);
-
-// Install schema across all resources:
 blog.install_schema().await?;
-
-// Run queries through domain:
 let posts = blog.query::<Post>().await?;
 ```
 
@@ -403,26 +404,20 @@ let posts = blog.query::<Post>().await?;
 
 ## 8. Bulk Operations & Streaming
 
-Ash provides first-class bulk operations and chunked result streaming:
-
 ```rust
-// 1. Bulk creation
 let items = vec![
     [("title", "Post 1".into()), ("content", "...".into())],
     [("title", "Post 2".into()), ("content", "...".into())],
 ];
 let res = Post::bulk_create(&ctx, items).await?;
 
-// 2. Query bulk destruction
 let del_res = Post::query(&ctx)
     .filter(Post::archived.eq(true))
     .bulk_destroy("destroy", BulkDestroyOptions::default())
     .await?;
 
-// 3. Chunked query streaming
 Post::query(&ctx)
     .chunked(100, |batch| async move {
-        // process batch of 100 posts
         Ok(())
     })
     .await?;
@@ -432,10 +427,7 @@ Post::query(&ctx)
 
 ## 9. Declarative Action Hooks
 
-Attach lifecycle callbacks directly in resource actions, via reusable `CustomChange` plugins, as lightweight functions, or at runtime via action builders:
-
 ```rust
-// 1. Standalone hook functions:
 fn normalize_title(fields: &mut FieldMap) -> Result<()> {
     if let Some(Value::String(s)) = fields.get("title") {
         fields.insert("title".into(), Value::String(s.trim().to_string()));
@@ -449,7 +441,6 @@ fn emit_metrics(res: std::result::Result<&FieldMap, &Error>) {
     }
 }
 
-// 2. Reusable change function (no struct needed):
 fn audit_logger(ctx: &mut ChangeContext<'_>) -> Result<()> {
     ctx.after_action(|fields| {
         println!("Saved record: {:?}", fields.get("id"));
@@ -458,7 +449,6 @@ fn audit_logger(ctx: &mut ChangeContext<'_>) -> Result<()> {
     Ok(())
 }
 
-// 3. Or a reusable CustomChange struct (promotes to 'static directly with &AuditLogger):
 struct AuditLogger;
 impl CustomChange for AuditLogger {
     fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()> {
@@ -470,58 +460,50 @@ impl CustomChange for AuditLogger {
 }
 
 resource! {
-    resource Article;
-    table "articles";
+    Article {
+        table "articles";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        body: String,
-    }
-
-    actions {
-        create publish {
-            primary;
-            accept [title, body];
-
-            // Shorthand action hooks (function pointers or inline closures):
-            before_action normalize_title;
-            after_action |fields| {
-                println!("Saved article: {:?}", fields.get("title"));
-                Ok(())
-            };
-            after_transaction emit_metrics;
-
-            // Ash Elixir change wrapper syntax:
-            change before_action(normalize_title);
-
-            // Lightweight function change (zero struct boilerplate):
-            change func(audit_logger);
-
-            // Reusable CustomChange plugin (direct unit struct reference, no separate const needed):
-            change custom(&AuditLogger);
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            body: String;
         }
 
-        destroy archive {
-            primary;
-            before_action |fields| {
-                // Abort if deletion condition fails
-                Ok(())
-            };
+        actions {
+            create publish {
+                primary;
+                accept [title, body];
+
+                before_action normalize_title;
+                after_action |fields| {
+                    println!("Saved article: {:?}", fields.get("title"));
+                    Ok(())
+                };
+                after_transaction emit_metrics;
+
+                change before_action(normalize_title);
+                change func(audit_logger);
+                change custom(&AuditLogger);
+            }
+
+            destroy archive {
+                primary;
+                before_action |fields| {
+                    Ok(())
+                };
+            }
         }
     }
 }
 ```
 
-### Runtime Call-Site Hooks (Capturing Local Variables)
-While DSL hooks are compile-time functions, action builders also support runtime hooks that capture request-scoped variables (HTTP request IDs, client references, traces):
+### Runtime Call-Site Hooks
 
 ```rust
 let article = Article::create(&ctx)
     .title("Hello World")
     .body("...")
     .after_action(move |record| {
-        // Captures request_id from local scope!
         telemetry.record("article_created", record.id, request_id);
         Ok(())
     })
@@ -537,42 +519,35 @@ let article = Article::create(&ctx)
 
 ## 10. Generic Actions
 
-Generic actions allow resources to declare first-class domain operations that execute business logic without requiring database persistence:
-
 ```rust
 resource! {
-    resource CommunicationService;
+    CommunicationService {
+        actions {
+            generic send_notification, String {
+                argument recipient: String;
+                argument body: String;
+                argument priority: Option<String>;
 
-    actions {
-        // Syntax: action <name>, <return_type>
-        action send_notification, String {
-            argument recipient: String;
-            argument body: String;
-            argument priority: Option<String>;
-
-            run |input| async move {
-                let priority = input.priority.unwrap_or_else(|| "normal".into());
-                let sender = input.actor().map(|a| a.id.to_string()).unwrap_or_else(|| "system".into());
-                Ok(format!("{}: [{}] sent '{}' to {}", sender, priority, input.body, input.recipient))
+                run |input| async move {
+                    let priority = input.priority.unwrap_or_else(|| "normal".into());
+                    let sender = input.actor().map(|a| a.id.to_string()).unwrap_or_else(|| "system".into());
+                    Ok(format!("{}: [{}] sent '{}' to {}", sender, priority, input.body, input.recipient))
+                }
             }
         }
     }
 }
 
-// Caller API:
 let response = CommunicationService::send_notification(&ctx)
     .recipient("alice@example.com")
     .body("Hello, World!")
     .priority("high")
-    .call()
     .await?;
 ```
 
 ---
 
-## 11. Type-Safe Store Tagging (`store <Type>;` & `StoreRegistry`)
-
-Resources can explicitly bind to a storage target via `store <Type>;`, allowing multiple databases of the same kind (e.g. primary vs audit SQLite) or third-party engines:
+## 11. Type-Safe Store Tagging (`store <Type>;`)
 
 ```rust
 pub struct PrimaryDb;
@@ -582,20 +557,21 @@ pub struct AuditDb;
 impl StoreTag for AuditDb {}
 
 resource! {
-    resource Order;
-    table "orders";
-    store PrimaryDb;
-    // ...
+    Order {
+        table "orders";
+        store PrimaryDb;
+        // ...
+    }
 }
 
 resource! {
-    resource AuditEvent;
-    table "audit_events";
-    store AuditDb;
-    // ...
+    AuditEvent {
+        table "audit_events";
+        store AuditDb;
+        // ...
+    }
 }
 
-// In application setup:
 let registry = StoreRegistry::new()
     .with_store::<PrimaryDb, _>(primary_sqlite)
     .with_store::<AuditDb, _>(audit_sqlite);
@@ -603,28 +579,23 @@ let registry = StoreRegistry::new()
 let ctx = Context::new(registry);
 ```
 
+`store SqliteStore` / `MemoryStore` / `PostgresStore` also set `ResourceDef.data_layer`. Do not write `data_layer sqlite`.
+
 ---
 
 ## 12. Tenant & Request Metadata (`Context`, `ValidationContext`, `ChangeContext`)
 
-`ash-rust` contexts seamlessly support multi-tenancy and distributed tracing metadata:
-
 ```rust
-// 1. Configure context with tenant and metadata
 let ctx = Context::new(data_layer)
     .with_tenant("tenant_acme")
     .with_metadata("trace_id", "trace-12345");
 
-// 2. Action builders inherit tenant, or can override it
 let post = Post::create(&ctx)
     .title("Tenant Post")
-    .call()
     .await?;
 
-// Override tenant on a specific query or mutation:
 let alt_posts = Post::query(&ctx).tenant("tenant_beta").all().await?;
 
-// 3. Custom Validations and Changes access tenant and metadata directly:
 pub struct CheckTenant;
 impl CustomValidation for CheckTenant {
     fn validate(&self, ctx: &ValidationContext<'_>) -> Result<()> {
@@ -635,6 +606,3 @@ impl CustomValidation for CheckTenant {
     }
 }
 ```
-
-
-

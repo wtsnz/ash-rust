@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use ash_core::Context;
+use ash_core::{AshEnum, Context};
 use ash_sqlite::Sqlite;
 use clap::{Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
 use crate::representative::fields as rep;
 use crate::ticket::fields as t;
-use crate::ticket::{actor_customer, actor_representative};
+use crate::ticket::{actor_customer, actor_representative, Status};
 use crate::{Representative, Ticket, open_sqlite};
 
 #[derive(Parser)]
@@ -166,7 +166,7 @@ async fn run_ticket(ctx: &Context<Sqlite>, cmd: TicketCommand) -> ash_core::Resu
         } => {
             let mut query = Ticket::query(ctx);
             if open {
-                query = query.filter(t::status.eq("open"));
+                query = query.filter(t::status.eq(Status::Open));
             }
             if with_rep {
                 query = query.include(t::representative);

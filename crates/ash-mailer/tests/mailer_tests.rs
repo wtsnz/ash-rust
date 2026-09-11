@@ -12,14 +12,14 @@ mod order_mod {
     use super::*;
 
     ash_core::resource! {
-        resource Order;
+        Order {
         table "orders";
 
         attributes {
-            id: Uuid [pk],
-            customer_email: String,
-            amount: i64,
-            status: String = "pending",
+            id: Uuid [pk];
+            customer_email: String;
+            amount: i64;
+            status: String = "pending";
         }
 
         actions {
@@ -37,7 +37,7 @@ mod order_mod {
                 change set_attribute(status, "completed");
             }
         }
-    }
+    }}
 }
 pub use order_mod::Order;
 
@@ -47,12 +47,12 @@ mod user_mod {
 
     #[authentication]
     ash_core::resource! {
-        resource User;
+        User {
         table "users";
 
         attributes {
-            id: Uuid [pk],
-            email: String,
+            id: Uuid [pk];
+            email: String;
         }
 
         authentication {
@@ -71,7 +71,7 @@ mod user_mod {
         actions {
             read read { primary; }
         }
-    }
+    }}
 }
 pub use user_mod::User;
 

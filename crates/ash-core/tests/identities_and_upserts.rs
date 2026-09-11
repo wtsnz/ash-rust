@@ -4,16 +4,16 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    resource Account;
-    table "accounts";
+    Account {
+        table "accounts";
 
     attributes {
-        id: Uuid [pk],
-        email: String,
-        org_id: Uuid,
-        slug: String,
-        display_name: String,
-        points: i64,
+        id: Uuid [pk];
+        email: String;
+        org_id: Uuid;
+        slug: String;
+        display_name: String;
+        points: i64;
     }
 
     identities {
@@ -36,7 +36,7 @@ resource! {
             accept [display_name, points];
         }
     }
-}
+    }}
 
 #[tokio::main(flavor = "current_thread")]
 #[test]

@@ -41,38 +41,39 @@ use uuid::Uuid;
 
 #[state_machine]
 resource! {
-    resource Ticket;
-    table "tickets";
+    Ticket {
+        table "tickets";
 
-    attributes {
-        id: Uuid [pk],
-        subject: String,
-        // `status: String` is automatically injected by #[state_machine]
-    }
-
-    state_machine {
-        state_attribute status;
-        initial: "open";
-        transition assign, from: ["open"], to: "in_progress";
-        transition resolve, from: ["in_progress"], to: "resolved";
-        transition close, from: ["open", "in_progress", "resolved"], to: "closed";
-    }
-
-    actions {
-        create open {
-            primary;
-            accept [subject];
-            // Initial state "open" is automatically injected!
+        attributes {
+            id: Uuid [pk];
+            subject: String;
+            // `status: String` is automatically injected by #[state_machine]
         }
 
-        read read {
-            primary;
+        state_machine {
+            state_attribute status;
+            initial: "open";
+            transition assign, from: ["open"], to: "in_progress";
+            transition resolve, from: ["in_progress"], to: "resolved";
+            transition close, from: ["open", "in_progress", "resolved"], to: "closed";
         }
 
-        // Action validations and state changes are automatically injected!
-        update assign {}
-        update resolve {}
-        update close {}
+        actions {
+            create open {
+                primary;
+                accept [subject];
+                // Initial state "open" is automatically injected!
+            }
+
+            read read {
+                primary;
+            }
+
+            // Action validations and state changes are automatically injected!
+            update assign {}
+            update resolve {}
+            update close {}
+        }
     }
 }
 

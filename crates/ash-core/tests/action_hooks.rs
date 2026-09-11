@@ -62,14 +62,14 @@ mod test_shorthand_and_custom_change {
     }
 
     resource! {
-        resource ShorthandArticle;
+        ShorthandArticle {
         table "shorthand_articles";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            tag: Option<String>,
-            audit_before: Option<bool>,
+            id: Uuid [pk];
+            title: String;
+            tag: Option<String>;
+            audit_before: Option<bool>;
         }
 
         actions {
@@ -90,7 +90,7 @@ mod test_shorthand_and_custom_change {
                 primary;
             }
         }
-    }
+    }}
 
     #[tokio::test]
     async fn test_shorthand_hooks_in_memory() {
@@ -151,14 +151,14 @@ mod test_elixir_change_hooks {
     }
 
     resource! {
-        resource ElixirPost;
+        ElixirPost {
         table "elixir_posts";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            summary: Option<String>,
-            flag: Option<String>,
+            id: Uuid [pk];
+            title: String;
+            summary: Option<String>;
+            flag: Option<String>;
         }
 
         actions {
@@ -181,7 +181,7 @@ mod test_elixir_change_hooks {
                 change after_transaction(tx_updated);
             }
         }
-    }
+    }}
 
     #[tokio::test]
     async fn test_elixir_style_hooks_on_update() {
@@ -241,13 +241,13 @@ mod test_destroy_action_hooks {
     }
 
     resource! {
-        resource Document;
+        Document {
         table "documents";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            status: String = "active",
+            id: Uuid [pk];
+            title: String;
+            status: String = "active";
         }
 
         actions {
@@ -267,7 +267,7 @@ mod test_destroy_action_hooks {
                 after_transaction tx_destroyed;
             }
         }
-    }
+    }}
 
     #[tokio::test]
     async fn test_destroy_action_lifecycle_success() {
@@ -333,13 +333,13 @@ mod test_sqlite_hooks {
     }
 
     resource! {
-        resource SqliteEntity;
+        SqliteEntity {
         table "hook_entities";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
-            version: Option<i64>,
+            id: Uuid [pk];
+            name: String;
+            version: Option<i64>;
         }
 
         actions {
@@ -355,7 +355,7 @@ mod test_sqlite_hooks {
                 primary;
             }
         }
-    }
+    }}
 
     #[tokio::test]
     async fn test_sqlite_action_hooks() {

@@ -43,24 +43,25 @@ use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 use uuid::Uuid;
 
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
-    attributes {
-        id: Uuid [pk],
-        amount: i64,
-        status: String,
-    }
-
-    actions {
-        create create {
-            primary;
-            accept [amount];
-            change set(status = "pending");
+        attributes {
+            id: Uuid [pk];
+            amount: i64;
+            status: String;
         }
 
-        update complete {
-            change set(status = "completed");
+        actions {
+            create create {
+                primary;
+                accept [amount];
+                change set(status = "pending");
+            }
+
+            update complete {
+                change set(status = "completed");
+            }
         }
     }
 }

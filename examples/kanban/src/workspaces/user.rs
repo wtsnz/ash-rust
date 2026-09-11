@@ -2,13 +2,13 @@ use ash_core::resource;
 use uuid::Uuid;
 
 resource! {
-    resource User;
-    table "users";
+    User {
+        table "users";
 
     attributes {
-        id: Uuid [pk],
-        name: String,
-        email: String,
+        id: Uuid [pk];
+        name: String;
+        email: String;
     }
 
     actions {
@@ -19,13 +19,13 @@ resource! {
         }
 
         read read {
-            primary
+            primary;
         }
     }
 
     policies {
         policy always {
-            authorize_if always
+            authorize_if always;
         }
     }
-}
+    }}

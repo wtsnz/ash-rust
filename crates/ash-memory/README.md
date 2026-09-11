@@ -36,23 +36,24 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    resource Item;
-    table "items";
+    Item {
+        table "items";
 
-    attributes {
-        id: Uuid [pk],
-        name: String,
-        count: i64,
-    }
-
-    actions {
-        create create {
-            primary;
-            accept [name, count];
+        attributes {
+            id: Uuid [pk];
+            name: String;
+            count: i64;
         }
 
-        read read {
-            primary;
+        actions {
+            create create {
+                primary;
+                accept [name, count];
+            }
+
+            read read {
+                primary;
+            }
         }
     }
 }

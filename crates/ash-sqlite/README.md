@@ -40,28 +40,29 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    resource Customer;
-    table "customers";
+    Customer {
+        table "customers";
 
-    attributes {
-        id: Uuid [pk],
-        name: String,
-        email: String,
-        balance: i64,
-    }
-
-    actions {
-        create register {
-            primary;
-            accept [name, email, balance];
+        attributes {
+            id: Uuid [pk];
+            name: String;
+            email: String;
+            balance: i64;
         }
 
-        read read {
-            primary;
-        }
+        actions {
+            create register {
+                primary;
+                accept [name, email, balance];
+            }
 
-        update deposit {
-            accept [balance];
+            read read {
+                primary;
+            }
+
+            update deposit {
+                accept [balance];
+            }
         }
     }
 }

@@ -4,19 +4,19 @@ use ash_core::resource;
 use uuid::Uuid;
 
 resource! {
-    resource WorkspaceMember;
-    table "workspace_members";
+    WorkspaceMember {
+        table "workspace_members";
 
     attributes {
-        id: Uuid [pk],
-        workspace_id: Uuid,
-        user_id: Uuid,
-        role: String,
+        id: Uuid [pk];
+        workspace_id: Uuid;
+        user_id: Uuid;
+        role: String;
     }
 
     relationships {
-        belongs_to workspace: Workspace [fk: workspace_id],
-        belongs_to user: User [fk: user_id],
+        belongs_to workspace: Workspace [fk: workspace_id];
+        belongs_to user: User [fk: user_id];
     }
 
     actions {
@@ -27,7 +27,7 @@ resource! {
         }
 
         read read {
-            primary
+            primary;
         }
 
         destroy destroy {}
@@ -35,7 +35,7 @@ resource! {
 
     policies {
         policy always {
-            authorize_if always
+            authorize_if always;
         }
     }
-}
+    }}

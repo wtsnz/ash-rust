@@ -21,32 +21,32 @@ pub enum Priority {
 }
 
 resource! {
-    resource Post;
-    table "posts";
+    Post {
+        table "posts";
 
     attributes {
-        id: Uuid [pk],
-        title: String,
-        status: PostStatus [enum, default: PostStatus::Draft],
-        priority: Option<Priority> [enum],
+        id: Uuid [pk];
+        title: String;
+        status: PostStatus [enum, default: PostStatus::Draft];
+        priority: Option<Priority> [enum];
     }
 
     actions {
         create create {
-            primary true;
+            primary;
             accept [title, status, priority];
         }
 
         update update {
-            primary true;
+            primary;
             accept [title, status, priority];
         }
 
         read read {
-            primary true;
+            primary;
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_ash_enum_traits_and_conversions() {

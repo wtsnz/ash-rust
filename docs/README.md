@@ -76,33 +76,32 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    resource Post;
-    table "posts";
+    Post {
+        table "posts";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        views: i64,
-        version: i64 [version], // Optimistic concurrency control
-    }
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            views: i64;
+            version: i64 [version]; // Optimistic concurrency control
+        }
 
-    actions {
-        create create {
-            primary;
-            accept {
-                title: String,
+        actions {
+            create create {
+                primary;
+                accept [title];
+                change set(views = 0);
             }
-            change set_attribute(views, 0);
-        }
 
-        read read {
-            primary;
-        }
+            read read {
+                primary;
+            }
 
-        update increment_views {
-            argument by: i64;
-            // Increments view count safely
-            change custom(&MyIncrementChange);
+            update increment_views {
+                argument by: i64;
+                // Increments view count safely
+                change custom(&MyIncrementChange);
+            }
         }
     }
 }

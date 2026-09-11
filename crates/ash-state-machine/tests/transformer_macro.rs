@@ -30,13 +30,13 @@ use uuid::Uuid;
 
 #[state_machine]
 resource! {
-    resource Order;
-    table "orders";
+    Order {
+        table "orders";
 
     attributes {
-        id: Uuid [pk],
+        id: Uuid [pk];
         // Note: `status` is omitted here! The transformer injects `status: String`.
-        amount: i64,
+        amount: i64;
     }
 
     state_machine {
@@ -62,7 +62,7 @@ resource! {
         update pay {}
         update cancel {}
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
@@ -158,13 +158,13 @@ mod ticket_module {
 
     #[state_machine]
     resource! {
-        resource Ticket;
+        Ticket {
         table "tickets";
 
         attributes {
-            id: Uuid [pk],
-            title: String,
-            resolution_note: Option<String>,
+            id: Uuid [pk];
+            title: String;
+            resolution_note: Option<String>;
         }
 
         state_machine {
@@ -190,7 +190,7 @@ mod ticket_module {
                 accept [resolution_note];
             }
         }
-    }
+    }}
 
     #[tokio::test]
     async fn test_pattern2_auto_synthesized_actions_and_custom_accept() {

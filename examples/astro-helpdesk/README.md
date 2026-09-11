@@ -108,45 +108,58 @@ Open [http://localhost:4321](http://localhost:4321) in your browser.
 
 ```rust
 // 1. Declarative Resource with typed actions and validations
+use ash_core::{AshEnum, resource};
+
+#[derive(AshEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TicketStatus {
+    #[ash(string = "OPEN")]
+    Open,
+    #[ash(string = "IN_PROGRESS")]
+    InProgress,
+    #[ash(string = "RESOLVED")]
+    Resolved,
+    #[ash(string = "CLOSED")]
+    Closed,
+}
+
 resource! {
-    resource Ticket;
-    table "tickets";
+    Ticket {
+        table "tickets";
 
-    attributes {
-        id: Uuid [pk],
-        title: String,
-        description: Option<String>,
-        status: String [atom: "OPEN,IN_PROGRESS,RESOLVED,CLOSED"],
-        priority: i64,
-        author_id: Option<Uuid>,
-    }
-
-    relationships {
-        belongs_to author: Option<Representative> [fk: "author_id"],
-    }
-
-    actions {
-        create open {
-            primary
-            accept [title, description, status, priority, author_id]
-            validate present(title);
-            validate string_length(title, min = 5, max = 100);
-            validate one_of(status, ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]);
-            validate numericality(priority, min = 1, max = 5);
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            description: Option<String>;
+            status: TicketStatus [enum];
+            priority: i64;
+            author_id: Option<Uuid>;
         }
 
-        update change_status {
-            primary
-            accept [status]
-            validate one_of(status, ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]);
+        relationships {
+            belongs_to author: Representative [fk: author_id];
         }
 
-        destroy close {
-            primary
-        }
+        actions {
+            create open {
+                primary;
+                accept [title, description, status, priority, author_id];
+                validate present(title);
+                validate string_length(title, min: 5, max: 100);
+                validate numericality(priority, min: 1, max: 5);
+            }
 
-        read read {
-            primary
+            update change_status {
+                primary;
+                accept [status];
+            }
+
+            destroy close {
+                primary;
+            }
+
+            read read {
+                primary;
+            }
         }
     }
 }
@@ -169,7 +182,7 @@ let rep = Representative::create(&ctx)
 
 let ticket = Ticket::open(&ctx)
     .title("Postgres connection pool exhaustion")
-    .status("IN_PROGRESS")
+    .status(TicketStatus::InProgress)
     .priority(1)
     .author_id(rep.id)
     .await?;

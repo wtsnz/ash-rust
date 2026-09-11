@@ -9,16 +9,16 @@ pub mod user {
     use super::*;
 
     resource! {
-        resource User;
+        User {
         table "users";
 
         attributes {
-            id: Uuid [pk],
-            name: String,
+            id: Uuid [pk];
+            name: String;
         }
 
         relationships {
-            has_one profile: super::profile::Profile [fk: user_id, on_delete: cascade],
+            has_one profile: super::profile::Profile [fk: user_id, on_delete: cascade];
         }
 
         actions {
@@ -33,20 +33,20 @@ pub mod user {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod profile {
     use super::*;
 
     resource! {
-        resource Profile;
+        Profile {
         table "profiles";
 
         attributes {
-            id: Uuid [pk],
-            user_id: Uuid,
-            bio: String,
+            id: Uuid [pk];
+            user_id: Uuid;
+            bio: String;
         }
 
         actions {
@@ -61,14 +61,14 @@ pub mod profile {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub mod tenant_doc {
     use super::*;
 
     resource! {
-        resource TenantDoc;
+        TenantDoc {
         table "tenant_docs";
 
         multitenancy {
@@ -77,9 +77,9 @@ pub mod tenant_doc {
         }
 
         attributes {
-            id: Uuid [pk],
-            tenant_id: String,
-            title: String,
+            id: Uuid [pk];
+            tenant_id: String;
+            title: String;
         }
 
         actions {
@@ -91,7 +91,7 @@ pub mod tenant_doc {
                 primary;
             }
         }
-    }
+    }}
 }
 
 pub use profile::Profile;

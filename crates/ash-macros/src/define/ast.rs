@@ -22,6 +22,7 @@ pub struct ResourceDefinition {
     pub store: Option<Type>,
     pub timestamps: Option<TimestampsSpec>,
     pub multitenancy: Option<MultitenancySpec>,
+    pub actor: Option<ActorSpec>,
     pub warnings: Vec<proc_macro2::TokenStream>,
 }
 
@@ -48,6 +49,7 @@ impl ResourceDefinition {
             store: None,
             timestamps: None,
             multitenancy: None,
+            actor: None,
             warnings: Vec::new(),
         }
     }
@@ -70,6 +72,15 @@ pub struct IdentitySpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
     pub message: Option<String>,
+}
+
+pub struct ActorFieldSpec {
+    pub name: Ident,
+    pub ty: Type,
+}
+
+pub struct ActorSpec {
+    pub fields: Vec<ActorFieldSpec>,
 }
 
 pub struct AttributeSpec {
@@ -252,11 +263,11 @@ pub struct FieldAccept {
 pub enum ChangeSpec {
     Set {
         field: Ident,
-        value: Lit,
+        value: Expr,
     },
     SetNew {
         field: Ident,
-        value: Lit,
+        value: Expr,
     },
     RelateActor {
         field: Ident,

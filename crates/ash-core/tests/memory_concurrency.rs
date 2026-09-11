@@ -3,13 +3,13 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    resource ConcurrentUser;
-    table "concurrent_users";
+    ConcurrentUser {
+        table "concurrent_users";
 
     attributes {
-        id: Uuid [pk],
-        name: String,
-        email: String,
+        id: Uuid [pk];
+        name: String;
+        email: String;
     }
 
     actions {
@@ -27,7 +27,7 @@ resource! {
             accept [name, email];
         }
     }
-}
+    }}
 
 #[tokio::test]
 async fn test_memory_transaction_does_not_discard_concurrent_writes() {
