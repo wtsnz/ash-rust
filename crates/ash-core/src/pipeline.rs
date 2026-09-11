@@ -3,6 +3,7 @@ use uuid::Uuid;
 use crate::action::{ActionDef, ActionKind, Change, PersistKind, Validation};
 use crate::actor::Actor;
 use crate::error::{Error, Result};
+use crate::filter::Filter;
 use crate::resource::{AttrType, AttributeDef, ResourceDef};
 use crate::value::{FieldMap, Value};
 
@@ -156,14 +157,12 @@ pub fn apply_changes_with_context(
             Change::SetAttribute { field, value } => {
                 fields.insert((*field).to_string(), Value::from(*value));
             }
-            Change::SetNewAttribute { field, value } => {
-                match fields.get(*field) {
-                    None | Some(Value::Null) => {
-                        fields.insert((*field).to_string(), Value::from(*value));
-                    }
-                    _ => {}
+            Change::SetNewAttribute { field, value } => match fields.get(*field) {
+                None | Some(Value::Null) => {
+                    fields.insert((*field).to_string(), Value::from(*value));
                 }
-            }
+                _ => {}
+            },
             Change::RelateActor { field } => {
                 let actor = actor.ok_or(Error::Forbidden)?;
                 fields.insert((*field).to_string(), Value::Uuid(actor.id));
@@ -176,14 +175,12 @@ pub fn apply_changes_with_context(
             Change::SetAttributeFn { field, value } => {
                 fields.insert((*field).to_string(), value());
             }
-            Change::SetNewAttributeFn { field, value } => {
-                match fields.get(*field) {
-                    None | Some(Value::Null) => {
-                        fields.insert((*field).to_string(), value());
-                    }
-                    _ => {}
+            Change::SetNewAttributeFn { field, value } => match fields.get(*field) {
+                None | Some(Value::Null) => {
+                    fields.insert((*field).to_string(), value());
                 }
-            }
+                _ => {}
+            },
             Change::BeforeAction(hook) => {
                 before_actions.push(Box::new(*hook));
             }
@@ -349,6 +346,100 @@ pub fn run_validations_with_context(
         }
     }
     Ok(())
+}
+
+pub fn and_filters(left: Option<Filter>, right: Option<Filter>) -> Option<Filter> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(filter), None) | (None, Some(filter)) => Some(filter),
+        (Some(left), Some(right)) => Some(Filter::and([left, right])),
+    }
+}
+
+/// AND a tenant attribute filter onto a query, and require a tenant when the resource is not global.
+pub fn apply_tenant_scope(
+    resource: &ResourceDef,
+    filter: Option<Filter>,
+    tenant: Option<String>,
+) -> Result<(Option<Filter>, Option<String>)> {
+    let mut filter = filter;
+    if let Some(mt) = resource.multitenancy {
+        match mt.strategy {
+            crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
+                if let Some(ref tenant) = tenant {
+                    let tenant_filter = Filter::eq(attr_name, Value::String(tenant.clone()));
+                    filter = and_filters(filter, Some(tenant_filter));
+                } else if !mt.global {
+                    return Err(Error::TenantRequired {
+                        resource: resource.name,
+                    });
+                }
+            }
+            crate::resource::MultitenancyStrategy::Context => {
+                if tenant.is_none() && !mt.global {
+                    return Err(Error::TenantRequired {
+                        resource: resource.name,
+                    });
+                }
+            }
+        }
+    }
+    Ok((filter, tenant))
+}
+
+/// Stamp or require a tenant on write fields. Attribute strategy writes `tenant` onto `fields`.
+pub fn apply_tenant_to_fields(
+    resource: &ResourceDef,
+    fields: &mut FieldMap,
+    tenant: Option<&str>,
+    for_create: bool,
+) -> Result<()> {
+    if let Some(mt) = resource.multitenancy {
+        match mt.strategy {
+            crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
+                if let Some(tenant) = tenant {
+                    if for_create {
+                        fields.insert(attr_name.to_string(), Value::String(tenant.to_string()));
+                    }
+                } else if !mt.global {
+                    return Err(Error::TenantRequired {
+                        resource: resource.name,
+                    });
+                }
+            }
+            crate::resource::MultitenancyStrategy::Context => {
+                if tenant.is_none() && !mt.global {
+                    return Err(Error::TenantRequired {
+                        resource: resource.name,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Split accepted attributes from action arguments. Extra keys (pk, version) are ignored
+/// so GraphQL can pass `id` on the same map. An empty accept list keeps non-argument keys
+/// as fields, matching the GraphQL input builder.
+pub fn take_accepted_and_args(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
+    let mut fields = FieldMap::new();
+    let mut arguments = FieldMap::new();
+    for (field, value) in input {
+        if action.has_argument(&field) {
+            arguments.insert(field, value);
+        } else if action.accept.is_empty() || action.accept.contains(&field.as_str()) {
+            fields.insert(field, value);
+        }
+    }
+    for arg in action.arguments {
+        if !arg.allow_nil && !arguments.contains_key(arg.name) {
+            return Err(Error::Missing {
+                field: arg.name.to_string(),
+            });
+        }
+    }
+    Ok((fields, arguments))
 }
 
 pub fn validate(def: &ResourceDef, fields: &FieldMap) -> Result<()> {

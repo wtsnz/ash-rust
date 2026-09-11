@@ -7,8 +7,8 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    action_named, apply_changes_with_context, expect_kind, expect_persist, generate_pk, pk_name,
-    run_validations_with_context, split_input, validate,
+    action_named, apply_changes_with_context, apply_tenant_scope, expect_kind, expect_persist,
+    generate_pk, pk_name, run_validations_with_context, split_input, validate,
 };
 use crate::policy::{authorize_field_writes, authorize_write, redact_fields};
 use crate::resource::Resource;
@@ -192,7 +192,8 @@ where
 
             for attr in R::DEF.attributes {
                 if let Some(def_fn) = attr.default_fn
-                    && (!fields.contains_key(attr.name) || fields.get(attr.name) == Some(&Value::Null))
+                    && (!fields.contains_key(attr.name)
+                        || fields.get(attr.name) == Some(&Value::Null))
                 {
                     fields.insert(attr.name.to_string(), def_fn());
                 }
@@ -200,10 +201,12 @@ where
 
             if let Some((created_at, updated_at)) = R::DEF.timestamps {
                 let now = crate::resource::utc_now_iso8601();
-                if !fields.contains_key(created_at) || fields.get(created_at) == Some(&Value::Null) {
+                if !fields.contains_key(created_at) || fields.get(created_at) == Some(&Value::Null)
+                {
                     fields.insert(created_at.to_string(), Value::String(now.clone()));
                 }
-                if !fields.contains_key(updated_at) || fields.get(updated_at) == Some(&Value::Null) {
+                if !fields.contains_key(updated_at) || fields.get(updated_at) == Some(&Value::Null)
+                {
                     fields.insert(updated_at.to_string(), Value::String(now));
                 }
             }
@@ -253,7 +256,11 @@ where
     let mut records = Vec::new();
     let mut count = 0;
 
-    let chunk_size = opts.batch_size.unwrap_or(if prepared.is_empty() { 1 } else { prepared.len() });
+    let chunk_size = opts.batch_size.unwrap_or(if prepared.is_empty() {
+        1
+    } else {
+        prepared.len()
+    });
     for chunk in prepared.chunks(chunk_size) {
         if let Some((ident_name, ref u_fields)) = opts.upsert {
             let identity = R::DEF.identity(ident_name).ok_or_else(|| {
@@ -264,7 +271,11 @@ where
             })?;
 
             for (id, fields, arguments) in chunk {
-                match ctx.data.upsert(&R::DEF, *id, fields.clone(), identity, u_fields).await {
+                match ctx
+                    .data
+                    .upsert(&R::DEF, *id, fields.clone(), identity, u_fields)
+                    .await
+                {
                     Ok(mut stored) => {
                         if opts.notify {
                             let mut notif_metadata = ctx.metadata.clone();
@@ -278,8 +289,10 @@ where
                                 None,
                                 ctx.actor.clone(),
                                 notif_metadata,
-                            ).with_tenant(ctx.tenant.clone());
-                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
+                            )
+                            .with_tenant(ctx.tenant.clone());
+                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification)
+                                .await?;
                         }
                         if opts.return_records {
                             redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
@@ -298,7 +311,8 @@ where
                 }
             }
         } else {
-            let chunk_tuples: Vec<(Uuid, FieldMap)> = chunk.iter().map(|(id, f, _)| (*id, f.clone())).collect();
+            let chunk_tuples: Vec<(Uuid, FieldMap)> =
+                chunk.iter().map(|(id, f, _)| (*id, f.clone())).collect();
             match ctx.data.bulk_create(&R::DEF, chunk_tuples).await {
                 Ok(stored_rows) => {
                     for (mut stored, (id, _, arguments)) in stored_rows.into_iter().zip(chunk) {
@@ -314,8 +328,10 @@ where
                                 None,
                                 ctx.actor.clone(),
                                 notif_metadata,
-                            ).with_tenant(ctx.tenant.clone());
-                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
+                            )
+                            .with_tenant(ctx.tenant.clone());
+                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification)
+                                .await?;
                         }
                         if opts.return_records {
                             redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
@@ -361,15 +377,20 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
 
     let pk = pk_name(&R::DEF)?;
 
-    // Fetch existing records for authorization, cascading deletes, and notifications
-    let filter = Filter::In(pk.to_string(), ids.iter().map(|id| Value::Uuid(*id)).collect());
+    // Fetch existing records for authorization, cascading deletes, and notifications.
+    // Tenant scope must match Query::load so knowing a UUID is not enough to delete across tenants.
+    let id_filter = Filter::In(
+        pk.to_string(),
+        ids.iter().map(|id| Value::Uuid(*id)).collect(),
+    );
+    let (filter, tenant) = apply_tenant_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
     let rows = ctx
         .data
         .run_query(
             &R::DEF,
             &CompiledQuery {
-                filter: Some(filter),
-                tenant: ctx.tenant.clone(),
+                filter,
+                tenant,
                 ..CompiledQuery::default()
             },
         )
@@ -416,7 +437,11 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
     let mut records = Vec::new();
     let mut count = 0;
 
-    let chunk_size = opts.batch_size.unwrap_or(if valid_to_destroy.is_empty() { 1 } else { valid_to_destroy.len() });
+    let chunk_size = opts.batch_size.unwrap_or(if valid_to_destroy.is_empty() {
+        1
+    } else {
+        valid_to_destroy.len()
+    });
     for chunk in valid_to_destroy.chunks(chunk_size) {
         let chunk_ids: Vec<Uuid> = chunk.iter().map(|(id, _)| *id).collect();
         match ctx.data.bulk_destroy(&R::DEF, &chunk_ids).await {
@@ -432,7 +457,8 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
                             Some(row.clone()),
                             ctx.actor.clone(),
                             ctx.metadata.clone(),
-                        ).with_tenant(ctx.tenant.clone());
+                        )
+                        .with_tenant(ctx.tenant.clone());
                         crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
                     }
                     if opts.return_records {

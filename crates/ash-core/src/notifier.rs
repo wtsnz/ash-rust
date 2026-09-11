@@ -129,6 +129,25 @@ where
     }
 }
 
+/// Dispatch every queued notification. Used after a transaction (or Multi) commits.
+pub async fn flush_queued_notifications(
+    queue: &std::sync::Mutex<Vec<crate::context::QueuedNotification>>,
+    context_notifiers: &[Arc<dyn Notifier>],
+) {
+    let queued = {
+        let mut q = queue.lock().unwrap();
+        std::mem::take(&mut *q)
+    };
+    for item in queued {
+        for notifier in context_notifiers {
+            let _ = notifier.notify(&item.notification).await;
+        }
+        for notifier in item.resource_notifiers {
+            let _ = notifier.notify(&item.notification).await;
+        }
+    }
+}
+
 /// Dispatch a notification to context notifiers and resource notifiers, or buffer if an atomic transaction queue is present.
 pub async fn dispatch_notification<D>(
     ctx: &crate::context::Context<D>,
@@ -136,10 +155,13 @@ pub async fn dispatch_notification<D>(
     notification: Notification,
 ) -> Result<()> {
     if let Some(ref queue) = ctx.notification_queue {
-        queue.lock().unwrap().push(crate::context::QueuedNotification {
-            notification,
-            resource_notifiers: resource_def.notifiers,
-        });
+        queue
+            .lock()
+            .unwrap()
+            .push(crate::context::QueuedNotification {
+                notification,
+                resource_notifiers: resource_def.notifiers,
+            });
         return Ok(());
     }
 

@@ -8,10 +8,11 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    action_named, expect_kind, expect_persist, generate_pk, pk_name,
-    run_validations_with_context, validate,
+    apply_changes_with_context, apply_tenant_scope, apply_tenant_to_fields, expect_kind,
+    expect_persist, generate_pk, pk_name, run_validations_with_context, take_accepted_and_args,
+    validate,
 };
-use crate::policy::authorize_write;
+use crate::policy::{authorize_field_writes, authorize_write};
 use crate::resource::{Resource, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
@@ -61,13 +62,8 @@ pub async fn destroy<R: Resource, D: DataLayer>(
     action: &str,
     id: Uuid,
 ) -> Result<()> {
-    let action_def = action_named(&R::DEF, action)?;
-    expect_kind(action_def, ActionKind::Destroy)?;
-    expect_persist(action_def, PersistKind::DataLayer)?;
-
     let existing = get::<R, D>(ctx, id).await?;
-    let existing_fields = existing.to_fields();
-    destroy_dynamic(ctx, &R::DEF, action_def, id, &existing_fields).await
+    destroy_existing(ctx, action, existing).await
 }
 
 pub async fn destroy_existing<R: Resource, D: DataLayer>(
@@ -108,12 +104,17 @@ pub async fn destroy_dynamic<D: DataLayer>(
         hook(&mut fields)?;
     }
 
-    authorize_write(
+    run_validations_with_context(
         resource,
         action,
-        ctx.actor.as_ref(),
         Some(existing_fields),
+        &fields,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &FieldMap::new(),
     )?;
+    authorize_write(resource, action, ctx.actor.as_ref(), Some(existing_fields))?;
 
     let execute_destroy = || async {
         handle_cascading_deletes(ctx, resource, id, existing_fields).await?;
@@ -133,7 +134,8 @@ pub async fn destroy_dynamic<D: DataLayer>(
             Some(existing_fields.clone()),
             ctx.actor.clone(),
             ctx.metadata.clone(),
-        ).with_tenant(ctx.tenant.clone());
+        )
+        .with_tenant(ctx.tenant.clone());
         crate::notifier::dispatch_notification(ctx, resource, notification).await?;
 
         Ok(())
@@ -159,28 +161,54 @@ pub async fn create_dynamic<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    mut fields: FieldMap,
+    input: FieldMap,
 ) -> Result<FieldMap> {
-    generate_pk(resource, &mut fields);
-    let id = required_uuid(&fields, pk_name(resource)?)?;
+    expect_kind(action, ActionKind::Create)?;
+    expect_persist(action, PersistKind::DataLayer)?;
 
-    if let Some(v_attr) = resource.optimistic_lock_attribute() {
+    let (mut fields, arguments) = take_accepted_and_args(action, input)?;
+    generate_pk(resource, &mut fields);
+
+    if let Some(v_attr) = resource.optimistic_lock_attribute()
+        && (!fields.contains_key(v_attr) || fields.get(v_attr) == Some(&Value::Null))
+    {
         fields.insert(v_attr.to_string(), Value::Int(1));
     }
 
     if let Some((created_at, updated_at)) = resource.timestamps {
         let now = crate::resource::utc_now_iso8601();
-        fields.entry(created_at.to_string()).or_insert_with(|| Value::String(now.clone()));
-        fields.entry(updated_at.to_string()).or_insert_with(|| Value::String(now));
+        fields
+            .entry(created_at.to_string())
+            .or_insert_with(|| Value::String(now.clone()));
+        fields
+            .entry(updated_at.to_string())
+            .or_insert_with(|| Value::String(now));
     }
 
     for attr in resource.attributes {
-        if let Some(def_fn) = attr.default_fn {
-            fields.entry(attr.name.to_string()).or_insert_with(def_fn);
+        if let Some(def_fn) = attr.default_fn
+            && (!fields.contains_key(attr.name) || fields.get(attr.name) == Some(&Value::Null))
+        {
+            fields.insert(attr.name.to_string(), def_fn());
         }
     }
 
-    validate(resource, &fields)?;
+    let mut dynamic_before_actions = Vec::new();
+    let mut dynamic_after_actions = Vec::new();
+    let mut dynamic_after_transactions = Vec::new();
+    apply_changes_with_context(
+        &mut fields,
+        action,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &arguments,
+        &mut dynamic_before_actions,
+        &mut dynamic_after_actions,
+        &mut dynamic_after_transactions,
+    )?;
+    apply_tenant_to_fields(resource, &mut fields, ctx.tenant(), true)?;
+
     run_validations_with_context(
         resource,
         action,
@@ -189,25 +217,63 @@ pub async fn create_dynamic<D: DataLayer>(
         ctx.actor.as_ref(),
         ctx.tenant(),
         ctx.metadata(),
-        &FieldMap::new(),
+        &arguments,
     )?;
+    validate(resource, &fields)?;
+    authorize_field_writes(resource, ctx.actor.as_ref(), None, &fields)?;
     authorize_write(resource, action, ctx.actor.as_ref(), Some(&fields))?;
 
-    let stored = ctx.data.create(resource, id, fields).await?;
-
-    let notification = crate::notifier::Notification::new(
-        resource.name,
-        action.name,
-        ActionKind::Create,
-        id,
-        stored.clone(),
+    for hook in dynamic_before_actions {
+        hook(&mut fields)?;
+    }
+    run_validations_with_context(
+        resource,
+        action,
         None,
-        ctx.actor.clone(),
-        ctx.metadata.clone(),
-    ).with_tenant(ctx.tenant.clone());
-    crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+        &fields,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &arguments,
+    )?;
+    validate(resource, &fields)?;
+    let id = required_uuid(&fields, pk_name(resource)?)?;
 
-    Ok(stored)
+    let persist = async {
+        let mut stored = ctx.data.create(resource, id, fields).await?;
+        for hook in dynamic_after_actions {
+            hook(&mut stored)?;
+        }
+
+        let notification = crate::notifier::Notification::new(
+            resource.name,
+            action.name,
+            ActionKind::Create,
+            id,
+            stored.clone(),
+            None,
+            ctx.actor.clone(),
+            ctx.metadata.clone(),
+        )
+        .with_tenant(ctx.tenant.clone());
+        crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+        Ok(stored)
+    };
+
+    match persist.await {
+        Ok(stored) => {
+            for hook in dynamic_after_transactions {
+                hook(Ok(&stored));
+            }
+            Ok(stored)
+        }
+        Err(err) => {
+            for hook in dynamic_after_transactions {
+                hook(Err(&err));
+            }
+            Err(err)
+        }
+    }
 }
 
 pub async fn update_dynamic<D: DataLayer>(
@@ -217,14 +283,22 @@ pub async fn update_dynamic<D: DataLayer>(
     id: Uuid,
     input: FieldMap,
 ) -> Result<FieldMap> {
+    expect_kind(action, ActionKind::Update)?;
+    expect_persist(action, PersistKind::DataLayer)?;
+
     let pk = pk_name(resource)?;
+    let (lookup_filter, tenant) = apply_tenant_scope(
+        resource,
+        Some(Filter::eq(pk, Value::Uuid(id))),
+        ctx.tenant.clone(),
+    )?;
     let existing_fields = ctx
         .data
         .run_query(
             resource,
             &CompiledQuery {
-                filter: Some(Filter::eq(pk, Value::Uuid(id))),
-                tenant: ctx.tenant.clone(),
+                filter: lookup_filter,
+                tenant,
                 ..CompiledQuery::default()
             },
         )
@@ -233,8 +307,9 @@ pub async fn update_dynamic<D: DataLayer>(
         .next()
         .ok_or(Error::NotFound)?;
 
+    let (accepted, arguments) = take_accepted_and_args(action, input)?;
     let mut fields = existing_fields.clone();
-    fields.extend(input);
+    fields.extend(accepted.clone());
 
     if let Some(v_attr) = resource.optimistic_lock_attribute() {
         let current_v = existing_fields
@@ -252,7 +327,22 @@ pub async fn update_dynamic<D: DataLayer>(
         fields.insert(updated_at.to_string(), Value::String(now));
     }
 
-    validate(resource, &fields)?;
+    let mut dynamic_before_actions = Vec::new();
+    let mut dynamic_after_actions = Vec::new();
+    let mut dynamic_after_transactions = Vec::new();
+    apply_changes_with_context(
+        &mut fields,
+        action,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &arguments,
+        &mut dynamic_before_actions,
+        &mut dynamic_after_actions,
+        &mut dynamic_after_transactions,
+    )?;
+    apply_tenant_to_fields(resource, &mut fields, ctx.tenant(), false)?;
+
     run_validations_with_context(
         resource,
         action,
@@ -261,25 +351,67 @@ pub async fn update_dynamic<D: DataLayer>(
         ctx.actor.as_ref(),
         ctx.tenant(),
         ctx.metadata(),
-        &FieldMap::new(),
+        &arguments,
+    )?;
+    validate(resource, &fields)?;
+    authorize_field_writes(
+        resource,
+        ctx.actor.as_ref(),
+        Some(&existing_fields),
+        &accepted,
     )?;
     authorize_write(resource, action, ctx.actor.as_ref(), Some(&fields))?;
 
-    let stored = ctx.data.update(resource, id, fields).await?;
+    for hook in dynamic_before_actions {
+        hook(&mut fields)?;
+    }
+    run_validations_with_context(
+        resource,
+        action,
+        Some(&existing_fields),
+        &fields,
+        ctx.actor.as_ref(),
+        ctx.tenant(),
+        ctx.metadata(),
+        &arguments,
+    )?;
+    validate(resource, &fields)?;
 
-    let notification = crate::notifier::Notification::new(
-        resource.name,
-        action.name,
-        ActionKind::Update,
-        id,
-        stored.clone(),
-        Some(existing_fields),
-        ctx.actor.clone(),
-        ctx.metadata.clone(),
-    ).with_tenant(ctx.tenant.clone());
-    crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+    let persist = async {
+        let mut stored = ctx.data.update(resource, id, fields).await?;
+        for hook in dynamic_after_actions {
+            hook(&mut stored)?;
+        }
 
-    Ok(stored)
+        let notification = crate::notifier::Notification::new(
+            resource.name,
+            action.name,
+            ActionKind::Update,
+            id,
+            stored.clone(),
+            Some(existing_fields),
+            ctx.actor.clone(),
+            ctx.metadata.clone(),
+        )
+        .with_tenant(ctx.tenant.clone());
+        crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+        Ok(stored)
+    };
+
+    match persist.await {
+        Ok(stored) => {
+            for hook in dynamic_after_transactions {
+                hook(Ok(&stored));
+            }
+            Ok(stored)
+        }
+        Err(err) => {
+            for hook in dynamic_after_transactions {
+                hook(Err(&err));
+            }
+            Err(err)
+        }
+    }
 }
 
 /// Create that runs the changeset pipeline, then a persist callback instead of the data layer.

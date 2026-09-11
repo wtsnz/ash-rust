@@ -6,8 +6,8 @@ pub use managed::ManagedRelationshipSpec;
 pub(crate) use managed::extract_managed_relationships;
 
 use crate::action::{
-    ActionDef, ActionKind, DynamicAfterActionHook, DynamicAfterTransactionHook,
-    ManagedRelType, PersistKind,
+    ActionDef, ActionKind, DynamicAfterActionHook, DynamicAfterTransactionHook, ManagedRelType,
+    PersistKind,
 };
 use crate::context::Context;
 use crate::data_layer::DataLayer;
@@ -27,7 +27,8 @@ pub type BeforeActionHook<R> = Box<dyn FnOnce(&mut Changeset<R>) -> Result<()> +
 pub type AfterActionHook<R> = Box<dyn FnOnce(&mut R) -> Result<()> + Send + 'static>;
 
 /// Hook running after transaction completion (commit or rollback), receiving the result.
-pub type AfterTransactionHook<R> = Box<dyn FnOnce(std::result::Result<&R, &Error>) + Send + 'static>;
+pub type AfterTransactionHook<R> =
+    Box<dyn FnOnce(std::result::Result<&R, &Error>) + Send + 'static>;
 
 /// Prepared write. Accept, changes, and validation have already run.
 /// Persist happens on [`commit`](Self::commit).
@@ -231,12 +232,16 @@ impl<R: Resource> Changeset<R> {
                     if let Some(t) = ctx.tenant() {
                         fields.insert(attr_name.to_string(), Value::String(t.to_string()));
                     } else if !mt.global {
-                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                        return Err(Error::TenantRequired {
+                            resource: R::DEF.name,
+                        });
                     }
                 }
                 crate::resource::MultitenancyStrategy::Context => {
                     if ctx.tenant().is_none() && !mt.global {
-                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                        return Err(Error::TenantRequired {
+                            resource: R::DEF.name,
+                        });
                     }
                 }
             }
@@ -333,9 +338,12 @@ impl<R: Resource> Changeset<R> {
         }
 
         if let Some(mt) = R::DEF.multitenancy
-            && ctx.tenant().is_none() && !mt.global
+            && ctx.tenant().is_none()
+            && !mt.global
         {
-            return Err(Error::TenantRequired { resource: R::DEF.name });
+            return Err(Error::TenantRequired {
+                resource: R::DEF.name,
+            });
         }
 
         run_validations_with_context(
@@ -434,11 +442,7 @@ impl<R: Resource> Changeset<R> {
         R::from_fields(&fields)
     }
 
-    pub fn for_destroy<D: DataLayer>(
-        ctx: &Context<D>,
-        action: &str,
-        existing: R,
-    ) -> Result<Self> {
+    pub fn for_destroy<D: DataLayer>(ctx: &Context<D>, action: &str, existing: R) -> Result<Self> {
         let action = action_named(&R::DEF, action)?;
         expect_kind(action, ActionKind::Destroy)?;
         let mut fields = existing.to_fields();
@@ -526,6 +530,21 @@ impl<R: Resource> Changeset<R> {
             hook(self)?;
         }
 
+        let previous = self.existing.as_ref().map(Resource::to_fields);
+        run_validations_with_context(
+            &R::DEF,
+            self.action,
+            previous.as_ref(),
+            &self.fields,
+            ctx.actor.as_ref(),
+            ctx.tenant(),
+            ctx.metadata(),
+            &self.arguments,
+        )?;
+        if self.action.kind != ActionKind::Destroy {
+            validate(&R::DEF, &self.fields)?;
+        }
+
         expect_persist(self.action, PersistKind::DataLayer)?;
         authorize(self, ctx)?;
 
@@ -537,16 +556,27 @@ impl<R: Resource> Changeset<R> {
                     .actions
                     .iter()
                     .find(|a| a.kind == ActionKind::Create && a.primary)
-                    .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Create));
+                    .or_else(|| {
+                        dest_def
+                            .actions
+                            .iter()
+                            .find(|a| a.kind == ActionKind::Create)
+                    });
                 let child_update_action = dest_def
                     .actions
                     .iter()
                     .find(|a| a.kind == ActionKind::Update && a.primary)
-                    .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Update));
+                    .or_else(|| {
+                        dest_def
+                            .actions
+                            .iter()
+                            .find(|a| a.kind == ActionKind::Update)
+                    });
 
                 let child_pk = pk_name(dest_def)?;
                 for child_fields in &managed.inputs {
-                    let is_update = child_fields.contains_key(child_pk) && managed.rel_type == ManagedRelType::DirectControl;
+                    let is_update = child_fields.contains_key(child_pk)
+                        && managed.rel_type == ManagedRelType::DirectControl;
                     if is_update {
                         if let Some(act) = child_update_action {
                             run_validations(dest_def, act, None, child_fields, &FieldMap::new())?;
@@ -573,9 +603,20 @@ impl<R: Resource> Changeset<R> {
                             .actions
                             .iter()
                             .find(|a| a.kind == ActionKind::Create && a.primary)
-                            .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Create));
+                            .or_else(|| {
+                                dest_def
+                                    .actions
+                                    .iter()
+                                    .find(|a| a.kind == ActionKind::Create)
+                            });
                         if let Some(create_act) = create_act {
-                            let stored = Box::pin(crate::engine::create_dynamic(ctx, dest_def, create_act, child_fields)).await?;
+                            let stored = Box::pin(crate::engine::create_dynamic(
+                                ctx,
+                                dest_def,
+                                create_act,
+                                child_fields,
+                            ))
+                            .await?;
                             required_uuid(&stored, dest_pk)?
                         } else {
                             generate_pk(dest_def, &mut child_fields);
@@ -584,7 +625,8 @@ impl<R: Resource> Changeset<R> {
                             cid
                         }
                     };
-                    self.fields.insert(rel.source_attribute.to_string(), Value::from(child_id));
+                    self.fields
+                        .insert(rel.source_attribute.to_string(), Value::from(child_id));
                 }
             }
         }
@@ -595,15 +637,20 @@ impl<R: Resource> Changeset<R> {
                 crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
                     if let Some(t) = tenant {
                         if self.action.kind == ActionKind::Create {
-                            self.fields.insert(attr_name.to_string(), Value::String(t.to_string()));
+                            self.fields
+                                .insert(attr_name.to_string(), Value::String(t.to_string()));
                         }
                     } else if !mt.global {
-                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                        return Err(Error::TenantRequired {
+                            resource: R::DEF.name,
+                        });
                     }
                 }
                 crate::resource::MultitenancyStrategy::Context => {
                     if tenant.is_none() && !mt.global {
-                        return Err(Error::TenantRequired { resource: R::DEF.name });
+                        return Err(Error::TenantRequired {
+                            resource: R::DEF.name,
+                        });
                     }
                 }
             }
@@ -645,7 +692,9 @@ impl<R: Resource> Changeset<R> {
         };
 
         let managed_list = std::mem::take(&mut self.managed_relationships);
-        if let Err(err) = crate::engine::handle_managed_relationships(ctx, &R::DEF, id, managed_list).await {
+        if let Err(err) =
+            crate::engine::handle_managed_relationships(ctx, &R::DEF, id, managed_list).await
+        {
             if self.action.kind == ActionKind::Create {
                 let _ = ctx.data.destroy(&R::DEF, id).await;
             }
@@ -677,7 +726,8 @@ impl<R: Resource> Changeset<R> {
             previous_fields,
             ctx.actor.clone(),
             notif_metadata,
-        ).with_tenant(self.tenant.clone().or_else(|| ctx.tenant.clone()));
+        )
+        .with_tenant(self.tenant.clone().or_else(|| ctx.tenant.clone()));
         crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 
         Ok(record)
