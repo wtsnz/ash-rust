@@ -309,6 +309,8 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 #namespaces
                 #[allow(dead_code)]
                 fn __ash_assert_resource<T: ::ash_core::Resource>() {}
+                #[allow(dead_code)]
+                fn __ash_assert_store<T: ::ash_core::StoreTag>() {}
                 #ash_type_helper
                 #enum_helper
 
@@ -349,6 +351,26 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
         probes.push(quote_spanned! { dest.span() =>
             __ash_assert_resource::<#dest>();
         });
+        if let Some(through) = &rel.through {
+            probes.push(quote_spanned! { through.span() =>
+                __ash_assert_resource::<#through>();
+            });
+        }
+    }
+
+    if let Some(store_ty) = &def.store {
+        probes.push(quote_spanned! { store_ty.span() =>
+            __ash_assert_store::<#store_ty>();
+        });
+    }
+
+    for attr in &def.attributes {
+        if let Some(default_fn) = &attr.default_fn {
+            let ty = &attr.ty;
+            probes.push(quote_spanned! { default_fn.span() =>
+                let _: #ty = (#default_fn)();
+            });
+        }
     }
 
     for rel in &def.relationships {
@@ -795,5 +817,29 @@ mod tests {
             !out.contains("Context < :: ash_memory :: Memory >"),
             "policy action probes should not instantiate builders: {out}"
         );
+    }
+
+    #[test]
+    fn test_probe_store_through_and_default_fn() {
+        let def = parse_def(quote! {
+            TestResource {
+                store PrimaryDb;
+                attributes {
+                    id: Uuid [pk];
+                    token: String [default_fn: gen_token];
+                }
+                relationships {
+                    many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("StoreTag"), "missing store bound: {out}");
+        assert!(out.contains("PrimaryDb"), "missing store type: {out}");
+        assert!(out.contains("PostTag"), "missing through type: {out}");
+        assert!(out.contains("gen_token"), "missing default_fn: {out}");
     }
 }
