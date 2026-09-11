@@ -85,12 +85,12 @@ resource! {
 use ash_core::domain;
 
 domain! {
-    domain Catalog {
+    Catalog {
         resources {
             Product {
-                define: create_product, action: create;
-                define: get_product, action: read;
-            }
+                define create_product, action: create;
+                define get_product, action: read;
+            };
         }
     }
 }

@@ -1,7 +1,7 @@
 use super::ast::{CodeInterfaceTarget, DomainDefinition};
 use crate::ast_helpers::{screaming_snake, snake_case};
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::Result;
 
 fn pluralize(s: &str) -> String {
@@ -139,15 +139,19 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
     let mut interface_probes = Vec::new();
     for res in &def.resources {
         let res_ident = &res.resource;
+        interface_probes.push(quote_spanned! { res_ident.span() =>
+            __ash_assert_resource::<#res_ident>();
+        });
         for ci in &res.interfaces {
             if ci.get_by.is_some() || ci.action_name == "read" {
                 continue;
             }
             let action_name = &ci.action_name;
+            let method = quote_spanned! { action_name.span() => #action_name };
             interface_probes.push(match ci.target {
                 CodeInterfaceTarget::Static => quote! {
                     if false {
-                        let _ = <#res_ident>::#action_name::<::ash_memory::Memory>;
+                        let _ = <#res_ident>::#method::<::ash_memory::Memory>;
                     }
                 },
                 CodeInterfaceTarget::Record | CodeInterfaceTarget::Id => quote! {
@@ -156,7 +160,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                             __ctx: &::ash_core::Context<::ash_memory::Memory>,
                             __id: ::uuid::Uuid,
                         ) {
-                            let _ = <#res_ident>::#action_name(__ctx, __id);
+                            let _ = <#res_ident>::#method(__ctx, __id);
                         }
                     }
                 },
@@ -175,6 +179,8 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                 clippy::pedantic
             )]
             fn __ash_domain_ide_probes() {
+                #[allow(dead_code)]
+                fn __ash_assert_resource<T: ::ash_core::Resource>() {}
                 #(#interface_probes)*
             }
         };
@@ -333,13 +339,14 @@ mod tests {
     #[test]
     fn test_domain_emits_action_interface_probes() {
         let def = match syn::parse2::<DomainDefinition>(quote! {
-            domain Helpdesk;
-            resources {
-                Ticket {
-                    define open_ticket, action: open, args: [subject: String];
-                    define close_ticket, action: close, on: record;
-                    define list_tickets, action: read;
-                    define get_ticket, action: read, get_by: id;
+            Helpdesk {
+                resources {
+                    Ticket {
+                        define open_ticket, action: open, args: [subject: String];
+                        define close_ticket, action: close, on: record;
+                        define list_tickets, action: read;
+                        define get_ticket, action: read, get_by: id;
+                    };
                 }
             }
         }) {
@@ -353,6 +360,10 @@ mod tests {
         assert!(
             out.contains("__ash_domain_ide_probes"),
             "missing domain probe: {out}"
+        );
+        assert!(
+            out.contains("__ash_assert_resource"),
+            "missing resource probe: {out}"
         );
     }
 }

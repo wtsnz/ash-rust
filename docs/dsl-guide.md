@@ -382,22 +382,27 @@ let results = ctx.multi()
 
 ## 7. Defining Domains (`domain!`)
 
+Canonical header is `Name { ... }`, matching `resource!`. Resource entries and code interfaces end with `;`. `action: open` probes `Ticket::open` so F12 goes to the action.
+
 ```rust
 use ash_core::domain;
 
 domain! {
-    domain Blog;
-
-    resources {
-        Post,
-        Author,
-        Tag,
+    Blog {
+        resources {
+            Post {
+                define create_post, action: create, args: [title: String];
+                define get_post, action: read, get_by: id;
+            };
+            Author;
+            Tag;
+        }
     }
 }
 
 let blog = Blog::new(Sqlite::connect("sqlite://blog.db").await?);
-blog.install_schema().await?;
-let posts = blog.query::<Post>().await?;
+blog.install().await?;
+let posts = blog.query::<Post>().all().await?;
 ```
 
 ---

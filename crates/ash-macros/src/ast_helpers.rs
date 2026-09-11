@@ -255,7 +255,30 @@ pub fn extract_resource_ident(input: &proc_macro2::TokenStream) -> Option<Ident>
 }
 
 pub fn extract_domain_ident(input: &proc_macro2::TokenStream) -> Option<Ident> {
-    extract_ident_after_keyword(input, &["domain", "name"])
+    extract_ident_after_keyword(input, &["domain", "name"]).or_else(|| {
+        let tokens: Vec<proc_macro2::TokenTree> = input.clone().into_iter().collect();
+        let mut i = 0;
+        while i < tokens.len() {
+            match &tokens[i] {
+                proc_macro2::TokenTree::Punct(p) if p.as_char() == '#' => {
+                    i += 1;
+                    if matches!(tokens.get(i), Some(proc_macro2::TokenTree::Group(_))) {
+                        i += 1;
+                    }
+                }
+                proc_macro2::TokenTree::Ident(name) => {
+                    if let Some(proc_macro2::TokenTree::Group(g)) = tokens.get(i + 1)
+                        && g.delimiter() == proc_macro2::Delimiter::Brace
+                    {
+                        return Some(name.clone());
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        None
+    })
 }
 
 fn extract_ident_after_keyword(
@@ -369,6 +392,18 @@ mod tests {
 
     #[test]
     fn test_extract_domain_ident_from_header() {
+        let tokens = quote::quote! {
+            /// docs
+            Helpdesk {
+                resources { Ticket; }
+            }
+        };
+        let ident = extract_domain_ident(&tokens).expect("domain ident");
+        assert_eq!(ident.to_string(), "Helpdesk");
+    }
+
+    #[test]
+    fn test_extract_domain_ident_from_legacy_header() {
         let tokens = quote::quote! {
             /// docs
             domain Helpdesk;
