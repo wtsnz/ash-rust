@@ -342,10 +342,10 @@ mod tests {
             Helpdesk {
                 resources {
                     Ticket {
-                        define open_ticket, action: open, args: [subject: String];
-                        define close_ticket, action: close, on: record;
-                        define list_tickets, action: read;
-                        define get_ticket, action: read, get_by: id;
+                        define open_ticket action: open args: [subject: String];
+                        define close_ticket action: close on: record;
+                        define list_tickets action: read;
+                        define get_ticket action: read get_by: id;
                     };
                 }
             }

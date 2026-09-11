@@ -31,7 +31,7 @@ ash_core::resource! {
 
         update revoke {
             primary;
-            change set_attribute(revoked, true);
+            change set(revoked, true);
         }
 
         destroy destroy {

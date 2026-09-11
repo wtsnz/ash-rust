@@ -34,7 +34,7 @@ mod order_mod {
 
             update complete {
                 primary;
-                change set_attribute(status, "completed");
+                change set(status, "completed");
             }
         }
     }}

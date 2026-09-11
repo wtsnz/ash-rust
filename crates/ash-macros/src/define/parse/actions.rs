@@ -212,7 +212,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         change_kw = Some(item_ident.clone());
                     }
                     let expr: Expr = body.parse()?;
-                    changes.push(parse_change(&expr)?);
+                    changes.push(parse_change(&expr, errors)?);
                     require_semi(&body, errors, "change");
                 }
                 "before_action" => {
@@ -245,7 +245,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     let _ = syn::bracketed!(items in body);
                     let exprs = Punctuated::<Expr, Token![,]>::parse_terminated(&items)?;
                     for expr in exprs {
-                        changes.push(parse_change(&expr)?);
+                        changes.push(parse_change(&expr, errors)?);
                     }
                     if body.peek(Token![;]) {
                         let _: Token![;] = body.parse()?;
@@ -455,7 +455,7 @@ fn arg_call_ident(expr: &Expr) -> Option<Ident> {
     expr_to_ident(call.args.first()?).ok()
 }
 
-pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
+pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> {
     let Expr::Call(call) = expr else {
         return Err(Error::new_spanned(
             expr,
@@ -466,61 +466,28 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
     let Expr::Path(func) = &*call.func else {
         return Err(Error::new_spanned(&call.func, "expected function name"));
     };
-    let func_name = func
-        .path
-        .get_ident()
+    let func_ident = func.path.get_ident();
+    let func_name = func_ident
         .ok_or_else(|| Error::new_spanned(func, "expected identifier"))?
         .to_string();
 
     match func_name.as_str() {
-        "set" | "set_attribute" => {
-            if call.args.len() == 1 {
-                if let Some(Expr::Assign(assign)) = call.args.first() {
-                    let field = expr_to_ident(&assign.left)?;
-                    if let Some(argument) = arg_call_ident(&assign.right) {
-                        return Ok(ChangeSpec::SetFromArg { field, argument });
-                    }
-                    return Ok(ChangeSpec::Set {
-                        field,
-                        value: (*assign.right).clone(),
-                    });
-                }
-            } else if call.args.len() == 2 {
-                let field = expr_to_ident(&call.args[0])?;
-                if let Some(argument) = arg_call_ident(&call.args[1]) {
-                    return Ok(ChangeSpec::SetFromArg { field, argument });
-                }
-                return Ok(ChangeSpec::Set {
-                    field,
-                    value: call.args[1].clone(),
-                });
-            }
-            Err(Error::new_spanned(
-                call,
-                "expected `set(field = value)` or `set(field, value)`",
-            ))
+        "set_attribute" => {
+            errors.push(Error::new_spanned(
+                func,
+                "use `set(...)`, not `set_attribute(...)`",
+            ));
+            parse_set_change(call, false)
         }
-        "set_new" | "set_new_attribute" => {
-            if call.args.len() == 1 {
-                if let Some(Expr::Assign(assign)) = call.args.first() {
-                    let field = expr_to_ident(&assign.left)?;
-                    return Ok(ChangeSpec::SetNew {
-                        field,
-                        value: (*assign.right).clone(),
-                    });
-                }
-            } else if call.args.len() == 2 {
-                let field = expr_to_ident(&call.args[0])?;
-                return Ok(ChangeSpec::SetNew {
-                    field,
-                    value: call.args[1].clone(),
-                });
-            }
-            Err(Error::new_spanned(
-                call,
-                "expected `set_new(field = value)` or `set_new(field, value)`",
-            ))
+        "set" => parse_set_change(call, false),
+        "set_new_attribute" => {
+            errors.push(Error::new_spanned(
+                func,
+                "use `set_new(...)`, not `set_new_attribute(...)`",
+            ));
+            parse_set_change(call, true)
         }
+        "set_new" => parse_set_change(call, true),
         "relate_actor" => {
             if call.args.len() == 1 {
                 let field = expr_to_ident(&call.args[0])?;
@@ -603,12 +570,9 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
         _ => {
             const CHANGE_NAMES: &[&str] = &[
                 "set",
-                "set_attribute",
                 "set_new",
-                "set_new_attribute",
                 "relate_actor",
                 "set_from_arg",
-                "set_from_argument",
                 "manage_relationship",
                 "before_action",
                 "after_action",
@@ -630,6 +594,48 @@ pub fn parse_change(expr: &Expr) -> Result<ChangeSpec> {
             }
         }
     }
+}
+
+fn parse_set_change(call: &syn::ExprCall, new: bool) -> Result<ChangeSpec> {
+    if call.args.len() == 1 {
+        if let Some(Expr::Assign(assign)) = call.args.first() {
+            let field = expr_to_ident(&assign.left)?;
+            if !new && let Some(argument) = arg_call_ident(&assign.right) {
+                return Ok(ChangeSpec::SetFromArg { field, argument });
+            }
+            if new {
+                return Ok(ChangeSpec::SetNew {
+                    field,
+                    value: (*assign.right).clone(),
+                });
+            }
+            return Ok(ChangeSpec::Set {
+                field,
+                value: (*assign.right).clone(),
+            });
+        }
+    } else if call.args.len() == 2 {
+        let field = expr_to_ident(&call.args[0])?;
+        if !new && let Some(argument) = arg_call_ident(&call.args[1]) {
+            return Ok(ChangeSpec::SetFromArg { field, argument });
+        }
+        if new {
+            return Ok(ChangeSpec::SetNew {
+                field,
+                value: call.args[1].clone(),
+            });
+        }
+        return Ok(ChangeSpec::Set {
+            field,
+            value: call.args[1].clone(),
+        });
+    }
+    let expected = if new {
+        "expected `set_new(field = value)` or `set_new(field, value)`"
+    } else {
+        "expected `set(field = value)` or `set(field, value)`"
+    };
+    Err(Error::new_spanned(call, expected))
 }
 
 fn parse_named_usize(content: ParseStream, errors: &mut Vec<Error>) -> Result<(Ident, usize)> {

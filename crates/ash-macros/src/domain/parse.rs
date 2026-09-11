@@ -331,7 +331,11 @@ fn parse_resource_items(
 fn parse_code_interface(input: ParseStream, errors: &mut Vec<Error>) -> Result<CodeInterfaceSpec> {
     let fn_name: Ident = input.parse()?;
     if input.peek(Token![,]) {
-        let _: Token![,] = input.parse()?;
+        let comma: Token![,] = input.parse()?;
+        errors.push(Error::new(
+            comma.span,
+            "use `define name action: ...`, not a comma after the name",
+        ));
     }
 
     let mut action_name = None;
@@ -399,7 +403,11 @@ fn parse_code_interface(input: ParseStream, errors: &mut Vec<Error>) -> Result<C
         }
 
         if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
+            let comma: Token![,] = input.parse()?;
+            errors.push(Error::new(
+                comma.span,
+                "use spaces between code interface options, not `,`",
+            ));
         }
     }
 
@@ -477,7 +485,7 @@ mod tests {
             Helpdesk {
                 resources {
                     Ticket {
-                        define open_ticket, acton: open;
+                        define open_ticket acton: open;
                     };
                 }
             }
@@ -495,7 +503,7 @@ mod tests {
             Helpdesk {
                 resources {
                     Ticket {
-                        define close_ticket, action: close, on: recrod;
+                        define close_ticket action: close on: recrod;
                     };
                 }
             }
@@ -535,6 +543,44 @@ mod tests {
         });
         assert!(
             err.to_string().contains("use `;` after resource, not `,`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_comma_after_define_name_is_an_error() {
+        let err = parse_err(quote! {
+            Helpdesk {
+                resources {
+                    Ticket {
+                        define open_ticket, action: open;
+                    };
+                }
+            }
+        });
+        assert!(
+            err.to_string()
+                .contains("use `define name action: ...`, not a comma after the name"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_comma_between_code_interface_options_is_an_error() {
+        let err = parse_err(quote! {
+            Helpdesk {
+                resources {
+                    Ticket {
+                        define close_ticket action: close, on: record;
+                    };
+                }
+            }
+        });
+        assert!(
+            err.to_string()
+                .contains("use spaces between code interface options, not `,`"),
             "got: {}",
             err
         );

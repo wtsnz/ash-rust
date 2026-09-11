@@ -1228,4 +1228,29 @@ mod tests {
             err
         );
     }
+
+    #[test]
+    fn test_set_attribute_is_an_error() {
+        let tokens = quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: String;
+                }
+                actions {
+                    create open {
+                        accept [status];
+                        change set_attribute(status = "open");
+                    }
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("use `set(...)`, not `set_attribute(...)`"),
+            "got: {}",
+            err
+        );
+    }
 }
