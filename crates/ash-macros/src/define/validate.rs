@@ -486,6 +486,17 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             ));
         }
     }
+
+    if let Some(lock) = &def.optimistic_lock {
+        if def.attributes.iter().all(|a| a.ident != *lock) {
+            errors.push(slot_error(
+                lock,
+                "attribute",
+                &attr_names,
+                &names,
+            ));
+        }
+    }
 }
 
 fn lint_uncovered_actions(def: &ResourceDefinition, errors: &mut Vec<Error>) {
@@ -1216,6 +1227,22 @@ mod tests {
             msg.contains("duplicate identity `unique_email`"),
             "got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_optimistic_lock_unknown_attribute_suggests_did_you_mean() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+                version: i64 [version];
+            }
+            optimistic_lock versoin;
+            actions {
+                read read { primary; }
+            }
+        }});
+        assert!(msg.contains("Did you mean `version`?"), "got: {msg}");
     }
 
     #[test]

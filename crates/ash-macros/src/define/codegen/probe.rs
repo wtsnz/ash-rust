@@ -530,6 +530,13 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
         });
     }
 
+    if let Some(lock) = &def.optimistic_lock {
+        probes.push(ns_field_probe(
+            &Ident::new("__ash_accept", lock.span()),
+            lock,
+        ));
+    }
+
     for identity in &def.identities {
         for key in &identity.keys {
             probes.push(ns_field_probe(
