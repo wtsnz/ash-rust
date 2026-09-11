@@ -230,6 +230,7 @@ pub struct ActionSpec {
     pub persist_kw: Option<Ident>,
     pub returns_kw: Option<Ident>,
     pub run_kw: Option<Ident>,
+    pub accept_span: Option<proc_macro2::Span>,
 }
 
 pub struct ArgumentSpec {
