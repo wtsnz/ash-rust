@@ -1,8 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use ash_core::{CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dataloader::Loader;
+use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::read_scope::scoped_read_filter;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BelongsToKey {
@@ -77,7 +79,11 @@ impl<D: DataLayer + Clone + 'static> Loader<BelongsToKey> for AshBatchLoader<D> 
 
             let id_values: Vec<Value> = ids.into_iter().map(Value::Uuid).collect();
             let query = CompiledQuery {
-                filter: Some(Filter::in_list(dest_attr, id_values)),
+                filter: scoped_read_filter(
+                    res,
+                    self.ctx.actor.as_ref(),
+                    Some(Filter::in_list(dest_attr, id_values)),
+                ),
                 tenant: self.ctx.tenant.clone(),
                 ..CompiledQuery::default()
             };
@@ -139,7 +145,11 @@ impl<D: DataLayer + Clone + 'static> Loader<HasManyKey> for AshBatchLoader<D> {
 
             let id_values: Vec<Value> = ids.into_iter().map(Value::Uuid).collect();
             let query = CompiledQuery {
-                filter: Some(Filter::in_list(dest_attr, id_values)),
+                filter: scoped_read_filter(
+                    res,
+                    self.ctx.actor.as_ref(),
+                    Some(Filter::in_list(dest_attr, id_values)),
+                ),
                 tenant: self.ctx.tenant.clone(),
                 ..CompiledQuery::default()
             };
@@ -198,10 +208,7 @@ impl<D: DataLayer + Clone + 'static> Loader<ManyToManyKey> for AshBatchLoader<D>
 
             // 1. Query join table
             let join_query = CompiledQuery {
-                filter: Some(Filter::eq(
-                    k.source_attr_on_join,
-                    Value::Uuid(k.source_id),
-                )),
+                filter: Some(Filter::eq(k.source_attr_on_join, Value::Uuid(k.source_id))),
                 tenant: self.ctx.tenant.clone(),
                 ..CompiledQuery::default()
             };
@@ -231,7 +238,11 @@ impl<D: DataLayer + Clone + 'static> Loader<ManyToManyKey> for AshBatchLoader<D>
                 .unwrap_or("id");
 
             let dest_query = CompiledQuery {
-                filter: Some(Filter::in_list(pk, dest_ids)),
+                filter: scoped_read_filter(
+                    dest_res,
+                    self.ctx.actor.as_ref(),
+                    Some(Filter::in_list(pk, dest_ids)),
+                ),
                 tenant: self.ctx.tenant.clone(),
                 ..CompiledQuery::default()
             };

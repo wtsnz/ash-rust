@@ -1,5 +1,7 @@
 use ash_core::redact_fields;
 use ash_core::{ActionKind, Actor, ResourceDef};
+
+use crate::read_scope::record_visible_for_read;
 use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 use uuid::Uuid;
@@ -51,6 +53,9 @@ pub fn build_resource_subscriptions(
                             {
                                 continue;
                             }
+                            if !record_visible_for_read(resource, actor.as_ref(), &record) {
+                                continue;
+                            }
                             let _ = redact_fields(resource, actor.as_ref(), &mut record);
                             yield Ok(FieldValue::owned_any(record));
                         }
@@ -78,7 +83,10 @@ pub fn build_resource_subscriptions(
             SubscriptionFieldFuture::new(async move {
                 let target_id = if let Some(id_arg) = ctx.args.get("id") {
                     let s = id_arg.string()?;
-                    Some(Uuid::parse_str(s).map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?)
+                    Some(
+                        Uuid::parse_str(s)
+                            .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?,
+                    )
                 } else {
                     None
                 };
@@ -95,6 +103,9 @@ pub fn build_resource_subscriptions(
                                 continue;
                             }
                             let mut record = notif.record_fields;
+                            if !record_visible_for_read(resource, actor.as_ref(), &record) {
+                                continue;
+                            }
                             let _ = redact_fields(resource, actor.as_ref(), &mut record);
                             yield Ok(FieldValue::owned_any(record));
                         }
@@ -118,12 +129,16 @@ pub fn build_resource_subscriptions(
             SubscriptionFieldFuture::new(async move {
                 let target_id = if let Some(id_arg) = ctx.args.get("id") {
                     let s = id_arg.string()?;
-                    Some(Uuid::parse_str(s).map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?)
+                    Some(
+                        Uuid::parse_str(s)
+                            .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?,
+                    )
                 } else {
                     None
                 };
 
                 let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
+                let actor = ctx.data_opt::<Actor>().cloned();
 
                 let stream = async_stream::stream! {
                     while let Ok(notif) = sub.recv().await {
@@ -131,6 +146,9 @@ pub fn build_resource_subscriptions(
                             if let Some(tid) = target_id
                                 && notif.id != tid
                             {
+                                continue;
+                            }
+                            if !record_visible_for_read(resource, actor.as_ref(), &notif.record_fields) {
                                 continue;
                             }
                             yield Ok(FieldValue::value(async_graphql::Value::String(notif.id.to_string())));

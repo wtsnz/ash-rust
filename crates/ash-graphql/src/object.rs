@@ -1,9 +1,14 @@
 use ash_core::eval as eval_expr;
 use ash_core::redact_fields;
-use ash_core::{Actor, AttrType, CompiledQuery, Context, DataLayer, FieldMap, Filter, RelKind, ResourceDef, Value};
+use ash_core::{
+    Actor, AttrType, CompiledQuery, Context, DataLayer, FieldMap, Filter, RelKind, ResourceDef,
+    Value,
+};
+
+use crate::read_scope::scoped_read_filter;
+use async_graphql::Value as GqlValue;
 use async_graphql::dataloader::DataLoader;
 use async_graphql::dynamic::*;
-use async_graphql::Value as GqlValue;
 
 use crate::dataloader::{AshBatchLoader, BelongsToKey, HasManyKey, ManyToManyKey};
 use crate::types::{
@@ -21,16 +26,19 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
     for attr in resource.attributes {
         let attr_name = attr.name;
         let attr_ty = attr.ty;
-        let has_field_policy = resource.field_policies.iter().any(|fp| fp.field == attr.name);
+        let has_field_policy = resource
+            .field_policies
+            .iter()
+            .any(|fp| fp.field == attr.name);
         let allow_nil = attr.allow_nil || has_field_policy;
         let type_ref = attr_type_to_type_ref(resource.name, attr.name, attr.ty, allow_nil);
 
         let field = Field::new(attr_name, type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    let actor = ctx.data_opt::<Actor>().or_else(|| {
-                        ctx.data_opt::<Option<Actor>>().and_then(|opt| opt.as_ref())
-                    });
+                    let actor = ctx
+                        .data_opt::<Actor>()
+                        .or_else(|| ctx.data_opt::<Option<Actor>>().and_then(|opt| opt.as_ref()));
 
                     if has_field_policy {
                         let mut check_map = map.clone();
@@ -156,7 +164,11 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                     .filter_map(|v| match v {
                                         Value::Map(m) => {
                                             let mut item = m.clone();
-                                            let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut item);
+                                            let _ = redact_fields(
+                                                dest_res,
+                                                ctx.data_opt::<Actor>(),
+                                                &mut item,
+                                            );
                                             Some(FieldValue::owned_any(item))
                                         }
                                         _ => None,
@@ -172,21 +184,29 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     if let Some(loader) = ctx.data_opt::<DataLoader<AshBatchLoader<D>>>() {
                         match rel_kind {
                             RelKind::BelongsTo => {
-                                if let Some(foreign_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                if let Some(foreign_id) =
+                                    map.get(source_attr).and_then(|v| v.as_uuid())
+                                {
                                     let key = BelongsToKey {
                                         dest_resource: dest_name,
                                         dest_attr,
                                         foreign_id,
                                     };
                                     if let Ok(Some(mut record)) = loader.load_one(key).await {
-                                        let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut record);
+                                        let _ = redact_fields(
+                                            dest_res,
+                                            ctx.data_opt::<Actor>(),
+                                            &mut record,
+                                        );
                                         return Ok(Some(FieldValue::owned_any(record)));
                                     }
                                 }
                                 return Ok(None);
                             }
                             RelKind::HasOne => {
-                                if let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                if let Some(source_id) =
+                                    map.get(source_attr).and_then(|v| v.as_uuid())
+                                {
                                     let key = HasManyKey {
                                         dest_resource: dest_name,
                                         dest_attr,
@@ -195,14 +215,20 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                     if let Ok(Some(records)) = loader.load_one(key).await
                                         && let Some(mut r) = records.into_iter().next()
                                     {
-                                        let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut r);
+                                        let _ = redact_fields(
+                                            dest_res,
+                                            ctx.data_opt::<Actor>(),
+                                            &mut r,
+                                        );
                                         return Ok(Some(FieldValue::owned_any(r)));
                                     }
                                 }
                                 return Ok(None);
                             }
                             RelKind::HasMany => {
-                                if let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                if let Some(source_id) =
+                                    map.get(source_attr).and_then(|v| v.as_uuid())
+                                {
                                     let key = HasManyKey {
                                         dest_resource: dest_name,
                                         dest_attr,
@@ -212,7 +238,11 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                         let items: Vec<FieldValue> = records
                                             .into_iter()
                                             .map(|mut r| {
-                                                let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut r);
+                                                let _ = redact_fields(
+                                                    dest_res,
+                                                    ctx.data_opt::<Actor>(),
+                                                    &mut r,
+                                                );
                                                 FieldValue::owned_any(r)
                                             })
                                             .collect();
@@ -225,7 +255,8 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                 if let Some(through) = through_fn
                                     && let Some(src_join) = source_join
                                     && let Some(dst_join) = dest_join
-                                    && let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid())
+                                    && let Some(source_id) =
+                                        map.get(source_attr).and_then(|v| v.as_uuid())
                                 {
                                     let key = ManyToManyKey {
                                         join_resource: through().name,
@@ -238,7 +269,11 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                         let items: Vec<FieldValue> = records
                                             .into_iter()
                                             .map(|mut r| {
-                                                let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut r);
+                                                let _ = redact_fields(
+                                                    dest_res,
+                                                    ctx.data_opt::<Actor>(),
+                                                    &mut r,
+                                                );
                                                 FieldValue::owned_any(r)
                                             })
                                             .collect();
@@ -254,51 +289,85 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     if let Ok(ctx_ash) = ctx.data::<Context<D>>() {
                         match rel_kind {
                             RelKind::BelongsTo => {
-                                if let Some(foreign_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                if let Some(foreign_id) =
+                                    map.get(source_attr).and_then(|v| v.as_uuid())
+                                {
                                     let query = CompiledQuery {
-                                        filter: Some(Filter::eq(dest_attr, Value::Uuid(foreign_id))),
+                                        filter: scoped_read_filter(
+                                            dest_res,
+                                            ctx_ash.actor.as_ref(),
+                                            Some(Filter::eq(dest_attr, Value::Uuid(foreign_id))),
+                                        ),
                                         tenant: ctx_ash.tenant.clone(),
                                         limit: Some(1),
                                         ..CompiledQuery::default()
                                     };
-                                    if let Ok(mut records) = ctx_ash.data.run_query(dest_res, &query).await
+                                    if let Ok(mut records) =
+                                        ctx_ash.data.run_query(dest_res, &query).await
                                         && let Some(mut rec) = records.pop()
                                     {
-                                        let _ = redact_fields(dest_res, ctx_ash.actor.as_ref(), &mut rec);
+                                        let _ = redact_fields(
+                                            dest_res,
+                                            ctx_ash.actor.as_ref(),
+                                            &mut rec,
+                                        );
                                         return Ok(Some(FieldValue::owned_any(rec)));
                                     }
                                 }
                                 return Ok(None);
                             }
                             RelKind::HasOne => {
-                                if let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                if let Some(source_id) =
+                                    map.get(source_attr).and_then(|v| v.as_uuid())
+                                {
                                     let query = CompiledQuery {
-                                        filter: Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
+                                        filter: scoped_read_filter(
+                                            dest_res,
+                                            ctx_ash.actor.as_ref(),
+                                            Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
+                                        ),
                                         tenant: ctx_ash.tenant.clone(),
                                         limit: Some(1),
                                         ..CompiledQuery::default()
                                     };
-                                    if let Ok(mut records) = ctx_ash.data.run_query(dest_res, &query).await
+                                    if let Ok(mut records) =
+                                        ctx_ash.data.run_query(dest_res, &query).await
                                         && let Some(mut rec) = records.pop()
                                     {
-                                        let _ = redact_fields(dest_res, ctx_ash.actor.as_ref(), &mut rec);
+                                        let _ = redact_fields(
+                                            dest_res,
+                                            ctx_ash.actor.as_ref(),
+                                            &mut rec,
+                                        );
                                         return Ok(Some(FieldValue::owned_any(rec)));
                                     }
                                 }
                                 return Ok(None);
                             }
                             RelKind::HasMany => {
-                                if let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid()) {
+                                if let Some(source_id) =
+                                    map.get(source_attr).and_then(|v| v.as_uuid())
+                                {
                                     let query = CompiledQuery {
-                                        filter: Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
+                                        filter: scoped_read_filter(
+                                            dest_res,
+                                            ctx_ash.actor.as_ref(),
+                                            Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
+                                        ),
                                         tenant: ctx_ash.tenant.clone(),
                                         ..CompiledQuery::default()
                                     };
-                                    if let Ok(records) = ctx_ash.data.run_query(dest_res, &query).await {
+                                    if let Ok(records) =
+                                        ctx_ash.data.run_query(dest_res, &query).await
+                                    {
                                         let items: Vec<FieldValue> = records
                                             .into_iter()
                                             .map(|mut r| {
-                                                let _ = redact_fields(dest_res, ctx_ash.actor.as_ref(), &mut r);
+                                                let _ = redact_fields(
+                                                    dest_res,
+                                                    ctx_ash.actor.as_ref(),
+                                                    &mut r,
+                                                );
                                                 FieldValue::owned_any(r)
                                             })
                                             .collect();
@@ -311,14 +380,17 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                 if let Some(through) = through_fn
                                     && let Some(src_join) = source_join
                                     && let Some(dst_join) = dest_join
-                                    && let Some(source_id) = map.get(source_attr).and_then(|v| v.as_uuid())
+                                    && let Some(source_id) =
+                                        map.get(source_attr).and_then(|v| v.as_uuid())
                                 {
                                     let join_query = CompiledQuery {
                                         filter: Some(Filter::eq(src_join, Value::Uuid(source_id))),
                                         tenant: ctx_ash.tenant.clone(),
                                         ..CompiledQuery::default()
                                     };
-                                    if let Ok(join_rows) = ctx_ash.data.run_query(through(), &join_query).await {
+                                    if let Ok(join_rows) =
+                                        ctx_ash.data.run_query(through(), &join_query).await
+                                    {
                                         let dest_ids: Vec<Value> = join_rows
                                             .into_iter()
                                             .filter_map(|r| r.get(dst_join).cloned())
@@ -331,15 +403,25 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                                 .map(|a| a.name)
                                                 .unwrap_or("id");
                                             let dest_query = CompiledQuery {
-                                                filter: Some(Filter::in_list(pk, dest_ids)),
+                                                filter: scoped_read_filter(
+                                                    dest_res,
+                                                    ctx_ash.actor.as_ref(),
+                                                    Some(Filter::in_list(pk, dest_ids)),
+                                                ),
                                                 tenant: ctx_ash.tenant.clone(),
                                                 ..CompiledQuery::default()
                                             };
-                                            if let Ok(records) = ctx_ash.data.run_query(dest_res, &dest_query).await {
+                                            if let Ok(records) =
+                                                ctx_ash.data.run_query(dest_res, &dest_query).await
+                                            {
                                                 let items: Vec<FieldValue> = records
                                                     .into_iter()
                                                     .map(|mut r| {
-                                                        let _ = redact_fields(dest_res, ctx_ash.actor.as_ref(), &mut r);
+                                                        let _ = redact_fields(
+                                                            dest_res,
+                                                            ctx_ash.actor.as_ref(),
+                                                            &mut r,
+                                                        );
                                                         FieldValue::owned_any(r)
                                                     })
                                                     .collect();
