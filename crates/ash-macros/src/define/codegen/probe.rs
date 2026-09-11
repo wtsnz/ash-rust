@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::Ident;
 
-use crate::ast_helpers::{option_inner, pascal_case};
+use crate::ast_helpers::{option_inner, pascal_case, snake_case};
 use crate::define::ast::{
     ActionKind, AggregateKindSpec, CalculationExprSpec, ChangeSpec, PolicyCheckExpr,
     PolicyEffectSpec, PolicyWhenSpec, PreparationSpec, RelType, ResourceDefinition, ValidationSpec,
@@ -263,7 +263,76 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
         quote! {}
     };
 
+    let calc_mod = format_ident!(
+        "__ash_{}_calc_probe",
+        snake_case(&resource.to_string())
+    );
+    let calc_helpers = if def.calculations.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            #[doc(hidden)]
+            #[allow(dead_code, non_camel_case_types)]
+            mod #calc_mod {
+                pub trait __AshStrLen {
+                    fn __ash_str_len(&self) -> i64;
+                }
+                impl __AshStrLen for ::std::string::String {
+                    fn __ash_str_len(&self) -> i64 {
+                        self.chars().count() as i64
+                    }
+                }
+                impl __AshStrLen for ::std::option::Option<::std::string::String> {
+                    fn __ash_str_len(&self) -> i64 {
+                        self.as_ref()
+                            .map(|s| s.chars().count() as i64)
+                            .unwrap_or(0)
+                    }
+                }
+                pub trait __AshStrCase {
+                    type Out;
+                    fn __ash_lower(self) -> Self::Out;
+                    fn __ash_upper(self) -> Self::Out;
+                }
+                impl __AshStrCase for ::std::string::String {
+                    type Out = ::std::string::String;
+                    fn __ash_lower(self) -> Self::Out {
+                        self.to_lowercase()
+                    }
+                    fn __ash_upper(self) -> Self::Out {
+                        self.to_uppercase()
+                    }
+                }
+                impl __AshStrCase for ::std::option::Option<::std::string::String> {
+                    type Out = ::std::option::Option<::std::string::String>;
+                    fn __ash_lower(self) -> Self::Out {
+                        self.map(|s| s.to_lowercase())
+                    }
+                    fn __ash_upper(self) -> Self::Out {
+                        self.map(|s| s.to_uppercase())
+                    }
+                }
+                pub trait __AshCalcFits<Declared> {}
+                impl<T> __AshCalcFits<T> for T {}
+                impl<T> __AshCalcFits<::std::option::Option<T>> for T {}
+                pub fn __ash_calc_fits<Declared, Inferred: __AshCalcFits<Declared>>(
+                    _: &Declared,
+                    _: &Inferred,
+                ) {
+                }
+            }
+        }
+    };
+    let calc_use = if def.calculations.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            use #calc_mod::{__AshCalcFits, __AshStrCase, __AshStrLen, __ash_calc_fits};
+        }
+    };
+
     quote! {
+        #calc_helpers
         #[doc(hidden)]
         const _: () = {
             #[allow(
@@ -306,6 +375,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 clippy::pedantic
             )]
             fn __ash_ide_typecheck(__ash_record: &#resource) {
+                #calc_use
                 #namespaces
                 #[allow(dead_code)]
                 fn __ash_assert_resource<T: ::ash_core::Resource>() {}
@@ -447,6 +517,14 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
             });
         }
         collect_calc_field_probes(&calc.expr, &mut calc_probes);
+        if let Some(typed) = calc_expr_typed(&calc.expr) {
+            let ty = &calc.ty;
+            calc_probes.push(quote! {
+                let __ash_declared: #ty = loop {};
+                let __ash_inferred = #typed;
+                __ash_calc_fits(&__ash_declared, &__ash_inferred);
+            });
+        }
         probes.push(quote! {
             {
                 #(#calc_probes)*
@@ -552,7 +630,116 @@ fn collect_calc_field_probes(expr: &CalculationExprSpec, probes: &mut Vec<TokenS
         | CalculationExprSpec::LitString(_)
         | CalculationExprSpec::LitBool(_)
         | CalculationExprSpec::Null
-        | CalculationExprSpec::Custom(_) => {}
+        |         CalculationExprSpec::Custom(_) => {}
+    }
+}
+
+fn calc_expr_typed(expr: &CalculationExprSpec) -> Option<TokenStream> {
+    match expr {
+        CalculationExprSpec::Field(field) => Some(quote_spanned! { field.span() =>
+            __ash_record.#field.clone()
+        }),
+        CalculationExprSpec::Arg(ident) => Some(quote_spanned! { ident.span() =>
+            #ident.clone()
+        }),
+        CalculationExprSpec::StringLength(field) => Some(quote_spanned! { field.span() =>
+            __AshStrLen::__ash_str_len(&__ash_record.#field)
+        }),
+        CalculationExprSpec::LitInt(n) => Some(quote! { #n }),
+        CalculationExprSpec::LitString(s) => {
+            Some(quote! { ::std::string::String::from(#s) })
+        }
+        CalculationExprSpec::LitBool(b) => Some(quote! { #b }),
+        CalculationExprSpec::Length(inner) => {
+            let inner = calc_expr_typed(inner)?;
+            Some(quote! { __AshStrLen::__ash_str_len(&#inner) })
+        }
+        CalculationExprSpec::Lower(inner) => {
+            let inner = calc_expr_typed(inner)?;
+            Some(quote! { __AshStrCase::__ash_lower(#inner) })
+        }
+        CalculationExprSpec::Upper(inner) => {
+            let inner = calc_expr_typed(inner)?;
+            Some(quote! { __AshStrCase::__ash_upper(#inner) })
+        }
+        CalculationExprSpec::Add(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) + (#right) })
+        }
+        CalculationExprSpec::Sub(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) - (#right) })
+        }
+        CalculationExprSpec::Mul(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) * (#right) })
+        }
+        CalculationExprSpec::Div(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) / (#right) })
+        }
+        CalculationExprSpec::Eq(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) == (#right) })
+        }
+        CalculationExprSpec::Ne(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) != (#right) })
+        }
+        CalculationExprSpec::Gt(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) > (#right) })
+        }
+        CalculationExprSpec::Gte(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) >= (#right) })
+        }
+        CalculationExprSpec::Lt(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) < (#right) })
+        }
+        CalculationExprSpec::Lte(left, right) => {
+            let left = calc_expr_typed(left)?;
+            let right = calc_expr_typed(right)?;
+            Some(quote! { (#left) <= (#right) })
+        }
+        CalculationExprSpec::Concat(parts) => {
+            let typed: Vec<_> = parts.iter().map(calc_expr_typed).collect::<Option<_>>()?;
+            let mut typed = typed.into_iter();
+            let mut acc = typed.next()?;
+            for part in typed {
+                acc = quote! { ::std::format!("{}{}", #acc, #part) };
+            }
+            Some(acc)
+        }
+        CalculationExprSpec::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let cond = calc_expr_typed(cond)?;
+            let then_expr = calc_expr_typed(then_expr)?;
+            let else_expr = calc_expr_typed(else_expr)?;
+            Some(quote! {
+                if #cond {
+                    #then_expr
+                } else {
+                    #else_expr
+                }
+            })
+        }
+        CalculationExprSpec::Coalesce(_)
+        | CalculationExprSpec::Null
+        | CalculationExprSpec::Custom(_) => None,
     }
 }
 
@@ -678,6 +865,39 @@ mod tests {
             "missing destination probe: {out}"
         );
         assert!(out.contains("__dest_stub"), "missing dest stub: {out}");
+    }
+
+    #[test]
+    fn test_probe_lowers_calculation_types() {
+        let def = parse_def(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                price: i64;
+                quantity: i64;
+            }
+            calculations {
+                title_len: Option<i64> = string_length(title);
+                total: i64 = price * quantity;
+            }
+            actions {
+                read read { primary; }
+            }
+        }});
+        let out = expand_ide_probe(&def).to_string();
+        assert!(
+            out.contains("__AshStrLen"),
+            "missing string-length trait: {out}"
+        );
+        assert!(
+            out.contains("__ash_calc_fits"),
+            "missing declared-type fit: {out}"
+        );
+        assert!(
+            out.contains("__ash_str_len"),
+            "missing length probe: {out}"
+        );
     }
 
     #[test]
