@@ -1,5 +1,6 @@
 use crate::ast_helpers::{
-    find_closest_match, is_i64, is_integer, is_string, option_inner, unknown_ident_error,
+    find_closest_match, is_bool, is_i64, is_integer, is_string, is_uuid, option_inner,
+    unknown_ident_error,
 };
 use crate::define::ast::{
     ActionKind, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, RelType,
@@ -509,7 +510,9 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                 }
                 if let Some(attr) = attr {
                     match val {
-                        ValidationSpec::OneOf { .. } if attr.is_enum => {
+                        ValidationSpec::OneOf { .. }
+                            if attr.uses_ash_type_storage() || attr.is_enum =>
+                        {
                             errors.push(Error::new_spanned(
                                 field,
                                 format!(
@@ -569,9 +572,25 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
 
 /// Resolve inferred types, collect every semantic error, and drop invalid field refs so
 /// codegen can still emit a usable struct.
+fn validate_attributes(def: &ResourceDefinition, errors: &mut Vec<Error>) {
+    for attr in &def.attributes {
+        if !attr.is_enum {
+            continue;
+        }
+        let inner = option_inner(&attr.ty).unwrap_or(&attr.ty);
+        if is_uuid(inner) || is_string(inner) || is_i64(inner) || is_bool(inner) {
+            errors.push(Error::new_spanned(
+                &attr.ty,
+                "`[enum]` requires a type that implements `AshEnum`, not a builtin scalar",
+            ));
+        }
+    }
+}
+
 pub fn validate(def: &mut ResourceDefinition) -> Vec<Error> {
     let mut errors = Vec::new();
     check_name_collisions(def, &mut errors);
+    validate_attributes(def, &mut errors);
     validate_actions(def, &mut errors);
     validate_cross_section(def, &mut errors);
     lint_uncovered_actions(def, &mut errors);
@@ -1193,6 +1212,47 @@ mod tests {
         });
         assert!(
             msg.contains("`one_of` is not valid on enum attribute `status`"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_one_of_on_inferred_enum_attribute_fails() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: Status;
+                }
+                actions {
+                    create open {
+                        accept [status];
+                        validate one_of(status, ["open", "closed"]);
+                    }
+                }
+            }
+        });
+        assert!(
+            msg.contains("`one_of` is not valid on enum attribute `status`"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_enum_flag_on_builtin_scalar_fails() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: String [enum];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        });
+        assert!(
+            msg.contains("`[enum]` requires a type that implements `AshEnum`"),
             "got: {msg}"
         );
     }

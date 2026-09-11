@@ -96,6 +96,19 @@ pub struct AttributeSpec {
     pub default_fn: Option<syn::Path>,
 }
 
+impl AttributeSpec {
+    /// Persist via `AshType` when `[enum]` is set, or when the field type is not a builtin scalar.
+    pub fn uses_ash_type_storage(&self) -> bool {
+        if self.is_enum {
+            return true;
+        }
+        if self.pk || self.version || self.atom.is_some() {
+            return false;
+        }
+        !crate::ast_helpers::is_builtin_attr_type(&self.ty)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RelType {
     BelongsTo,

@@ -164,6 +164,24 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
     }
 
     let section_probes = expand_cross_section_probes(def);
+    let needs_ash_type = def.attributes.iter().any(|a| a.uses_ash_type_storage());
+    let needs_enum = def.attributes.iter().any(|a| a.is_enum);
+    let ash_type_helper = if needs_ash_type {
+        quote! {
+            #[allow(dead_code)]
+            fn __ash_assert_ash_type<T: ::ash_core::AshType>() {}
+        }
+    } else {
+        quote! {}
+    };
+    let enum_helper = if needs_enum {
+        quote! {
+            #[allow(dead_code)]
+            fn __ash_assert_enum<T: ::ash_core::AshEnum>() {}
+        }
+    } else {
+        quote! {}
+    };
 
     quote! {
         #[doc(hidden)]
@@ -210,6 +228,8 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
             fn __ash_ide_typecheck(__ash_record: &#resource) {
                 #[allow(dead_code)]
                 fn __ash_assert_resource<T: ::ash_core::Resource>() {}
+                #ash_type_helper
+                #enum_helper
 
                 if false {
                     #(#action_probes)*
@@ -223,6 +243,21 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
 fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     let mut probes = Vec::new();
     let resource = &def.resource;
+
+    for attr in &def.attributes {
+        if !attr.uses_ash_type_storage() {
+            continue;
+        }
+        let inner = option_inner(&attr.ty).unwrap_or(&attr.ty);
+        probes.push(quote_spanned! { inner.span() =>
+            __ash_assert_ash_type::<#inner>();
+        });
+        if attr.is_enum {
+            probes.push(quote_spanned! { inner.span() =>
+                __ash_assert_enum::<#inner>();
+            });
+        }
+    }
 
     for rel in &def.relationships {
         let dest = &rel.dest;
