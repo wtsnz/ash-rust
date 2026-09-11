@@ -316,7 +316,7 @@ Required create accept fields and non-`Option` arguments are typestate-required.
 - `validate string_length(field, min: X, max: Y);`
 - `validate numericality(field, min: X, max: Y);`
 - `validate one_of(field, ["opt1", "opt2"]);` — not on enum attributes
-- `validate custom(&MyValidator);`
+- `validate custom(&MyValidator);` — `&'static dyn CustomValidation`
 - `validate func(|ctx| { ... });`
 
 ### Built-in Changes
@@ -328,12 +328,13 @@ Required create accept fields and non-`Option` arguments are typestate-required.
 - `change relate_actor(field);`
 - `change set_from_arg(field, argument_name);` or `change set(field = arg(name));`
 - `change manage_relationship(rel);`
-- `change func(my_fn);`
-- `change custom(&MyChange);`
+- `change func(my_fn);` — `fn(&mut ChangeContext<'_>) -> Result<()>`
+- `change custom(&MyChange);` — `&'static dyn CustomChange`
+- `change before_action(my_fn);` / `before_action my_fn;` — `BeforeActionFn`
 
 ### Policies
 
-Every check ends with `;`. `policy action(name)` is go-to-definition on the action. `actor_eq` / `actor_attribute_equals` require an `actor { field: Type; }` block on the resource.
+Every check ends with `;`. `policy action(name)` is go-to-definition on the action. `actor_eq` / `actor_attribute_equals` require an `actor { field: Type; }` block on the resource. `relates_to` / `relates_to_actor` complete relationship or attribute names; `is_nil` and `eq` complete attributes and type-check the comparison value.
 
 ```rust
 actor {
