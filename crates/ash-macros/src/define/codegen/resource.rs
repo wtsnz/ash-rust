@@ -80,7 +80,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             attr_defs.push(quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) });
         } else if a.version || def.optimistic_lock.as_ref() == Some(&a.ident) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::version(#name_str) });
-        } else if a.is_enum {
+        } else if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if let Some(default_expr) = &a.default {
                 let fn_name = format_ident!("__default_{}", name_str);
@@ -405,7 +405,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
-        if a.is_enum {
+        if a.uses_ash_type_storage() {
             if option_inner(ty).is_some() {
                 to_inserts.push(quote! {
                     if let ::std::option::Option::Some(val) = &self.#id {
@@ -485,7 +485,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = id.to_string();
         let ty = &a.ty;
 
-        if a.is_enum {
+        if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if option_inner(ty).is_some() {
                 from_inits.push(quote! {
@@ -737,7 +737,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let o_attrs = &a.outer_attrs;
         let has_action_conflict = def.actions.iter().any(|act| act.name == *id);
 
-        if a.is_enum {
+        if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             field_consts.push(quote! {
                 #(#o_attrs)*

@@ -523,6 +523,21 @@ pub trait ResourceExt: Resource {
 
 impl<R: Resource> ResourceExt for R {}
 
+impl<T: Resource> crate::types::AshType for T {
+    const ATTR_TYPE: AttrType = AttrType::Map;
+
+    fn to_value(&self) -> crate::value::Value {
+        crate::value::Value::Map(self.to_fields())
+    }
+
+    fn from_value(value: &crate::value::Value) -> Result<Self> {
+        match value {
+            crate::value::Value::Map(m) => Self::from_fields(m),
+            _ => Err(Error::Invalid("expected map".into())),
+        }
+    }
+}
+
 /// Formats the current UTC system time as an ISO 8601 string (e.g. "2026-09-02T16:55:00Z").
 pub fn utc_now_iso8601() -> String {
     let now = std::time::SystemTime::now();

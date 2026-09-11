@@ -65,6 +65,11 @@ pub fn is_bool(ty: &Type) -> bool {
     last_ident(ty).is_some_and(|i| i == "bool")
 }
 
+pub fn is_builtin_attr_type(ty: &Type) -> bool {
+    let inner = option_inner(ty).unwrap_or(ty);
+    is_uuid(inner) || is_string(inner) || is_i64(inner) || is_bool(inner)
+}
+
 pub fn is_integer(ty: &Type) -> bool {
     last_ident(ty).is_some_and(|i| {
         matches!(

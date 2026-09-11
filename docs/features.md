@@ -605,7 +605,7 @@ pub enum TicketStatus {
 ```
 
 ### Resource Definition
-Mark attributes with `[enum]` or `[enum, default: ...]`:
+AshEnum field types are stored as enums without an extra flag. `[enum]` is optional and still requires `AshEnum`:
 ```rust
 resource! {
     Ticket {
@@ -614,7 +614,7 @@ resource! {
         attributes {
             id: Uuid [pk];
             subject: String;
-            status: TicketStatus [enum, default: TicketStatus::Draft];
+            status: TicketStatus [default: TicketStatus::Draft];
             priority: Option<Priority> [enum];
         }
 

@@ -240,4 +240,56 @@ mod tests {
             "missing argument docs: {out}"
         );
     }
+
+    #[test]
+    fn test_enum_storage_inferred_without_flag() {
+        let out = expand_ok(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: PostStatus [default: PostStatus::Draft];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        })
+        .to_string();
+        assert!(
+            out.contains("AshType"),
+            "inferred enum should persist via AshType: {out}"
+        );
+        assert!(
+            out.contains("ATTR_TYPE"),
+            "inferred enum should use AshType::ATTR_TYPE: {out}"
+        );
+        assert!(
+            out.contains("__ash_assert_ash_type"),
+            "inferred enum should probe AshType: {out}"
+        );
+        assert!(
+            !out.contains("__ash_assert_enum"),
+            "inferred enum should not require [enum]/AshEnum: {out}"
+        );
+    }
+
+    #[test]
+    fn test_explicit_enum_flag_probes_ash_enum() {
+        let out = expand_ok(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    status: PostStatus [enum];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        })
+        .to_string();
+        assert!(
+            out.contains("__ash_assert_enum"),
+            "explicit [enum] should probe AshEnum: {out}"
+        );
+    }
 }

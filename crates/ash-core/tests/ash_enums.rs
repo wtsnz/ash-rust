@@ -21,32 +21,32 @@ pub enum Priority {
 }
 
 resource! {
-    Post {
-        table "posts";
+Post {
+    table "posts";
 
-    attributes {
-        id: Uuid [pk];
-        title: String;
-        status: PostStatus [enum, default: PostStatus::Draft];
-        priority: Option<Priority> [enum];
+attributes {
+    id: Uuid [pk];
+    title: String;
+    status: PostStatus [default: PostStatus::Draft];
+    priority: Option<Priority> [enum];
+}
+
+actions {
+    create create {
+        primary;
+        accept [title, status, priority];
     }
 
-    actions {
-        create create {
-            primary;
-            accept [title, status, priority];
-        }
-
-        update update {
-            primary;
-            accept [title, status, priority];
-        }
-
-        read read {
-            primary;
-        }
+    update update {
+        primary;
+        accept [title, status, priority];
     }
-    }}
+
+    read read {
+        primary;
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_ash_enum_traits_and_conversions() {
@@ -64,8 +64,14 @@ async fn test_ash_enum_traits_and_conversions() {
     assert_eq!(format!("{}", PostStatus::Archived), "archived");
 
     // 3. INVARIANT: Parse from string / FromStr
-    assert_eq!(PostStatus::parse("in_progress").unwrap(), PostStatus::InProgress);
-    assert_eq!("published".parse::<PostStatus>().unwrap(), PostStatus::Published);
+    assert_eq!(
+        PostStatus::parse("in_progress").unwrap(),
+        PostStatus::InProgress
+    );
+    assert_eq!(
+        "published".parse::<PostStatus>().unwrap(),
+        PostStatus::Published
+    );
     assert!(PostStatus::parse("nonexistent").is_err());
 
     // 4. INVARIANT: AshType attr_type metadata is Atom
