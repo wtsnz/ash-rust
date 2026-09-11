@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use ash_core::{Actor, Context, DataLayer, FieldMap, Filter, Resource, ResourceDef, Value};
 use ash_core::Result as CoreResult;
+use ash_core::{Actor, Context, DataLayer, FieldMap, Filter, Resource, ResourceDef, Value};
 use uuid::Uuid;
 
 use crate::api_key::ApiKeyService;
@@ -101,10 +101,7 @@ impl<R: Resource> AuthStrategy<R> {
             .await
             .map_err(AuthError::Core)?;
 
-        let record_fields = records
-            .into_iter()
-            .next()
-            .ok_or(AuthError::UserNotFound)?;
+        let record_fields = records.into_iter().next().ok_or(AuthError::UserNotFound)?;
 
         R::from_fields(&record_fields).map_err(AuthError::Core)
     }
@@ -162,6 +159,20 @@ impl<R: Resource> AuthStrategy<R> {
             .verify_password(password, hashed_password)?;
         if !valid {
             return Err(AuthError::InvalidCredentials);
+        }
+
+        if let Some(confirmation) = &auth_def.confirmation
+            && confirmation.prevent_unconfirmed_sign_in
+        {
+            let confirmed = match fields.get(confirmation.confirmed_field) {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(false)) => false,
+                Some(Value::String(s)) if s.trim().is_empty() => false,
+                Some(_) => true,
+            };
+            if !confirmed {
+                return Err(AuthError::UserUnconfirmed);
+            }
         }
 
         Ok(record)
@@ -289,7 +300,11 @@ impl<R: Resource> AuthStrategy<R> {
     }
 
     /// Revoke a token (by either JWT string or raw identifier).
-    pub async fn revoke_token<D: DataLayer>(&self, ctx: &Context<D>, token_or_jti: &str) -> Result<()> {
+    pub async fn revoke_token<D: DataLayer>(
+        &self,
+        ctx: &Context<D>,
+        token_or_jti: &str,
+    ) -> Result<()> {
         let jwt = self.jwt_service.as_ref();
         let token_store = DatabaseTokenStore::new(ctx.clone());
 

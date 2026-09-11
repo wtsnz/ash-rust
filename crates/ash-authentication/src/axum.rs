@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use ash_core::{Actor, Context, DataLayer, Resource};
 use axum::extract::{FromRequestParts, State};
-use axum::http::request::Parts;
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -40,7 +40,7 @@ where
             .ok_or(AuthRejection::InvalidHeader)?;
 
         let claims = jwt
-            .verify_token(token)
+            .verify_token_with_purpose(token, "access")
             .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
 
         let mut actor = Actor::new(claims.sub);
@@ -175,7 +175,10 @@ where
         .route("/refresh", post(refresh_handler::<R, D>))
         .route("/revoke", post(revoke_handler::<R, D>))
         .route("/change-password", post(change_password_handler::<R, D>))
-        .route("/request-password-reset", post(request_password_reset_handler::<R, D>))
+        .route(
+            "/request-password-reset",
+            post(request_password_reset_handler::<R, D>),
+        )
         .route("/reset-password", post(reset_password_handler::<R, D>))
         .route("/me", get(me_handler::<R, D>))
         .with_state(state)
@@ -264,7 +267,7 @@ async fn change_password_handler<R: Resource, D: DataLayer>(
 
     let claims = state
         .jwt_service
-        .verify_token(token)
+        .verify_token_with_purpose(token, "access")
         .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
 
     let updated_user = state
@@ -289,15 +292,14 @@ async fn request_password_reset_handler<R: Resource, D: DataLayer>(
     State(state): State<Arc<AuthRouterState<R, D>>>,
     Json(payload): Json<RequestPasswordResetRequest>,
 ) -> Result<Json<serde_json::Value>, AuthRejection> {
-    let (_user, reset_token) = state
+    let (_user, _reset_token) = state
         .strategy
         .request_password_reset(&state.context, &payload.email)
         .await
         .map_err(AuthRejection::AuthError)?;
 
     Ok(Json(serde_json::json!({
-        "status": "reset_requested",
-        "reset_token": reset_token
+        "status": "reset_requested"
     })))
 }
 
@@ -337,7 +339,7 @@ async fn me_handler<R: Resource, D: DataLayer>(
 
     let claims = state
         .jwt_service
-        .verify_token(token)
+        .verify_token_with_purpose(token, "access")
         .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
 
     Ok(Json(serde_json::json!({

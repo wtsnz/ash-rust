@@ -611,7 +611,7 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         jwt: jwt_service.clone(),
     };
 
-    let auth_routes = auth_router(strategy, jwt_service.clone(), ctx);
+    let auth_routes = auth_router(strategy, jwt_service.clone(), ctx.clone());
     let app: Router = Router::new().nest("/auth", auth_routes).with_state(app_state);
 
     // 1. POST /auth/sign-in
@@ -732,7 +732,15 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .unwrap()
         .to_bytes();
     let reset_req_val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    let reset_token = reset_req_val["reset_token"].as_str().unwrap().to_string();
+    assert!(
+        reset_req_val.get("reset_token").is_none(),
+        "reset token must not be returned over HTTP: {reset_req_val}"
+    );
+    let (_user, reset_token) = User::auth_strategy()
+        .with_jwt_service((*jwt_service).clone())
+        .request_password_reset(&ctx, "lifecycle_user@example.com")
+        .await
+        .expect("test can mint a reset token via the strategy, not the HTTP body");
 
     // 6a. POST /auth/reset-password with password confirmation mismatch must fail (401)
     let mismatch_reset_req = axum::http::Request::builder()
