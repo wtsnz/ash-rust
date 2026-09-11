@@ -2,8 +2,8 @@ use crate::ast_helpers::{
     find_closest_match, is_bool, is_integer, is_string, is_uuid, option_inner, unknown_ident_error,
 };
 use crate::define::ast::{
-    ActionKind, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, RelType,
-    ResourceDefinition, ValidationSpec,
+    ActionKind, ArgumentSpec, CalculationExprSpec, PolicyCheckExpr, PolicyEffectSpec,
+    PolicyWhenSpec, RelType, ResourceDefinition, ValidationSpec,
 };
 use quote::{quote, quote_spanned};
 use std::collections::HashSet;
@@ -251,15 +251,67 @@ fn validate_policy_effect(
     validate_policy_check(check, field_names, actor, errors);
 }
 
+fn calc_operand_ty<'a>(
+    name: &Ident,
+    def: &'a ResourceDefinition,
+    args: &'a [ArgumentSpec],
+) -> Option<&'a Type> {
+    args.iter()
+        .find(|a| a.name == *name)
+        .map(|a| &a.ty)
+        .or_else(|| {
+            def.attributes
+                .iter()
+                .find(|a| a.ident == *name)
+                .map(|a| &a.ty)
+        })
+}
+
+fn require_stringy_calc_field(
+    field: &Ident,
+    op: &str,
+    def: &ResourceDefinition,
+    args: &[ArgumentSpec],
+    errors: &mut Vec<Error>,
+) {
+    if let Some(ty) = calc_operand_ty(field, def, args)
+        && !is_string_type(ty)
+    {
+        errors.push(Error::new_spanned(
+            field,
+            format!(
+                "`{op}({field})` requires a string field, but `{field}` has type '{}'",
+                type_label(ty)
+            ),
+        ));
+    }
+}
+
+fn require_stringy_calc_expr(
+    expr: &CalculationExprSpec,
+    op: &str,
+    def: &ResourceDefinition,
+    args: &[ArgumentSpec],
+    errors: &mut Vec<Error>,
+) {
+    match expr {
+        CalculationExprSpec::Field(field) | CalculationExprSpec::Arg(field) => {
+            require_stringy_calc_field(field, op, def, args, errors);
+        }
+        CalculationExprSpec::LitString(_) => {}
+        _ => {}
+    }
+}
+
 fn validate_calc_fields(
     expr: &CalculationExprSpec,
-    attr_names: &[String],
-    arg_names: &[String],
+    def: &ResourceDefinition,
+    args: &[ArgumentSpec],
     errors: &mut Vec<Error>,
 ) {
     let candidates = {
-        let mut names = attr_names.to_vec();
-        names.extend(arg_names.iter().cloned());
+        let mut names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+        names.extend(args.iter().map(|a| a.name.to_string()));
         names
     };
     match expr {
@@ -272,6 +324,8 @@ fn validate_calc_fields(
         CalculationExprSpec::StringLength(field) => {
             if !candidates.iter().any(|n| n == &field.to_string()) {
                 errors.push(unknown_field(field, &candidates, "field"));
+            } else {
+                require_stringy_calc_field(field, "string_length", def, args, errors);
             }
         }
         CalculationExprSpec::Add(left, right)
@@ -284,27 +338,34 @@ fn validate_calc_fields(
         | CalculationExprSpec::Gte(left, right)
         | CalculationExprSpec::Lt(left, right)
         | CalculationExprSpec::Lte(left, right) => {
-            validate_calc_fields(left, attr_names, arg_names, errors);
-            validate_calc_fields(right, attr_names, arg_names, errors);
+            validate_calc_fields(left, def, args, errors);
+            validate_calc_fields(right, def, args, errors);
         }
         CalculationExprSpec::Concat(parts) | CalculationExprSpec::Coalesce(parts) => {
             for part in parts {
-                validate_calc_fields(part, attr_names, arg_names, errors);
+                validate_calc_fields(part, def, args, errors);
             }
         }
-        CalculationExprSpec::Lower(inner)
-        | CalculationExprSpec::Upper(inner)
-        | CalculationExprSpec::Length(inner) => {
-            validate_calc_fields(inner, attr_names, arg_names, errors);
+        CalculationExprSpec::Lower(inner) => {
+            validate_calc_fields(inner, def, args, errors);
+            require_stringy_calc_expr(inner, "lower", def, args, errors);
+        }
+        CalculationExprSpec::Upper(inner) => {
+            validate_calc_fields(inner, def, args, errors);
+            require_stringy_calc_expr(inner, "upper", def, args, errors);
+        }
+        CalculationExprSpec::Length(inner) => {
+            validate_calc_fields(inner, def, args, errors);
+            require_stringy_calc_expr(inner, "length", def, args, errors);
         }
         CalculationExprSpec::IfElse {
             cond,
             then_expr,
             else_expr,
         } => {
-            validate_calc_fields(cond, attr_names, arg_names, errors);
-            validate_calc_fields(then_expr, attr_names, arg_names, errors);
-            validate_calc_fields(else_expr, attr_names, arg_names, errors);
+            validate_calc_fields(cond, def, args, errors);
+            validate_calc_fields(then_expr, def, args, errors);
+            validate_calc_fields(else_expr, def, args, errors);
         }
         CalculationExprSpec::Arg(_)
         | CalculationExprSpec::LitInt(_)
@@ -412,8 +473,7 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
     }
 
     for calc in &def.calculations {
-        let arg_names: Vec<String> = calc.arguments.iter().map(|a| a.name.to_string()).collect();
-        validate_calc_fields(&calc.expr, &attr_names, &arg_names, errors);
+        validate_calc_fields(&calc.expr, def, &calc.arguments, errors);
     }
 
     for agg in &def.aggregates {
@@ -1319,6 +1379,24 @@ mod tests {
             }
         }});
         assert!(msg.contains("Did you mean `title`?"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_calculation_string_length_on_integer_fails() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+                count: i64;
+            }
+            calculations {
+                count_len: i64 = string_length(count);
+            }
+        }});
+        assert!(
+            msg.contains("requires a string field") && msg.contains("i64"),
+            "got: {msg}"
+        );
     }
 
     #[test]
