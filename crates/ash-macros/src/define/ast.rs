@@ -223,6 +223,13 @@ pub struct ActionSpec {
     pub persist_manual: bool,
     pub returns: Option<Type>,
     pub run_expr: Option<Expr>,
+    pub accept_kw: Option<Ident>,
+    pub change_kw: Option<Ident>,
+    pub validate_kw: Option<Ident>,
+    pub prepare_kw: Option<Ident>,
+    pub persist_kw: Option<Ident>,
+    pub returns_kw: Option<Ident>,
+    pub run_kw: Option<Ident>,
 }
 
 pub struct ArgumentSpec {
