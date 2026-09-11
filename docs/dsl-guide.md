@@ -360,7 +360,7 @@ notifiers [
 ]
 ```
 
-Alternatively, attach notifiers per-request via `ctx.with_notifier(...)`.
+Alternatively, attach notifiers per-request via `ctx.with_notifier(...)`. Each entry is type-checked as `&'static dyn Notifier`. `extensions [&STATE_MACHINE]` is `&'static dyn ResourceExtension`. `optimistic_lock version;` must name an attribute. Aggregate `filter:` fields are checked on the related resource.
 
 ---
 
