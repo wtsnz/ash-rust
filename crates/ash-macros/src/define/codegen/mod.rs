@@ -189,6 +189,30 @@ mod tests {
     }
 
     #[test]
+    fn test_typestate_emits_named_missing_input_diagnostic() {
+        let out = expand_ok(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                }
+                actions {
+                    create open {
+                        primary;
+                        accept [title];
+                    }
+                    read read { primary; }
+                }
+            }
+        })
+        .to_string();
+        assert!(
+            out.contains("missing `.title(...)` on this action builder"),
+            "missing typestate diagnostic: {out}"
+        );
+    }
+
+    #[test]
     fn test_attribute_docs_copied_to_field_consts_and_setters() {
         let out = expand_ok(quote! {
             TestResource {

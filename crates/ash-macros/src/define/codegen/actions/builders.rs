@@ -96,6 +96,69 @@ fn typestate_types(n: usize) -> (TokenStream, TokenStream, TokenStream) {
     (struct_params, unset_ty, ready_ty)
 }
 
+/// Per-required-field traits so rustc names the missing setter instead of `InputUnset`.
+fn typestate_ready_impls(
+    builder_name: &syn::Ident,
+    resource: &syn::Ident,
+    act_pascal: &str,
+    required: &[&syn::Ident],
+) -> (TokenStream, TokenStream, TokenStream, TokenStream) {
+    if required.is_empty() {
+        let impl_ready = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
+        let into_future = quote! {
+            impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #builder_name<'a, D>
+        };
+        let into_changeset = quote! {
+            impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D>
+        };
+        return (quote! {}, impl_ready, into_future, into_changeset);
+    }
+
+    let ts: Vec<syn::Ident> = (0..required.len())
+        .map(|i| format_ident!("TS{i}"))
+        .collect();
+    let mut traits = Vec::new();
+    let mut trait_defs = Vec::new();
+    for name in required {
+        let trait_name = format_ident!("__Ash{resource}{act_pascal}Need_{name}");
+        let msg = format!("missing `.{name}(...)` on this action builder");
+        let label = format!("required input `{name}` is not set");
+        trait_defs.push(quote! {
+            #[diagnostic::on_unimplemented(
+                message = #msg,
+                label = #label,
+                note = "set it before `.await` or `.call()`"
+            )]
+            pub trait #trait_name {}
+            impl #trait_name for ::ash_core::InputSet {}
+        });
+        traits.push(trait_name);
+    }
+    let ts_tys: Vec<TokenStream> = ts.iter().map(|t| quote! { #t }).collect();
+    let tuple = tuple_ty(&ts_tys);
+    let impl_ready = quote! {
+        impl<'a, D: ::ash_core::DataLayer, #(#ts),*> #builder_name<'a, D, #tuple>
+        where
+            #(#ts: #traits + ::std::marker::Send + 'static,)*
+    };
+    let into_future = quote! {
+        impl<'a, D: ::ash_core::DataLayer, #(#ts),*> ::std::future::IntoFuture for #builder_name<'a, D, #tuple>
+        where
+            #(#ts: #traits + ::std::marker::Send + 'static,)*
+    };
+    let into_changeset = quote! {
+        impl<'a, D: ::ash_core::DataLayer, #(#ts),*> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D, #tuple>
+        where
+            #(#ts: #traits + ::std::marker::Send + 'static,)*
+    };
+    (
+        quote! { #(#trait_defs)* },
+        impl_ready,
+        into_future,
+        into_changeset,
+    )
+}
+
 fn into_fieldmap_ref_impl(builder_name: &syn::Ident, has_state: bool) -> TokenStream {
     if has_state {
         quote! {
@@ -313,7 +376,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 let mut required_info = Vec::new();
                 let mut all_input_names = Vec::new();
                 let required_names = required_input_names(def, act);
-                let (struct_params, _unset_ty, ready_ty) = typestate_types(required_names.len());
+                let (struct_params, _, _) = typestate_types(required_names.len());
                 let has_state = !required_names.is_empty();
                 let phantom_field = if has_state {
                     quote! { _state: ::std::marker::PhantomData<S>, }
@@ -414,17 +477,9 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 } else {
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
-                let impl_ready = if has_state {
-                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D, #ready_ty> }
-                } else {
-                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
-                };
+                let (need_traits, impl_ready, into_future_impl, into_changeset_impl) =
+                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names);
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
-                let into_future_ty = if has_state {
-                    quote! { #builder_name<'a, D, #ready_ty> }
-                } else {
-                    quote! { #builder_name<'a, D> }
-                };
                 let into_fieldmap_owned = if has_state {
                     quote! {
                         impl<'a, D: ::ash_core::DataLayer, S> ::ash_core::IntoFieldMap for #builder_name<'a, D, S> {
@@ -446,6 +501,8 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                 if act.persist_manual {
                     builders.push(quote! {
+                        #need_traits
+
                         #(#outer_attrs)*
                         pub struct #builder_name<'a, D #struct_params> {
                             ctx: &'a ::ash_core::Context<D>,
@@ -492,6 +549,8 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     });
                 } else {
                     builders.push(quote! {
+                        #need_traits
+
                         #(#outer_attrs)*
                         pub struct #builder_name<'a, D #struct_params> {
                             ctx: &'a ::ash_core::Context<D>,
@@ -667,7 +726,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                         #into_fieldmap_ref
 
-                        impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #into_future_ty {
+                        #into_future_impl {
                             type Output = ::ash_core::Result<#resource>;
                             type IntoFuture = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = Self::Output> + ::std::marker::Send + 'a>>;
 
@@ -676,7 +735,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         }
 
-                        impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #into_future_ty {
+                        #into_changeset_impl {
                             fn into_changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
                                 self.changeset()
                             }
@@ -710,7 +769,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 let mut required_info = Vec::new();
                 let mut all_input_names = Vec::new();
                 let required_names = required_input_names(def, act);
-                let (struct_params, _unset_ty, ready_ty) = typestate_types(required_names.len());
+                let (struct_params, _, _) = typestate_types(required_names.len());
                 let has_state = !required_names.is_empty();
                 let phantom_field = if has_state {
                     quote! { _state: ::std::marker::PhantomData<S>, }
@@ -727,17 +786,9 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 } else {
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
-                let impl_ready = if has_state {
-                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D, #ready_ty> }
-                } else {
-                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
-                };
+                let (need_traits, impl_ready, into_future_impl, into_changeset_impl) =
+                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names);
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
-                let into_future_ty = if has_state {
-                    quote! { #builder_name<'a, D, #ready_ty> }
-                } else {
-                    quote! { #builder_name<'a, D> }
-                };
                 let into_fieldmap_owned = if has_state {
                     quote! {
                         impl<'a, D: ::ash_core::DataLayer, S> ::ash_core::IntoFieldMap for #builder_name<'a, D, S> {
@@ -835,6 +886,8 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 );
 
                 builders.push(quote! {
+                    #need_traits
+
                     pub enum #target_enum {
                         Id(::uuid::Uuid),
                         Existing(#resource),
@@ -1059,7 +1112,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                     #into_fieldmap_ref
 
-                    impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #into_future_ty {
+                    #into_future_impl {
                         type Output = ::ash_core::Result<#resource>;
                         type IntoFuture = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = Self::Output> + ::std::marker::Send + 'a>>;
 
@@ -1068,7 +1121,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         }
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #into_future_ty {
+                    #into_changeset_impl {
                         fn into_changeset(self) -> ::ash_core::Result<::ash_core::Changeset<#resource>> {
                             self.changeset()
                         }
@@ -1159,7 +1212,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 let mut required_info = Vec::new();
                 let mut all_input_names = Vec::new();
                 let required_names = required_input_names(def, act);
-                let (struct_params, _unset_ty, ready_ty) = typestate_types(required_names.len());
+                let (struct_params, _, _) = typestate_types(required_names.len());
                 let has_state = !required_names.is_empty();
                 let phantom_field = if has_state {
                     quote! { _state: ::std::marker::PhantomData<S>, }
@@ -1176,17 +1229,9 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 } else {
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
-                let impl_ready = if has_state {
-                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D, #ready_ty> }
-                } else {
-                    quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
-                };
+                let (need_traits, impl_ready, into_future_impl, _) =
+                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names);
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
-                let into_future_ty = if has_state {
-                    quote! { #builder_name<'a, D, #ready_ty> }
-                } else {
-                    quote! { #builder_name<'a, D> }
-                };
 
                 let all_inputs: Vec<(&syn::Ident, &syn::Type)> = act
                     .accept
@@ -1262,6 +1307,8 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 };
 
                 builders.push(quote! {
+                    #need_traits
+
                     pub struct #input_struct_name<'a, D> {
                         pub ctx: &'a ::ash_core::Context<D>,
                         #(#input_struct_fields,)*
@@ -1337,7 +1384,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         }
                     }
 
-                    impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #into_future_ty {
+                    #into_future_impl {
                         type Output = ::ash_core::Result<#returns_ty>;
                         type IntoFuture = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = Self::Output> + ::std::marker::Send + 'a>>;
 
