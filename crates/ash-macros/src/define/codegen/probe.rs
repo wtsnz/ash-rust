@@ -518,6 +518,18 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
         }
     }
 
+    for notifier in &def.notifiers {
+        probes.push(quote_spanned! { notifier.span() =>
+            let _: &'static dyn ::ash_core::Notifier = #notifier;
+        });
+    }
+
+    for ext in &def.extensions {
+        probes.push(quote_spanned! { ext.span() =>
+            let _: &'static dyn ::ash_core::ResourceExtension = #ext;
+        });
+    }
+
     for identity in &def.identities {
         for key in &identity.keys {
             probes.push(ns_field_probe(
@@ -1244,6 +1256,40 @@ mod tests {
         assert!(out.contains("PrimaryDb"), "missing store type: {out}");
         assert!(out.contains("PostTag"), "missing through type: {out}");
         assert!(out.contains("gen_token"), "missing default_fn: {out}");
+    }
+
+    #[test]
+    fn test_probe_notifiers_and_extensions() {
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                }
+                extensions [
+                    &STATE_MACHINE
+                ]
+                notifiers [
+                    &AUDIT_LOG_NOTIFIER
+                ]
+                actions {
+                    read read { primary; }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("Notifier"), "missing Notifier bound: {out}");
+        assert!(
+            out.contains("AUDIT_LOG_NOTIFIER"),
+            "missing notifier path: {out}"
+        );
+        assert!(
+            out.contains("ResourceExtension"),
+            "missing ResourceExtension bound: {out}"
+        );
+        assert!(
+            out.contains("STATE_MACHINE"),
+            "missing extension path: {out}"
+        );
     }
 
     #[test]
