@@ -4,8 +4,9 @@ use syn::Ident;
 
 use crate::ast_helpers::{option_inner, pascal_case, snake_case};
 use crate::define::ast::{
-    ActionKind, AggregateKindSpec, CalculationExprSpec, ChangeSpec, PolicyCheckExpr,
-    PolicyEffectSpec, PolicyWhenSpec, PreparationSpec, RelType, ResourceDefinition, ValidationSpec,
+    ActionKind, AggregateFilterSpec, AggregateKindSpec, CalculationExprSpec, ChangeSpec,
+    PolicyCheckExpr, PolicyEffectSpec, PolicyWhenSpec, PreparationSpec, RelType,
+    ResourceDefinition, ValidationSpec,
 };
 use quote::format_ident;
 use syn::spanned::Spanned;
@@ -516,6 +517,16 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
             }
             AggregateKindSpec::Count | AggregateKindSpec::Exists => {}
         }
+        if let Some(filter) = &agg.filter {
+            let field = match filter {
+                AggregateFilterSpec::Eq { field, .. } | AggregateFilterSpec::Ne { field, .. } => {
+                    field
+                }
+            };
+            if let Some(r) = def.relationships.iter().find(|r| r.ident == *rel) {
+                probes.push(dest_field_probe(&r.dest, field));
+            }
+        }
     }
 
     for notifier in &def.notifiers {
@@ -959,6 +970,32 @@ mod tests {
             "missing destination probe: {out}"
         );
         assert!(out.contains("__dest_stub"), "missing dest stub: {out}");
+    }
+
+    #[test]
+    fn test_probe_aggregate_filter_on_dest_field() {
+        let def = parse_def(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+            }
+            relationships {
+                has_many tickets: Ticket;
+            }
+            aggregates {
+                open_ticket_count: Option<i64> = count(tickets, filter: status == "open");
+            }
+            actions {
+                read read { primary; }
+            }
+        }});
+        let out = expand_ide_probe(&def).to_string();
+        assert!(out.contains("status"), "missing dest filter field: {out}");
+        assert!(out.contains("Ticket"), "missing dest type: {out}");
+        assert!(
+            out.contains("__ash_probe_dest"),
+            "missing dest filter probe: {out}"
+        );
     }
 
     #[test]
