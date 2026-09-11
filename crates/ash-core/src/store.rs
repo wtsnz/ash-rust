@@ -8,6 +8,11 @@
 use crate::registry::DynDataLayer;
 
 /// A marker trait identifying a logical database or storage target.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an Ash store tag",
+    label = "not a store tag",
+    note = "implement `StoreTag` or use `SqliteStore`, `MemoryStore`, or `PostgresStore`"
+)]
 pub trait StoreTag: 'static + Send + Sync {}
 
 /// The default store marker used when a resource does not specify an explicit store.
@@ -31,6 +36,11 @@ pub struct MemoryStore;
 impl StoreTag for MemoryStore {}
 
 /// Trait implemented by contexts or registries that provide storage for a specific [`StoreTag`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not provide store `{T}`",
+    label = "missing store `{T}`",
+    note = "register it with `.with_store::<{T}>(...)` on `StoreRegistry`"
+)]
 pub trait HasStore<T: StoreTag> {
     /// Retrieve the type-erased data layer for store `T`.
     fn get_store(&self) -> &dyn DynDataLayer;
