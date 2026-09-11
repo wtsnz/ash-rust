@@ -292,4 +292,37 @@ mod tests {
             "explicit [enum] should probe AshEnum: {out}"
         );
     }
+
+    #[test]
+    fn test_non_i64_integers_use_integer_storage() {
+        let out = expand_ok(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    priority: i32;
+                    count: Option<u32>;
+                }
+                actions {
+                    create create {
+                        primary;
+                        accept [priority, count];
+                    }
+                    read read { primary; }
+                }
+            }
+        })
+        .to_string();
+        assert!(
+            out.contains("AttrType :: Integer"),
+            "i32/u32 should store as Integer: {out}"
+        );
+        assert!(
+            !out.contains("AttrType :: Map"),
+            "i32/u32 should not fall through to Map: {out}"
+        );
+        assert!(
+            out.contains("i32"),
+            "field consts should keep the declared integer type: {out}"
+        );
+    }
 }

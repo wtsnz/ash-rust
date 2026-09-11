@@ -1,5 +1,5 @@
 use crate::ast_helpers::{
-    is_bool, is_i64, is_string, is_uuid, lit_string, option_inner, rel_inner, vec_inner,
+    is_bool, is_integer, is_string, is_uuid, lit_string, option_inner, rel_inner, vec_inner,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -74,7 +74,11 @@ impl FieldSpec {
         let name = self.ident.to_string();
         match &self.kind {
             Kind::Pk => Some(quote! { ::ash_core::AttributeDef::uuid_pk(#name) }),
-            Kind::Stored { optional, atom, is_enum } => {
+            Kind::Stored {
+                optional,
+                atom,
+                is_enum,
+            } => {
                 let ty = if *is_enum {
                     let inner = option_inner(&self.ty).unwrap_or(&self.ty);
                     quote! { <#inner as ::ash_core::AshType>::ATTR_TYPE }
@@ -82,7 +86,7 @@ impl FieldSpec {
                     quote! { ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*] } }
                 } else if is_uuid(&self.ty) || option_inner(&self.ty).is_some_and(is_uuid) {
                     quote! { ::ash_core::AttrType::Uuid }
-                } else if is_i64(&self.ty) || option_inner(&self.ty).is_some_and(is_i64) {
+                } else if is_integer(&self.ty) || option_inner(&self.ty).is_some_and(is_integer) {
                     quote! { ::ash_core::AttrType::Integer }
                 } else if is_bool(&self.ty) {
                     quote! { ::ash_core::AttrType::Boolean }
@@ -138,7 +142,11 @@ impl FieldSpec {
         let ident = &self.ident;
         let name = ident.to_string();
         match &self.kind {
-            Kind::Stored { is_enum: true, optional: true, .. } => Some(quote! {
+            Kind::Stored {
+                is_enum: true,
+                optional: true,
+                ..
+            } => Some(quote! {
                 if let ::std::option::Option::Some(ref val) = self.#ident {
                     map.insert(
                         ::std::string::String::from(#name),
@@ -151,7 +159,11 @@ impl FieldSpec {
                     );
                 }
             }),
-            Kind::Stored { is_enum: true, optional: false, .. } => Some(quote! {
+            Kind::Stored {
+                is_enum: true,
+                optional: false,
+                ..
+            } => Some(quote! {
                 map.insert(
                     ::std::string::String::from(#name),
                     ::ash_core::AshType::to_value(&self.#ident),
@@ -239,6 +251,45 @@ impl FieldSpec {
             },
             Kind::Stored {
                 optional: false,
+                atom: None,
+                ..
+            } if is_integer(&self.ty) => {
+                let ty = &self.ty;
+                quote! {
+                    #ident: {
+                        let n = ::ash_core::optional_int(fields, #name)?
+                            .ok_or_else(|| ::ash_core::Error::Missing { field: #name.into() })?;
+                        <#ty as ::std::convert::TryFrom<i64>>::try_from(n).map_err(|_| {
+                            ::ash_core::Error::Invalid(::std::format!(
+                                "integer does not fit in {}",
+                                stringify!(#ty)
+                            ))
+                        })?
+                    }
+                }
+            }
+            Kind::Stored {
+                optional: true,
+                atom: None,
+                ..
+            } if option_inner(&self.ty).is_some_and(is_integer) => {
+                let inner = option_inner(&self.ty).unwrap();
+                quote! {
+                    #ident: match ::ash_core::optional_int(fields, #name)? {
+                        ::std::option::Option::Some(n) => ::std::option::Option::Some(
+                            <#inner as ::std::convert::TryFrom<i64>>::try_from(n).map_err(|_| {
+                                ::ash_core::Error::Invalid(::std::format!(
+                                    "integer does not fit in {}",
+                                    stringify!(#inner)
+                                ))
+                            })?
+                        ),
+                        ::std::option::Option::None => ::std::option::Option::None,
+                    }
+                }
+            }
+            Kind::Stored {
+                optional: false,
                 atom: Some(_),
                 ..
             } => quote! {
@@ -298,7 +349,7 @@ impl FieldSpec {
                     pub const #ident: ::ash_core::Attr<super::#owner, #inner> =
                         ::ash_core::Attr::new(#name);
                 }
-            },
+            }
             Kind::Stored { atom: Some(_), .. } => quote! {
                 pub const #ident: ::ash_core::Attr<super::#owner, ::std::string::String> =
                     ::ash_core::Attr::new(#name);
@@ -316,10 +367,11 @@ impl FieldSpec {
                     ::ash_core::Attr::new(#name);
             },
             Kind::Stored { .. }
-                if is_i64(&self.ty) || option_inner(&self.ty).is_some_and(is_i64) =>
+                if is_integer(&self.ty) || option_inner(&self.ty).is_some_and(is_integer) =>
             {
+                let inner = option_inner(&self.ty).unwrap_or(&self.ty);
                 quote! {
-                    pub const #ident: ::ash_core::Attr<super::#owner, i64> =
+                    pub const #ident: ::ash_core::Attr<super::#owner, #inner> =
                         ::ash_core::Attr::new(#name);
                 }
             }

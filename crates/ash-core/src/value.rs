@@ -187,6 +187,20 @@ impl From<i64> for Value {
     }
 }
 
+macro_rules! impl_from_int {
+    ($($t:ty),*) => {
+        $(
+            impl From<$t> for Value {
+                fn from(value: $t) -> Self {
+                    Self::Int(value as i64)
+                }
+            }
+        )*
+    };
+}
+
+impl_from_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
+
 impl From<Option<Uuid>> for Value {
     fn from(value: Option<Uuid>) -> Self {
         match value {
@@ -204,6 +218,23 @@ impl From<Option<i64>> for Value {
         }
     }
 }
+
+macro_rules! impl_from_option_int {
+    ($($t:ty),*) => {
+        $(
+            impl From<Option<$t>> for Value {
+                fn from(value: Option<$t>) -> Self {
+                    match value {
+                        Some(v) => Self::Int(v as i64),
+                        None => Self::Null,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_from_option_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
 
 impl From<Option<bool>> for Value {
     fn from(value: Option<bool>) -> Self {
@@ -257,6 +288,20 @@ impl IntoOption<i64> for i64 {
         Some(self)
     }
 }
+
+macro_rules! impl_into_option_int {
+    ($($t:ty),*) => {
+        $(
+            impl IntoOption<$t> for $t {
+                fn into_option(self) -> Option<$t> {
+                    Some(self)
+                }
+            }
+        )*
+    };
+}
+
+impl_into_option_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
 
 impl IntoOption<bool> for bool {
     fn into_option(self) -> Option<bool> {

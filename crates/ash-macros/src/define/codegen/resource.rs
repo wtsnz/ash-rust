@@ -1,12 +1,23 @@
 use super::calculations::calc_expr_to_tokens;
 use super::policies::lit_to_const_value;
 use crate::ast_helpers::{
-    is_bool, is_i64, is_string, is_uuid, option_inner, screaming_snake, snake_case,
+    is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake, snake_case,
 };
 use crate::define::ast::{AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Error, Result};
+use syn::{Error, Result, Type};
+
+fn try_from_i64(ty: &Type, n: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    quote! {
+        <#ty as ::std::convert::TryFrom<i64>>::try_from(#n).map_err(|_| {
+            ::ash_core::Error::Invalid(::std::format!(
+                "integer does not fit in {}",
+                stringify!(#ty)
+            ))
+        })?
+    }
+}
 
 pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     if def.attributes.is_empty() {
@@ -115,7 +126,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             let fn_name = format_ident!("__default_{}", name_str);
             let attr_ty = if is_string(ty) {
                 quote! { ::ash_core::AttrType::String }
-            } else if is_i64(ty) {
+            } else if is_integer(ty) {
                 quote! { ::ash_core::AttrType::Integer }
             } else if is_bool(ty) {
                 quote! { ::ash_core::AttrType::Boolean }
@@ -134,7 +145,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             let fn_name = format_ident!("__default_{}", name_str);
             let attr_ty = if is_string(ty) {
                 quote! { ::ash_core::AttrType::String }
-            } else if is_i64(ty) {
+            } else if is_integer(ty) {
                 quote! { ::ash_core::AttrType::Integer }
             } else if is_bool(ty) {
                 quote! { ::ash_core::AttrType::Boolean }
@@ -166,9 +177,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::String) });
         } else if option_inner(ty).is_some_and(is_string) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::String) });
-        } else if is_i64(ty) {
+        } else if is_integer(ty) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Integer) });
-        } else if option_inner(ty).is_some_and(is_i64) {
+        } else if option_inner(ty).is_some_and(is_integer) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::optional(#name_str, ::ash_core::AttrType::Integer) });
         } else if is_bool(ty) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::required(#name_str, ::ash_core::AttrType::Boolean) });
@@ -271,7 +282,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let inner = option_inner(&c.ty).unwrap_or(&c.ty);
         let ty_tokens = if is_string(inner) {
             quote! { ::ash_core::AttrType::String }
-        } else if is_i64(inner) {
+        } else if is_integer(inner) {
             quote! { ::ash_core::AttrType::Integer }
         } else if is_bool(inner) {
             quote! { ::ash_core::AttrType::Boolean }
@@ -300,7 +311,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     let arg_allow_nil = option_inner(arg_ty).is_some();
                     let arg_type_tok = if is_string(arg_inner) {
                         quote! { ::ash_core::AttrType::String }
-                    } else if is_i64(arg_inner) {
+                    } else if is_integer(arg_inner) {
                         quote! { ::ash_core::AttrType::Integer }
                     } else if is_bool(arg_inner) {
                         quote! { ::ash_core::AttrType::Boolean }
@@ -347,7 +358,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     quote! { ::ash_core::AttrType::Uuid }
                 } else if is_string(inner) {
                     quote! { ::ash_core::AttrType::String }
-                } else if is_i64(inner) {
+                } else if is_integer(inner) {
                     quote! { ::ash_core::AttrType::Integer }
                 } else if is_bool(inner) {
                     quote! { ::ash_core::AttrType::Boolean }
@@ -548,10 +559,11 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     }
                 });
                 continue;
-            } else if is_i64(ty) {
+            } else if is_integer(ty) {
+                let conv = try_from_i64(ty, quote!(*n));
                 from_inits.push(quote! {
                     #id: match fields.get(#name_str) {
-                        ::std::option::Option::Some(::ash_core::Value::Int(n)) => *n,
+                        ::std::option::Option::Some(::ash_core::Value::Int(n)) => #conv,
                         _ => #default_expr,
                     }
                 });
@@ -596,12 +608,24 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             from_inits.push(
                 quote! { #id: #ty::parse(&::ash_core::required_string(fields, #name_str)?)? },
             );
-        } else if is_i64(ty) {
+        } else if is_integer(ty) {
+            let conv = try_from_i64(ty, quote!(n));
             from_inits.push(quote! {
-                #id: ::ash_core::optional_int(fields, #name_str)?.ok_or_else(|| ::ash_core::Error::Missing { field: #name_str.into() })?
+                #id: {
+                    let n = ::ash_core::optional_int(fields, #name_str)?
+                        .ok_or_else(|| ::ash_core::Error::Missing { field: #name_str.into() })?;
+                    #conv
+                }
             });
-        } else if option_inner(ty).is_some_and(is_i64) {
-            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        } else if option_inner(ty).is_some_and(is_integer) {
+            let inner = option_inner(ty).unwrap();
+            let conv = try_from_i64(inner, quote!(n));
+            from_inits.push(quote! {
+                #id: match ::ash_core::optional_int(fields, #name_str)? {
+                    ::std::option::Option::Some(n) => ::std::option::Option::Some(#conv),
+                    ::std::option::Option::None => ::std::option::Option::None,
+                }
+            });
         } else if is_bool(ty) {
             from_inits.push(quote! {
                 #id: match fields.get(#name_str) {
@@ -640,8 +664,14 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &c.ident;
         let name_str = id.to_string();
         let inner = option_inner(&c.ty).unwrap_or(&c.ty);
-        if is_i64(inner) {
-            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        if is_integer(inner) {
+            let conv = try_from_i64(inner, quote!(n));
+            from_inits.push(quote! {
+                #id: match ::ash_core::optional_int(fields, #name_str)? {
+                    ::std::option::Option::Some(n) => ::std::option::Option::Some(#conv),
+                    ::std::option::Option::None => ::std::option::Option::None,
+                }
+            });
         } else if is_string(inner) {
             from_inits.push(quote! {
                 #id: match fields.get(#name_str) {
@@ -666,8 +696,14 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &agg.ident;
         let name_str = id.to_string();
         let inner = option_inner(&agg.ty).unwrap_or(&agg.ty);
-        if is_i64(inner) {
-            from_inits.push(quote! { #id: ::ash_core::optional_int(fields, #name_str)? });
+        if is_integer(inner) {
+            let conv = try_from_i64(inner, quote!(n));
+            from_inits.push(quote! {
+                #id: match ::ash_core::optional_int(fields, #name_str)? {
+                    ::std::option::Option::Some(n) => ::std::option::Option::Some(#conv),
+                    ::std::option::Option::None => ::std::option::Option::None,
+                }
+            });
         } else if is_bool(inner) {
             from_inits.push(quote! {
                 #id: match fields.get(#name_str) {
@@ -777,16 +813,17 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::ash_core::Attr::new(#name_str);
                 });
             }
-        } else if is_i64(ty) || option_inner(ty).is_some_and(is_i64) {
+        } else if is_integer(ty) || option_inner(ty).is_some_and(is_integer) {
+            let inner = option_inner(ty).unwrap_or(ty);
             field_consts.push(quote! {
                 #(#o_attrs)*
-                pub const #id: ::ash_core::Attr<super::#resource, i64> =
+                pub const #id: ::ash_core::Attr<super::#resource, #inner> =
                     ::ash_core::Attr::new(#name_str);
             });
             if !has_action_conflict {
                 associated_field_consts.push(quote! {
                     #(#o_attrs)*
-                    pub const #id: ::ash_core::Attr<Self, i64> =
+                    pub const #id: ::ash_core::Attr<Self, #inner> =
                         ::ash_core::Attr::new(#name_str);
                 });
             }

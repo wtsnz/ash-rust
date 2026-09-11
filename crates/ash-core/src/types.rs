@@ -63,6 +63,34 @@ impl AshType for i64 {
     }
 }
 
+macro_rules! impl_ash_int {
+    ($($t:ty),*) => {
+        $(
+            impl AshType for $t {
+                const ATTR_TYPE: AttrType = AttrType::Integer;
+
+                fn to_value(&self) -> Value {
+                    Value::Int(*self as i64)
+                }
+
+                fn from_value(value: &Value) -> Result<Self> {
+                    match value {
+                        Value::Int(n) => (*n).try_into().map_err(|_| {
+                            Error::Invalid(format!(
+                                "integer {n} does not fit in {}",
+                                stringify!($t)
+                            ))
+                        }),
+                        _ => Err(Error::Invalid("expected integer".into())),
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_ash_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
+
 impl AshType for bool {
     const ATTR_TYPE: AttrType = AttrType::Boolean;
 
