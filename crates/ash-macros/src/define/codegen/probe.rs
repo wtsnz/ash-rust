@@ -17,8 +17,76 @@ fn record_has_field(def: &ResourceDefinition, name: &Ident) -> bool {
         || def.relationships.iter().any(|r| r.ident == *name)
 }
 
+fn ns_field_probe(target: &Ident, name: &Ident) -> TokenStream {
+    quote_spanned! { name.span() =>
+        let _ = &#target.#name;
+    }
+}
+
+/// Completion namespaces so `accept [...]`, relationship slots, and
+/// `policy action(...)` offer only the names valid in that slot — not every
+/// method and field on the resource struct.
+fn expand_completion_namespaces(def: &ResourceDefinition) -> TokenStream {
+    let attr_fields = def.attributes.iter().map(|a| {
+        let id = &a.ident;
+        let ty = &a.ty;
+        quote! { pub #id: #ty }
+    });
+    let rel_fields = def.relationships.iter().map(|r| {
+        let id = &r.ident;
+        let dest = &r.dest;
+        quote! { pub #id: #dest }
+    });
+    let action_fields = def.actions.iter().map(|a| {
+        let id = &a.name;
+        quote! { pub #id: () }
+    });
+    let actor_fields = def.actor.iter().flat_map(|actor| {
+        actor.fields.iter().map(|f| {
+            let id = &f.name;
+            let ty = &f.ty;
+            quote! { pub #id: #ty }
+        })
+    });
+    let actor_struct = if def.actor.is_some() {
+        quote! {
+            #[allow(dead_code, non_camel_case_types)]
+            struct __AshActorFields {
+                #(#actor_fields,)*
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #[allow(dead_code, non_camel_case_types)]
+        struct __AshAcceptFields {
+            #(#attr_fields,)*
+        }
+        #[allow(dead_code, non_camel_case_types)]
+        struct __AshRelFields {
+            #(#rel_fields,)*
+        }
+        #[allow(dead_code, non_camel_case_types)]
+        struct __AshActionNames {
+            #(#action_fields,)*
+        }
+        #actor_struct
+    }
+}
+
 pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
     let resource = &def.resource;
+    let namespaces = expand_completion_namespaces(def);
+    let has_actor = def.actor.is_some();
+    let actor_bind = if has_actor {
+        quote! {
+            let __ash_actor: &__AshActorFields = loop {};
+        }
+    } else {
+        quote! {}
+    };
 
     let mut action_probes = Vec::new();
 
@@ -37,7 +105,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
             });
         }
 
-        // 2. Accept fields: resource attributes on CRUD actions, locals on generic actions.
+        // 2. Accept fields: attribute namespace on CRUD, locals on generic actions.
         for acc in &action.accept {
             let name = &acc.name;
             if action.kind == ActionKind::Generic {
@@ -47,14 +115,14 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                     let _ = &#name;
                 });
             } else {
-                field_probes.push(quote_spanned! { name.span() =>
-                    let _ = &__ash_record.#name;
-                });
+                field_probes.push(ns_field_probe(
+                    &Ident::new("__ash_accept", name.span()),
+                    name,
+                ));
             }
         }
 
-        // 3. Validation fields: if they match an attribute on the struct, probe &__ash_record.#field.
-        // If they match an action argument, probe that local variable.
+        // 3. Validation fields: attribute namespace, or the argument local.
         for val in &action.validations {
             match val {
                 ValidationSpec::Present { field }
@@ -69,9 +137,10 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                             let _ = &#field;
                         });
                     } else {
-                        field_probes.push(quote_spanned! { field.span() =>
-                            let _ = &__ash_record.#field;
-                        });
+                        field_probes.push(ns_field_probe(
+                            &Ident::new("__ash_accept", field.span()),
+                            field,
+                        ));
                     }
                 }
                 _ => {}
@@ -117,9 +186,10 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                     });
                 }
                 ChangeSpec::ManageRelationship { relationship, .. } => {
-                    field_probes.push(quote_spanned! { relationship.span() =>
-                        let _ = &__ash_record.#relationship;
-                    });
+                    field_probes.push(ns_field_probe(
+                        &Ident::new("__ash_rel", relationship.span()),
+                        relationship,
+                    ));
                 }
                 _ => {}
             }
@@ -129,9 +199,10 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
         for prep in &action.preparations {
             match prep {
                 PreparationSpec::Sort { field, .. } => {
-                    field_probes.push(quote_spanned! { field.span() =>
-                        let _ = &__ash_record.#field;
-                    });
+                    field_probes.push(ns_field_probe(
+                        &Ident::new("__ash_accept", field.span()),
+                        field,
+                    ));
                 }
                 PreparationSpec::Filter { expr } => {
                     let filter_tokens = super::actions::filter_expr_to_tokens(expr, resource);
@@ -235,12 +306,17 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 clippy::pedantic
             )]
             fn __ash_ide_typecheck(__ash_record: &#resource) {
+                #namespaces
                 #[allow(dead_code)]
                 fn __ash_assert_resource<T: ::ash_core::Resource>() {}
                 #ash_type_helper
                 #enum_helper
 
                 if false {
+                    let __ash_accept: &__AshAcceptFields = loop {};
+                    let __ash_rel: &__AshRelFields = loop {};
+                    let __ash_actions: &__AshActionNames = loop {};
+                    #actor_bind
                     #(#action_probes)*
                     #(#section_probes)*
                 }
@@ -290,9 +366,10 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
 
     for agg in &def.aggregates {
         let rel = &agg.relationship;
-        probes.push(quote_spanned! { rel.span() =>
-            let _ = &__ash_record.#rel;
-        });
+        probes.push(ns_field_probe(
+            &Ident::new("__ash_rel", rel.span()),
+            rel,
+        ));
         match &agg.kind {
             AggregateKindSpec::First { field } | AggregateKindSpec::Sum { field } => {
                 if let Some(r) = def.relationships.iter().find(|r| r.ident == *rel) {
@@ -305,17 +382,19 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
 
     for identity in &def.identities {
         for key in &identity.keys {
-            probes.push(quote_spanned! { key.span() =>
-                let _ = &__ash_record.#key;
-            });
+            probes.push(ns_field_probe(
+                &Ident::new("__ash_accept", key.span()),
+                key,
+            ));
         }
     }
 
     for fp in &def.field_policies {
         let field = &fp.field;
-        probes.push(quote_spanned! { field.span() =>
-            let _ = &__ash_record.#field;
-        });
+        probes.push(ns_field_probe(
+            &Ident::new("__ash_accept", field.span()),
+            field,
+        ));
         for check in &fp.checks {
             collect_policy_check_probes(def, resource, check_ref(check), &mut probes);
         }
@@ -324,29 +403,10 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     for pol in &def.policies {
         for when in &pol.whens {
             if let PolicyWhenSpec::ActionName(name) = when {
-                let method = quote_spanned! { name.span() => #name };
-                let act = def.actions.iter().find(|a| a.name == *name);
-                let probe = match act.map(|a| a.kind) {
-                    Some(ActionKind::Read) => quote_spanned! { name.span() =>
-                        if false {
-                            let _ = #resource::query::<::ash_memory::Memory>;
-                        }
-                    },
-                    Some(ActionKind::Update) | Some(ActionKind::Destroy) => quote! {
-                        if false {
-                            let ctx: &::ash_core::Context<::ash_memory::Memory> = loop {};
-                            let rec: #resource = loop {};
-                            let _ = #resource::#method(ctx, rec);
-                        }
-                    },
-                    _ => quote! {
-                        if false {
-                            let ctx: &::ash_core::Context<::ash_memory::Memory> = loop {};
-                            let _ = #resource::#method(ctx);
-                        }
-                    },
-                };
-                probes.push(probe);
+                probes.push(ns_field_probe(
+                    &Ident::new("__ash_actions", name.span()),
+                    name,
+                ));
             }
         }
         for check in &pol.checks {
@@ -392,6 +452,12 @@ fn collect_policy_check_probes(
 ) {
     match check {
         PolicyCheckExpr::ActorAttributeEquals { attr, value } => {
+            if def.actor.is_some() {
+                probes.push(ns_field_probe(
+                    &Ident::new("__ash_actor", attr.span()),
+                    attr,
+                ));
+            }
             if let Some(actor) = &def.actor
                 && let Some(field) = actor.fields.iter().find(|f| f.name == *attr)
             {
@@ -667,5 +733,67 @@ mod tests {
         assert!(out.contains("eq"), "missing eq operator: {out}");
         assert!(out.contains("Filter"), "missing Filter type: {out}");
         assert!(out.contains("TestResource"), "missing resource path: {out}");
+    }
+
+    #[test]
+    fn test_probe_emits_slot_namespaces_not_builder_calls() {
+        let def = parse_def(quote! {
+            TestResource {
+                attributes {
+                    id: Uuid [pk];
+                    title: String;
+                    author_id: Uuid;
+                }
+                relationships {
+                    belongs_to author: User [fk: author_id];
+                    has_many comments: Comment;
+                }
+                actor {
+                    role: String;
+                }
+                actions {
+                    create open {
+                        primary;
+                        accept [title];
+                    }
+                    read read { primary; }
+                    update assign { accept [title]; }
+                }
+                policies {
+                    policy action(open) | action(assign) {
+                        authorize_if actor_eq(role = "admin");
+                    }
+                    policy action_type(read) {
+                        authorize_if always;
+                    }
+                }
+            }
+        });
+        let out = expand_ide_probe(&def).to_string();
+        assert!(
+            out.contains("__AshAcceptFields"),
+            "missing accept namespace: {out}"
+        );
+        assert!(
+            out.contains("__AshRelFields"),
+            "missing rel namespace: {out}"
+        );
+        assert!(
+            out.contains("__AshActionNames"),
+            "missing action namespace: {out}"
+        );
+        assert!(
+            out.contains("__AshActorFields"),
+            "missing actor namespace: {out}"
+        );
+        assert!(out.contains("__ash_accept"), "missing accept bind: {out}");
+        assert!(
+            out.contains("__ash_actions"),
+            "missing action bind: {out}"
+        );
+        assert!(
+            !out.contains("Context < :: ash_memory :: Memory >"),
+            "policy action probes should not instantiate builders: {out}"
+        );
     }
 }
