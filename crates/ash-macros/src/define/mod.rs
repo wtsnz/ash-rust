@@ -1,6 +1,7 @@
 pub mod ast;
 mod codegen;
 mod parse;
+mod token_walk;
 mod validate;
 
 use crate::ast_helpers::combine_errors;
@@ -8,6 +9,7 @@ pub use ast::ResourceDefinition;
 
 pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let extracted = crate::ast_helpers::extract_resource_ident(&input);
+    let walk_probes = token_walk::expand_probes(&input, extracted.as_ref());
     let mut parsed = parse::parse_resource(input);
     parsed.errors.extend(validate::validate(&mut parsed.def));
 
@@ -26,6 +28,7 @@ pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
                 let compile_error = err.to_compile_error();
                 quote::quote! {
                     #compile_error
+                    #walk_probes
                     #tokens
                 }
             } else {
@@ -40,6 +43,7 @@ pub fn expand_dsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
             quote::quote! {
                 #compile_error
                 #stub
+                #walk_probes
             }
         }
     }
@@ -241,5 +245,35 @@ mod tests {
         assert!(out.contains("subjet"), "missing subjet error: {out}");
         assert!(out.contains("statu"), "missing statu error: {out}");
         assert!(out.contains("struct Ticket"), "missing struct: {out}");
+    }
+
+    #[test]
+    fn test_token_walk_probes_survive_skipped_action() {
+        let tokens = quote! {
+            Ticket {
+                attributes {
+                    id: Uuid [pk];
+                    subject: String;
+                }
+                actions {
+                    creat broken {
+                        accept [subject];
+                        change set(status = "open");
+                    }
+                }
+                policies {
+                    policy action(open) {
+                        authorize_if always;
+                    }
+                }
+            }
+        };
+        let out = expand_dsl(tokens).to_string();
+        assert!(
+            out.contains("__ash_token_walk_probes"),
+            "missing token walk probes: {out}"
+        );
+        assert!(out.contains("subject"), "missing accept probe: {out}");
+        assert!(out.contains("status"), "missing set probe: {out}");
     }
 }
