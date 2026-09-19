@@ -19,9 +19,9 @@ pub trait CustomValidation: Send + Sync + 'static {
 }
 
 // In your resource action:
-validation custom(&MyCustomValidator);
+validate custom(&MyCustomValidator);
 // or with a direct function:
-validation func(|ctx| {
+validate func(|ctx| {
     if ctx.fields.get("name").is_none() {
         return Err(Error::Validation { field: "name".into(), message: "missing".into() });
     }

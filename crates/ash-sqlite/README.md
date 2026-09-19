@@ -19,7 +19,7 @@ It translates high-level Ash resource definitions, filters, calculations, and re
 - **Parameterized SQL Query Compiler**:
   - Compiles `ash_core::Filter` into secure, parameterized `WHERE` clauses using bound values.
   - Inlines calculations directly into SQL expressions.
-  - Handles relational queries (`belongs_to`, `has_many`, and `many_to_many` join tables).
+  - Handles relational queries (`belongs_to`, `has_one`, `has_many`, and `many_to_many` join tables).
   - Evaluates aggregates (`count`, `sum`, `exists`, `first`) via SQL subqueries.
 - **Keyset & Offset Pagination in SQL**:
   - Cursor-based `page_keyset` compiles to indexed boundary conditions (`WHERE id > ? ORDER BY id ASC LIMIT ?`).

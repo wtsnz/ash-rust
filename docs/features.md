@@ -308,9 +308,9 @@ Instead of repeating attribute types in action `accept` blocks, write `accept [f
 
 ```rust
 attributes {
-    title: String,
-    content: String,
-    tag: Option<String>,
+    title: String;
+    content: String;
+    tag: Option<String>;
 }
 
 actions {
@@ -479,6 +479,9 @@ resource! {
 
         // Custom Rust function calculation:
         discount_tier: String = custom(custom_discount);
+
+        // Runtime arguments via arg(name), loaded with calc_with_args:
+        discounted(discount: i64): i64 = price - arg(discount);
     }
     }
 }
@@ -585,7 +588,7 @@ ctx.multi()
 
 ---
 
-## 12. Native Rust Enum Types (`#[derive(AshEnum)]` / `AshType`)
+## 11. Native Rust Enum Types (`#[derive(AshEnum)]` / `AshType`)
 
 Eliminates stringly-typed attributes for status, category, and state columns. Native enums compile down to strings for SQL / in-memory storage, while giving callers 100% compile-time type safety, exhaustive pattern matching, and typed filter operators.
 
@@ -652,7 +655,7 @@ let active = Ticket::query(&ctx)
 
 ---
 
-## 13. Extended Policy Primitives (`bypass`, `forbid_if`, `authorize_unless`, `forbid_unless`)
+## 12. Extended Policy Primitives (`bypass`, `forbid_if`, `authorize_unless`, `forbid_unless`)
 
 Ash policies support expressive negative conditions and bypass blocks that allow privileged actors to skip authorization ladders completely.
 
@@ -684,7 +687,7 @@ Applicable across both resource policies and `field_policies` for fine-grained c
 
 ---
 
-## 14. Changeset Lifecycle Hooks (`before_action`, `after_action`, `after_transaction`)
+## 13. Changeset Lifecycle Hooks (`before_action`, `after_action`, `after_transaction`)
 
 Ash changesets support granular lifecycle closure hooks directly on `Changeset<R>` and on action invocation builders:
 
@@ -736,9 +739,9 @@ let article = cs.commit(&ctx).await?;
 
 ---
 
-## 15. Cascading Relationship Deletes (`on_delete: cascade | nilify | restrict`)
+## 14. Cascading Relationship Deletes (`on_delete: cascade | nilify | restrict`)
 
-Relationships declare delete behavior. When a parent entity is destroyed via an Ash destroy action, Ash executes application-layer cascading actions for all dependent child records (ensuring child policies, validations, and notifiers are triggered rather than solely relying on raw database foreign key cascades):
+Relationships declare delete behavior. When a parent entity is destroyed via an Ash destroy action, Ash executes application-layer cascading actions for all dependent child records (ensuring child policies, validations, and notifiers are triggered rather than solely relying on raw database foreign key cascades). This applies to `has_one`, `has_many`, and `many_to_many`:
 
 - **`cascade`**: Recursively finds and destroys all matching child records using their primary destroy actions. Also cascades across join resources in `many_to_many` relationships.
 - **`nilify`**: Updates all dependent child records to set their foreign key attribute to `null`.
@@ -812,7 +815,7 @@ resource! {
 
 ---
 
-## 16. Managed Relationships (`manage_relationship` / Nested Writes)
+## 15. Managed Relationships (`manage_relationship` / Nested Writes)
 
 Ash allows executing nested writes directly inside create and update actions without manually orchestrating multi-step pipelines. Managed relationships handle inserting children, populating foreign keys, updating existing records, and removing/disassociating omitted records atomically within the action transaction.
 
@@ -895,7 +898,7 @@ resource! {
 }
 ```
 
-## 17. Bulk & Batch Operations (`bulk_create`, `bulk_destroy`, chunked streaming)
+## 16. Bulk & Batch Operations (`bulk_create`, `bulk_destroy`, chunked streaming)
 
 `ash-rust` provides native, optimized bulk data operations directly mirroring Ash Elixir's bulk actions:
 - `Resource::bulk_create(&ctx, inputs)`: Validates, sets defaults, checks policies, and inserts records in batched chunks.
@@ -947,7 +950,7 @@ Product::query(&ctx)
 
 ---
 
-## 18. Declarative Action Hooks & CustomChange Hook Registration
+## 17. Declarative Action Hooks & CustomChange Hook Registration
 
 Mirrors Ash Elixir's lifecycle hooks (`before_action`, `after_action`, `after_transaction`), supporting both declarative action-level DSL syntax and runtime registration from `CustomChange` modules:
 
@@ -1037,12 +1040,12 @@ resource! {
 
 ---
 
-## 19. Generic Actions (`generic <name>, <return_type>` / `run |input|`)
+## 18. Generic Actions (`generic <name>` / `returns` / `run |input|`)
 
 In Ash Elixir, not all actions correspond to database CRUD operations. Generic actions represent arbitrary business workflows, computations, remote API calls, or email dispatches that benefit from the Ash action machinery: strongly-typed arguments, actor policies, input validation, and event notifications.
 
 ### Capabilities
-- **Declarative Signature**: Defined using `generic <name>, <return_type> { ... }`. `action` is an error.
+- **Declarative Signature**: Defined using `generic <name> { returns <Type>; ... }` or `generic <name>, <Type> { ... }`. `action` is an error. `run` ends with `;`.
 - **Strongly Typed Arguments**: Supports `argument <name>: <type>;`, with automatic inference for optional (`Option<T>`) parameters via `IntoOption`.
 - **Auto-Generated Input Struct**: Generates a typed `ActionInput<'a, D>` struct giving clean field access (`input.arg`), actor extraction (`input.actor()`), and execution context (`input.context()`).
 - **Inline or Dynamic Runner**: Provide business logic inline with `run |input| async move { ... }` or pass a custom runner dynamically using `.run(|input| async move { ... })`.
@@ -1054,10 +1057,11 @@ In Ash Elixir, not all actions correspond to database CRUD operations. Generic a
 resource! {
     Messenger {
         actions {
-            generic send_message, String {
+            generic send_message {
                 argument recipient: String;
                 argument content: String;
                 argument priority: Option<String>;
+                returns String;
 
                 run |input| async move {
                     let prio = input.priority.unwrap_or_else(|| "normal".into());
@@ -1091,7 +1095,7 @@ let custom_result = Messenger::dynamic_operation(&ctx)
 
 ---
 
-## 20. Tenant & Context Metadata (`with_tenant`, `with_metadata`)
+## 19. Tenant & Context Metadata (`with_tenant`, `with_metadata`, `multitenancy`)
 
 Multi-tenant systems and distributed tracing require carrying contextual request metadata (e.g. current tenant, trace ID, client IP) alongside the actor throughout queries, changesets, validations, generic actions, and event notifications.
 
@@ -1113,6 +1117,7 @@ Multi-tenant systems and distributed tracing require carrying contextual request
 - **Notification & Generic Action Propagation**:
   - Committed `Notification` payloads include `.tenant: Option<String>` and merge request metadata.
   - Generic action input structs expose `input.tenant()` and `input.metadata()`.
+- **Resource-level `multitenancy`**: `multitenancy { strategy: attribute; attribute: tenant_id; }` stamps the tenant attribute on create and scopes reads. `strategy: context` requires `ctx.tenant()` without writing a column. Create without a tenant is `Error::TenantRequired` unless `global: true`.
 
 ### Example Usage
 ```rust

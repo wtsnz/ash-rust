@@ -13,9 +13,9 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
 ## What This Crate Provides
 
 - **`resource!` (and `define!`) Macro**:
-  - Declarative definition of attributes, identities, embedded resources, timestamps, relationships (`belongs_to`, `has_many`, `many_to_many`), calculations, aggregates, and field-level policies.
+  - Declarative definition of attributes, identities, embedded resources, timestamps, relationships (`belongs_to`, `has_one`, `has_many`, `many_to_many`), calculations (including `(arg: Type)` and `arg(name)`), aggregates, and field-level policies.
   - DRY action input declarations (`accept [field1, field2]`) where types are inferred directly from resource attributes.
-  - Query preparations on read actions (`prepare filter(...)`, `prepare sort(...)`, `prepare limit(...)`).
+  - Query preparations on read actions (`prepare filter(...)`, `prepare sort(...)`, `prepare limit(...)`, `prepare offset(...)`).
   - Rich expressions in calculations (`total = price * quantity`, `display = coalesce(...)`, `badge = if_else(...)`).
   - Custom action arguments (`argument name: Type`), validations (`present`, `string_length`, `numericality`, `one_of`), and changes (`set`, `set_new`).
   - Optimistic locking configuration (`[version]`).
@@ -23,8 +23,8 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
   - Extension token forwarding (`extend <macro>! { ... }`) for zero-coupling 3rd-party integrations (Pattern 1).
 - **`domain!` Macro**:
   - Groups related resources into a bounded context.
-  - Generates typed code interfaces (`order_domain.create_ticket(...)`).
-  - Provides domain-level transactions and cross-resource schema initialization (`domain.install_schema()`).
+  - Generates typed code interfaces (`helpdesk.open_ticket(...)`).
+  - Provides domain-level transactions and cross-resource schema initialization (`domain.install()`).
 - **`#[derive(Resource)]`**:
   - Derive macro for annotated struct-based resource declarations.
 - **Generated Ergonomic APIs**:

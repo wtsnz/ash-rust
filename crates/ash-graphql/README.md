@@ -11,7 +11,7 @@ Automatic GraphQL server engine for `ash-rust` powered by `async-graphql`.
 - **Query Generation**: Auto-generates type-safe getters (`get<Resource>`) and lists (`list<Resource>s`) with dynamic filtering (`FilterInput`), comparison operators, boolean combinators (`and`, `or`, `not`), and sorting (`SortInput`).
 - **Relay Keyset Pagination**: Keyset cursor pagination with `Connection`, `Edge`, and `PageInfo` matching the Relay specification.
 - **Mutation Generation**: Resource create, update, and destroy actions map to mutations with structured payloads, action argument validation, optimistic locking, and structured `UserError` responses.
-- **DataLoader**: Solves N+1 relationship query problems via batched loading (`AshBatchLoader`) for `belongs_to`, `has_many`, and `many_to_many`.
+- **DataLoader**: Solves N+1 relationship query problems via batched loading (`AshBatchLoader`) for `belongs_to`, `has_one`, `has_many`, and `many_to_many`.
 - **PubSub Subscriptions**: Realtime live event streams hooked directly into `ash-pubsub` (`<resource>Created`, `<resource>Updated`, `<resource>Destroyed`) with predicate filtering.
 - **Web Adapters**: First-class Axum integration helpers (`graphql_router`, `graphql_handler`, and interactive `graphiql_handler`).
 
@@ -45,9 +45,9 @@ Every Ash attribute maps to an appropriate GraphQL scalar, enum, or list:
 - `String` -> `String`
 - `Integer` -> `Int`
 - `Boolean` -> `Boolean`
-- `Atom { one_of }` -> Dynamic GraphQL `Enum`
+- `AshEnum` attributes -> GraphQL enums
 - `Calculations` -> Dynamic computation evaluated via `ash_core::eval`
-- `Aggregates` -> Dynamic aggregation (count, sum, avg, min, max)
+- `Aggregates` -> `count`, `exists`, `sum`, `first`
 - `Field Policies` -> Unauthorized fields are automatically redacted to `null`
 
 ### 2. Queries & Dynamic Filtering

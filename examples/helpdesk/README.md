@@ -11,13 +11,13 @@ Demonstrates resource authorization policies, actor roles (customer vs. represen
 Modeled with the `Helpdesk` bounded context via `domain!`:
 
 - **`Ticket` Resource**:
-  - Actions: `open`, `read`, `assign`, `close`, `analyze`.
+  - Actions: `open`, `read`, `assign`, `close`, `analyze_subject`, `intake`.
   - Policies:
     - Customers can only read and close their own opened tickets.
     - Representatives can view unassigned tickets and assigned tickets, and close assigned tickets.
     - Missing or unauthorized actors are blocked at query time via compiled read filters.
   - Calculations: `subject_length` computed dynamically or inlined into SQL.
-  - Relationships: `belongs_to :representative`.
+  - Relationships: `belongs_to representative: Representative`.
 - **`Representative` Resource**:
   - Support agents assigned to tickets.
   - Aggregates: `assigned_ticket_count`, `closed_ticket_count`.

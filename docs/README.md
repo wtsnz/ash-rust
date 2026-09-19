@@ -22,11 +22,12 @@
 3. **[DSL & Modeling Guide](dsl-guide.md)**
    - `resource!` macro reference
    - Attributes & types
-   - Relationships (`belongs_to`, `has_many`, `many_to_many`)
-   - Calculations & Aggregates (`count`, `exists`, `sum`, `first`)
+   - Relationships (`belongs_to`, `has_one`, `has_many`, `many_to_many`)
+   - Calculations & Aggregates (`count`, `exists`, `sum`, `first`; calculation arguments via `arg(...)`)
    - Actions (`create`, `read`, `update`, `destroy`, `generic`)
    - Action Arguments (non-attribute inputs)
    - `domain!` macro reference & Code Interfaces
+   - Attribute multitenancy (`multitenancy { ... }`)
 
 4. **[Advanced Capabilities](features.md)**
    - **Ash.Multi & Atomic Transactions**: Multi-step pipelines with rollback

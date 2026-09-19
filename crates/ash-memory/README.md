@@ -17,7 +17,7 @@ It enables lightning-fast unit testing, local prototyping, and embedded executio
   - Filter evaluation (`Eq`, `Gt`, `Gte`, `Lt`, `Lte`, `Nil`, `And`, `Or`, `Not`).
   - Expression and calculations evaluation.
   - Multi-attribute sorting.
-  - Relationships resolution (`belongs_to`, `has_many`, `many_to_many` via join tables).
+  - Relationships resolution (`belongs_to`, `has_one`, `has_many`, `many_to_many` via join tables).
   - Aggregates computation (`count`, `exists`, `sum`, `first`) with custom filter predicates.
   - Keyset (`page_keyset`) and offset (`page_offset`) pagination.
 - **Snapshot-Based Atomic Transactions**:

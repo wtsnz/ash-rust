@@ -1,14 +1,32 @@
 # DSL & Modeling Guide
 
-The `resource!` and `domain!` procedural macros in `ash-macros` provide an expressive, declarative domain-specific language for modeling resources, relationships, validations, and operations.
+The `resource!` and `domain!` procedural macros in `ash-macros` provide an expressive, declarative domain-specific language for modeling resources, relationships, validations, and operations. `define!` is an alias of `resource!`.
 
-Item terminators are `;`. Required create/generic inputs are typestate-gated: omitting them is a compile error.
+Canonical header is `Name { ... }`. Put `embedded` before the name when the resource is not persisted as its own table. Bind storage with `store Type;`.
+
+Items end with `;`. Inside `[...]` lists, commas separate names and a trailing comma is allowed. Empty sections may be `{}` or omitted. Required create/generic inputs are typestate-gated: omitting them is a compile error.
+
+| Write | Don't write |
+| :--- | :--- |
+| `Post { ... }` | `resource Post;` / `name Post;` |
+| `embedded Address { ... }` | `embedded;` in the body |
+| `Blog { ... }` in `domain!` | `domain Blog;` |
+| `Ticket;` in `resources` | `resource Ticket` |
+| `primary;` | `primary true;` |
+| `min: 3` | `min = 3` or positional `string_length(title, 3)` |
+| `store SqliteStore;` | `data_layer sqlite;` |
+| `change set(status = ...)` | `change set_attribute(...)` |
+| `validate present(title);` | `validation present(title);` |
+| `prepare filter(...)` | `preparation filter(...)` |
+| `generic ping { ... }` | `action ping { ... }` |
+| `define close action: close on: record;` | commas after the name or between options |
+| `fk: author_id` | `fk: "author_id"` |
+| `has_many comments: Comment` | `has_many comments: Vec<Comment>` |
+| `belongs_to author: Author` / `has_one profile: Profile` | `Option<Author>` / `Option<Profile>` |
 
 ---
 
 ## 1. Defining Resources (`resource!`)
-
-Canonical header is `Name { ... }`. Put `embedded` before the name when the resource is not persisted as its own table. Bind storage with `store Type;`.
 
 ```rust
 use ash_core::{resource, AshEnum};
@@ -40,6 +58,7 @@ resource! {
 
         relationships {
             belongs_to author: Author [fk: author_id];
+            has_one cover: Cover [fk: post_id];
             has_many comments: Comment [fk: post_id];
             many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
         }
@@ -127,7 +146,7 @@ Attributes represent persisted state or fields on the underlying data layer. Eac
 
 | Syntax | Description |
 | :--- | :--- |
-| `id: Uuid [pk];` | Primary key for the resource |
+| `id: Uuid [pk];` | Primary key for the resource (`[pk]` also marks it generated) |
 | `field: String;` | Non-nullable string attribute |
 | `field: Option<i64>;` | Nullable integer attribute |
 | `priority: i32;` | Integer attribute (`i8`/`u32`/… store as `Integer`) |
@@ -141,7 +160,7 @@ Do not use `[atom: "a,b"]`. Model closed sets as a Rust enum with `#[derive(AshE
 
 ### Timestamps Shorthand
 
-Add `timestamps;` to inject `created_at: String` and `updated_at: String` ISO-8601 attributes:
+Add `timestamps;` to inject `created_at: String` and `updated_at: String` ISO-8601 attributes. Rename them with `timestamps [inserted_at, modified_at];`. Either form may sit in the resource body or inside `attributes { ... }`.
 
 ```rust
 resource! {
@@ -222,12 +241,20 @@ resource! {
 
 ## 3. Relationships
 
-Foreign keys are identifiers, not strings. Destination types are the related resource, not `Option<T>` or `Vec<T>`.
+Foreign keys are identifiers, not strings. Destination types are the related resource. Wrapping is inferred: `belongs_to` / `has_one` become `Rel<Option<Dest>>`; `has_many` / `many_to_many` become `Rel<Vec<Dest>>`. Writing `Option<Dest>` or `Vec<Dest>` in the DSL is an error.
+
+`fk` is optional. `belongs_to` defaults to `{rel}_id`. `has_one` and `has_many` default to `{parent_resource}_id` on the destination.
 
 ### `belongs_to`
 
 ```rust
 belongs_to author: Author [fk: author_id];
+```
+
+### `has_one`
+
+```rust
+has_one profile: Profile [fk: user_id, on_delete: cascade];
 ```
 
 ### `has_many`
@@ -242,7 +269,7 @@ has_many comments: Comment [fk: post_id];
 many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
 ```
 
-`on_delete: cascade` (and related options) take identifiers, not `"cascade"` strings.
+`on_delete` is `cascade`, `nilify`, `restrict`, or `nothing` (identifiers, not `"cascade"` strings). `source_attribute_on_join_resource` / `destination_attribute_on_join_resource` are aliases of `source_fk` / `dest_fk`.
 
 ---
 
@@ -254,10 +281,15 @@ many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
 calculations {
     title_length: Option<i64> = string_length(title);
     total: i64 = price * quantity;
+    discounted(discount: i64): i64 = price - arg(discount);
 }
 ```
 
-`string_length(title)` is a compile error if `title` is not a string. Declared `Option<i64>` may wrap a non-optional `i64` result.
+`string_length(title)` is a compile error if `title` is not a string. The struct field is always `Option<inner>`: declaring `i64` or `Option<i64>` both yield `Option<i64>` on the resource.
+
+Calculation arguments use `(name: Type)` after the calculation name and `arg(name)` in the expression. Load them with `query.calc_with_args(Item::discounted, args)`.
+
+Built-ins: `string_length`, `length`, `concat`, `coalesce`, `lower`, `upper`, `if_else`, `custom`, arithmetic, comparisons, and `null`. Quoted `"string_length(title)"` is an error.
 
 ### Aggregates
 
@@ -280,11 +312,11 @@ aggregates {
 
 ### Action Kinds
 
-- `create`: Inserts a new record.
-- `read`: Queries records. May use `prepare filter(...)` / `sort` / `limit`.
+- `create`: Inserts a new record. `persist manual` skips the data layer; the builder exposes `.persist(|ctx, record| async { ... })` instead of writing through the store.
+- `read`: Queries records. May use `prepare filter(...)` / `sort` / `limit` / `offset`.
 - `update`: Mutates an existing record.
 - `destroy`: Deletes a record.
-- `generic`: Custom logic. Typed `accept { name: Type }` is allowed here only. May omit `run` when the caller supplies `.run(...)`.
+- `generic`: Custom logic. Typed `accept { name: Type }` is allowed here only. Return type is `generic name, Type { ... }` or `returns Type;` inside the body. May omit `run` when the caller supplies `.run(...)`.
 
 ### Inputs
 
@@ -310,6 +342,23 @@ Required create accept fields and non-`Option` arguments are typestate-required.
 
 `primary;` is a flag with no boolean. Write `min: 3`, not `min = 3` or positional integers.
 
+`persist manual` is create-only. The generated builder does not write to the store; you supply persistence:
+
+```rust
+create intake {
+    accept [subject];
+    persist manual;
+}
+
+let ticket = Ticket::intake(&ctx)
+    .subject("Printer jammed")
+    .persist(|_ctx, ticket| async move {
+        intake_store().lock().unwrap().insert(ticket.id, ticket.clone());
+        Ok(ticket)
+    })
+    .await?;
+```
+
 ### Built-in Validations
 
 - `validate present(field);`
@@ -327,7 +376,7 @@ Required create accept fields and non-`Option` arguments are typestate-required.
 - `change set_new(field = value);`
 - `change relate_actor(field);`
 - `change set_from_arg(field, argument_name);` or `change set(field = arg(name));`
-- `change manage_relationship(rel);`
+- `change manage_relationship(rel);` or `change manage_relationship(rel, create);` / `manage_relationship(rel, type: create)`
 - `change func(my_fn);` — `fn(&mut ChangeContext<'_>) -> Result<()>`
 - `change custom(&MyChange);` — `&'static dyn CustomChange`
 - `change before_action(my_fn);` / `before_action my_fn;` — `BeforeActionFn`
@@ -360,7 +409,7 @@ notifiers [
 ]
 ```
 
-Alternatively, attach notifiers per-request via `ctx.with_notifier(...)`. Each entry is type-checked as `&'static dyn Notifier`. `extensions [&STATE_MACHINE]` is `&'static dyn ResourceExtension`. `optimistic_lock version;` must name an attribute. Aggregate `filter:` fields are checked on the related resource.
+Alternatively, attach notifiers per-request via `ctx.with_notifier(...)`. Each entry is type-checked as `&'static dyn Notifier`. `extensions [&STATE_MACHINE]` is `&'static dyn ResourceExtension`. `optimistic_lock version;` must name an attribute (same effect as `[version]` on that attribute). Aggregate `filter:` fields are checked on the related resource.
 
 ---
 
@@ -395,6 +444,13 @@ let results = ctx.multi()
 
 Canonical header is `Name { ... }`, matching `resource!`. Resource entries and code interfaces end with `;`. Code interface options are space-separated (`define open_ticket action: open`), not comma-separated. `action: open` probes `Ticket::open` so F12 goes to the action. If the `domain!` body is incomplete, a first-pass token walk still type-checks resource names and `action:` values so rust-analyzer can complete them.
 
+Options on `define`:
+
+- `action: name` (required)
+- `args: [name: Type, ...]`
+- `get_by: id` for get-by-primary-key
+- `on: record` or `on: id` for update/destroy-style interfaces that take a record or id
+
 ```rust
 use ash_core::domain;
 
@@ -404,6 +460,7 @@ domain! {
             Post {
                 define create_post action: create args: [title: String];
                 define get_post action: read get_by: id;
+                define publish_post action: publish on: record;
             };
             Author;
             Tag;
@@ -535,20 +592,36 @@ let article = Article::create(&ctx)
 
 ## 10. Generic Actions
 
+Return type is either `generic name, Type { ... }` or `returns Type;` inside the body. Typed `accept { name: Type }` is for generic actions only. Every item, including `run`, ends with `;`.
+
 ```rust
 resource! {
     CommunicationService {
         actions {
-            generic send_notification, String {
+            generic send_notification {
                 argument recipient: String;
                 argument body: String;
                 argument priority: Option<String>;
+                returns String;
 
                 run |input| async move {
                     let priority = input.priority.unwrap_or_else(|| "normal".into());
                     let sender = input.actor().map(|a| a.id.to_string()).unwrap_or_else(|| "system".into());
                     Ok(format!("{}: [{}] sent '{}' to {}", sender, priority, input.body, input.recipient))
-                }
+                };
+            }
+
+            generic analyze_subject {
+                accept {
+                    text: String,
+                };
+                returns Analysis;
+                run |input| async move {
+                    Ok(Analysis {
+                        word_count: input.text.split_whitespace().count(),
+                        urgent: input.text.contains('!'),
+                    })
+                };
             }
         }
     }
@@ -600,6 +673,37 @@ let ctx = Context::new(registry);
 ---
 
 ## 12. Tenant & Request Metadata (`Context`, `ValidationContext`, `ChangeContext`)
+
+Attribute multitenancy stamps and scopes records from `ctx.tenant()`. Create without a tenant returns `Error::TenantRequired`.
+
+```rust
+resource! {
+    TenantDoc {
+        table "tenant_docs";
+
+        multitenancy {
+            strategy: attribute;
+            attribute: tenant_id;
+        }
+
+        attributes {
+            id: Uuid [pk];
+            tenant_id: String;
+            title: String;
+        }
+
+        actions {
+            create create {
+                primary;
+                accept [title];
+            }
+            read read { primary; }
+        }
+    }
+}
+```
+
+`strategy: attribute` (the default if omitted) stamps and filters `attribute` from `ctx.tenant()`. `strategy: context` requires a tenant on the context without writing a column, which pairs with schema/`search_path` tenancy in `ash-postgres`. `global: true` skips the tenant requirement. `attribute` may be an identifier or a string.
 
 ```rust
 let ctx = Context::new(data_layer)

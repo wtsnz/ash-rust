@@ -29,8 +29,8 @@ It provides the abstractions for static resource metadata, action pipelines, val
 - **Transactional Pipelines (`Multi`)**: Composable atomic batches inspired by `Ash.Multi`. Steps can create, update, destroy, or compute derived data, guaranteeing all-or-nothing rollback on failure.
 - **Bulk & Batch Operations**: High-throughput `bulk_create` and `bulk_destroy` with chunking, upserting, cascading deletes, and chunked query streaming.
 - **Declarative Action Lifecycle Hooks**: `before_action`, `after_action`, and `after_transaction` hooks at the action level, via `Change`, and inside `CustomChange` plugins.
-- **Generic Actions**: Type-safe arbitrary domain operations (`generic <name>, <return_type> { ... }`) with strongly-typed arguments, policies, and notification dispatch.
-- **Managed Relationships**: Declarative and nested writes (`manage_relationship`) across `has_many`, `belongs_to`, and `many_to_many`.
+- **Generic Actions**: Type-safe arbitrary domain operations (`generic <name> { returns <Type>; ... }`) with strongly-typed arguments, policies, and notification dispatch.
+- **Managed Relationships**: Declarative and nested writes (`manage_relationship`) across `has_one`, `has_many`, `belongs_to`, and `many_to_many`.
 - **Event Notification Primitives**: Core `Notification` payload and `Notifier` trait. Notifications generated during `Multi` pipelines are atomically buffered and only dispatched after database commit.
 - **Record Lifecycle Helpers (`ResourceExt`)**: Fluent helpers including `record.reload(&ctx)` and `record.destroy(&ctx)`.
 
