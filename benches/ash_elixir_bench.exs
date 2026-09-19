@@ -1,7 +1,12 @@
-Mix.install([
-  {:ash, "~> 3.0"},
-  {:benchee, "~> 1.0"}
-])
+Mix.install(
+  [
+    {:ash, "~> 3.0"},
+    {:benchee, "~> 1.0"}
+  ],
+  config: [ash: [default_string_length_count: :codepoints]]
+)
+
+Code.require_file("embedded_mode.exs", __DIR__)
 
 Logger.configure(level: :warning)
 
@@ -93,6 +98,19 @@ defmodule BenchRunner do
   require Ash.Query
 
   def run do
+    # Prime every measured path so :embedded mode can refuse autoload.
+    _ = Helpdesk.Support.open_ticket!("Printer is broken")
+    _ = Helpdesk.Support.create_representative!("Alice Smith")
+
+    for i <- 1..100 do
+      Helpdesk.Support.create_static_ticket!("Ticket number #{i}", "open")
+    end
+
+    query = Ash.Query.filter(Helpdesk.Support.StaticTicket, status == "open")
+    _ = Ash.read!(query)
+
+    AshBench.EmbeddedMode.enter!()
+
     IO.puts("\n=== [1/3] Ash Elixir: Ticket.open ===")
     Benchee.run(
       %{
@@ -119,14 +137,7 @@ defmodule BenchRunner do
       print: [fast_warning: false]
     )
 
-    # Pre-populate exactly 100 records in StaticTicket
-    for i <- 1..100 do
-      Helpdesk.Support.create_static_ticket!("Ticket number #{i}", "open")
-    end
-
     IO.puts("\n=== [3/3] Ash Elixir: Ticket.read (100 records) ===")
-    query = Ash.Query.filter(Helpdesk.Support.StaticTicket, status == "open")
-
     Benchee.run(
       %{
         "Ticket.read (filter status == open, 100 records)" => fn ->
@@ -138,6 +149,8 @@ defmodule BenchRunner do
       memory_time: 2,
       print: [fast_warning: false]
     )
+
+    AshBench.EmbeddedMode.restore!()
   end
 end
 

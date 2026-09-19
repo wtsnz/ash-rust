@@ -1,11 +1,16 @@
-Mix.install([
-  {:ash, "~> 3.0"},
-  {:ash_postgres, "~> 2.0"},
-  {:ecto, "~> 3.12"},
-  {:ecto_sql, "~> 3.12"},
-  {:postgrex, "~> 0.19"},
-  {:benchee, "~> 1.0"}
-])
+Mix.install(
+  [
+    {:ash, "~> 3.0"},
+    {:ash_postgres, "~> 2.0"},
+    {:ecto, "~> 3.12"},
+    {:ecto_sql, "~> 3.12"},
+    {:postgrex, "~> 0.19"},
+    {:benchee, "~> 1.0"}
+  ],
+  config: [ash: [default_string_length_count: :codepoints]]
+)
+
+Code.require_file("embedded_mode.exs", __DIR__)
 
 Logger.configure(level: :error)
 
@@ -186,8 +191,25 @@ defmodule PostgresBenchRunner do
     filtered_results = Ash.read!(filtered_query)
     unless length(filtered_results) == 50, do: raise("sanity check failed: filtered query")
 
+    _ =
+      Ash.bulk_create!(
+        [%{title: "Prime bulk", status: "open", priority: 2, user_id: first_user_id}],
+        Bench.Ticket,
+        :open,
+        return_records?: true
+      )
+
+    {:ok, _} =
+      Ash.transaction([Bench.User, Bench.Ticket], fn ->
+        {:ok, u} = Ash.create(Bench.User, %{name: "Prime Tx User", email: "prime-tx@company.com"})
+        {:ok, t} = Ash.create(Bench.Ticket, %{title: "Prime Tx Ticket", status: "open", priority: 1, user_id: u.id})
+        {u, t}
+      end)
+
     warmup = 1
     bench_time = 3
+
+    AshBench.EmbeddedMode.enter!()
 
     Benchee.run(
       %{
@@ -236,6 +258,8 @@ defmodule PostgresBenchRunner do
       memory_time: 1,
       print: [fast_warning: false]
     )
+
+    AshBench.EmbeddedMode.restore!()
   end
 end
 

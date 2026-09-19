@@ -12,14 +12,26 @@ A side-by-side benchmark was conducted on identical domain models (`Helpdesk` do
 
 | Benchmark Workload | Ash Elixir (ETS) | `ash-rust` (In-Memory) | Rust Advantage |
 | :--- | :--- | :--- | :--- |
-| **`Ticket.open`** (validate + changeset + write) | 39.42 µs (25.4k ips) | **3.73 µs (267.8k ips)** | **10.6x faster** |
-| **`Representative.create`** (validate + write) | 35.92 µs (27.8k ips) | **2.58 µs (388.0k ips)** | **13.9x faster** |
-| **`Ticket.read`** (filter `status == open`, 100 rows) | 367.44 µs (2.72k ips) | **64.81 µs (15.4k ips)** | **5.7x faster** |
-| **P99 Tail Latency** (`Ticket.open`) | 80.71 µs | **7.58 µs** | **10.6x lower** |
-| **Heap Memory Allocation per Action** | 42 – 48 KB / op | **0 KB (stack-allocated)** | **Zero GC churn** |
+| **`Ticket.open`** (validate + changeset + write) | 26.63 µs (37.6k ips) | **3.23 µs (309.2k ips)** | **8.2x faster** |
+| **`Representative.create`** (validate + write) | 23.74 µs (42.1k ips) | **2.47 µs (405.2k ips)** | **9.6x faster** |
+| **`Ticket.read`** (filter `status == open`, 100 rows) | 208.63 µs (4.79k ips) | **32.79 µs (30.5k ips)** | **6.4x faster** |
+| **P99 Tail Latency** (`Ticket.open`) | 59.04 µs | **7.67 µs** | **7.7x lower** |
+| **Heap Memory Allocation per Action** | 38 – 45 KB / op | **0 KB (stack-allocated)** | **Zero GC churn** |
 
-An interactive visual canvas with comparison graphs and breakdown charts is located at:
-`~/.cursor/projects/Users-will-projects-ash-rust/canvases/ash-rust-vs-elixir-benchmark.canvas.tsx`.
+### GraphQL (`ash_graphql` + Absinthe vs `ash-graphql`)
+
+Median latency in parentheses.
+
+| GraphQL Workload | Ash Elixir | ash-rust | Rust Advantage |
+| :--- | :--- | :--- | :--- |
+| Single record by ID | 2,850 ops/sec (311 µs) | **26,861 ops/sec (35.5 µs)** | **9.4x faster** |
+| 100 tickets collection | 1,180 ops/sec (796 µs) | **4,471 ops/sec (216.5 µs)** | **3.8x faster** |
+| Filtered & sorted (50) | 1,380 ops/sec (688 µs) | **7,932 ops/sec (119.7 µs)** | **5.8x faster** |
+| Keyset pagination (first: 20) | 1,780 ops/sec (531 µs) | **6,942 ops/sec (137.0 µs)** | **3.9x faster** |
+| DataLoader (100 tickets + author) | **760 ops/sec (1,358 µs)** | 664 ops/sec (1,419 µs) | **0.9x** (Elixir slightly ahead) |
+| Mutation: `openTicket` | 5,800 ops/sec (156 µs) | **41,845 ops/sec (22.5 µs)** | **7.2x faster** |
+
+PostgreSQL numbers were not refreshed in this run (Docker unavailable). See `benches/README.md` for the previous Postgres table.
 
 ---
 
@@ -27,13 +39,14 @@ An interactive visual canvas with comparison graphs and breakdown charts is loca
 
 All benchmarks were executed locally on identical bare-metal hardware:
 
-- **Host Machine**: Apple MacBook Pro (Apple M1 Max, 10 CPU cores, 32 GB unified memory)
-- **Operating System**: macOS Darwin 24.6.0
+- **Host Machine**: Apple MacBook Pro (Apple M4 Max, 16 CPU cores, 128 GB unified memory)
+- **Operating System**: macOS 26.6.2
 - **Rust Runtime**: Rust 1.90.0, release profile (`opt-level = 3`, LTO enabled)
-- **Elixir Runtime**: Elixir 1.17.3 running on Erlang/OTP 27.1.1 (BEAM JIT enabled)
-- **Framework Versions**: `ash-core 0.1.0` vs `ash 3.32.3` (Hex package)
-- **Test Harnesses**: Criterion 0.5.1 (Rust) and Benchee 1.5.1 (Elixir)
-- **Sampling Configuration**: 2.0 s – 3.0 s warmup, followed by 5.0 s active sampling with outlier detection
+- **Elixir Runtime**: Elixir 1.20.1 running on Erlang/OTP 29.0.2 (BEAM JIT enabled)
+- **Code server**: Elixir suites switch to `:embedded` mode after warmup (production release default)
+- **Framework Versions**: `ash-core 0.1.0` vs `ash 3.33.6` / `ash_graphql 1.12.0` (Hex packages)
+- **Test Harnesses**: Standalone release runners (Rust) and Benchee 1.5.1 (Elixir)
+- **Sampling Configuration**: Core 2.0 s warmup + 5.0 s sampling; GraphQL Elixir 1.0 s warmup + 3.0 s sampling; GraphQL Rust 0.5 s warmup + 2.0 s sampling
 
 ---
 
@@ -82,11 +95,11 @@ The benchmark highlights fundamental structural differences between BEAM's dynam
 - In **`ash-rust`**, procedural macros (`resource!` and `domain!`) generate statically typed structs, constant metadata arrays, and inlined action methods. The Rust compiler flattens and inlines the entire validation and changeset path into direct machine instructions with zero reflection.
 
 ### 2. Stack Allocation vs. Heap / Garbage Collection Pressure
-- In **Elixir Ash**, every action execution allocates **42 KB to 48 KB of heap memory** for changesets, telemetry metadata, context maps, and string binaries. Under a throughput of 25,000 req/sec, this generates over **1 GB/sec of transient heap allocations**, triggering frequent minor garbage collection sweeps per BEAM process.
+- In **Elixir Ash**, every action execution allocates **38 KB to 45 KB of heap memory** for changesets, telemetry metadata, context maps, and string binaries. Under a throughput of 37,500 req/sec, this generates about **1.7 GB/sec of transient heap allocations**, triggering frequent minor garbage collection sweeps per BEAM process.
 - In **`ash-rust`**, validation context and changeset arguments live directly on the thread stack. Heap allocation is restricted to inserting the final record into storage, resulting in virtually zero GC jitter.
 
 ### 3. P99 Tail Latency Predictability
-- On `Ticket.open`, `ash-rust` recorded a **P99 of 7.58 µs** compared to Elixir's **80.71 µs** (a 10.6x gap).
+- On `Ticket.open`, `ash-rust` recorded a **P99 of 7.67 µs** compared to Elixir's **59.04 µs** (a 7.7x gap).
 - The absence of stop-the-world phases, concurrent tracing overhead, or dynamic dispatch allows `ash-rust` to sustain ultra-consistent latency percentiles under high concurrency.
 
 ---
@@ -149,6 +162,8 @@ cargo run --release -p helpdesk --example bench
 ```
 
 ### 3. Elixir Ash Suite
+
+The Elixir scripts call `AshBench.EmbeddedMode.enter!/0` after priming so `Code.ensure_loaded/1` misses do not walk the Mix.install code path. That is the same `:embedded` behavior a release uses.
 
 To run the Elixir Ash benchmark with Benchee:
 ```bash

@@ -1,9 +1,14 @@
-Mix.install([
-  {:ash, "~> 3.0"},
-  {:ash_graphql, "~> 1.3"},
-  {:absinthe, "~> 1.7"},
-  {:benchee, "~> 1.0"}
-])
+Mix.install(
+  [
+    {:ash, "~> 3.0"},
+    {:ash_graphql, "~> 1.3"},
+    {:absinthe, "~> 1.7"},
+    {:benchee, "~> 1.0"}
+  ],
+  config: [ash: [default_string_length_count: :codepoints]]
+)
+
+Code.require_file("embedded_mode.exs", __DIR__)
 
 Logger.configure(level: :warning)
 
@@ -247,8 +252,14 @@ defmodule GraphqlBenchRunner do
     {:ok, %{data: nest_res}} = Absinthe.run(nested_query, Support.Schema)
     unless length(nest_res["listTickets"]["results"]) == 100, do: raise("nest_res failed")
 
+    {:ok, _} = Absinthe.run(filter_sort_query, Support.Schema)
+    {:ok, _} = Absinthe.run(relay_query, Support.Schema)
+    {:ok, _} = Absinthe.run(mutation_query, Support.Schema)
+
     warmup = 1
     bench_time = 3
+
+    AshBench.EmbeddedMode.enter!()
 
     Benchee.run(
       %{
@@ -276,6 +287,8 @@ defmodule GraphqlBenchRunner do
       memory_time: 1,
       print: [fast_warning: false]
     )
+
+    AshBench.EmbeddedMode.restore!()
   end
 end
 
