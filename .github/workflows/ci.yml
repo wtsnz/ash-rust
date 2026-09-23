@@ -24,8 +24,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # `-D warnings` would also fail on the DSL's intentional `__ash_lint` deprecation notes.
-      - run: cargo clippy --locked --all-targets --all-features -- -D clippy::all
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   test:
     name: Test
