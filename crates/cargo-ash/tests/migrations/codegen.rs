@@ -4,7 +4,7 @@ use cargo_ash::codegen::{
 };
 
 use crate::fixtures::{self, ORG_ID, OTHER_ORG_ID, TICKET_ID};
-use crate::support::{Column, ForeignKey, Project, TestDb, on_every_backend};
+use crate::support::{Column, Db, ForeignKey, Project, TestDb, on_every_backend};
 
 async fn seed_ticket(db: &TestDb) {
     db.exec(&format!(
@@ -1872,3 +1872,150 @@ async fn codegen_rejects_duplicate_check_name_without_writing(db: TestDb) {
     );
 }
 on_every_backend!(codegen_rejects_duplicate_check_name_without_writing);
+
+async fn migrate_schemas_isolates_two_postgres_schemas(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate(
+        "create_bounded_notes",
+        &[&fixtures::bounded_notes_plain::BoundedNote::DEF],
+    );
+
+    match &db.db {
+        Db::Sqlite(_) => {
+            eprintln!("SQLite did not call migrate_schemas");
+            db.migrate(&project.migrations()).await.unwrap();
+            let schema = db.schema().await;
+            assert!(
+                schema.tables.contains_key("bounded_notes"),
+                "default migrate must still create the table on SQLite"
+            );
+        }
+        Db::Postgres(pg) => {
+            let caller_schema: String = sqlx::query_scalar("SELECT current_schema()")
+                .fetch_one(pg.pool().unwrap())
+                .await
+                .unwrap();
+            let schema_a = format!("tenant_a_{}", uuid::Uuid::new_v4().simple());
+            let schema_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+
+            pg.migrate_schemas(&[&schema_a, &schema_b], project.migrations())
+                .await
+                .unwrap();
+
+            let table_count = |schema: String| {
+                let db = &db;
+                async move {
+                    db.int(&format!(
+                        "SELECT COUNT(*) FROM pg_class c \
+                         JOIN pg_namespace n ON n.oid = c.relnamespace \
+                         WHERE n.nspname = '{schema}' AND c.relname = 'bounded_notes' AND c.relkind = 'r'"
+                    ))
+                    .await
+                }
+            };
+            assert_eq!(
+                table_count(schema_a.clone()).await,
+                1,
+                "schema A must have the table"
+            );
+            assert_eq!(
+                table_count(schema_b.clone()).await,
+                1,
+                "schema B must have the table"
+            );
+
+            let row_id = "00000000-0000-0000-0000-0000000000a1";
+            db.exec(&format!(
+                "INSERT INTO \"{schema_a}\".bounded_notes (id, title) VALUES ('{row_id}', 'in A')"
+            ))
+            .await
+            .unwrap();
+            assert_eq!(
+                db.int(&format!(
+                    "SELECT COUNT(*) FROM \"{schema_b}\".bounded_notes WHERE id = '{row_id}'"
+                ))
+                .await,
+                0,
+                "schema B must not see a row inserted in schema A"
+            );
+
+            pg.migrate_schemas(&[&schema_a, &schema_b], project.migrations())
+                .await
+                .expect("second migrate_schemas call must be idempotent");
+
+            let bad = "bad\"name";
+            let err = pg
+                .migrate_schemas(&[bad], project.migrations())
+                .await
+                .expect_err("schema names with quotes must be rejected");
+            assert!(
+                err.to_string().contains("invalid Postgres schema name"),
+                "unexpected error: {err}"
+            );
+            assert_eq!(
+                db.int("SELECT COUNT(*) FROM pg_namespace WHERE nspname = 'bad\"name'")
+                    .await,
+                0,
+                "rejected name must not create a schema"
+            );
+
+            db.exec(&format!("SET search_path TO \"{caller_schema}\""))
+                .await
+                .unwrap();
+
+            let base = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+            let separator = if base.contains('?') { '&' } else { '?' };
+            let tenant_a_url = format!("{base}{separator}options=-c%20search_path%3D{schema_a}");
+            let tenant_a = ash_postgres::Postgres::connect(&tenant_a_url)
+                .await
+                .unwrap();
+            tenant_a.rollback(project.migrations()).await.unwrap();
+            assert_eq!(
+                table_count(schema_a.clone()).await,
+                0,
+                "rollback in schema A must drop its table"
+            );
+            assert_eq!(
+                table_count(schema_b.clone()).await,
+                1,
+                "rollback in schema A must not drop schema B's table"
+            );
+
+            db.exec(&format!("SET search_path TO \"{caller_schema}\""))
+                .await
+                .unwrap();
+            pg.migrate_schemas(&[&schema_a, &schema_b], project.migrations())
+                .await
+                .unwrap();
+
+            let after_schema: String = sqlx::query_scalar("SELECT current_schema()")
+                .fetch_one(pg.pool().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                after_schema, caller_schema,
+                "migrate_schemas must restore the caller's search_path"
+            );
+
+            db.exec("CREATE TABLE post_migrate_probe (id int)")
+                .await
+                .unwrap();
+            let probe_schema: String = sqlx::query_scalar(
+                "SELECT n.nspname FROM pg_class c \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE c.relname = 'post_migrate_probe' AND c.relkind = 'r' \
+                   AND n.nspname = current_schema()",
+            )
+            .fetch_one(pg.pool().unwrap())
+            .await
+            .unwrap();
+            assert_eq!(
+                probe_schema, caller_schema,
+                "tables created after migrate_schemas must land in the test schema"
+            );
+            assert_ne!(probe_schema, schema_a);
+            assert_ne!(probe_schema, schema_b);
+        }
+    }
+}
+on_every_backend!(migrate_schemas_isolates_two_postgres_schemas);

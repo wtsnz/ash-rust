@@ -224,6 +224,44 @@ impl Postgres {
         migrate(pool, migrations_dir).await
     }
 
+    /// Create each Postgres schema if needed, migrate the same history into it, then restore
+    /// the caller's `search_path`. Schema names must match `[A-Za-z_][A-Za-z0-9_]*`.
+    pub async fn migrate_schemas(
+        &self,
+        schemas: &[&str],
+        migrations_dir: impl AsRef<Path>,
+    ) -> Result<()> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let previous: String = sqlx::query_scalar("SHOW search_path")
+            .fetch_one(pool)
+            .await
+            .map_err(map_sqlx)?;
+        let dir = migrations_dir.as_ref();
+        for name in schemas {
+            validate_schema_name(name)?;
+            let quoted = quote_schema_name(name);
+            sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {quoted}"))
+                .execute(pool)
+                .await
+                .map_err(map_sqlx)?;
+            let opts = (*pool.connect_options())
+                .clone()
+                .options([("search_path", *name)]);
+            let tenant_pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(opts)
+                .await
+                .map_err(map_sqlx)?;
+            let migrated = migrate(&tenant_pool, dir).await;
+            tenant_pool.close().await;
+            migrated?;
+        }
+        set_search_path(pool, &previous).await?;
+        Ok(())
+    }
+
     /// Rollback the latest applied migration.
     pub async fn rollback(&self, migrations_dir: impl AsRef<Path>) -> Result<Option<String>> {
         let pool = self
@@ -486,6 +524,49 @@ pub async fn migrate(pool: &PgPool, migrations_dir: impl AsRef<Path>) -> Result<
     let migrator = Migrator::new(PostgresDialect, migrations_dir);
     let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
     migrator.run(&executor).await
+}
+
+fn validate_schema_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let valid = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::Invalid(format!(
+            "invalid Postgres schema name `{name}`: must start with an ASCII letter or underscore, then only ASCII letters, digits, or underscores"
+        )))
+    }
+}
+
+fn quote_schema_name(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+async fn set_search_path(pool: &PgPool, path: &str) -> Result<()> {
+    let sql = format!("SET search_path TO {path}");
+    let mut held = Vec::new();
+    while let Some(conn) = pool.try_acquire() {
+        held.push(conn);
+        if held.len() >= 64 {
+            break;
+        }
+    }
+    if held.is_empty() {
+        sqlx::query(&sql).execute(pool).await.map_err(map_sqlx)?;
+    } else {
+        for mut conn in held {
+            sqlx::query(&sql)
+                .execute(&mut *conn)
+                .await
+                .map_err(map_sqlx)?;
+        }
+    }
+    Ok(())
 }
 
 struct PgMigrationExecutor {
