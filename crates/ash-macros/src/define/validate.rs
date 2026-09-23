@@ -846,24 +846,30 @@ fn lint_warning(span: proc_macro2::Span, note: &str) -> proc_macro2::TokenStream
     }
 }
 
+fn mentions_ident(tokens: proc_macro2::TokenStream, name: &Ident) -> bool {
+    tokens.into_iter().any(|tt| match tt {
+        proc_macro2::TokenTree::Ident(id) => id == *name,
+        proc_macro2::TokenTree::Group(g) => mentions_ident(g.stream(), name),
+        _ => false,
+    })
+}
+
 fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
     use crate::define::ast::ChangeSpec;
     let mut warnings = Vec::new();
     for action in &def.actions {
-        let overwritten: HashSet<String> = action
-            .changes
-            .iter()
-            .filter_map(|chg| match chg {
-                ChangeSpec::Set { field, .. } | ChangeSpec::SetNew { field, .. } => {
-                    Some(field.to_string())
-                }
+        // Only changes that write unconditionally; `set_new` and `set_from_arg` keep caller input.
+        let overwrites = |name: &Ident| {
+            action.changes.iter().find_map(|chg| match chg {
+                ChangeSpec::Set { field, .. } if field == name => Some("set"),
+                ChangeSpec::RelateActor { field } if field == name => Some("relate_actor"),
                 _ => None,
             })
-            .collect();
+        };
         for acc in &action.accept {
-            if overwritten.contains(&acc.name.to_string()) {
+            if let Some(change) = overwrites(&acc.name) {
                 let note = format!(
-                    "`accept [{}]` is overwritten by `change set({})` on this action",
+                    "`accept [{}]` is overwritten by `change {change}({})` on this action",
                     acc.name, acc.name
                 );
                 warnings.push(lint_warning(acc.name.span(), &note));
@@ -873,6 +879,7 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
             if let ValidationSpec::Present { field } = val
                 && let Some(attr) = def.attributes.iter().find(|a| a.ident == *field)
                 && option_inner(&attr.ty).is_none()
+                && !is_string(&attr.ty)
             {
                 let note = format!(
                     "`present({field})` is always true because `{field}` is not `Option`"
@@ -880,15 +887,32 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
                 warnings.push(lint_warning(field.span(), &note));
             }
         }
-        if action.run_expr.is_some() {
+        // Opaque changes, validations, and generic runners can read any argument.
+        let has_opaque_consumer = action.kind == ActionKind::Generic
+            || action.changes.iter().any(|chg| {
+                matches!(
+                    chg,
+                    ChangeSpec::BeforeAction(_)
+                        | ChangeSpec::AfterAction(_)
+                        | ChangeSpec::AfterTransaction(_)
+                        | ChangeSpec::Custom(_)
+                        | ChangeSpec::Func(_)
+                )
+            })
+            || action
+                .validations
+                .iter()
+                .any(|val| matches!(val, ValidationSpec::Custom(_) | ValidationSpec::Func(_)));
+        if action.run_expr.is_some() || has_opaque_consumer {
             continue;
         }
         for arg in &action.arguments {
             let name = arg.name.to_string();
             let used_in_change = action.changes.iter().any(|chg| match chg {
                 ChangeSpec::SetFromArg { argument, .. } => argument == &arg.name,
+                ChangeSpec::ManageRelationship { relationship, .. } => relationship == &arg.name,
                 ChangeSpec::Set { value, .. } | ChangeSpec::SetNew { field: _, value } => {
-                    quote!(#value).to_string().contains(&name)
+                    mentions_ident(quote!(#value), &arg.name)
                 }
                 _ => false,
             });
@@ -1868,61 +1892,204 @@ mod tests {
         assert!(errors.is_empty(), "unexpected: {errors:?}");
     }
 
-    #[test]
-    fn test_present_on_required_field_emits_warning() {
-        let mut def = parse_def(quote! {
-            TestResource {
-                attributes {
-                    id: Uuid [pk];
-                    title: String;
-                }
-                actions {
-                    create open {
-                        accept [title];
-                        validate present(title);
-                    }
-                }
-            }
-        });
+    fn lint_notes(label: &str, tokens: proc_macro2::TokenStream) -> String {
+        let mut def = parse_def(tokens);
         let errors = validate(&mut def);
-        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-        let notes = def
-            .warnings
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<String>();
-        assert!(
-            notes.contains("always true") && notes.contains("deprecated"),
-            "missing present() warning: {notes}"
-        );
+        assert!(errors.is_empty(), "{label}: unexpected errors: {errors:?}");
+        def.warnings.iter().map(|t| t.to_string()).collect()
     }
 
     #[test]
-    fn test_accept_overwritten_by_set_emits_warning() {
-        let mut def = parse_def(quote! {
-            TestResource {
-                attributes {
-                    id: Uuid [pk];
-                    status: String;
-                }
-                actions {
-                    create open {
-                        accept [status];
-                        change set(status = "open");
+    fn test_present_lint_warns_only_when_the_value_cannot_be_blank() {
+        let cases = [
+            ("i64", quote!(field: i64;), true),
+            ("bool", quote!(field: bool;), true),
+            ("Uuid", quote!(field: Uuid;), true),
+            ("enum", quote!(field: Status [enum];), true),
+            ("String rejects blank", quote!(field: String;), false),
+            ("Option<String>", quote!(field: Option<String>;), false),
+            ("Option<i64>", quote!(field: Option<i64>;), false),
+        ];
+        for (label, attribute, expect_warning) in cases {
+            let notes = lint_notes(label, quote! {
+                TestResource {
+                    attributes {
+                        id: Uuid [pk];
+                        #attribute
+                    }
+                    actions {
+                        create open {
+                            accept [field];
+                            validate present(field);
+                        }
                     }
                 }
+            });
+            assert_eq!(
+                notes.contains("`present(field)` is always true"),
+                expect_warning,
+                "{label}: {notes}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_accept_lint_warns_only_on_unconditional_overwrites() {
+        let cases = [
+            ("set", quote!(status), quote!(change set(status = "open");), Some("set")),
+            (
+                "relate_actor",
+                quote!(owner_id),
+                quote!(change relate_actor(owner_id);),
+                Some("relate_actor"),
+            ),
+            ("set_new keeps input", quote!(status), quote!(change set_new(status = "open");), None),
+            (
+                "set_from_arg keeps input when arg is absent",
+                quote!(status),
+                quote!(argument next: Option<String>; change set_from_arg(status, next);),
+                None,
+            ),
+            ("set on another field", quote!(status), quote!(change set(note = "x");), None),
+        ];
+        for (label, accepted, body, expected_change) in cases {
+            let notes = lint_notes(label, quote! {
+                TestResource {
+                    attributes {
+                        id: Uuid [pk];
+                        status: String;
+                        note: String;
+                        owner_id: Uuid;
+                    }
+                    actions {
+                        create open {
+                            accept [#accepted];
+                            #body
+                        }
+                    }
+                }
+            });
+            match expected_change {
+                Some(change) => assert!(
+                    notes.contains(&format!("is overwritten by `change {change}({accepted})`")),
+                    "{label}: {notes}"
+                ),
+                None => assert!(!notes.contains("overwritten"), "{label}: {notes}"),
             }
-        });
-        let errors = validate(&mut def);
-        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-        let notes = def
-            .warnings
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<String>();
-        assert!(
-            notes.contains("overwritten") && notes.contains("status"),
-            "missing overwrite warning: {notes}"
-        );
+        }
+    }
+
+    #[test]
+    fn test_unused_argument_lint_covers_every_consumer() {
+        let cases = [
+            ("unused", quote!(create open { argument reason: String; }), true),
+            (
+                "only a string literal mentions it",
+                quote!(create open { argument reason: String; change set(status = "reason"); }),
+                true,
+            ),
+            (
+                "unused beside a declarative change",
+                quote!(create open { argument reason: String; change set(status = "x"); }),
+                true,
+            ),
+            (
+                "set_from_arg",
+                quote!(create open { argument reason: String; change set_from_arg(status, reason); }),
+                false,
+            ),
+            (
+                "set value expression",
+                quote!(create open { argument reason: String; change set(status = reason); }),
+                false,
+            ),
+            (
+                "manage_relationship",
+                quote!(create open { argument items: Vec<FieldMap>; change manage_relationship(items, create); }),
+                false,
+            ),
+            (
+                "present",
+                quote!(create open { argument reason: String; validate present(reason); }),
+                false,
+            ),
+            (
+                "string_length",
+                quote!(create open { argument reason: String; validate string_length(reason, min: 1); }),
+                false,
+            ),
+            (
+                "one_of",
+                quote!(create open { argument reason: String; validate one_of(reason, ["a", "b"]); }),
+                false,
+            ),
+            (
+                "numericality",
+                quote!(create open { argument count: i64; validate numericality(count, min: 1); }),
+                false,
+            ),
+            (
+                "custom change",
+                quote!(create open { argument reason: String; change custom(&Hash); }),
+                false,
+            ),
+            (
+                "func change",
+                quote!(create open { argument reason: String; change func(hash); }),
+                false,
+            ),
+            (
+                "before_action",
+                quote!(create open { argument reason: String; change before_action(hook); }),
+                false,
+            ),
+            (
+                "after_action",
+                quote!(create open { argument reason: String; change after_action(hook); }),
+                false,
+            ),
+            (
+                "after_transaction",
+                quote!(create open { argument reason: String; change after_transaction(hook); }),
+                false,
+            ),
+            (
+                "custom validation",
+                quote!(create open { argument reason: String; validate custom(&Check); }),
+                false,
+            ),
+            (
+                "func validation",
+                quote!(create open { argument reason: String; validate func(check); }),
+                false,
+            ),
+            (
+                "generic with run",
+                quote!(generic ping, bool { argument reason: String; run |_input| async move { Ok(true) }; }),
+                false,
+            ),
+            (
+                "generic with runner supplied at call time",
+                quote!(generic ping, bool { argument reason: String; }),
+                false,
+            ),
+        ];
+        for (label, action, expect_warning) in cases {
+            let notes = lint_notes(label, quote! {
+                TestResource {
+                    attributes {
+                        id: Uuid [pk];
+                        status: String;
+                    }
+                    relationships {
+                        has_many items: Item [fk: parent_id];
+                    }
+                    actions {
+                        #action
+                    }
+                }
+            });
+            assert_eq!(notes.contains("is never used"), expect_warning, "{label}: {notes}");
+        }
     }
 }
