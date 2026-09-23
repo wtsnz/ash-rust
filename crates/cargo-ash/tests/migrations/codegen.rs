@@ -2019,3 +2019,81 @@ async fn migrate_schemas_isolates_two_postgres_schemas(db: TestDb) {
     }
 }
 on_every_backend!(migrate_schemas_isolates_two_postgres_schemas);
+
+async fn setup_then_reset_recreates_an_empty_migrated_database(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_bounded_notes",
+        &[&fixtures::bounded_notes_plain::BoundedNote::DEF],
+    );
+
+    cargo_ash::run_setup(cargo_ash::MigrateArgs {
+        database_url: Some(db.url.clone()),
+        dir: project.migrations(),
+    })
+    .await
+    .unwrap();
+
+    let after_setup = db.applied_versions().await;
+    assert_eq!(
+        after_setup,
+        vec![migration.version.clone()],
+        "setup must record the latest version"
+    );
+    assert!(
+        db.schema().await.tables.contains_key("bounded_notes"),
+        "setup must create the resource table"
+    );
+
+    cargo_ash::run_setup(cargo_ash::MigrateArgs {
+        database_url: Some(db.url.clone()),
+        dir: project.migrations(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        db.applied_versions().await,
+        after_setup,
+        "a second setup must not add a tracking row"
+    );
+
+    let row_id = "00000000-0000-0000-0000-0000000000b1";
+    db.exec(&format!(
+        "INSERT INTO bounded_notes (id, title) VALUES ('{row_id}', 'seed')"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        db.int(&format!(
+            "SELECT COUNT(*) FROM bounded_notes WHERE id = '{row_id}'"
+        ))
+        .await,
+        1
+    );
+
+    cargo_ash::run_reset(cargo_ash::MigrateArgs {
+        database_url: Some(db.url.clone()),
+        dir: project.migrations(),
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        db.int(&format!(
+            "SELECT COUNT(*) FROM bounded_notes WHERE id = '{row_id}'"
+        ))
+        .await,
+        0,
+        "reset must drop the seeded row"
+    );
+    assert!(
+        db.schema().await.tables.contains_key("bounded_notes"),
+        "reset must leave the resource table in place after re-setup"
+    );
+    assert_eq!(
+        db.applied_versions().await,
+        vec![migration.version.clone()],
+        "reset must leave the tracking table at the latest version"
+    );
+}
+on_every_backend!(setup_then_reset_recreates_an_empty_migrated_database);
