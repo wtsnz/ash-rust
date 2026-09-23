@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use ash_core::{OnDelete, RelKind, ResourceDef};
+use ash_core::{OnDelete, RelKind, ResourceDef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::dialect::SqlDialect;
@@ -32,7 +32,7 @@ impl TableSnapshot {
                 name: attr.name.to_string(),
                 sql_type: dialect.column_type(attr),
                 nullable: attr.allow_nil && !attr.primary_key,
-                default: None,
+                default: attribute_sql_default(attr, dialect),
                 is_primary_key: attr.primary_key,
             });
         }
@@ -129,4 +129,59 @@ pub struct ReferenceSnapshot {
     pub target_table: String,
     pub target_column: String,
     pub on_delete: String,
+}
+
+/// SQL default for a constant attribute default. A function that returns a new value each call is skipped.
+pub fn attribute_sql_default<D: SqlDialect>(
+    attr: &ash_core::AttributeDef,
+    dialect: &D,
+) -> Option<String> {
+    let default_fn = attr.default_fn?;
+    let first = default_fn();
+    let second = default_fn();
+    if first != second {
+        return None;
+    }
+    sql_literal(dialect, &first)
+}
+
+pub fn sql_literal<D: SqlDialect>(dialect: &D, value: &Value) -> Option<String> {
+    match value {
+        Value::Null => Some("NULL".to_string()),
+        Value::Bool(v) => Some(dialect.boolean_literal(*v).to_string()),
+        Value::Int(v) => Some(v.to_string()),
+        Value::String(v) => Some(format!("'{}'", v.replace('\'', "''"))),
+        Value::Uuid(v) => Some(format!("'{v}'")),
+        Value::Map(_) | Value::Array(_) => None,
+    }
+}
+
+/// Resources that persist as tables, parents before children.
+pub fn persistable_resources<'a>(resources: &[&'a ResourceDef]) -> Vec<&'a ResourceDef> {
+    let mut pending: Vec<&ResourceDef> = resources
+        .iter()
+        .copied()
+        .filter(|resource| !resource.is_embedded())
+        .collect();
+    let names: std::collections::HashSet<&str> = pending.iter().map(|r| r.table_name()).collect();
+    let mut ordered = Vec::new();
+    while !pending.is_empty() {
+        let next = pending.iter().position(|resource| {
+            resource.relationships.iter().all(|rel| {
+                if rel.kind != RelKind::BelongsTo {
+                    return true;
+                }
+                let dest = (rel.destination)();
+                !names.contains(dest.table_name())
+                    || ordered
+                        .iter()
+                        .any(|done: &&ResourceDef| done.table_name() == dest.table_name())
+            })
+        });
+        match next {
+            Some(i) => ordered.push(pending.remove(i)),
+            None => ordered.append(&mut pending),
+        }
+    }
+    ordered
 }

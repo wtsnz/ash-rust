@@ -10,7 +10,9 @@ use ash_core::{
     CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
-use ash_sql::{CompiledSql, MigrationExecutor, Migrator, SqlParam, SqliteDialect};
+use ash_sql::{
+    CompiledSql, MigrationExecutor, Migrator, SqlParam, SqliteDialect, persistable_resources,
+};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteQueryResult,
     SqliteRow,
@@ -41,7 +43,9 @@ impl Sqlite {
     pub async fn connect(url: &str) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(url)
             .map_err(map_sqlx)?
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(30));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
@@ -56,8 +60,9 @@ impl Sqlite {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
+            .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .busy_timeout(Duration::from_secs(5));
+            .busy_timeout(Duration::from_secs(30));
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -75,10 +80,7 @@ impl Sqlite {
         }
     }
 
-    async fn execute_query(
-        &self,
-        compiled: &CompiledSql,
-    ) -> Result<SqliteQueryResult> {
+    async fn execute_query(&self, compiled: &CompiledSql) -> Result<SqliteQueryResult> {
         match &self.source {
             SqliteSource::Pool(pool) => {
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
@@ -116,10 +118,7 @@ impl Sqlite {
         }
     }
 
-    async fn fetch_all(
-        &self,
-        compiled: &CompiledSql,
-    ) -> Result<Vec<SqliteRow>> {
+    async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<SqliteRow>> {
         match &self.source {
             SqliteSource::Pool(pool) => {
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
@@ -138,12 +137,16 @@ impl Sqlite {
             SqliteSource::Pool(pool) => sqlx::query(sql).execute(pool).await.map_err(map_sqlx),
             SqliteSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
-                sqlx::query(sql).execute(&mut **guard).await.map_err(map_sqlx)
+                sqlx::query(sql)
+                    .execute(&mut **guard)
+                    .await
+                    .map_err(map_sqlx)
             }
         }
     }
 
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
+        let resources = persistable_resources(resources);
         for resource in resources {
             let ddl = sql::create_table_sql(resource)?;
             self.execute_raw(&ddl).await?;
@@ -156,15 +159,25 @@ impl Sqlite {
 
     /// Run pending declarative migrations from a directory.
     pub async fn migrate(&self, migrations_dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        if let Some(pool) = self.pool() {
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(pool)
+                .await
+                .map_err(map_sqlx)?;
+        }
         let migrator = Migrator::new(SqliteDialect, migrations_dir);
-        migrator.run(self).await
+        let result = migrator.run(self).await;
+        if let Some(pool) = self.pool() {
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(pool)
+                .await
+                .map_err(map_sqlx)?;
+        }
+        result
     }
 
     /// Rollback the latest applied migration.
-    pub async fn rollback(
-        &self,
-        migrations_dir: impl AsRef<Path>,
-    ) -> Result<Option<String>> {
+    pub async fn rollback(&self, migrations_dir: impl AsRef<Path>) -> Result<Option<String>> {
         let migrator = Migrator::new(SqliteDialect, migrations_dir);
         migrator.rollback(self).await
     }
@@ -213,7 +226,60 @@ fn bind_compiled<'q>(
 
 impl MigrationExecutor for Sqlite {
     async fn execute_script(&self, sql: &str) -> Result<()> {
-        self.execute_raw(sql).await?;
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        sqlx::raw_sql(sql).execute(pool).await.map_err(map_sqlx)?;
+        Ok(())
+    }
+
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let mut conn = pool.acquire().await.map_err(map_sqlx)?;
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx)?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx)?;
+        let failed = sqlx::raw_sql(sql)
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx);
+        if let Err(error) = failed {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            let _ = sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await;
+            return Err(error);
+        }
+        let recorded = sqlx::query(
+            "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        )
+        .bind(version)
+        .bind(name)
+        .execute(&mut *conn)
+        .await
+        .map_err(map_sqlx);
+        if let Err(error) = recorded {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            let _ = sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await;
+            return Err(error);
+        }
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx)?;
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx)?;
         Ok(())
     }
 
@@ -295,10 +361,8 @@ impl DataLayer for Sqlite {
                     resource.table_name(),
                     pk.name
                 );
-                let check_compiled = CompiledSql::new(
-                    check_sql,
-                    vec![SqlParam::new(Value::Uuid(id))],
-                );
+                let check_compiled =
+                    CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
                 if self.fetch_all(&check_compiled).await?.is_empty() {
                     return Err(Error::NotFound);
                 } else {
@@ -320,10 +384,7 @@ impl DataLayer for Sqlite {
             resource.table_name(),
             pk.name
         );
-        let fetch_compiled = CompiledSql::new(
-            fetch_sql,
-            vec![SqlParam::new(Value::Uuid(id))],
-        );
+        let fetch_compiled = CompiledSql::new(fetch_sql, vec![SqlParam::new(Value::Uuid(id))]);
         let mut fetched = self.fetch_all(&fetch_compiled).await?;
         if let Some(row) = fetched.pop() {
             sql::row_to_fields(&row, resource, &[], &[])

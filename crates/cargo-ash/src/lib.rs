@@ -1,6 +1,7 @@
+pub mod codegen;
 pub mod commands;
 
 pub use commands::{
-    run_dump, run_generate, run_migrate, run_rollback, run_status, run_ts, DumpArgs, GenerateArgs,
-    MigrateArgs, RollbackArgs, StatusArgs, TypeScriptArgs,
+    DumpArgs, GenerateArgs, MigrateArgs, RollbackArgs, StatusArgs, TypeScriptArgs, run_dump,
+    run_generate, run_migrate, run_rollback, run_status, run_ts,
 };

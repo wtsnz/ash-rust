@@ -1,5 +1,8 @@
+use std::collections::HashSet;
+
 use crate::dialect::SqlDialect;
 use crate::diff::SchemaOperation;
+use crate::snapshot::TableSnapshot;
 
 /// Contains generated `.up.sql` and `.down.sql` migration files metadata and contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,39 +103,9 @@ pub fn generate_migration_with_version<D: SqlDialect>(
 fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (String, String) {
     match op {
         SchemaOperation::CreateTable(snapshot) => {
+            let mut up = emit_create_table(dialect, snapshot);
+            up.push_str(&emit_indexes(dialect, snapshot));
             let table = dialect.quote_identifier(&snapshot.table);
-            let mut cols = Vec::new();
-
-            for col in &snapshot.columns {
-                let col_name = dialect.quote_identifier(&col.name);
-                let mut def = format!("{col_name} {}", col.sql_type);
-                if col.is_primary_key {
-                    def.push_str(" PRIMARY KEY");
-                }
-                if !col.nullable && !col.is_primary_key {
-                    def.push_str(" NOT NULL");
-                }
-                if let Some(default) = &col.default {
-                    def.push_str(&format!(" DEFAULT {default}"));
-                }
-                cols.push(def);
-            }
-
-            let mut up = format!("CREATE TABLE IF NOT EXISTS {table} (\n  {}\n);", cols.join(",\n  "));
-
-            for id in &snapshot.identities {
-                let id_name = dialect.quote_identifier(&id.name);
-                let key_cols = id
-                    .columns
-                    .iter()
-                    .map(|k| dialect.quote_identifier(k))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                up.push_str(&format!(
-                    "\n\nCREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {table} ({key_cols});"
-                ));
-            }
-
             let down = format!("DROP TABLE IF EXISTS {table};");
             (up, down)
         }
@@ -184,8 +157,12 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let t = dialect.quote_identifier(table);
             let col = dialect.quote_identifier(column);
             if dialect.name() == "postgres" {
-                let up = format!("ALTER TABLE {t} ALTER COLUMN {col} TYPE {new_type};");
-                let down = format!("ALTER TABLE {t} ALTER COLUMN {col} TYPE {old_type};");
+                let up = format!(
+                    "ALTER TABLE {t} ALTER COLUMN {col} TYPE {new_type} USING {col}::{new_type};"
+                );
+                let down = format!(
+                    "ALTER TABLE {t} ALTER COLUMN {col} TYPE {old_type} USING {col}::{old_type};"
+                );
                 (up, down)
             } else {
                 let up = format!("-- SQLite does not support ALTER COLUMN TYPE for {col} on {t}");
@@ -210,7 +187,8 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                 let down = format!("ALTER TABLE {t} ALTER COLUMN {col} {down_clause};");
                 (up, down)
             } else {
-                let up = "-- SQLite does not support modifying column nullability directly".to_string();
+                let up =
+                    "-- SQLite does not support modifying column nullability directly".to_string();
                 let down = "-- Rollback column nullability modification".to_string();
                 (up, down)
             }
@@ -276,4 +254,226 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             (up, down)
         }
     }
+}
+
+pub fn emit_create_table<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String {
+    let table = dialect.quote_identifier(&snapshot.table);
+    let mut cols = Vec::new();
+
+    for col in &snapshot.columns {
+        let col_name = dialect.quote_identifier(&col.name);
+        let mut def = format!("{col_name} {}", col.sql_type);
+        if col.is_primary_key {
+            def.push_str(" PRIMARY KEY");
+        }
+        if !col.nullable && !col.is_primary_key {
+            def.push_str(" NOT NULL");
+        }
+        if let Some(default) = &col.default {
+            def.push_str(&format!(" DEFAULT {default}"));
+        }
+        cols.push(def);
+    }
+
+    for reference in &snapshot.references {
+        let ref_name = dialect.quote_identifier(&reference.name);
+        let col = dialect.quote_identifier(&reference.column);
+        let target_t = dialect.quote_identifier(&reference.target_table);
+        let target_col = dialect.quote_identifier(&reference.target_column);
+        cols.push(format!(
+            "CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}",
+            reference.on_delete
+        ));
+    }
+
+    let if_not_exists = if dialect.create_table_if_not_exists() {
+        "IF NOT EXISTS "
+    } else {
+        ""
+    };
+    format!(
+        "CREATE TABLE {if_not_exists}{table} (\n  {}\n);",
+        cols.join(",\n  ")
+    )
+}
+
+fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String {
+    let table = dialect.quote_identifier(&snapshot.table);
+    let mut sql = String::new();
+    for identity in &snapshot.identities {
+        let id_name = dialect.quote_identifier(&identity.name);
+        let key_cols = identity
+            .columns
+            .iter()
+            .map(|k| dialect.quote_identifier(k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(
+            "\n\nCREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {table} ({key_cols});"
+        ));
+    }
+    sql
+}
+
+fn table_of(op: &SchemaOperation) -> Option<&str> {
+    match op {
+        SchemaOperation::CreateTable(snapshot) => Some(snapshot.table.as_str()),
+        SchemaOperation::DropTable(name) => Some(name.as_str()),
+        SchemaOperation::AddColumn { table, .. }
+        | SchemaOperation::DropColumn { table, .. }
+        | SchemaOperation::RenameColumn { table, .. }
+        | SchemaOperation::AlterColumnType { table, .. }
+        | SchemaOperation::SetNullable { table, .. }
+        | SchemaOperation::SetDefault { table, .. }
+        | SchemaOperation::CreateIdentity { table, .. }
+        | SchemaOperation::DropIdentity { table, .. }
+        | SchemaOperation::AddReference { table, .. }
+        | SchemaOperation::DropReference { table, .. } => Some(table.as_str()),
+    }
+}
+
+fn needs_sqlite_rebuild(op: &SchemaOperation) -> bool {
+    matches!(
+        op,
+        SchemaOperation::AlterColumnType { .. }
+            | SchemaOperation::SetNullable { .. }
+            | SchemaOperation::SetDefault { .. }
+            | SchemaOperation::AddReference { .. }
+            | SchemaOperation::DropReference { .. }
+    )
+}
+
+pub fn emit_sql<D: SqlDialect>(
+    dialect: &D,
+    operations: &[SchemaOperation],
+    previous: &[TableSnapshot],
+    targets: &[TableSnapshot],
+) -> String {
+    let rebuild: HashSet<String> = if dialect.name() == "sqlite" {
+        operations
+            .iter()
+            .filter(|op| needs_sqlite_rebuild(op))
+            .filter_map(table_of)
+            .map(str::to_string)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
+    let mut stmts = Vec::new();
+    let mut rebuilt = HashSet::new();
+
+    for op in operations {
+        let table = table_of(op).unwrap_or_default();
+        if rebuild.contains(table)
+            && !matches!(
+                op,
+                SchemaOperation::CreateTable(_) | SchemaOperation::DropTable(_)
+            )
+        {
+            if matches!(op, SchemaOperation::RenameColumn { .. }) {
+                let (up, _) = generate_operation_sql(dialect, op);
+                if !up.is_empty() {
+                    stmts.push(up);
+                }
+            }
+            if rebuilt.insert(table.to_string())
+                && let (Some(old), Some(new)) = (
+                    previous.iter().find(|s| s.table == table),
+                    targets.iter().find(|s| s.table == table),
+                )
+            {
+                stmts.push(emit_sqlite_rebuild(dialect, old, new, previous, operations));
+            }
+            continue;
+        }
+        let (up, _) = generate_operation_sql(dialect, op);
+        if !up.is_empty() {
+            stmts.push(up);
+        }
+    }
+
+    stmts.join("\n\n")
+}
+
+fn emit_sqlite_rebuild<D: SqlDialect>(
+    dialect: &D,
+    old: &TableSnapshot,
+    new: &TableSnapshot,
+    all: &[TableSnapshot],
+    operations: &[SchemaOperation],
+) -> String {
+    let live_names = {
+        let mut names: HashSet<String> = old.columns.iter().map(|c| c.name.clone()).collect();
+        for op in operations {
+            if let SchemaOperation::RenameColumn {
+                table,
+                old_name,
+                new_name,
+            } = op
+                && table == &new.table
+            {
+                names.remove(old_name);
+                names.insert(new_name.clone());
+            }
+        }
+        names
+    };
+
+    let children: Vec<&TableSnapshot> = all
+        .iter()
+        .filter(|table| {
+            table.table != new.table
+                && table
+                    .references
+                    .iter()
+                    .any(|reference| reference.target_table == new.table)
+        })
+        .collect();
+
+    let mut sql = String::new();
+    for child in &children {
+        let hold = dialect.quote_identifier(&format!("{}__ash_hold", child.table));
+        let src = dialect.quote_identifier(&child.table);
+        sql.push_str(&format!("CREATE TABLE {hold} AS SELECT * FROM {src};\n\n"));
+    }
+
+    let mut copy = new.clone();
+    copy.table = format!("{}__ash_new", new.table);
+    sql.push_str(&emit_create_table(dialect, &copy));
+    let dest = dialect.quote_identifier(&copy.table);
+    let src = dialect.quote_identifier(&new.table);
+    let cols: Vec<String> = new
+        .columns
+        .iter()
+        .filter(|c| live_names.contains(&c.name))
+        .map(|c| dialect.quote_identifier(&c.name))
+        .collect();
+    if !cols.is_empty() {
+        let list = cols.join(", ");
+        sql.push_str(&format!(
+            "\n\nINSERT INTO {dest} ({list})\nSELECT {list} FROM {src};"
+        ));
+    }
+    sql.push_str(&format!("\n\nDROP TABLE {src};"));
+    sql.push_str(&format!("\n\nALTER TABLE {dest} RENAME TO {src};"));
+    let mut indexed = new.clone();
+    indexed.table = new.table.clone();
+    sql.push_str(&emit_indexes(dialect, &indexed));
+    for child in &children {
+        let hold = dialect.quote_identifier(&format!("{}__ash_hold", child.table));
+        let src = dialect.quote_identifier(&child.table);
+        let child_cols: Vec<String> = child
+            .columns
+            .iter()
+            .map(|c| dialect.quote_identifier(&c.name))
+            .collect();
+        let list = child_cols.join(", ");
+        sql.push_str(&format!("\n\nDELETE FROM {src};"));
+        sql.push_str(&format!(
+            "\n\nINSERT INTO {src} ({list}) SELECT {list} FROM {hold};"
+        ));
+        sql.push_str(&format!("\n\nDROP TABLE {hold};"));
+    }
+    sql
 }

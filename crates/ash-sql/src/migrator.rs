@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ash_core::{utc_now_iso8601, Error, Result};
 use crate::dialect::SqlDialect;
+use ash_core::{Error, Result, utc_now_iso8601};
 
 /// Represents an on-disk migration script pair.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +27,54 @@ pub trait MigrationExecutor: Send + Sync {
 
     /// Removes a rolled-back migration version from `_ash_schema_migrations`.
     async fn remove_migration(&self, version: &str) -> Result<()>;
+
+    /// Runs one migration script and records it in a single transaction when the store allows it.
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
+        self.execute_script(sql).await?;
+        self.record_migration(version, name).await
+    }
+
+    /// Creates `_ash_schema_migrations` if the executor needs it before reading versions.
+    async fn ensure_tracking_table(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct MigrationLock {
+    _in_process: tokio::sync::MutexGuard<'static, ()>,
+    _file: Option<fs::File>,
+}
+
+static PROCESS_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn lock_migrations(dir: &Path) -> Result<MigrationLock> {
+    let in_process = PROCESS_LOCK.lock().await;
+    if !dir.exists() {
+        return Ok(MigrationLock {
+            _in_process: in_process,
+            _file: None,
+        });
+    }
+    let file = fs::File::create(dir.join(".ash.lock"))
+        .map_err(|e| Error::DataLayer(format!("Failed to create migration lock: {e}")))?;
+    loop {
+        match file.try_lock() {
+            Ok(()) => {
+                return Ok(MigrationLock {
+                    _in_process: in_process,
+                    _file: Some(file),
+                });
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(error) => {
+                return Err(Error::DataLayer(format!(
+                    "Failed to lock migrations: {error}"
+                )));
+            }
+        }
+    }
 }
 
 /// Manages and executes database migrations from a migrations directory.
@@ -60,7 +108,9 @@ impl<D: SqlDialect> Migrator<D> {
             let path = entry.path();
             if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
                 let is_up = filename.ends_with(&up_suffix_dialect)
-                    || (filename.ends_with(".up.sql") && !filename.contains(".sqlite.") && !filename.contains(".postgres."));
+                    || (filename.ends_with(".up.sql")
+                        && !filename.contains(".sqlite.")
+                        && !filename.contains(".postgres."));
 
                 if is_up {
                     // Filename format: <version>_<name>...
@@ -115,15 +165,22 @@ impl<D: SqlDialect> Migrator<D> {
 
     /// Runs all pending migrations against the given executor, returning the list of applied versions.
     pub async fn run<E: MigrationExecutor>(&self, executor: &E) -> Result<Vec<String>> {
+        let _lock = lock_migrations(&self.migrations_dir).await?;
+        executor.ensure_tracking_table().await?;
         let pending = self.pending_migrations(executor).await?;
         let mut applied_versions = Vec::new();
 
         for migration in pending {
-            let sql = fs::read_to_string(&migration.up_path)
-                .map_err(|e| Error::DataLayer(format!("Failed to read migration {}: {e}", migration.up_path.display())))?;
+            let sql = fs::read_to_string(&migration.up_path).map_err(|e| {
+                Error::DataLayer(format!(
+                    "Failed to read migration {}: {e}",
+                    migration.up_path.display()
+                ))
+            })?;
 
-            executor.execute_script(&sql).await?;
-            executor.record_migration(&migration.version, &migration.name).await?;
+            executor
+                .apply_migration(&sql, &migration.version, &migration.name)
+                .await?;
             applied_versions.push(migration.version);
         }
 
@@ -143,14 +200,24 @@ impl<D: SqlDialect> Migrator<D> {
         let migration = all
             .into_iter()
             .find(|m| m.version == *latest_version)
-            .ok_or_else(|| Error::DataLayer(format!("Migration script for version {latest_version} not found on disk")))?;
+            .ok_or_else(|| {
+                Error::DataLayer(format!(
+                    "Migration script for version {latest_version} not found on disk"
+                ))
+            })?;
 
         let down_path = migration.down_path.ok_or_else(|| {
-            Error::DataLayer(format!("No rollback script found for migration version {latest_version}"))
+            Error::DataLayer(format!(
+                "No rollback script found for migration version {latest_version}"
+            ))
         })?;
 
-        let sql = fs::read_to_string(&down_path)
-            .map_err(|e| Error::DataLayer(format!("Failed to read down migration {}: {e}", down_path.display())))?;
+        let sql = fs::read_to_string(&down_path).map_err(|e| {
+            Error::DataLayer(format!(
+                "Failed to read down migration {}: {e}",
+                down_path.display()
+            ))
+        })?;
 
         executor.execute_script(&sql).await?;
         executor.remove_migration(&migration.version).await?;
