@@ -2,7 +2,7 @@ use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use helpdesk::representative::fields as r;
-use helpdesk::ticket::fields as t;
+use helpdesk::ticket::{Status, fields as t};
 use helpdesk::{Helpdesk, Representative, Ticket, actor_customer, actor_representative};
 use uuid::Uuid;
 
@@ -66,7 +66,7 @@ fn bench_queries(c: &mut Criterion) {
     group.bench_function("filter_status_open_100_memory", |b| {
         b.to_async(&rt).iter(|| async {
             let res = Ticket::query(&customer_mem)
-                .filter(t::status.eq(black_box("open")))
+                .filter(t::status.eq(black_box(Status::Open)))
                 .all()
                 .await;
             black_box(res.unwrap());
@@ -89,7 +89,7 @@ fn bench_queries(c: &mut Criterion) {
     group.bench_function("filter_status_open_100_sqlite", |b| {
         b.to_async(&rt).iter(|| async {
             let res = Ticket::query(&customer_sql)
-                .filter(t::status.eq(black_box("open")))
+                .filter(t::status.eq(black_box(Status::Open)))
                 .all()
                 .await;
             black_box(res.unwrap());

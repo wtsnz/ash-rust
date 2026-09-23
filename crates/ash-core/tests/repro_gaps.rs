@@ -27,7 +27,7 @@ mod task {
             create create {
                 primary;
                 accept [title];
-                change set_attribute(status, "open");
+                change set(status = "open");
             }
 
             read read {
@@ -199,7 +199,7 @@ async fn create_dynamic_runs_action_changes() {
 
     let stored = create_dynamic(&ctx, &Task::DEF, action, input)
         .await
-        .expect("create_dynamic should apply change set_attribute(status, open)");
+        .expect("create_dynamic should apply change set(status = open)");
 
     assert_eq!(
         stored.get("status").and_then(|v| v.as_str()),
