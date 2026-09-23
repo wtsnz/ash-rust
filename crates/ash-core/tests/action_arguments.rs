@@ -19,7 +19,6 @@ actions {
         primary;
         accept [order_id, amount];
         argument reason: String;
-        argument feedback: Option<String>;
         validate present(reason);
         validate string_length(reason, min: 5);
         change set(status = "submitted");
