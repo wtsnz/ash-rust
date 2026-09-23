@@ -49,7 +49,6 @@ pub struct CodegenOptions {
     pub snapshots_dir: PathBuf,
     pub mode: Mode,
     pub drop_columns: bool,
-    /// Write `{version}_dev.{dialect}.*.sql` and update `…/<dialect>/dev/` snapshots.
     pub dev: bool,
 }
 
