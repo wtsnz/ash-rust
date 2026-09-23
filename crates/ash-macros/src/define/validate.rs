@@ -57,28 +57,13 @@ fn slot_error(
     candidates: &[String],
     names: &SlotNames,
 ) -> Error {
-    unknown_or_wrong_slot(
-        ident,
-        expected,
-        candidates,
-        &names.attrs,
-        &names.rels,
-        &names.calcs,
-        &names.aggs,
-        &names.actions,
-    )
-}
-
-fn unknown_or_wrong_slot(
-    ident: &Ident,
-    expected: &str,
-    candidates: &[String],
-    attrs: &[String],
-    rels: &[String],
-    calcs: &[String],
-    aggs: &[String],
-    actions: &[String],
-) -> Error {
+    let SlotNames {
+        attrs,
+        rels,
+        calcs,
+        aggs,
+        actions,
+    } = names;
     let name = ident.to_string();
     let actual = if attrs.iter().any(|n| n == &name) {
         Some("attribute")
@@ -487,8 +472,8 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
         }
     }
 
-    if let Some(lock) = &def.optimistic_lock {
-        if def.attributes.iter().all(|a| a.ident != *lock) {
+    if let Some(lock) = &def.optimistic_lock
+        && def.attributes.iter().all(|a| a.ident != *lock) {
             errors.push(slot_error(
                 lock,
                 "attribute",
@@ -496,7 +481,6 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
                 &names,
             ));
         }
-    }
 }
 
 fn lint_uncovered_actions(def: &ResourceDefinition, errors: &mut Vec<Error>) {

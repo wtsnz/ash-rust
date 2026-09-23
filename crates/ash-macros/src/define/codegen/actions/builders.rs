@@ -49,11 +49,10 @@ fn is_required_accept(
     if matches!(act.kind, ActionKind::Update | ActionKind::Destroy) {
         return false;
     }
-    if let Some(attr) = def.attributes.iter().find(|a| a.ident == *name) {
-        if attr.default.is_some() || attr.default_fn.is_some() || attr.pk || attr.generated {
+    if let Some(attr) = def.attributes.iter().find(|a| a.ident == *name)
+        && (attr.default.is_some() || attr.default_fn.is_some() || attr.pk || attr.generated) {
             return false;
         }
-    }
     if act.changes.iter().any(|chg| match chg {
         ChangeSpec::Set { field, .. }
         | ChangeSpec::SetNew { field, .. }
@@ -191,8 +190,7 @@ fn required_setter_impls(
     }
     let type_params: Vec<syn::Ident> = (0..n).map(|i| format_ident!("TS{i}")).collect();
     let mut impls = Vec::new();
-    for i in 0..n {
-        let (name, ty, is_option, docs) = &required[i];
+    for (i, (name, ty, is_option, docs)) in required.iter().enumerate() {
         let mut from_parts = Vec::new();
         let mut to_parts = Vec::new();
         let mut generics = Vec::new();
@@ -402,7 +400,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     all_input_names.push(name.clone());
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
-                    let is_req = required_names.iter().any(|n| *n == name);
+                    let is_req = required_names.contains(&name);
                     if is_req {
                         let docs_ts = quote! { #(#docs)* };
                         required_info.push((
@@ -823,7 +821,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     all_input_names.push(name.clone());
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
-                    let is_req = required_names.iter().any(|n| *n == name);
+                    let is_req = required_names.contains(&name);
                     if is_req {
                         let docs_ts = quote! { #(#docs)* };
                         required_info.push((
@@ -1251,7 +1249,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     input_struct_fields.push(quote! { #(#arg_docs)* pub #name: #ty });
                     field_members.push(quote! { pub #name: ::std::option::Option<#ty> });
                     field_inits.push(quote! { #name: ::std::option::Option::None });
-                    let is_req = required_names.iter().any(|n| *n == name);
+                    let is_req = required_names.contains(&name);
 
                     if is_req {
                         let docs_ts = quote! { #(#docs)* };

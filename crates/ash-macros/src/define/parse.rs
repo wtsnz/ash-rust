@@ -481,11 +481,10 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                             } else if let Ok(strat_ident) = content.parse::<Ident>() {
                                 strategy = Some(strat_ident.to_string());
                             }
-                        } else if key_ident == "global" {
-                            if let Ok(lit) = content.parse::<syn::LitBool>() {
+                        } else if key_ident == "global"
+                            && let Ok(lit) = content.parse::<syn::LitBool>() {
                                 global = lit.value;
                             }
-                        }
                         if content.peek(Token![,]) || content.peek(Token![;]) {
                             let _ = content.parse::<proc_macro2::TokenTree>();
                         }

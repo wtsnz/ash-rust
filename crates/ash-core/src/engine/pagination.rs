@@ -49,12 +49,10 @@ pub(crate) fn build_keyset_filter(sorts: &[(String, Value, bool)], is_after: boo
         } else {
             Filter::Lt(field.clone(), val.clone())
         }
+    } else if !desc {
+        Filter::Lt(field.clone(), val.clone())
     } else {
-        if !desc {
-            Filter::Lt(field.clone(), val.clone())
-        } else {
-            Filter::Gt(field.clone(), val.clone())
-        }
+        Filter::Gt(field.clone(), val.clone())
     };
 
     if sorts.len() == 1 {

@@ -935,8 +935,6 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             quote! { ::ash_core::DataLayerKind::Sqlite }
         } else if s.ends_with("PostgresStore") {
             quote! { ::ash_core::DataLayerKind::Postgres }
-        } else if s.ends_with("MemoryStore") {
-            quote! { ::ash_core::DataLayerKind::Memory }
         } else {
             quote! { ::ash_core::DataLayerKind::Memory }
         }

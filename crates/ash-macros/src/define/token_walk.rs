@@ -167,27 +167,17 @@ fn walk(stream: TokenStream, out: &mut Walked) {
                 {
                     out.action_names.push(id.clone());
                 }
-            } else if matches!(name.as_str(), "count" | "exists" | "first" | "sum") {
-                if let Some(TokenTree::Group(g)) = next
-                    && g.delimiter() == Delimiter::Parenthesis
-                {
-                    if let Some(field) = first_field_ident(g.stream()) {
-                        out.fields.push(field);
-                    }
-                    i += 2;
-                    continue;
-                }
-            } else if name == "set" || name == "set_new" {
-                if let Some(TokenTree::Group(g)) = next
-                    && g.delimiter() == Delimiter::Parenthesis
-                {
-                    if let Some(field) = first_field_ident(g.stream()) {
-                        out.fields.push(field);
-                    }
-                    i += 2;
-                    continue;
-                }
-            } else if name == "set_from_arg" || name == "relate_actor" {
+            } else if matches!(
+                name.as_str(),
+                "count"
+                    | "exists"
+                    | "first"
+                    | "sum"
+                    | "set"
+                    | "set_new"
+                    | "set_from_arg"
+                    | "relate_actor"
+            ) {
                 if let Some(TokenTree::Group(g)) = next
                     && g.delimiter() == Delimiter::Parenthesis
                 {
@@ -208,8 +198,8 @@ fn walk(stream: TokenStream, out: &mut Walked) {
             } else if matches!(
                 name.as_str(),
                 "present" | "string_length" | "one_of" | "numericality"
-            ) {
-                if let Some(TokenTree::Group(g)) = next
+            )
+                && let Some(TokenTree::Group(g)) = next
                     && g.delimiter() == Delimiter::Parenthesis
                 {
                     if let Some(field) = first_field_ident(g.stream()) {
@@ -218,7 +208,6 @@ fn walk(stream: TokenStream, out: &mut Walked) {
                     i += 2;
                     continue;
                 }
-            }
         }
         if let TokenTree::Group(g) = &tokens[i] {
             walk(g.stream(), out);

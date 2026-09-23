@@ -449,7 +449,7 @@ fn arg_call_ident(expr: &Expr) -> Option<Ident> {
     let Expr::Path(func) = &*call.func else {
         return None;
     };
-    if func.path.get_ident()?.to_string() != "arg" {
+    if *func.path.get_ident()? != "arg" {
         return None;
     }
     expr_to_ident(call.args.first()?).ok()

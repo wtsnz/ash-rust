@@ -13,11 +13,10 @@ pub fn expand_define(mut def: ResourceDefinition) -> Result<TokenStream> {
     for action in &mut def.actions {
         if action.kind != crate::define::ast::ActionKind::Generic {
             for acc in &mut action.accept {
-                if acc.inferred {
-                    if let Some(attr) = def.attributes.iter().find(|a| a.ident == acc.name) {
+                if acc.inferred
+                    && let Some(attr) = def.attributes.iter().find(|a| a.ident == acc.name) {
                         acc.ty = attr.ty.clone();
                     }
-                }
             }
         }
     }
