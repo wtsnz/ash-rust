@@ -49,6 +49,8 @@ pub struct CodegenOptions {
     pub snapshots_dir: PathBuf,
     pub mode: Mode,
     pub drop_columns: bool,
+    /// Write `{version}_dev.{dialect}.*.sql` and update `…/<dialect>/dev/` snapshots.
+    pub dev: bool,
 }
 
 impl CodegenOptions {
@@ -60,6 +62,7 @@ impl CodegenOptions {
             snapshots_dir: PathBuf::from("resource_snapshots"),
             mode: Mode::Write,
             drop_columns: false,
+            dev: false,
         }
     }
 }
@@ -93,6 +96,8 @@ impl CodegenOutcome {
 #[derive(Debug)]
 pub enum CodegenError {
     MissingName,
+    DevAndName,
+    RollbackDevFirst { versions: Vec<String> },
     AmbiguousRenames(Vec<RenameQuestion>),
     Usage(String),
     Io(std::io::Error),
@@ -104,6 +109,12 @@ impl fmt::Display for CodegenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingName => write!(f, "a migration name is required when writing changes"),
+            Self::DevAndName => write!(f, "--dev does not take a migration name"),
+            Self::RollbackDevFirst { versions } => write!(
+                f,
+                "roll back dev migrations and delete their SQL files before writing a named migration ({})",
+                versions.join(", ")
+            ),
             Self::AmbiguousRenames(questions) => {
                 write!(f, "rename required: ")?;
                 for question in questions {
@@ -202,15 +213,33 @@ fn run_with<D: SqlDialect>(
     options: &CodegenOptions,
     resolver: &mut dyn RenameResolver,
 ) -> Result<CodegenOutcome, CodegenError> {
+    if options.mode == Mode::Write && options.dev && options.name.is_some() {
+        return Err(CodegenError::DevAndName);
+    }
+
     let resources = persistable_resources(resources);
     let new: Vec<TableSnapshot> = resources
         .iter()
         .map(|resource| TableSnapshot::from_resource(resource, dialect))
         .collect();
-    let old = load_snapshots(&options.snapshots_dir.join(dialect.name()))?;
+
+    let committed_dir = committed_snap_dir(options);
+    let old = if options.dev {
+        load_effective_old(options)?
+    } else {
+        load_snapshots(&committed_dir)?
+    };
+
     let plan = plan_schema(&old, &new, resolver, options.drop_columns);
     if !plan.unresolved.is_empty() {
         return Err(CodegenError::AmbiguousRenames(plan.unresolved));
+    }
+
+    if options.mode == Mode::Write && !options.dev {
+        let versions = dev_migration_versions(options)?;
+        if !versions.is_empty() {
+            return Err(CodegenError::RollbackDevFirst { versions });
+        }
     }
 
     let up_sql = render(
@@ -230,9 +259,22 @@ fn run_with<D: SqlDialect>(
     match options.mode {
         Mode::Check => Ok(CodegenOutcome::OutOfDate { up_sql }),
         Mode::DryRun => Ok(CodegenOutcome::WouldWrite { up_sql, down_sql }),
+        Mode::Write if options.dev => {
+            write_plan(dialect, options, "dev", &dev_snap_dir(options), &plan, &up_sql, &down_sql)
+        }
         Mode::Write => {
             let name = options.name.as_deref().ok_or(CodegenError::MissingName)?;
-            write_plan(dialect, options, name, &plan, &up_sql, &down_sql)
+            let outcome = write_plan(
+                dialect,
+                options,
+                name,
+                &committed_dir,
+                &plan,
+                &up_sql,
+                &down_sql,
+            )?;
+            delete_dev_snapshots(options)?;
+            Ok(outcome)
         }
     }
 }
@@ -263,6 +305,7 @@ fn write_plan<D: SqlDialect>(
     dialect: &D,
     options: &CodegenOptions,
     name: &str,
+    snap_dir: &Path,
     plan: &SchemaPlan,
     up_sql: &str,
     down_sql: &str,
@@ -283,13 +326,11 @@ fn write_plan<D: SqlDialect>(
     std::fs::write(&up_path, &up_body)?;
     std::fs::write(&down_path, &down_body)?;
 
-    let snap_dir = options.snapshots_dir.join(dialect_name);
-    if snap_dir.exists() {
-        for entry in std::fs::read_dir(&snap_dir)? {
-            let path = entry?.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                std::fs::remove_file(path)?;
-            }
+    std::fs::create_dir_all(snap_dir)?;
+    for entry in std::fs::read_dir(snap_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            std::fs::remove_file(path)?;
         }
     }
     for snapshot in &plan.targets {
@@ -305,6 +346,24 @@ fn write_plan<D: SqlDialect>(
     }))
 }
 
+fn committed_snap_dir(options: &CodegenOptions) -> PathBuf {
+    options.snapshots_dir.join(options.dialect.name())
+}
+
+fn dev_snap_dir(options: &CodegenOptions) -> PathBuf {
+    committed_snap_dir(options).join("dev")
+}
+
+fn load_effective_old(options: &CodegenOptions) -> Result<Vec<TableSnapshot>, CodegenError> {
+    let dev_dir = dev_snap_dir(options);
+    let dev = load_snapshots(&dev_dir)?;
+    if !dev.is_empty() {
+        Ok(dev)
+    } else {
+        load_snapshots(&committed_snap_dir(options))
+    }
+}
+
 fn load_snapshots(dir: &Path) -> Result<Vec<TableSnapshot>, CodegenError> {
     let mut snapshots = Vec::new();
     if !dir.exists() {
@@ -317,6 +376,41 @@ fn load_snapshots(dir: &Path) -> Result<Vec<TableSnapshot>, CodegenError> {
         }
     }
     Ok(snapshots)
+}
+
+fn dev_migration_versions(options: &CodegenOptions) -> Result<Vec<String>, CodegenError> {
+    let mut versions = Vec::new();
+    if !options.migrations_dir.exists() {
+        return Ok(versions);
+    }
+    let dialect = options.dialect.name();
+    let up_suffix = format!(".{dialect}.up.sql");
+    for entry in std::fs::read_dir(&options.migrations_dir)? {
+        let path = entry?.path();
+        let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        if !filename.ends_with(&up_suffix) {
+            continue;
+        }
+        let Some((version, rest)) = filename.split_once('_') else {
+            continue;
+        };
+        let name = rest.trim_end_matches(&up_suffix);
+        if name == "dev" {
+            versions.push(version.to_string());
+        }
+    }
+    versions.sort();
+    Ok(versions)
+}
+
+fn delete_dev_snapshots(options: &CodegenOptions) -> Result<(), CodegenError> {
+    let dir = dev_snap_dir(options);
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    Ok(())
 }
 
 fn next_version(dir: &Path) -> String {
@@ -358,6 +452,8 @@ struct CodegenCli {
     dry_run: bool,
     #[arg(long)]
     drop_columns: bool,
+    #[arg(long)]
+    dev: bool,
     #[arg(long, default_value = "sqlite")]
     dialect: String,
     #[arg(long, default_value = "migrations")]
@@ -398,6 +494,7 @@ where
             Mode::Write
         },
         drop_columns: cli.drop_columns,
+        dev: cli.dev,
     };
     let mut parsed = Vec::new();
     for spec in &cli.renames {

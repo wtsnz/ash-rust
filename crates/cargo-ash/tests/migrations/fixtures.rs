@@ -140,6 +140,36 @@ pub mod with_priority {
     }
 }
 
+pub mod with_priority_and_category {
+    use super::base::Org;
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Ticket {
+            table "tickets";
+            attributes {
+                id: Uuid [pk];
+                subject: String;
+                status: String = "open";
+                notes: Option<String>;
+                org_id: Uuid;
+                priority: i64 = 3;
+                category: Option<String>;
+            }
+            relationships {
+                belongs_to org: Org [fk: org_id, on_delete: cascade];
+            }
+            identities {
+                identity unique_subject: [subject];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod with_runtime_default {
     use super::base::Org;
     use super::new_code;

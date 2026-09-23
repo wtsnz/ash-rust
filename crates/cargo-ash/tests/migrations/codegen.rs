@@ -743,3 +743,389 @@ fn successive_migrations_get_increasing_versions() {
         third.version
     );
 }
+
+async fn dev_codegen_applies_without_a_name(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let tickets_snap = project
+        .snapshots()
+        .join(db.dialect().name())
+        .join("tickets.json");
+    let committed_before = std::fs::read_to_string(&tickets_snap).unwrap();
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    let outcome = project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    assert!(matches!(outcome, CodegenOutcome::Written(_)), "{outcome:?}");
+
+    let applied = db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(
+        db.int(&format!(
+            "SELECT priority FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        3
+    );
+    assert_eq!(
+        std::fs::read_to_string(&tickets_snap).unwrap(),
+        committed_before
+    );
+
+    let second = db.migrate(&project.migrations()).await.unwrap();
+    assert!(second.is_empty(), "second migrate applied {second:?}");
+}
+on_every_backend!(dev_codegen_applies_without_a_name);
+
+async fn dev_without_changes_writes_nothing(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    let files_before = project.migration_files();
+
+    let outcome = project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    assert_eq!(outcome, CodegenOutcome::NoChanges);
+    assert_eq!(project.migration_files(), files_before);
+}
+on_every_backend!(dev_without_changes_writes_nothing);
+
+async fn second_dev_migration_only_adds_the_new_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.int(&format!(
+            "SELECT priority FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        3
+    );
+
+    let second = match project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority_and_category::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected second dev write, got {other:?}"),
+    };
+    assert!(
+        second.up_sql.to_ascii_lowercase().contains("category"),
+        "{}",
+        second.up_sql
+    );
+    assert!(
+        !second.up_sql.to_ascii_lowercase().contains("create table"),
+        "{}",
+        second.up_sql
+    );
+
+    let applied = db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(db.applied_versions().await.len(), 3);
+    assert!(db.schema().await.has_column("tickets", "category"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+}
+on_every_backend!(second_dev_migration_only_adds_the_new_column);
+
+async fn named_codegen_refuses_to_drop_dev_files_before_rollback(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    let files_before = project.migration_files();
+
+    let named = project.options(Mode::Write, Some("add_priority"));
+    let err = project
+        .run(
+            &named,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, CodegenError::RollbackDevFirst { .. }),
+        "{err:?}"
+    );
+    assert_eq!(project.migration_files(), files_before);
+    assert!(
+        db.migrate(&project.migrations())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(db.schema().await.has_column("tickets", "priority"));
+
+    let reverted = project
+        .run(&named, &fixtures::helpdesk(), &mut NonInteractive)
+        .unwrap_err();
+    assert!(
+        matches!(reverted, CodegenError::RollbackDevFirst { .. }),
+        "{reverted:?}"
+    );
+    assert_eq!(project.migration_files(), files_before);
+}
+on_every_backend!(named_codegen_refuses_to_drop_dev_files_before_rollback);
+
+async fn named_codegen_squashes_dev_migrations_and_keeps_rows(db: TestDb) {
+    let project = Project::for_db(&db);
+    let create = project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority_and_category::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+
+    db.rollback(&project.migrations()).await.unwrap();
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(!db.schema().await.has_column("tickets", "priority"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+
+    for name in project.migration_files() {
+        if name.contains("_dev.") {
+            std::fs::remove_file(project.migrations().join(name)).unwrap();
+        }
+    }
+
+    let named = project.options(Mode::Write, Some("add_priority_and_category"));
+    let squash = match project
+        .run(
+            &named,
+            &fixtures::helpdesk_with(&fixtures::with_priority_and_category::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected squash write, got {other:?}"),
+    };
+    assert!(
+        project
+            .migration_files()
+            .iter()
+            .all(|name| !name.contains("_dev.")),
+        "{:?}",
+        project.migration_files()
+    );
+    assert!(!project
+        .snapshots()
+        .join(db.dialect().name())
+        .join("dev")
+        .exists());
+
+    let applied = db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(applied, vec![squash.version.clone()]);
+    assert_eq!(
+        db.applied_versions().await,
+        vec![create.version.clone(), squash.version.clone()]
+    );
+    assert_eq!(
+        db.int(&format!(
+            "SELECT priority FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        3
+    );
+    assert!(db.schema().await.has_column("tickets", "category"));
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(!db.schema().await.has_column("tickets", "priority"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+}
+on_every_backend!(named_codegen_squashes_dev_migrations_and_keeps_rows);
+
+async fn check_sees_dev_work_as_pending(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    let files_before = project.migration_files();
+
+    let resources = fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF);
+    let check = project.options(Mode::Check, None);
+    let stale = project.run(&check, &resources, &mut NonInteractive).unwrap();
+    match &stale {
+        CodegenOutcome::OutOfDate { up_sql } => assert!(up_sql.contains("priority"), "{up_sql}"),
+        other => panic!("expected OutOfDate, got {other:?}"),
+    }
+
+    let mut check_dev = project.options(Mode::Check, None);
+    check_dev.dev = true;
+    let current = project
+        .run(&check_dev, &resources, &mut NonInteractive)
+        .unwrap();
+    assert_eq!(current, CodegenOutcome::NoChanges);
+    assert_eq!(project.migration_files(), files_before);
+}
+on_every_backend!(check_sees_dev_work_as_pending);
+
+async fn named_codegen_recovers_after_dev_files_were_deleted(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut options = project.options(Mode::Write, None);
+    options.dev = true;
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority_and_category::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+
+    db.rollback(&project.migrations()).await.unwrap();
+    db.rollback(&project.migrations()).await.unwrap();
+
+    let dialect = db.dialect().name();
+    for name in project.migration_files() {
+        if name.contains("_dev.") {
+            std::fs::remove_file(project.migrations().join(name)).unwrap();
+        }
+    }
+    let dev_dir = project.snapshots().join(dialect).join("dev");
+    if dev_dir.exists() {
+        std::fs::remove_dir_all(&dev_dir).unwrap();
+    }
+
+    let named = project.options(Mode::Write, Some("add_priority_and_category"));
+    let squash = match project
+        .run(
+            &named,
+            &fixtures::helpdesk_with(&fixtures::with_priority_and_category::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected recovery squash, got {other:?}"),
+    };
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.int(&format!(
+            "SELECT priority FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        3
+    );
+    assert!(db.schema().await.has_column("tickets", "category"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+    let _ = squash;
+}
+on_every_backend!(named_codegen_recovers_after_dev_files_were_deleted);
+
