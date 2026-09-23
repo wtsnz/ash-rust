@@ -1729,9 +1729,9 @@ async fn codegen_creates_a_non_unique_index(db: TestDb) {
     .await
     .unwrap();
     let dup_identity = db
-        .exec(&format!(
-            "INSERT INTO labeled_notes (id, title, status) VALUES ('00000000-0000-0000-0000-0000000000a3', 'alpha', 'closed')"
-        ))
+        .exec(
+            "INSERT INTO labeled_notes (id, title, status) VALUES ('00000000-0000-0000-0000-0000000000a3', 'alpha', 'closed')",
+        )
         .await;
     assert!(dup_identity.is_err(), "duplicate identity title must fail");
 
