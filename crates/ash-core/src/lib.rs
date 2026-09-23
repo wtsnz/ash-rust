@@ -29,8 +29,8 @@ mod types;
 mod value;
 
 pub use action::{
-    ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef, BeforeActionFn, Change,
-    ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
+    ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
+    BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
     DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, PersistKind,
     PreparationDef, Validation, ValidationContext,
 };
@@ -63,13 +63,13 @@ pub use policy::{
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
-    AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, IndexDef, MultitenancyDef,
-    MultitenancyStrategy, OnDelete, RelKind, RelationshipDef, Resource, ResourceDef, ResourceExt,
-    utc_now_iso8601, utc_now_timestamp,
+    AttrType, AttributeDef, CheckDef, DataLayerKind, Domain, DomainDef, IdentityDef, IndexDef,
+    MultitenancyDef, MultitenancyStrategy, OnDelete, RelKind, RelationshipDef, Resource,
+    ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
 };
 pub use store::{
-    default_store_type_id, DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore,
-    StoreTag,
+    DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore, StoreTag,
+    default_store_type_id,
 };
 pub use types::{AshEnum, AshType, Decimal, UtcDateTime};
 pub use value::{

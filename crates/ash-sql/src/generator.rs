@@ -251,6 +251,23 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let down = format!("-- Rollback DROP INDEX {idx_name}");
             (up, down)
         }
+        SchemaOperation::AddCheck { table, check } => {
+            let t = dialect.quote_identifier(table);
+            let ck_name = dialect.quote_identifier(&check.name);
+            let up = format!(
+                "ALTER TABLE {t} ADD CONSTRAINT {ck_name} CHECK ({});",
+                check.expression
+            );
+            let down = format!("ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {ck_name};");
+            (up, down)
+        }
+        SchemaOperation::DropCheck { table, name } => {
+            let t = dialect.quote_identifier(table);
+            let ck_name = dialect.quote_identifier(name);
+            let up = format!("ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {ck_name};");
+            let down = format!("-- Rollback DROP CONSTRAINT {ck_name} on {t}");
+            (up, down)
+        }
         SchemaOperation::AddReference { table, reference } => {
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(&reference.name);
@@ -292,6 +309,11 @@ pub fn emit_create_table<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -
             def.push_str(&format!(" DEFAULT {default}"));
         }
         cols.push(def);
+    }
+
+    for check in &snapshot.checks {
+        let ck_name = dialect.quote_identifier(&check.name);
+        cols.push(format!("CONSTRAINT {ck_name} CHECK ({})", check.expression));
     }
 
     for reference in &snapshot.references {
@@ -360,6 +382,8 @@ fn table_of(op: &SchemaOperation) -> Option<&str> {
         | SchemaOperation::DropIdentity { table, .. }
         | SchemaOperation::CreateIndex { table, .. }
         | SchemaOperation::DropIndex { table, .. }
+        | SchemaOperation::AddCheck { table, .. }
+        | SchemaOperation::DropCheck { table, .. }
         | SchemaOperation::AddReference { table, .. }
         | SchemaOperation::DropReference { table, .. } => Some(table.as_str()),
     }
@@ -371,6 +395,8 @@ fn needs_sqlite_rebuild(op: &SchemaOperation) -> bool {
         SchemaOperation::AlterColumnType { .. }
             | SchemaOperation::SetNullable { .. }
             | SchemaOperation::SetDefault { .. }
+            | SchemaOperation::AddCheck { .. }
+            | SchemaOperation::DropCheck { .. }
             | SchemaOperation::AddReference { .. }
             | SchemaOperation::DropReference { .. }
     )

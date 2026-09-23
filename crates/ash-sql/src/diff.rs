@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::snapshot::{
-    ColumnSnapshot, IdentitySnapshot, IndexSnapshot, ReferenceSnapshot, TableSnapshot,
+    CheckSnapshot, ColumnSnapshot, IdentitySnapshot, IndexSnapshot, ReferenceSnapshot,
+    TableSnapshot,
 };
 
 /// Represents a single structural DDL change operation between two database states.
@@ -51,6 +52,14 @@ pub enum SchemaOperation {
         index: IndexSnapshot,
     },
     DropIndex {
+        table: String,
+        name: String,
+    },
+    AddCheck {
+        table: String,
+        check: CheckSnapshot,
+    },
+    DropCheck {
         table: String,
         name: String,
     },
@@ -203,7 +212,23 @@ pub fn diff_snapshots_with_renames(
                 }
             }
 
-            // 7. References (foreign keys)
+            for o_ck in &o.checks {
+                if !n.checks.iter().any(|c| c == o_ck) {
+                    ops.push(SchemaOperation::DropCheck {
+                        table: table.clone(),
+                        name: o_ck.name.clone(),
+                    });
+                }
+            }
+            for n_ck in &n.checks {
+                if !o.checks.iter().any(|c| c == n_ck) {
+                    ops.push(SchemaOperation::AddCheck {
+                        table: table.clone(),
+                        check: n_ck.clone(),
+                    });
+                }
+            }
+
             for o_ref in &o.references {
                 if !n.references.iter().any(|r| r == o_ref) {
                     ops.push(SchemaOperation::DropReference {

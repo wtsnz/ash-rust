@@ -243,6 +243,31 @@ resource! {
 
 ---
 
+## 2b3. Check constraints
+
+A check is a row predicate. It is not an index. Indexes speed lookups. Checks reject rows.
+
+```rust
+resource! {
+    BoundedNote {
+        table "bounded_notes";
+
+        attributes {
+            id: Uuid [pk];
+            title: String;
+        }
+
+        checks {
+            check titled: "title <> ''";
+        }
+    }
+}
+```
+
+Codegen names each check `ck_{table}_{name}` and emits it inside `CREATE TABLE`.
+
+---
+
 ## 2c. Embedded Resources
 
 ```rust

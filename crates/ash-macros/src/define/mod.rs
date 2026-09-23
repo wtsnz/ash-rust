@@ -115,6 +115,7 @@ fn richer_fallback_resource_stub(def: &ResourceDefinition) -> proc_macro2::Token
                 notifiers: &[],
                 identities: &[],
                 indexes: &[],
+                checks: &[],
                 embedded: false,
                 data_layer: ::ash_core::DataLayerKind::Memory,
                 timestamps: None,

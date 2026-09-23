@@ -25,6 +25,6 @@ pub use plan::{
     reverse_plan,
 };
 pub use snapshot::{
-    ColumnSnapshot, IdentitySnapshot, IndexSnapshot, ReferenceSnapshot, TableSnapshot, attribute_sql_default,
-    persistable_resources,
+    CheckSnapshot, ColumnSnapshot, IdentitySnapshot, IndexSnapshot, ReferenceSnapshot,
+    TableSnapshot, attribute_sql_default, persistable_resources,
 };

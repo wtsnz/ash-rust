@@ -17,6 +17,8 @@ pub struct TableSnapshot {
     pub identities: Vec<IdentitySnapshot>,
     #[serde(default)]
     pub indexes: Vec<IndexSnapshot>,
+    #[serde(default)]
+    pub checks: Vec<CheckSnapshot>,
     pub references: Vec<ReferenceSnapshot>,
 }
 
@@ -56,6 +58,14 @@ impl TableSnapshot {
             });
         }
 
+        let mut checks = Vec::new();
+        for check in resource.checks {
+            checks.push(CheckSnapshot {
+                name: format!("ck_{}_{}", resource.table_name(), check.name),
+                expression: check.expression.to_string(),
+            });
+        }
+
         let mut references = Vec::new();
         for rel in resource.relationships {
             if rel.kind == RelKind::BelongsTo {
@@ -84,6 +94,7 @@ impl TableSnapshot {
             primary_key,
             identities,
             indexes,
+            checks,
             references,
         }
     }
@@ -137,6 +148,13 @@ pub struct IdentitySnapshot {
 pub struct IndexSnapshot {
     pub name: String,
     pub columns: Vec<String>,
+}
+
+/// Represents a CHECK constraint in a schema snapshot.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckSnapshot {
+    pub name: String,
+    pub expression: String,
 }
 
 /// Represents a foreign key constraint in a schema snapshot.

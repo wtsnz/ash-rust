@@ -462,7 +462,7 @@ pub mod invoice_text {
 }
 
 pub mod invoice {
-    use ash_core::{resource, Decimal, UtcDateTime};
+    use ash_core::{Decimal, UtcDateTime, resource};
     use uuid::Uuid;
 
     resource! {
@@ -491,3 +491,64 @@ pub fn helpdesk_with(ticket: &'static ResourceDef) -> [&'static ResourceDef; 2] 
 pub const ORG_ID: &str = "00000000-0000-0000-0000-00000000000a";
 pub const OTHER_ORG_ID: &str = "00000000-0000-0000-0000-00000000000b";
 pub const TICKET_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+pub mod bounded_notes_plain {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        BoundedNote {
+            table "bounded_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod bounded_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        BoundedNote {
+            table "bounded_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+            checks {
+                check titled: "title <> ''";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod duplicate_check_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        DuplicateCheckNote {
+            table "duplicate_check_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+            checks {
+                check titled: "title <> ''";
+                check titled: "title <> 'x'";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}

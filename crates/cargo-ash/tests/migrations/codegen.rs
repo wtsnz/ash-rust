@@ -1741,3 +1741,134 @@ async fn codegen_creates_a_non_unique_index(db: TestDb) {
 }
 on_every_backend!(codegen_creates_a_non_unique_index);
 
+async fn codegen_adds_a_check_and_rejects_a_bad_row(db: TestDb) {
+    {
+        let create_project = Project::for_db(&db);
+        let migration = create_project.generate(
+            "create_bounded_notes_checked",
+            &[&fixtures::bounded_notes::BoundedNote::DEF],
+        );
+        let dialect = db.dialect().name();
+        let up = std::fs::read_to_string(create_project.migrations().join(format!(
+            "{}_create_bounded_notes_checked.{dialect}.up.sql",
+            migration.version
+        )))
+        .unwrap();
+        assert!(
+            up.contains("CONSTRAINT \"ck_bounded_notes_titled\" CHECK (title <> '')"),
+            "create-table SQL missing check constraint:\n{up}"
+        );
+    }
+
+    let project = Project::for_db(&db);
+    project.generate(
+        "create_bounded_notes",
+        &[&fixtures::bounded_notes_plain::BoundedNote::DEF],
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+
+    let ok_id = "00000000-0000-0000-0000-0000000000b1";
+    db.exec(&format!(
+        "INSERT INTO bounded_notes (id, title) VALUES ('{ok_id}', 'ok')"
+    ))
+    .await
+    .unwrap();
+
+    let migration = project.generate(
+        "add_title_check",
+        &[&fixtures::bounded_notes::BoundedNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_add_title_check.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(
+            up.contains("ALTER TABLE")
+                && up.contains("ADD CONSTRAINT")
+                && up.contains("CHECK (title <> '')"),
+            "postgres up should ALTER TABLE ADD CONSTRAINT CHECK:\n{up}"
+        );
+    } else {
+        assert!(
+            up.contains("CONSTRAINT \"ck_bounded_notes_titled\" CHECK (title <> '')")
+                || up.contains("CHECK (title <> '')"),
+            "sqlite rebuild up should recreate with CHECK:\n{up}"
+        );
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let check_expr = schema
+        .table("bounded_notes")
+        .checks
+        .get("ck_bounded_notes_titled")
+        .unwrap_or_else(|| panic!("missing check: {:?}", schema.table("bounded_notes").checks));
+    assert!(
+        check_expr.contains("title") && check_expr.contains("<>"),
+        "unexpected check expression: {check_expr}"
+    );
+
+    let bad = db
+        .exec(
+            "INSERT INTO bounded_notes (id, title) VALUES ('00000000-0000-0000-0000-0000000000b2', '')",
+        )
+        .await;
+    assert!(bad.is_err(), "empty title must fail under CHECK");
+
+    assert_eq!(
+        db.int(&format!(
+            "SELECT COUNT(*) FROM bounded_notes WHERE id = '{ok_id}'"
+        ))
+        .await,
+        1
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let after = db.schema().await;
+    assert!(
+        !after
+            .table("bounded_notes")
+            .checks
+            .contains_key("ck_bounded_notes_titled"),
+        "check should be gone after rollback: {:?}",
+        after.table("bounded_notes").checks
+    );
+
+    db.exec(
+        "INSERT INTO bounded_notes (id, title) VALUES ('00000000-0000-0000-0000-0000000000b2', '')",
+    )
+    .await
+    .unwrap();
+}
+on_every_backend!(codegen_adds_a_check_and_rejects_a_bad_row);
+
+async fn codegen_rejects_duplicate_check_name_without_writing(db: TestDb) {
+    let project = Project::for_db(&db);
+    let before = project.migration_files();
+    let options = project.options(Mode::Write, Some("dup_check"));
+    let result = project.run(
+        &options,
+        &[&fixtures::duplicate_check_notes::DuplicateCheckNote::DEF],
+        &mut NonInteractive,
+    );
+    match result {
+        Err(CodegenError::DuplicateCheckName { table, name }) => {
+            assert_eq!(table, "duplicate_check_notes");
+            assert_eq!(name, "titled");
+        }
+        other => panic!("expected DuplicateCheckName, got {other:?}"),
+    }
+    assert_eq!(
+        project.migration_files(),
+        before,
+        "DuplicateCheckName must not write SQL files"
+    );
+    assert!(
+        project.snapshot_files().is_empty(),
+        "DuplicateCheckName must not write snapshot files"
+    );
+}
+on_every_backend!(codegen_rejects_duplicate_check_name_without_writing);

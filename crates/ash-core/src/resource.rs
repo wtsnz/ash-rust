@@ -87,7 +87,6 @@ impl IdentityDef {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IndexDef {
     pub name: &'static str,
@@ -97,6 +96,18 @@ pub struct IndexDef {
 impl IndexDef {
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
         Self { name, keys }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheckDef {
+    pub name: &'static str,
+    pub expression: &'static str,
+}
+
+impl CheckDef {
+    pub const fn new(name: &'static str, expression: &'static str) -> Self {
+        Self { name, expression }
     }
 }
 
@@ -148,6 +159,7 @@ pub struct ResourceDef {
     pub notifiers: &'static [&'static dyn Notifier],
     pub identities: &'static [IdentityDef],
     pub indexes: &'static [IndexDef],
+    pub checks: &'static [CheckDef],
     pub embedded: bool,
     pub data_layer: DataLayerKind,
     pub timestamps: Option<(&'static str, &'static str)>,

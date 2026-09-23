@@ -18,6 +18,7 @@ pub struct ResourceDefinition {
     pub optimistic_lock: Option<Ident>,
     pub identities: Vec<IdentitySpec>,
     pub indexes: Vec<IndexSpec>,
+    pub checks: Vec<CheckSpec>,
     pub embedded: bool,
     pub data_layer: Option<Ident>,
     pub store: Option<Type>,
@@ -46,6 +47,7 @@ impl ResourceDefinition {
             optimistic_lock: None,
             identities: Vec::new(),
             indexes: Vec::new(),
+            checks: Vec::new(),
             embedded: false,
             data_layer: None,
             store: None,
@@ -79,6 +81,11 @@ pub struct IdentitySpec {
 pub struct IndexSpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
+}
+
+pub struct CheckSpec {
+    pub name: Ident,
+    pub expression: String,
 }
 
 pub struct ActorFieldSpec {

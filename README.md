@@ -8,7 +8,7 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 
 ## Highlights
 
-- **Declarative DSL (`resource!`)**: Define attributes, actions, relationships, aggregates, calculations, identities, indexes, and policies in a unified, readable specification.
+- **Declarative DSL (`resource!`)**: Define attributes, actions, relationships, aggregates, calculations, identities, indexes, checks, and policies in a unified, readable specification.
 - **Pluggable Data Layers**: Resources are storage-agnostic. Run transparently on `ash-memory` for lightning-fast testing or `ash-sqlite` (and future relational engines) for production.
 - **Compile-Time Ergonomics**: Procedural macros generate typed action builders (`Order::create(&ctx).amount(100).await`), compile-time checked field accessors (`Order::status`), and fluent filter composition.
 - **Bounded Contexts (`domain!`)**: Group resources into business domains that manage cross-resource transactions, schema installations, and typed code interfaces.
@@ -157,7 +157,7 @@ Comprehensive guides are available in the **[`docs/`](docs/)** directory:
 
 - **[Architecture & Philosophy](docs/architecture.md)**: System design, crate separation, data layer abstractions, and the static Rust compilation model.
 - **[Extensibility Guide](docs/extensions.md)**: Pattern 1 (`extend <macro>!`) vs. Pattern 2 (`#[transformer]`), custom validation/change traits, and decoupled error handling.
-- **[DSL & Modeling Guide](docs/dsl-guide.md)**: In-depth reference for `resource!`, `domain!`, attributes, identities, indexes, embedded resources, timestamps, calculations, aggregates, relationships (`belongs_to`, `has_one`, `has_many`, `many_to_many`), and actions.
+- **[DSL & Modeling Guide](docs/dsl-guide.md)**: In-depth reference for `resource!`, `domain!`, attributes, identities, indexes, checks, embedded resources, timestamps, calculations, aggregates, relationships (`belongs_to`, `has_one`, `has_many`, `many_to_many`), and actions.
 - **[Advanced Capabilities](docs/features.md)**: Ash.Multi transactions, state machines, optimistic locking, query preparations, SQL calculations, multi-store data layer registry, keyset/offset pagination, field-level policies, cascading deletes, managed relationships, and bulk operations.
 - **[Authentication & Token Security](docs/wip/0004-ash-authentication.md)**: Declarative authentication strategies (`ash-authentication`), Argon2id password hashing, JWT bearer tokens, API key management, and Axum HTTP extractor.
 - **[Performance Benchmarks](docs/benchmarks.md)**: Empirical comparison against canonical Ash Elixir (10–14x throughput speedup, zero GC pressure) and Criterion regression testing.

@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use ash_core::{DomainDef, ResourceDef};
 use ash_sql::{
-    emit_sql, generate_migration_version, persistable_resources, plan_schema, reverse_plan,
-    PostgresDialect, SchemaPlan, SqlDialect, SqliteDialect, TableSnapshot,
+    PostgresDialect, SchemaPlan, SqlDialect, SqliteDialect, TableSnapshot, emit_sql,
+    generate_migration_version, persistable_resources, plan_schema, reverse_plan,
 };
 use clap::Parser;
 
@@ -99,6 +99,7 @@ pub enum CodegenError {
     RollbackDevFirst { versions: Vec<String> },
     AmbiguousRenames(Vec<RenameQuestion>),
     DuplicateIndexName { table: String, name: String },
+    DuplicateCheckName { table: String, name: String },
     Usage(String),
     Io(std::io::Error),
     Snapshot(serde_json::Error),
@@ -131,6 +132,10 @@ impl fmt::Display for CodegenError {
             Self::DuplicateIndexName { table, name } => write!(
                 f,
                 "index `{name}` on table `{table}` clashes with an identity name"
+            ),
+            Self::DuplicateCheckName { table, name } => write!(
+                f,
+                "check `{name}` on table `{table}` is defined more than once"
             ),
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io(error) => write!(f, "{error}"),
@@ -230,6 +235,15 @@ fn run_with<D: SqlDialect>(
                 return Err(CodegenError::DuplicateIndexName {
                     table: resource.table_name().to_string(),
                     name: index.name.to_string(),
+                });
+            }
+        }
+        let mut check_names = std::collections::HashSet::new();
+        for check in resource.checks {
+            if !check_names.insert(check.name) {
+                return Err(CodegenError::DuplicateCheckName {
+                    table: resource.table_name().to_string(),
+                    name: check.name.to_string(),
                 });
             }
         }

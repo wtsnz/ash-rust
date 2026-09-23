@@ -49,6 +49,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     notifiers: &[],
     identities: &[],
     indexes: &[],
+    checks: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,

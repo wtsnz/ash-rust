@@ -2,6 +2,7 @@ mod actions;
 mod aggregates;
 mod attributes;
 mod calculations;
+mod checks;
 mod helpers;
 mod identities;
 mod indexes;
@@ -230,6 +231,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     let mut optimistic_lock = None;
     let mut identities = Vec::new();
     let mut indexes = Vec::new();
+    let mut checks = Vec::new();
     let mut data_layer = None;
     let mut store = None;
     let mut timestamps = None;
@@ -406,9 +408,13 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                 }
                 let _ = helpers::optional_semi(input);
             } else if section_ident == "indexes" {
-                if let Some(parsed) = parse_braced_with(input, errors, indexes::parse_indexes)
-                {
+                if let Some(parsed) = parse_braced_with(input, errors, indexes::parse_indexes) {
                     indexes = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "checks" {
+                if let Some(parsed) = parse_braced_with(input, errors, checks::parse_checks) {
+                    checks = parsed;
                 }
                 let _ = helpers::optional_semi(input);
             } else if section_ident == "actor" {
@@ -490,9 +496,10 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                                 strategy = Some(strat_ident.to_string());
                             }
                         } else if key_ident == "global"
-                            && let Ok(lit) = content.parse::<syn::LitBool>() {
-                                global = lit.value;
-                            }
+                            && let Ok(lit) = content.parse::<syn::LitBool>()
+                        {
+                            global = lit.value;
+                        }
                         if content.peek(Token![,]) || content.peek(Token![;]) {
                             let _ = content.parse::<proc_macro2::TokenTree>();
                         }
@@ -593,6 +600,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         optimistic_lock,
         identities,
         indexes,
+        checks,
         embedded,
         data_layer,
         store,
