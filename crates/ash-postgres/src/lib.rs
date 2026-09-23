@@ -712,6 +712,25 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
+        ash_core::AttrType::UtcDatetime => {
+            if let Ok(Some(dt)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(col_name)
+            {
+                Value::String(format_utc(dt))
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Decimal => {
+            if let Ok(Some(n)) = row.try_get::<Option<rust_decimal::Decimal>, _>(col_name) {
+                Value::String(n.to_string())
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
         ash_core::AttrType::Integer => {
             if let Ok(Some(i)) = row.try_get::<Option<i64>, _>(col_name) {
                 Value::Int(i)
@@ -751,6 +770,15 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
             }
         }
     }
+}
+
+fn format_utc(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let format = if dt.timestamp_subsec_nanos() == 0 {
+        chrono::SecondsFormat::Secs
+    } else {
+        chrono::SecondsFormat::AutoSi
+    };
+    dt.to_rfc3339_opts(format, true)
 }
 
 fn json_to_ash_value(val: serde_json::Value) -> Value {

@@ -71,7 +71,7 @@ pub use store::{
     default_store_type_id, DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore,
     StoreTag,
 };
-pub use types::{AshEnum, AshType};
+pub use types::{AshEnum, AshType, Decimal, UtcDateTime};
 pub use value::{
     ConstValue, FieldMap, IntoOption, Value, optional_int, optional_uuid, required_string,
     required_uuid,

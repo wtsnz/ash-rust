@@ -334,6 +334,8 @@ pub enum AttrType {
     Atom { one_of: &'static [&'static str] },
     Map,
     Array,
+    UtcDatetime,
+    Decimal,
 }
 
 impl AttrType {
@@ -346,6 +348,8 @@ impl AttrType {
             Self::Atom { .. } => "atom",
             Self::Map => "map",
             Self::Array => "array",
+            Self::UtcDatetime => "utc_datetime",
+            Self::Decimal => "decimal",
         }
     }
 }

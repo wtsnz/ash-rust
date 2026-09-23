@@ -116,6 +116,20 @@ impl TestDb {
         }
     }
 
+    pub fn datetime_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "TEXT",
+            Db::Postgres(_) => "timestamp with time zone",
+        }
+    }
+
+    pub fn decimal_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "NUMERIC",
+            Db::Postgres(_) => "numeric",
+        }
+    }
+
     pub async fn migrate(&self, dir: &Path) -> ash_core::Result<Vec<String>> {
         match &self.db {
             Db::Sqlite(db) => db.migrate(dir).await,

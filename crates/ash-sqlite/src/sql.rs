@@ -113,7 +113,13 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
                 Uuid::parse_str(&text).map_err(|err| Error::DataLayer(err.to_string()))?,
             )),
         },
-        AttrType::String | AttrType::Atom { .. } => match optional_text(row, col)? {
+        AttrType::String | AttrType::Atom { .. } | AttrType::UtcDatetime => {
+            match optional_text(row, col)? {
+                None => Ok(Value::Null),
+                Some(text) => Ok(Value::String(text)),
+            }
+        }
+        AttrType::Decimal => match optional_decimal(row, col)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
@@ -154,7 +160,13 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::String | AttrType::Atom { .. } => match optional_text(row, agg.name)? {
+        AttrType::String | AttrType::Atom { .. } | AttrType::UtcDatetime => {
+            match optional_text(row, agg.name)? {
+                None => Ok(Value::Null),
+                Some(text) => Ok(Value::String(text)),
+            }
+        }
+        AttrType::Decimal => match optional_decimal(row, agg.name)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
@@ -165,6 +177,39 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
             )),
         },
         AttrType::Map | AttrType::Array => Ok(Value::Null),
+    }
+}
+
+fn optional_decimal(row: &SqliteRow, name: &str) -> Result<Option<String>> {
+    match row.try_get::<Option<String>, _>(name) {
+        Ok(value) => return Ok(value),
+        Err(sqlx::Error::ColumnNotFound(_)) => return Ok(None),
+        Err(_) => {}
+    }
+    match row.try_get::<Option<i64>, _>(name) {
+        Ok(Some(n)) => return Ok(Some(n.to_string())),
+        Ok(None) => return Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => return Ok(None),
+        Err(_) => {}
+    }
+    match row.try_get::<Option<f64>, _>(name) {
+        Ok(Some(n)) => Ok(Some(format_real(n))),
+        Ok(None) => Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => Ok(None),
+        Err(err) => Err(Error::DataLayer(err.to_string())),
+    }
+}
+
+fn format_real(n: f64) -> String {
+    if !n.is_finite() {
+        return n.to_string();
+    }
+    let text = format!("{n:.12}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 

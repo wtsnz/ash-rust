@@ -417,6 +417,44 @@ pub mod dev_comment {
     }
 }
 
+pub mod invoice_text {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Invoice {
+            table "invoices";
+            attributes {
+                id: Uuid [pk];
+                opened_at: String;
+                amount: String;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod invoice {
+    use ash_core::{Decimal, UtcDateTime, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Invoice {
+            table "invoices";
+            attributes {
+                id: Uuid [pk];
+                opened_at: UtcDateTime;
+                amount: Decimal = "12.50";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub fn helpdesk() -> [&'static ResourceDef; 2] {
     [&base::Org::DEF, &base::Ticket::DEF]
 }

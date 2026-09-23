@@ -67,7 +67,9 @@ pub fn register_resource_filter_inputs(
     for attr in resource.attributes {
         let field_filter_type = match attr.ty {
             AttrType::Uuid => "UuidFilterInput".to_string(),
-            AttrType::String => "StringFilterInput".to_string(),
+            AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
+                "StringFilterInput".to_string()
+            }
             AttrType::Integer => "IntFilterInput".to_string(),
             AttrType::Boolean => "BooleanFilterInput".to_string(),
             AttrType::Atom { .. } => {
@@ -246,6 +248,18 @@ fn parse_scalar_value(
         }
         AttrType::String => {
             let s = acc.string()?;
+            Ok(Value::String(s.to_string()))
+        }
+        AttrType::UtcDatetime => {
+            let s = acc.string()?;
+            ash_core::UtcDateTime::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
+        AttrType::Decimal => {
+            let s = acc.string()?;
+            ash_core::Decimal::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
         AttrType::Integer => {
