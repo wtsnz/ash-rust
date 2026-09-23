@@ -1021,6 +1021,282 @@ async fn named_codegen_squashes_dev_migrations_and_keeps_rows(db: TestDb) {
 }
 on_every_backend!(named_codegen_squashes_dev_migrations_and_keeps_rows);
 
+fn confirm_subject_became_title(question: &RenameQuestion) -> Resolution {
+    if question.added == "title" && question.candidates.iter().any(|name| name == "subject") {
+        Resolution::RenamedFrom("subject".into())
+    } else {
+        Resolution::NotRenamed
+    }
+}
+
+fn dev_resources_after_type_change() -> Vec<&'static ash_core::ResourceDef> {
+    vec![
+        &fixtures::base::Org::DEF,
+        &fixtures::dev_final_ticket::Ticket::DEF,
+        &fixtures::dev_comment::Comment::DEF,
+    ]
+}
+
+async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestDb) {
+    let project = Project::for_db(&db);
+    let create = project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut dev = project.options(Mode::Write, None);
+    dev.dev = true;
+    project
+        .run(
+            &dev,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.int(&format!(
+            "SELECT priority FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        3
+    );
+
+    let renamed = match project
+        .run(
+            &dev,
+            &fixtures::helpdesk_with(&fixtures::dev_renamed_estimate::Ticket::DEF),
+            &mut confirm_subject_became_title,
+        )
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected the rename dev migration, got {other:?}"),
+    };
+    assert!(
+        !renamed.up_sql.to_ascii_lowercase().contains("create table \"tickets\""),
+        "{}",
+        renamed.up_sql
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(&format!(
+        "UPDATE tickets SET estimate = '42' WHERE id = '{TICKET_ID}'"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        db.text(&format!(
+            "SELECT title FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+    assert!(!db.schema().await.has_column("tickets", "subject"));
+
+    let typed = match project
+        .run(
+            &dev,
+            &dev_resources_after_type_change(),
+            &mut confirm_subject_became_title,
+        )
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected the type-change dev migration, got {other:?}"),
+    };
+    assert!(
+        typed.up_sql.to_ascii_lowercase().contains("comments"),
+        "{}",
+        typed.up_sql
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("tickets", "estimate").ty,
+        db.integer_type()
+    );
+    assert_eq!(
+        db.int(&format!(
+            "SELECT estimate FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        42
+    );
+    assert_eq!(
+        db.text(&format!(
+            "SELECT status FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "open"
+    );
+    assert_eq!(
+        db.schema().await.column("tickets", "status").default.as_deref(),
+        Some("'new'")
+    );
+    let comment_id = "00000000-0000-0000-0000-0000000000c1";
+    db.exec(&format!(
+        "INSERT INTO comments (id, body, ticket_id) VALUES ('{comment_id}', 'seen in dev', '{TICKET_ID}')"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(db.applied_versions().await.len(), 4);
+
+    for _ in 0..3 {
+        db.rollback(&project.migrations()).await.unwrap();
+    }
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+    assert_eq!(
+        db.text(&format!(
+            "SELECT notes FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "call facilities"
+    );
+    let rolled_back = db.schema().await;
+    assert!(!rolled_back.has_column("tickets", "title"));
+    assert!(!rolled_back.has_column("tickets", "priority"));
+    assert!(!rolled_back.has_column("tickets", "estimate"));
+    assert!(!rolled_back.tables.contains_key("comments"));
+    assert_eq!(
+        rolled_back.column("tickets", "status").default.as_deref(),
+        Some("'open'")
+    );
+
+    for name in project.migration_files() {
+        if name.contains("_dev.") {
+            std::fs::remove_file(project.migrations().join(name)).unwrap();
+        }
+    }
+
+    let named = project.options(Mode::Write, Some("reshape_tickets"));
+    let refused = project.run(
+        &named,
+        &dev_resources_after_type_change(),
+        &mut NonInteractive,
+    );
+    assert!(
+        matches!(refused, Err(CodegenError::AmbiguousRenames(_))),
+        "{refused:?}"
+    );
+    assert_eq!(project.migration_files().len(), 2);
+
+    let squash = match project
+        .run(
+            &named,
+            &dev_resources_after_type_change(),
+            &mut confirm_subject_became_title,
+        )
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected one squash migration, got {other:?}"),
+    };
+    assert!(
+        project
+            .migration_files()
+            .iter()
+            .all(|name| !name.contains("_dev.")),
+        "{:?}",
+        project.migration_files()
+    );
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.applied_versions().await,
+        vec![create.version.clone(), squash.version.clone()]
+    );
+    assert_eq!(
+        db.text(&format!(
+            "SELECT title FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+    assert_eq!(
+        db.text(&format!(
+            "SELECT notes FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "call facilities"
+    );
+    assert_eq!(
+        db.text(&format!(
+            "SELECT status FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "open"
+    );
+    assert_eq!(
+        db.int(&format!(
+            "SELECT priority FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        3
+    );
+    assert_eq!(
+        db.int("SELECT COUNT(*) FROM tickets WHERE estimate IS NULL").await,
+        1
+    );
+    let schema = db.schema().await;
+    assert!(!schema.has_column("tickets", "subject"));
+    assert_eq!(schema.column("tickets", "estimate").ty, db.integer_type());
+    assert_eq!(
+        schema.column("tickets", "status").default.as_deref(),
+        Some("'new'")
+    );
+    assert_eq!(
+        schema
+            .table("tickets")
+            .unique_indexes
+            .values()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![vec!["title".to_string()]]
+    );
+    assert_eq!(
+        schema.table("comments").foreign_keys,
+        vec![ForeignKey {
+            column: "ticket_id".into(),
+            references_table: "tickets".into(),
+            references_column: "id".into(),
+            on_delete: "CASCADE".into(),
+        }]
+    );
+    db.exec(&format!(
+        "INSERT INTO comments (id, body, ticket_id) VALUES ('{comment_id}', 'after squash', '{TICKET_ID}')"
+    ))
+    .await
+    .unwrap();
+    assert!(
+        db.exec(&format!(
+            "INSERT INTO comments (id, body, ticket_id) VALUES ('00000000-0000-0000-0000-0000000000c2', 'orphan', '{OTHER_ORG_ID}')"
+        ))
+        .await
+        .is_err(),
+        "a comment needs a real ticket"
+    );
+    db.exec(&format!("DELETE FROM tickets WHERE id = '{TICKET_ID}'"))
+        .await
+        .unwrap();
+    assert_eq!(db.int("SELECT COUNT(*) FROM comments").await, 0);
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let restored = db.schema().await;
+    assert!(restored.has_column("tickets", "subject"));
+    assert!(!restored.has_column("tickets", "title"));
+    assert!(!restored.has_column("tickets", "priority"));
+    assert!(!restored.tables.contains_key("comments"));
+    assert_eq!(
+        restored.column("tickets", "status").default.as_deref(),
+        Some("'open'")
+    );
+}
+on_every_backend!(dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table);
+
 async fn check_sees_dev_work_as_pending(db: TestDb) {
     let project = Project::for_db(&db);
     project.generate("create_helpdesk", &fixtures::helpdesk());

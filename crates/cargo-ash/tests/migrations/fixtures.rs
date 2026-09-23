@@ -337,6 +337,86 @@ pub mod counter_integer {
     }
 }
 
+pub mod dev_renamed_estimate {
+    use super::base::Org;
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Ticket {
+            table "tickets";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                status: String = "open";
+                notes: Option<String>;
+                org_id: Uuid;
+                priority: i64 = 3;
+                estimate: Option<String>;
+            }
+            relationships {
+                belongs_to org: Org [fk: org_id, on_delete: cascade];
+            }
+            identities {
+                identity unique_subject: [title];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod dev_final_ticket {
+    use super::base::Org;
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Ticket {
+            table "tickets";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                status: String = "new";
+                notes: Option<String>;
+                org_id: Uuid;
+                priority: i64 = 3;
+                estimate: Option<i64>;
+            }
+            relationships {
+                belongs_to org: Org [fk: org_id, on_delete: cascade];
+            }
+            identities {
+                identity unique_subject: [title];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod dev_comment {
+    use super::dev_final_ticket::Ticket;
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Comment {
+            table "comments";
+            attributes {
+                id: Uuid [pk];
+                body: String;
+                ticket_id: Uuid;
+            }
+            relationships {
+                belongs_to ticket: Ticket [fk: ticket_id, on_delete: cascade];
+            }
+        }
+    }
+}
+
 pub fn helpdesk() -> [&'static ResourceDef; 2] {
     [&base::Org::DEF, &base::Ticket::DEF]
 }
