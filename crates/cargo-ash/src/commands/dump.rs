@@ -86,6 +86,7 @@ async fn dump_sqlite(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error
             columns,
             primary_key,
             identities: Vec::new(),
+            indexes: Vec::new(),
             references: Vec::new(),
         });
     }
@@ -138,6 +139,7 @@ async fn dump_postgres(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::err
             columns,
             primary_key,
             identities: Vec::new(),
+            indexes: Vec::new(),
             references: Vec::new(),
         });
     }

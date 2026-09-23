@@ -17,6 +17,7 @@ pub struct ResourceDefinition {
     pub extends: Vec<ExtendSpec>,
     pub optimistic_lock: Option<Ident>,
     pub identities: Vec<IdentitySpec>,
+    pub indexes: Vec<IndexSpec>,
     pub embedded: bool,
     pub data_layer: Option<Ident>,
     pub store: Option<Type>,
@@ -44,6 +45,7 @@ impl ResourceDefinition {
             extends: Vec::new(),
             optimistic_lock: None,
             identities: Vec::new(),
+            indexes: Vec::new(),
             embedded: false,
             data_layer: None,
             store: None,
@@ -72,6 +74,11 @@ pub struct IdentitySpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
     pub message: Option<String>,
+}
+
+pub struct IndexSpec {
+    pub name: Ident,
+    pub keys: Vec<Ident>,
 }
 
 pub struct ActorFieldSpec {

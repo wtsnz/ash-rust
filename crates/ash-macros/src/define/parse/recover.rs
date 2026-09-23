@@ -16,6 +16,7 @@ pub const SECTION_NAMES: &[&str] = &[
     "extend",
     "optimistic_lock",
     "identities",
+    "indexes",
     "embedded",
     "data_layer",
     "store",
@@ -201,6 +202,28 @@ pub fn skip_field_policy(input: ParseStream) {
 pub fn skip_identity(input: ParseStream) {
     while !input.is_empty() {
         if peek_ident_is(input, &["identity"]) {
+            return;
+        }
+        if skip_group(input, Delimiter::Brace)
+            || skip_group(input, Delimiter::Bracket)
+            || skip_group(input, Delimiter::Parenthesis)
+        {
+            continue;
+        }
+        if input.peek(Token![;]) {
+            let _ = input.parse::<Token![;]>();
+            return;
+        }
+        if !skip_one_tree(input) {
+            return;
+        }
+    }
+}
+
+/// Skip a broken `index` item. Stops before the next `index`.
+pub fn skip_index(input: ParseStream) {
+    while !input.is_empty() {
+        if peek_ident_is(input, &["index"]) {
             return;
         }
         if skip_group(input, Delimiter::Brace)

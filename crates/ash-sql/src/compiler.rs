@@ -883,6 +883,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_create_indexes(&self, resource: &ResourceDef) -> Result<Vec<String>> {
         let mut stmts = Vec::new();
         let table = ident(self.dialect, resource.table_name())?;
+        let if_not_exists = if self.dialect.create_table_if_not_exists() {
+            "IF NOT EXISTS "
+        } else {
+            ""
+        };
 
         for identity in resource.identities {
             let idx_name = ident(
@@ -893,13 +898,23 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for key in identity.keys {
                 key_cols.push(ident(self.dialect, key)?);
             }
-            let if_not_exists = if self.dialect.create_table_if_not_exists() {
-                "IF NOT EXISTS "
-            } else {
-                ""
-            };
             stmts.push(format!(
                 "CREATE UNIQUE INDEX {if_not_exists}{idx_name} ON {table} ({})",
+                key_cols.join(", ")
+            ));
+        }
+
+        for index in resource.indexes {
+            let idx_name = ident(
+                self.dialect,
+                &format!("idx_{}_{}", resource.table_name(), index.name),
+            )?;
+            let mut key_cols = Vec::new();
+            for key in index.keys {
+                key_cols.push(ident(self.dialect, key)?);
+            }
+            stmts.push(format!(
+                "CREATE INDEX {if_not_exists}{idx_name} ON {table} ({})",
                 key_cols.join(", ")
             ));
         }

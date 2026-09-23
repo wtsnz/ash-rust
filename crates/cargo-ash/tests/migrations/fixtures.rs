@@ -417,6 +417,31 @@ pub mod dev_comment {
     }
 }
 
+pub mod labeled_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        LabeledNote {
+            table "labeled_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                status: String;
+            }
+            identities {
+                identity unique_title: [title];
+            }
+            indexes {
+                index by_status: [status];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod invoice_text {
     use ash_core::resource;
     use uuid::Uuid;
@@ -437,7 +462,7 @@ pub mod invoice_text {
 }
 
 pub mod invoice {
-    use ash_core::{Decimal, UtcDateTime, resource};
+    use ash_core::{resource, Decimal, UtcDateTime};
     use uuid::Uuid;
 
     resource! {

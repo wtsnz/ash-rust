@@ -39,6 +39,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     extensions: &[],
     notifiers: &[],
     identities: TICKET_IDENTS,
+    indexes: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Sqlite,
     timestamps: None,
@@ -79,7 +80,9 @@ fn test_sqlite_query_compilation() {
     let CompiledSql { sql, params } = compiler.compile_select(&TICKET_DEF, &query).unwrap();
 
     assert!(sql.contains("SELECT \"id\", \"subject\", \"status\", \"representative_id\", \"priority\", length(\"subject\") AS \"subject_length\" FROM \"tickets\""));
-    assert!(sql.contains("WHERE (\"status\" = ? AND (\"representative_id\" IS NULL OR \"priority\" > ?))"));
+    assert!(sql.contains(
+        "WHERE (\"status\" = ? AND (\"representative_id\" IS NULL OR \"priority\" > ?))"
+    ));
     assert!(sql.contains("ORDER BY \"priority\" ASC, \"subject\" DESC"));
     assert!(sql.contains("LIMIT ? OFFSET ?"));
 
@@ -134,26 +137,41 @@ fn test_postgres_insert_update_upsert_returning() {
     let mut update_fields = ash_core::FieldMap::new();
     update_fields.insert("status".into(), Value::String("closed".into()));
 
-    let compiled_up = compiler2.compile_update(&TICKET_DEF, id, &update_fields).unwrap();
-    assert!(compiled_up.sql.contains("UPDATE \"tickets\" SET \"status\" = $1 WHERE \"id\" = $2 RETURNING *"));
+    let compiled_up = compiler2
+        .compile_update(&TICKET_DEF, id, &update_fields)
+        .unwrap();
+    assert!(compiled_up
+        .sql
+        .contains("UPDATE \"tickets\" SET \"status\" = $1 WHERE \"id\" = $2 RETURNING *"));
 
     // 3. Upsert
     let mut compiler3 = QueryCompiler::new(&dialect);
     let compiled_upsert = compiler3
-        .compile_upsert(&TICKET_DEF, &fields, &TICKET_IDENTS[0], &["status".to_string()])
+        .compile_upsert(
+            &TICKET_DEF,
+            &fields,
+            &TICKET_IDENTS[0],
+            &["status".to_string()],
+        )
         .unwrap();
-    assert!(compiled_upsert.sql.contains("ON CONFLICT (\"subject\") DO UPDATE SET \"status\" = EXCLUDED.\"status\" RETURNING *"));
+    assert!(compiled_upsert.sql.contains(
+        "ON CONFLICT (\"subject\") DO UPDATE SET \"status\" = EXCLUDED.\"status\" RETURNING *"
+    ));
 }
 
 #[test]
 fn test_create_table_ddl_compilation() {
-    let sqlite_ddl = QueryCompiler::new(&SqliteDialect).compile_create_table(&TICKET_DEF).unwrap();
+    let sqlite_ddl = QueryCompiler::new(&SqliteDialect)
+        .compile_create_table(&TICKET_DEF)
+        .unwrap();
     assert!(sqlite_ddl.contains("CREATE TABLE IF NOT EXISTS \"tickets\""));
     assert!(sqlite_ddl.contains("\"id\" TEXT PRIMARY KEY"));
     assert!(sqlite_ddl.contains("\"subject\" TEXT NOT NULL"));
     assert!(sqlite_ddl.contains("\"priority\" INTEGER"));
 
-    let pg_ddl = QueryCompiler::new(&PostgresDialect).compile_create_table(&TICKET_DEF).unwrap();
+    let pg_ddl = QueryCompiler::new(&PostgresDialect)
+        .compile_create_table(&TICKET_DEF)
+        .unwrap();
     assert!(pg_ddl.contains("CREATE TABLE IF NOT EXISTS \"tickets\""));
     assert!(pg_ddl.contains("\"id\" UUID PRIMARY KEY"));
     assert!(pg_ddl.contains("\"subject\" TEXT NOT NULL"));
@@ -193,9 +211,7 @@ fn test_in_list_compilation_sqlite_json_each_vs_postgres_any() {
     let mut pg_compiler = QueryCompiler::new(&PostgresDialect);
     let pg_compiled = pg_compiler.compile_select(&TICKET_DEF, &query).unwrap();
     assert!(
-        pg_compiled
-            .sql
-            .contains("\"id\" = ANY($1)"),
+        pg_compiled.sql.contains("\"id\" = ANY($1)"),
         "Postgres must compile IN query to = ANY($1), got: {}",
         pg_compiled.sql
     );
@@ -213,13 +229,16 @@ static CATEGORY_ATTRS: &[AttributeDef] = &[
     AttributeDef::optional("parent_id", AttrType::Uuid),
 ];
 
-static CATEGORY_RELS: &[ash_core::RelationshipDef] = &[
-    ash_core::RelationshipDef::has_many("subcategories", || &CATEGORY_DEF, "parent_id"),
-];
+static CATEGORY_RELS: &[ash_core::RelationshipDef] = &[ash_core::RelationshipDef::has_many(
+    "subcategories",
+    || &CATEGORY_DEF,
+    "parent_id",
+)];
 
-static CATEGORY_AGGS: &[ash_core::AggregateDef] = &[
-    ash_core::AggregateDef::count("subcategories_count", "subcategories"),
-];
+static CATEGORY_AGGS: &[ash_core::AggregateDef] = &[ash_core::AggregateDef::count(
+    "subcategories_count",
+    "subcategories",
+)];
 
 static CATEGORY_DEF: ResourceDef = ResourceDef {
     name: "Category",
@@ -234,6 +253,7 @@ static CATEGORY_DEF: ResourceDef = ResourceDef {
     extensions: &[],
     notifiers: &[],
     identities: &[],
+    indexes: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Sqlite,
     timestamps: None,
@@ -254,12 +274,16 @@ fn test_self_referential_aggregate_subquery_aliasing() {
 
     // Verify subquery table is aliased so outer "categories"."id" is not shadowed by inner table!
     assert!(
-        compiled.sql.contains("FROM \"categories\" AS \"_ash_sub_subcategories_count\""),
+        compiled
+            .sql
+            .contains("FROM \"categories\" AS \"_ash_sub_subcategories_count\""),
         "Inner table must be aliased to prevent self-referential shadowing, got: {}",
         compiled.sql
     );
     assert!(
-        compiled.sql.contains("\"_ash_sub_subcategories_count\".\"parent_id\" = \"categories\".\"id\""),
+        compiled
+            .sql
+            .contains("\"_ash_sub_subcategories_count\".\"parent_id\" = \"categories\".\"id\""),
         "Inner alias must join against outer table, got: {}",
         compiled.sql
     );
@@ -279,11 +303,19 @@ fn test_keyset_cursor_compilation() {
     };
 
     let sorts = vec![
-        Sort { field: "priority".to_string(), descending: true },
-        Sort { field: "subject".to_string(), descending: false },
+        Sort {
+            field: "priority".to_string(),
+            descending: true,
+        },
+        Sort {
+            field: "subject".to_string(),
+            descending: false,
+        },
     ];
 
-    let cursor_sql = compiler.compile_keyset_cursor(&TICKET_DEF, &cursor, &sorts).unwrap();
+    let cursor_sql = compiler
+        .compile_keyset_cursor(&TICKET_DEF, &cursor, &sorts)
+        .unwrap();
     // Expected format: ("priority" < ? OR ("priority" = ? AND "subject" > ?) OR ("priority" = ? AND "subject" = ? AND "id" > ?))
     assert!(cursor_sql.contains("\"priority\" < ?"));
     assert!(cursor_sql.contains("\"priority\" = ? AND \"subject\" > ?"));
@@ -299,7 +331,9 @@ fn test_keyset_cursor_compilation() {
         .compile_select_with_cursor(&TICKET_DEF, &select_query, Some(&cursor))
         .unwrap();
     assert!(
-        compiled_select.sql.contains("ORDER BY \"priority\" DESC, \"subject\" ASC, \"id\" ASC"),
+        compiled_select
+            .sql
+            .contains("ORDER BY \"priority\" DESC, \"subject\" ASC, \"id\" ASC"),
         "Cursor queries must order deterministically with PK tie-breaker, got: {}",
         compiled_select.sql
     );
@@ -328,7 +362,9 @@ fn test_empty_in_and_not_in_compilation() {
         ..CompiledQuery::default()
     };
     let mut compiler2 = QueryCompiler::new(&dialect);
-    let compiled2 = compiler2.compile_select(&TICKET_DEF, &query_not_empty).unwrap();
+    let compiled2 = compiler2
+        .compile_select(&TICKET_DEF, &query_not_empty)
+        .unwrap();
     assert!(
         compiled2.sql.contains("WHERE NOT (0=1)"),
         "Negated empty IN must compile to NOT (0=1), got: {}",
@@ -362,7 +398,8 @@ fn test_complex_expressions_compilation() {
 
     let compiled_expr = compiler.compile_expr(&TICKET_DEF, &expr).unwrap();
     assert!(
-        compiled_expr.contains("CASE WHEN (length(\"subject\") > 10) THEN upper(\"subject\") ELSE $1 END"),
+        compiled_expr
+            .contains("CASE WHEN (length(\"subject\") > 10) THEN upper(\"subject\") ELSE $1 END"),
         "Got: {}",
         compiled_expr
     );

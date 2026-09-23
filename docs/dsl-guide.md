@@ -215,6 +215,34 @@ let user = User::create(&ctx)
 
 ---
 
+## 2b2. Non-unique indexes
+
+Indexes speed lookups. They do not enforce uniqueness. Identities remain the unique upsert path.
+
+```rust
+resource! {
+    LabeledNote {
+        table "labeled_notes";
+
+        attributes {
+            id: Uuid [pk];
+            title: String;
+            status: String;
+        }
+
+        identities {
+            identity unique_title: [title];
+        }
+
+        indexes {
+            index by_status: [status];
+        }
+    }
+}
+```
+
+---
+
 ## 2c. Embedded Resources
 
 ```rust

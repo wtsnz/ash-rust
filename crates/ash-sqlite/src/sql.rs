@@ -1,7 +1,9 @@
 use ash_core::{
     AggregateDef, AttrType, CompiledQuery, Error, FieldMap, IdentityDef, ResourceDef, Result, Value,
 };
-use ash_sql::{column as sql_column, ident as sql_ident, CompiledSql, QueryCompiler, SqliteDialect};
+use ash_sql::{
+    column as sql_column, ident as sql_ident, CompiledSql, QueryCompiler, SqliteDialect,
+};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 use uuid::Uuid;
@@ -22,43 +24,27 @@ pub fn create_indexes_sql(resource: &ResourceDef) -> Result<Vec<String>> {
     QueryCompiler::new(&SqliteDialect).compile_create_indexes(resource)
 }
 
-pub fn select_query(
-    resource: &ResourceDef,
-    query: &CompiledQuery,
-) -> Result<CompiledSql> {
+pub fn select_query(resource: &ResourceDef, query: &CompiledQuery) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_select(resource, query)
 }
 
-pub fn insert_query(
-    resource: &ResourceDef,
-    fields: &FieldMap,
-) -> Result<CompiledSql> {
+pub fn insert_query(resource: &ResourceDef, fields: &FieldMap) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_insert(resource, fields)
 }
 
-pub fn update_query(
-    resource: &ResourceDef,
-    id: Uuid,
-    fields: &FieldMap,
-) -> Result<CompiledSql> {
+pub fn update_query(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_update(resource, id, fields)
 }
 
-pub fn delete_query(
-    resource: &ResourceDef,
-    id: Uuid,
-) -> Result<CompiledSql> {
+pub fn delete_query(resource: &ResourceDef, id: Uuid) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_delete(resource, id)
 }
 
-pub fn bulk_delete_query(
-    resource: &ResourceDef,
-    ids: &[Uuid],
-) -> Result<CompiledSql> {
+pub fn bulk_delete_query(resource: &ResourceDef, ids: &[Uuid]) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_bulk_delete(resource, ids)
 }
@@ -88,7 +74,10 @@ pub fn row_to_fields(
 
     for calc_name in calculations {
         let calc = resource.calculation(calc_name).ok_or_else(|| {
-            Error::Invalid(format!("unknown calculation `{calc_name}` on {}", resource.name))
+            Error::Invalid(format!(
+                "unknown calculation `{calc_name}` on {}",
+                resource.name
+            ))
         })?;
         let val = extract_column_value(row, calc.name, &calc.ty)?;
         map.insert(calc.name.to_string(), val);
@@ -96,7 +85,10 @@ pub fn row_to_fields(
 
     for agg_name in aggregates {
         let agg = resource.aggregate(agg_name).ok_or_else(|| {
-            Error::Invalid(format!("unknown aggregate `{agg_name}` on {}", resource.name))
+            Error::Invalid(format!(
+                "unknown aggregate `{agg_name}` on {}",
+                resource.name
+            ))
         })?;
         let val = extract_aggregate_value(row, agg)?;
         map.insert(agg.name.to_string(), val);
@@ -262,6 +254,7 @@ mod tests {
         extensions: &[],
         notifiers: &[],
         identities: &[],
+        indexes: &[],
         embedded: false,
         data_layer: ash_core::DataLayerKind::Sqlite,
         timestamps: None,

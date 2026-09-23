@@ -232,6 +232,25 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let down = format!("-- Rollback DROP INDEX {id_name}");
             (up, down)
         }
+        SchemaOperation::CreateIndex { table, index } => {
+            let t = dialect.quote_identifier(table);
+            let idx_name = dialect.quote_identifier(&index.name);
+            let key_cols = index
+                .columns
+                .iter()
+                .map(|k| dialect.quote_identifier(k))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let up = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {t} ({key_cols});");
+            let down = format!("DROP INDEX IF EXISTS {idx_name};");
+            (up, down)
+        }
+        SchemaOperation::DropIndex { table: _, name } => {
+            let idx_name = dialect.quote_identifier(name);
+            let up = format!("DROP INDEX IF EXISTS {idx_name};");
+            let down = format!("-- Rollback DROP INDEX {idx_name}");
+            (up, down)
+        }
         SchemaOperation::AddReference { table, reference } => {
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(&reference.name);
@@ -312,6 +331,18 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             "\n\nCREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {table} ({key_cols});"
         ));
     }
+    for index in &snapshot.indexes {
+        let idx_name = dialect.quote_identifier(&index.name);
+        let key_cols = index
+            .columns
+            .iter()
+            .map(|k| dialect.quote_identifier(k))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(
+            "\n\nCREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({key_cols});"
+        ));
+    }
     sql
 }
 
@@ -327,6 +358,8 @@ fn table_of(op: &SchemaOperation) -> Option<&str> {
         | SchemaOperation::SetDefault { table, .. }
         | SchemaOperation::CreateIdentity { table, .. }
         | SchemaOperation::DropIdentity { table, .. }
+        | SchemaOperation::CreateIndex { table, .. }
+        | SchemaOperation::DropIndex { table, .. }
         | SchemaOperation::AddReference { table, .. }
         | SchemaOperation::DropReference { table, .. } => Some(table.as_str()),
     }

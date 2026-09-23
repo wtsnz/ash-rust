@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::snapshot::{ColumnSnapshot, IdentitySnapshot, ReferenceSnapshot, TableSnapshot};
+use crate::snapshot::{
+    ColumnSnapshot, IdentitySnapshot, IndexSnapshot, ReferenceSnapshot, TableSnapshot,
+};
 
 /// Represents a single structural DDL change operation between two database states.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,6 +43,14 @@ pub enum SchemaOperation {
         identity: IdentitySnapshot,
     },
     DropIdentity {
+        table: String,
+        name: String,
+    },
+    CreateIndex {
+        table: String,
+        index: IndexSnapshot,
+    },
+    DropIndex {
         table: String,
         name: String,
     },
@@ -122,8 +132,9 @@ pub fn diff_snapshots_with_renames(
 
             // 4. Altered columns
             for n_col in &n.columns {
-                let old_match = if let Some(&(old_name, _)) =
-                    renames.iter().find(|(_, new_name)| *new_name == n_col.name.as_str())
+                let old_match = if let Some(&(old_name, _)) = renames
+                    .iter()
+                    .find(|(_, new_name)| *new_name == n_col.name.as_str())
                 {
                     o.columns.iter().find(|c| c.name == old_name)
                 } else {
@@ -174,7 +185,25 @@ pub fn diff_snapshots_with_renames(
                 }
             }
 
-            // 6. References (foreign keys)
+            // 6. Non-unique indexes
+            for o_idx in &o.indexes {
+                if !n.indexes.iter().any(|i| i == o_idx) {
+                    ops.push(SchemaOperation::DropIndex {
+                        table: table.clone(),
+                        name: o_idx.name.clone(),
+                    });
+                }
+            }
+            for n_idx in &n.indexes {
+                if !o.indexes.iter().any(|i| i == n_idx) {
+                    ops.push(SchemaOperation::CreateIndex {
+                        table: table.clone(),
+                        index: n_idx.clone(),
+                    });
+                }
+            }
+
+            // 7. References (foreign keys)
             for o_ref in &o.references {
                 if !n.references.iter().any(|r| r == o_ref) {
                     ops.push(SchemaOperation::DropReference {
