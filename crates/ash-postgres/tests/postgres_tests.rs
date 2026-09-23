@@ -232,7 +232,12 @@ async fn test_postgres_declarative_migration_runner() {
     std::fs::create_dir_all(&temp_dir).unwrap();
 
     let version = format!("2026{}", &Uuid::new_v4().simple().to_string()[..10]);
-    let snap = TableSnapshot::from_resource(&CUSTOMER_DEF, &PostgresDialect);
+    let table = format!("customers_mig_{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let mut snap = TableSnapshot::from_resource(&CUSTOMER_DEF, &PostgresDialect);
+    snap.table = table.clone();
+    for identity in &mut snap.identities {
+        identity.name = format!("{table}_{}", identity.name);
+    }
     let files = generate_migration_with_version(&PostgresDialect, &version, "create_customers", &[
         ash_sql::SchemaOperation::CreateTable(snap),
     ]);
@@ -254,6 +259,7 @@ async fn test_postgres_declarative_migration_runner() {
         .bind(&version)
         .execute(pool)
         .await;
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}")).execute(pool).await;
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
@@ -262,6 +268,7 @@ async fn test_postgres_in_query_large_batch_any_array() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
+    let _ = pg.install(&[&CUSTOMER_DEF]).await;
 
     let id1 = Uuid::new_v4();
     let id2 = Uuid::new_v4();
@@ -451,6 +458,7 @@ async fn test_postgres_empty_in_and_empty_bulk_operations() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
+    let _ = pg.install(&[&CUSTOMER_DEF]).await;
 
     // 1. Query with Filter::in_list of empty vec -> returns empty vec, no error
     let query_empty = CompiledQuery {
