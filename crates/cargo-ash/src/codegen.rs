@@ -50,6 +50,8 @@ pub struct CodegenOptions {
     pub mode: Mode,
     pub drop_columns: bool,
     pub dev: bool,
+    pub squash_history: bool,
+    pub applied_versions: Option<Vec<String>>,
 }
 
 impl CodegenOptions {
@@ -62,6 +64,8 @@ impl CodegenOptions {
             mode: Mode::Write,
             drop_columns: false,
             dev: false,
+            squash_history: false,
+            applied_versions: None,
         }
     }
 }
@@ -96,6 +100,10 @@ impl CodegenOutcome {
 pub enum CodegenError {
     MissingName,
     DevAndName,
+    MissingAppliedVersions,
+    RollbackBeforeSquash,
+    HandWrittenMigration { path: PathBuf },
+    RuntimeAlreadyRunning,
     RollbackDevFirst { versions: Vec<String> },
     AmbiguousRenames(Vec<RenameQuestion>),
     DuplicateIndexName { table: String, name: String },
@@ -111,6 +119,23 @@ impl fmt::Display for CodegenError {
         match self {
             Self::MissingName => write!(f, "a migration name is required when writing changes"),
             Self::DevAndName => write!(f, "--dev does not take a migration name"),
+            Self::MissingAppliedVersions => write!(
+                f,
+                "--squash requires applied migration versions from the database"
+            ),
+            Self::RollbackBeforeSquash => write!(
+                f,
+                "roll back until `_ash_schema_migrations` has no rows before squashing history"
+            ),
+            Self::HandWrittenMigration { path } => write!(
+                f,
+                "hand-written migration `{}` blocks history squash",
+                path.display()
+            ),
+            Self::RuntimeAlreadyRunning => write!(
+                f,
+                "cannot load applied migration versions while a Tokio runtime is already running"
+            ),
             Self::RollbackDevFirst { versions } => write!(
                 f,
                 "roll back dev migrations and delete their SQL files before writing a named migration ({})",
@@ -226,6 +251,16 @@ fn run_with<D: SqlDialect>(
         return Err(CodegenError::DevAndName);
     }
 
+    if options.squash_history {
+        match &options.applied_versions {
+            None => return Err(CodegenError::MissingAppliedVersions),
+            Some(versions) if !versions.is_empty() => {
+                return Err(CodegenError::RollbackBeforeSquash);
+            }
+            Some(_) => {}
+        }
+    }
+
     let resources = persistable_resources(resources);
     for resource in &resources {
         let identity_names: std::collections::HashSet<&str> =
@@ -254,7 +289,9 @@ fn run_with<D: SqlDialect>(
         .collect();
 
     let committed_dir = committed_snap_dir(options);
-    let old = if options.dev {
+    let old = if options.squash_history {
+        Vec::new()
+    } else if options.dev {
         load_effective_old(options)?
     } else {
         load_snapshots(&committed_dir)?
@@ -270,6 +307,12 @@ fn run_with<D: SqlDialect>(
         if !versions.is_empty() {
             return Err(CodegenError::RollbackDevFirst { versions });
         }
+    }
+
+    if options.squash_history
+        && let Some(path) = hand_written_migration_path(options)?
+    {
+        return Err(CodegenError::HandWrittenMigration { path });
     }
 
     let up_sql = render(
@@ -309,6 +352,15 @@ fn run_with<D: SqlDialect>(
                 &up_sql,
                 &down_sql,
             )?;
+            if options.squash_history
+                && let CodegenOutcome::Written(migration) = &outcome
+            {
+                delete_other_generated_migrations(
+                    options,
+                    &migration.up_path,
+                    &migration.down_path,
+                )?;
+            }
             delete_dev_snapshots(options)?;
             Ok(outcome)
         }
@@ -449,6 +501,119 @@ fn delete_dev_snapshots(options: &CodegenOptions) -> Result<(), CodegenError> {
     Ok(())
 }
 
+fn is_generated_migration_filename(filename: &str, dialect: &str) -> bool {
+    let up_suffix = format!(".{dialect}.up.sql");
+    let down_suffix = format!(".{dialect}.down.sql");
+    let stem = if let Some(stem) = filename.strip_suffix(&up_suffix) {
+        stem
+    } else if let Some(stem) = filename.strip_suffix(&down_suffix) {
+        stem
+    } else {
+        return false;
+    };
+    let Some((version, name)) = stem.split_once('_') else {
+        return false;
+    };
+    !version.is_empty()
+        && !name.is_empty()
+        && version.chars().all(|c| c.is_ascii_digit())
+}
+
+fn hand_written_migration_path(options: &CodegenOptions) -> Result<Option<PathBuf>, CodegenError> {
+    if !options.migrations_dir.exists() {
+        return Ok(None);
+    }
+    let dialect = options.dialect.name();
+    let mut entries: Vec<_> = std::fs::read_dir(&options.migrations_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        if !filename.ends_with(".sql") {
+            continue;
+        }
+        if !is_generated_migration_filename(filename, dialect) {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn delete_other_generated_migrations(
+    options: &CodegenOptions,
+    keep_up: &Path,
+    keep_down: &Path,
+) -> Result<(), CodegenError> {
+    if !options.migrations_dir.exists() {
+        return Ok(());
+    }
+    let dialect = options.dialect.name();
+    for entry in std::fs::read_dir(&options.migrations_dir)? {
+        let path = entry?.path();
+        if path == keep_up || path == keep_down {
+            continue;
+        }
+        let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        if is_generated_migration_filename(filename, dialect) {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Reads applied versions from `_ash_schema_migrations`. A missing tracking table is an empty list.
+pub async fn applied_migration_versions(database_url: &str) -> Result<Vec<String>, CodegenError> {
+    if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+        let pool = sqlx::PgPool::connect(database_url)
+            .await
+            .map_err(|error| CodegenError::Usage(error.to_string()))?;
+        match sqlx::query_scalar::<_, String>(
+            "SELECT version FROM _ash_schema_migrations ORDER BY version ASC",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(versions) => Ok(versions),
+            Err(error) if postgres_undefined_table(&error) => Ok(Vec::new()),
+            Err(error) => Err(CodegenError::Usage(error.to_string())),
+        }
+    } else {
+        let pool = sqlx::SqlitePool::connect(database_url)
+            .await
+            .map_err(|error| CodegenError::Usage(error.to_string()))?;
+        match sqlx::query_scalar::<_, String>(
+            "SELECT version FROM _ash_schema_migrations ORDER BY version ASC",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(versions) => Ok(versions),
+            Err(error) if sqlite_missing_table(&error) => Ok(Vec::new()),
+            Err(error) => Err(CodegenError::Usage(error.to_string())),
+        }
+    }
+}
+
+fn postgres_undefined_table(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Database(db) => db.code().as_deref() == Some("42P01"),
+        _ => false,
+    }
+}
+
+fn sqlite_missing_table(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Database(db) => db.message().contains("no such table"),
+        _ => false,
+    }
+}
+
 fn next_version(dir: &Path) -> String {
     let mut version = generate_migration_version();
     let names = list_names(dir);
@@ -490,6 +655,8 @@ struct CodegenCli {
     drop_columns: bool,
     #[arg(long)]
     dev: bool,
+    #[arg(long)]
+    squash: bool,
     #[arg(long, default_value = "sqlite")]
     dialect: String,
     #[arg(long, default_value = "migrations")]
@@ -517,6 +684,11 @@ where
         .iter()
         .flat_map(|d| d.resources.iter().copied())
         .collect();
+    let applied_versions = if cli.squash {
+        Some(load_applied_versions_for_squash()?)
+    } else {
+        None
+    };
     let options = CodegenOptions {
         name: cli.name,
         dialect: Dialect::parse(&cli.dialect),
@@ -531,6 +703,8 @@ where
         },
         drop_columns: cli.drop_columns,
         dev: cli.dev,
+        squash_history: cli.squash,
+        applied_versions,
     };
     let mut parsed = Vec::new();
     for spec in &cli.renames {
@@ -547,6 +721,15 @@ where
     } else {
         run(&resources, &options, &mut ExplicitRenames(parsed))
     }
+}
+
+fn load_applied_versions_for_squash() -> Result<Vec<String>, CodegenError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(CodegenError::RuntimeAlreadyRunning);
+    }
+    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://ash.db".to_string());
+    let runtime = tokio::runtime::Runtime::new().map_err(CodegenError::Io)?;
+    runtime.block_on(applied_migration_versions(&url))
 }
 
 pub fn main(domains: &[&'static DomainDef]) -> ExitCode {

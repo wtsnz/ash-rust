@@ -2097,3 +2097,110 @@ async fn setup_then_reset_recreates_an_empty_migrated_database(db: TestDb) {
     );
 }
 on_every_backend!(setup_then_reset_recreates_an_empty_migrated_database);
+
+async fn squash_history_refuses_until_rollback_then_writes_one_migration(db: TestDb) {
+    let project = Project::for_db(&db);
+    let resources = fixtures::helpdesk();
+    project.generate("create_helpdesk", &resources);
+    db.migrate(&project.migrations()).await.unwrap();
+
+    let options = project.options(Mode::Write, Some("add_priority"));
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF),
+            &mut NonInteractive,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+
+    let files_before = project.migration_files();
+    assert!(
+        files_before.len() >= 4,
+        "need a multi-file history before squash, got {files_before:?}"
+    );
+
+    let mut squash = project.options(Mode::Write, Some("create_helpdesk"));
+    squash.squash_history = true;
+    squash.applied_versions = Some(db.applied_versions().await);
+    let refused = project
+        .run(&squash, &resources, &mut NonInteractive)
+        .unwrap_err();
+    assert!(
+        matches!(refused, CodegenError::RollbackBeforeSquash),
+        "{refused:?}"
+    );
+    assert_eq!(
+        project.migration_files(),
+        files_before,
+        "tracking rows must leave the migration files untouched"
+    );
+    assert!(
+        refused
+            .to_string()
+            .contains("roll back until `_ash_schema_migrations` has no rows")
+    );
+    assert!(!refused.to_string().contains("reset"));
+
+    let hand_written = project.migrations().join("notes.sql");
+    std::fs::write(&hand_written, "SELECT 1;\n").unwrap();
+    squash.applied_versions = Some(Vec::new());
+    let hand = project
+        .run(&squash, &resources, &mut NonInteractive)
+        .unwrap_err();
+    assert!(
+        matches!(hand, CodegenError::HandWrittenMigration { .. }),
+        "{hand:?}"
+    );
+    assert_eq!(
+        project.migration_files(),
+        {
+            let mut expected = files_before.clone();
+            expected.push("notes.sql".into());
+            expected.sort();
+            expected
+        },
+        "a hand-written file must leave prior migrations in place"
+    );
+    std::fs::remove_file(&hand_written).unwrap();
+
+    while db.rollback(&project.migrations()).await.unwrap().is_some() {}
+    assert!(
+        db.applied_versions().await.is_empty(),
+        "full rollback must clear `_ash_schema_migrations`"
+    );
+
+    squash.applied_versions = Some(db.applied_versions().await);
+    let written = match project
+        .run(&squash, &resources, &mut NonInteractive)
+        .unwrap()
+    {
+        CodegenOutcome::Written(migration) => migration,
+        other => panic!("expected squash write, got {other:?}"),
+    };
+
+    let dialect = db.dialect().name();
+    assert_eq!(
+        project.migration_files(),
+        vec![
+            format!("{}_create_helpdesk.{dialect}.down.sql", written.version),
+            format!("{}_create_helpdesk.{dialect}.up.sql", written.version),
+        ]
+    );
+
+    cargo_ash::run_setup(cargo_ash::MigrateArgs {
+        database_url: Some(db.url.clone()),
+        dir: project.migrations(),
+    })
+    .await
+    .unwrap();
+
+    let schema = db.schema().await;
+    assert_eq!(schema.table_names(), vec!["orgs", "tickets"]);
+    assert_eq!(
+        db.applied_versions().await,
+        vec![written.version.clone()],
+        "setup on the empty database must apply the squashed migration"
+    );
+}
+on_every_backend!(squash_history_refuses_until_rollback_then_writes_one_migration);

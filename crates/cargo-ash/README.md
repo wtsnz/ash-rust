@@ -35,6 +35,12 @@ That writes dialect-suffixed SQL under `migrations/` and snapshots under `resour
 
 `--dev` writes a temporary `{version}_dev.{dialect}.*.sql` pair and updates only `resource_snapshots/<dialect>/dev/`; it takes no migration name. Before a named codegen, roll back each applied `dev` migration newest-first while the down files still exist, then delete those `_dev` SQL files. Named `run` refuses while they remain; once they are gone it writes the squash against committed snapshots.
 
+`--squash` rewrites history as one migration from an empty schema. It refuses while `_ash_schema_migrations` still has rows. Roll back until that table is empty, then pass a migration name with `--squash`. Do not run `cargo ash reset` first. Reset migrates again and leaves tracking rows. Squash also refuses when a `.sql` file in `migrations/` is not a generated `{version}_{name}.{dialect}.up.sql` or `.down.sql` pair. When the gates pass, it writes the new pair, deletes the other generated files for that dialect, and clears `resource_snapshots/<dialect>/dev/`.
+
+```bash
+cargo run --bin ash-codegen -- create_schema --squash --dialect postgres
+```
+
 ## CLI Usage
 
 ```bash
