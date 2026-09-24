@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 
 use cargo_ash::{
-    run_dump, run_generate, run_migrate, run_rollback, run_status, run_ts, DumpArgs, GenerateArgs,
-    MigrateArgs, RollbackArgs, StatusArgs, TypeScriptArgs,
+    DumpArgs, GenerateArgs, MigrateArgs, RollbackArgs, StatusArgs, TypeScriptArgs, run_dump,
+    run_generate, run_migrate, run_reset, run_rollback, run_setup, run_status, run_ts,
 };
 
 #[derive(Parser, Debug)]
@@ -36,6 +36,10 @@ pub enum Commands {
     },
     /// Run pending migrations (shortcut for `migrations run`)
     Migrate(MigrateArgs),
+    /// Apply all pending migrations
+    Setup(MigrateArgs),
+    /// Roll back every applied migration, then run setup
+    Reset(MigrateArgs),
     /// Rollback migrations (shortcut for `migrations rollback`)
     Rollback(RollbackArgs),
     /// Generate a new migration (shortcut for `migrations generate`)
@@ -96,6 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             CodegenCommands::Ts(args) => run_ts(args)?,
         },
         Commands::Migrate(args) => run_migrate(args).await?,
+        Commands::Setup(args) => run_setup(args).await?,
+        Commands::Reset(args) => run_reset(args).await?,
         Commands::Rollback(args) => run_rollback(args).await?,
         Commands::Generate(args) => run_generate(args)?,
         Commands::Status(args) => run_status(args).await?,

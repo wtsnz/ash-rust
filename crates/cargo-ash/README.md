@@ -44,6 +44,12 @@ cargo ash migrations generate --name add_priority_to_tickets --dialect postgres
 # Run pending migrations
 cargo ash migrate --database-url postgres://postgres:postgres@localhost:5432/ash_dev
 
+# Apply all pending migrations
+cargo ash setup --database-url postgres://postgres:postgres@localhost:5432/ash_dev
+
+# Roll back every applied migration, then run setup
+cargo ash reset --database-url sqlite://ash.db
+
 # Check status of migrations
 cargo ash status --database-url sqlite://ash.db
 
