@@ -379,6 +379,7 @@ pub enum AttrType {
     Float,
     Date,
     Binary,
+    CiString,
 }
 
 impl AttrType {
@@ -396,6 +397,7 @@ impl AttrType {
             Self::Float => "float",
             Self::Date => "date",
             Self::Binary => "binary",
+            Self::CiString => "ci_string",
         }
     }
 }

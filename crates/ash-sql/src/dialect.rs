@@ -85,6 +85,7 @@ impl SqlDialect for SqliteDialect {
             AttrType::Binary => "BLOB".to_string(),
             AttrType::Uuid
             | AttrType::String
+            | AttrType::CiString
             | AttrType::Date
             | AttrType::UtcDatetime
             | AttrType::Atom { .. }
@@ -152,6 +153,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Decimal => format!("{placeholder}::numeric"),
             AttrType::Float => format!("{placeholder}::float8"),
             AttrType::Date => format!("{placeholder}::date"),
+            AttrType::CiString => format!("{placeholder}::citext"),
             AttrType::Binary => format!("decode({placeholder}, 'base64')"),
             _ => placeholder.to_string(),
         }
@@ -168,6 +170,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Float => "DOUBLE PRECISION".to_string(),
             AttrType::Date => "DATE".to_string(),
+            AttrType::CiString => "CITEXT".to_string(),
             AttrType::Binary => "BYTEA".to_string(),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }

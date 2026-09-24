@@ -501,6 +501,15 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 });
             }
         },
+        (AttrType::CiString, Value::String(got)) => match crate::CiString::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a string, got {got}"),
+                });
+            }
+        },
         (AttrType::Float, Value::String(got)) => match crate::Float::parse(got) {
             Ok(_) => true,
             Err(_) => {

@@ -250,6 +250,52 @@ impl AshType for Binary {
     }
 }
 
+/// Case-insensitive string. The Rust value keeps the original casing.
+///
+/// Postgres columns use `citext`, so comparisons there ignore case. That needs
+/// `CREATE EXTENSION citext`, which a `statements` block can install for
+/// Postgres only. SQLite has no citext type, so the column is `TEXT` and
+/// comparisons stay case-sensitive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CiString(String);
+
+impl CiString {
+    pub fn parse(raw: &str) -> Result<Self> {
+        Ok(Self(raw.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<CiString> for Value {
+    fn from(value: CiString) -> Self {
+        value.to_value()
+    }
+}
+
+impl crate::value::IntoOption<CiString> for CiString {
+    fn into_option(self) -> Option<CiString> {
+        Some(self)
+    }
+}
+
+impl AshType for CiString {
+    const ATTR_TYPE: AttrType = AttrType::CiString;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected ci_string".into())),
+        }
+    }
+}
+
 /// Calendar date stored as `YYYY-MM-DD`.
 ///
 /// Postgres columns use `date`. SQLite has no date type, so the column is `TEXT`.
@@ -521,6 +567,13 @@ mod tests {
         assert!(Date::parse("2024-04-31").is_err());
         assert!(Date::parse("2024-1-02").is_err());
         assert!(Date::parse("2024-01-02T00:00:00Z").is_err());
+    }
+
+    #[test]
+    fn ci_string_keeps_the_original_casing() {
+        let email = CiString::parse("Ada@Example.com").unwrap();
+        assert_eq!(email.as_str(), "Ada@Example.com");
+        assert_eq!(email.to_value(), Value::String("Ada@Example.com".into()));
     }
 
     #[test]
