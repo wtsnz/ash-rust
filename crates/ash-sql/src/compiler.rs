@@ -1,6 +1,6 @@
 use ash_core::{
-    AggregateDef, AggregateFilter, AggregateKind, CompiledQuery, Error, Expr, FieldMap,
-    Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
+    AggregateDef, AggregateFilter, AggregateKind, CompiledQuery, Error, Expr, FieldMap, Filter,
+    IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
 use uuid::Uuid;
 
@@ -296,7 +296,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let inner = self.compile_filter_scoped(resource, part, scope_alias)?;
                 Ok(format!("NOT ({inner})"))
             }
-            Filter::Related { relationship, filter } => {
+            Filter::Related {
+                relationship,
+                filter,
+            } => {
                 let rel = resource.relationship(relationship).ok_or_else(|| {
                     Error::Invalid(format!(
                         "unknown relationship `{relationship}` on {}",
@@ -324,27 +327,31 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         })?;
                         let through_res = through_fn();
                         self.param_counter += 1;
-                        let join_alias = format!("rel_join_{}_{}", through_res.table_name(), self.param_counter);
+                        let join_alias = format!(
+                            "rel_join_{}_{}",
+                            through_res.table_name(),
+                            self.param_counter
+                        );
                         let through_table = ident(self.dialect, through_res.table_name())?;
                         let source_on_join = column(
                             self.dialect,
                             through_res,
-                            rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute),
+                            rel.source_attribute_on_join_resource
+                                .unwrap_or(rel.source_attribute),
                         )?;
                         let dest_on_join = column(
                             self.dialect,
                             through_res,
-                            rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute),
+                            rel.destination_attribute_on_join_resource
+                                .unwrap_or(rel.destination_attribute),
                         )?;
                         Ok(format!(
                             "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} INNER JOIN {through_table} AS {join_alias} ON {dest_alias}.{dest_col} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {outer_scope}.{outer_col} AND {inner_sql})"
                         ))
                     }
-                    RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
-                        Ok(format!(
-                            "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_col} = {outer_scope}.{outer_col} AND {inner_sql})"
-                        ))
-                    }
+                    RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => Ok(format!(
+                        "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_col} = {outer_scope}.{outer_col} AND {inner_sql})"
+                    )),
                 }
             }
         }
@@ -375,9 +382,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         agg: &AggregateDef,
     ) -> Result<String> {
-        let rel = resource
-            .relationship(agg.relationship)
-            .ok_or_else(|| Error::Invalid(format!("unknown relationship `{}`", agg.relationship)))?;
+        let rel = resource.relationship(agg.relationship).ok_or_else(|| {
+            Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
+        })?;
         let dest = (rel.destination)();
         let dest_table = ident(self.dialect, dest.table_name())?;
         let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
@@ -503,10 +510,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         sorts: &[Sort],
     ) -> Result<String> {
         if sorts.is_empty() {
-            let pk = resource
-                .primary_key()
-                .map(|p| p.name)
-                .unwrap_or("id");
+            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             let pk_col = column(self.dialect, resource, pk)?;
             let p = self.push_param(Value::Uuid(cursor.id));
             return Ok(format!("{pk_col} > {p}"));
@@ -536,10 +540,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         // Add deterministic tie-breaker on primary key if not explicitly in sort fields
-        let pk = resource
-            .primary_key()
-            .map(|p| p.name)
-            .unwrap_or("id");
+        let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
         if !sorts.iter().any(|s| s.field == pk) {
             let mut prefix_match = Vec::new();
             for prev in sorts {
@@ -559,10 +560,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         if conds.is_empty() {
-            let pk = resource
-                .primary_key()
-                .map(|p| p.name)
-                .unwrap_or("id");
+            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             let pk_col = column(self.dialect, resource, pk)?;
             let p = self.push_param(Value::Uuid(cursor.id));
             Ok(format!("{pk_col} > {p}"))
@@ -603,7 +601,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         for calc_name in &query.calculations {
             let calc = resource.calculation(calc_name).ok_or_else(|| {
-                Error::Invalid(format!("unknown calculation `{calc_name}` on {}", resource.name))
+                Error::Invalid(format!(
+                    "unknown calculation `{calc_name}` on {}",
+                    resource.name
+                ))
             })?;
             self.current_calc_args = query.calculation_args.get(calc_name).cloned();
             let expr_sql = self.compile_expr(resource, &calc.expr)?;
@@ -614,7 +615,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         for agg_name in &query.aggregates {
             let agg = resource.aggregate(agg_name).ok_or_else(|| {
-                Error::Invalid(format!("unknown aggregate `{agg_name}` on {}", resource.name))
+                Error::Invalid(format!(
+                    "unknown aggregate `{agg_name}` on {}",
+                    resource.name
+                ))
             })?;
             let agg_sql = self.compile_aggregate(resource, agg)?;
             let alias = ident(self.dialect, agg.name)?;
@@ -642,10 +646,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         let mut all_sorts = query.sort.clone();
         if cursor.is_some() {
-            let pk = resource
-                .primary_key()
-                .map(|p| p.name)
-                .unwrap_or("id");
+            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             if !all_sorts.iter().any(|s| s.field == pk) {
                 all_sorts.push(Sort {
                     field: pk.to_string(),
@@ -819,7 +820,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk_col = ident(self.dialect, pk.name)?;
 
         if ids.is_empty() {
-            return Ok(CompiledSql::new(format!("DELETE FROM {table} WHERE 0=1"), Vec::new()));
+            return Ok(CompiledSql::new(
+                format!("DELETE FROM {table} WHERE 0=1"),
+                Vec::new(),
+            ));
         }
 
         let vals: Vec<Value> = ids.iter().map(|id| Value::Uuid(*id)).collect();
@@ -840,11 +844,15 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let mut compiled = self.compile_insert(resource, fields)?;
         let has_returning = compiled.sql.ends_with(" RETURNING *");
         if has_returning {
-            compiled.sql.truncate(compiled.sql.len() - " RETURNING *".len());
+            compiled
+                .sql
+                .truncate(compiled.sql.len() - " RETURNING *".len());
         }
 
         compiled.sql.push(' ');
-        compiled.sql.push_str(&self.dialect.upsert_clause(identity, update_fields));
+        compiled
+            .sql
+            .push_str(&self.dialect.upsert_clause(identity, update_fields));
 
         if self.dialect.supports_returning() {
             compiled.sql.push_str(" RETURNING *");
@@ -854,37 +862,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     pub fn compile_create_table(&self, resource: &ResourceDef) -> Result<String> {
-        let table = ident(self.dialect, resource.table_name())?;
-        let mut cols = Vec::new();
-
-        for attr in resource.attributes {
-            let name = ident(self.dialect, attr.name)?;
-            let ty = self.dialect.column_type(attr);
-            let mut col = format!("{name} {ty}");
-            if attr.primary_key {
-                col.push_str(" PRIMARY KEY");
-            }
-            if !attr.allow_nil && !attr.primary_key {
-                col.push_str(" NOT NULL");
-            }
-            cols.push(col);
-        }
-
-        for identity in resource.identities {
-            let mut key_cols = Vec::new();
-            for key in identity.keys {
-                key_cols.push(ident(self.dialect, key)?);
-            }
-            cols.push(format!("UNIQUE ({})", key_cols.join(", ")));
-        }
-
-        let if_not_exists = if self.dialect.create_table_if_not_exists() {
-            "IF NOT EXISTS "
-        } else {
-            ""
-        };
-
-        Ok(format!("CREATE TABLE {if_not_exists}{table} ({})", cols.join(", ")))
+        Ok(crate::generator::emit_create_table(
+            self.dialect,
+            &crate::snapshot::TableSnapshot::from_resource(resource, self.dialect),
+        ))
     }
 
     pub fn compile_create_indexes(&self, resource: &ResourceDef) -> Result<Vec<String>> {

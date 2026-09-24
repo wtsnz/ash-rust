@@ -14,11 +14,9 @@ use ash_core::{
     CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
-use ash_sql::{
-    CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam,
-};
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow};
+use ash_sql::{CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam};
 use sqlx::Row;
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -195,13 +193,17 @@ impl Postgres {
             PostgresSource::Pool(pool) => sqlx::query(sql).execute(pool).await.map_err(map_sqlx),
             PostgresSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
-                sqlx::query(sql).execute(&mut **guard).await.map_err(map_sqlx)
+                sqlx::query(sql)
+                    .execute(&mut **guard)
+                    .await
+                    .map_err(map_sqlx)
             }
         }
     }
 
     /// Installs table and index DDL for the given Ash resources.
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
+        let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
         for res in resources {
@@ -312,7 +314,8 @@ impl DataLayer for Postgres {
                         resource.table_name(),
                         pk.name
                     );
-                    let check_compiled = CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
+                    let check_compiled =
+                        CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
                     let rows = self.fetch_all(&check_compiled).await?;
                     if rows.is_empty() {
                         Err(Error::NotFound)
@@ -347,7 +350,10 @@ impl DataLayer for Postgres {
     ) -> Result<Vec<FieldMap>> {
         // Schema multitenancy: if tenant is specified, apply search_path
         if let Some(tenant) = &query.tenant {
-            let set_search_path = format!("SET LOCAL search_path TO \"{}\", \"public\"", tenant.replace('"', "\"\""));
+            let set_search_path = format!(
+                "SET LOCAL search_path TO \"{}\", \"public\"",
+                tenant.replace('"', "\"\"")
+            );
             let _ = self.execute_raw(&set_search_path).await;
         }
 
@@ -479,7 +485,6 @@ impl TransactionSupport for Postgres {
 pub async fn migrate(pool: &PgPool, migrations_dir: impl AsRef<Path>) -> Result<Vec<String>> {
     let migrator = Migrator::new(PostgresDialect, migrations_dir);
     let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
-    executor.init().await?;
     migrator.run(&executor).await
 }
 
@@ -514,6 +519,29 @@ impl MigrationExecutor for PgMigrationExecutor {
         Ok(())
     }
 
+    async fn ensure_tracking_table(&self) -> Result<()> {
+        self.init().await
+    }
+
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        sqlx::raw_sql(sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        sqlx::query(
+            "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)",
+        )
+        .bind(version)
+        .bind(name)
+        .bind(ash_core::utc_now_iso8601())
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+        tx.commit().await.map_err(map_sqlx)?;
+        Ok(())
+    }
+
     async fn applied_versions(&self) -> Result<Vec<String>> {
         let rows = sqlx::query("SELECT version FROM _ash_schema_migrations ORDER BY version ASC")
             .fetch_all(&self.pool)
@@ -528,13 +556,15 @@ impl MigrationExecutor for PgMigrationExecutor {
     }
 
     async fn record_migration(&self, version: &str, name: &str) -> Result<()> {
-        sqlx::query("INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)")
-            .bind(version)
-            .bind(name)
-            .bind(ash_core::utc_now_iso8601())
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
+        sqlx::query(
+            "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)",
+        )
+        .bind(version)
+        .bind(name)
+        .bind(ash_core::utc_now_iso8601())
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
         Ok(())
     }
 
@@ -557,51 +587,51 @@ fn bind_compiled<'q>(
             && let Value::Array(items) = &p.value
         {
             // If the array is empty or contains UUIDs, integers, strings, etc.
-                if items.iter().all(|v| matches!(v, Value::Uuid(_))) {
-                    let uuids: Vec<Uuid> = items
-                        .iter()
-                        .filter_map(|v| match v {
-                            Value::Uuid(u) => Some(*u),
-                            _ => None,
-                        })
-                        .collect();
-                    query = query.bind(uuids);
-                    continue;
-                } else if items.iter().all(|v| matches!(v, Value::Int(_))) {
-                    let ints: Vec<i64> = items
-                        .iter()
-                        .filter_map(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        })
-                        .collect();
-                    query = query.bind(ints);
-                    continue;
-                } else if items.iter().all(|v| matches!(v, Value::String(_))) {
-                    let strings: Vec<String> = items
-                        .iter()
-                        .filter_map(|v| match v {
-                            Value::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    query = query.bind(strings);
-                    continue;
-                } else {
-                    // Fallback to string array
-                    let strings: Vec<String> = items
-                        .iter()
-                        .map(|v| match v {
-                            Value::String(s) => s.clone(),
-                            Value::Uuid(u) => u.to_string(),
-                            Value::Int(i) => i.to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            _ => v.to_string(),
-                        })
-                        .collect();
-                    query = query.bind(strings);
-                    continue;
-                }
+            if items.iter().all(|v| matches!(v, Value::Uuid(_))) {
+                let uuids: Vec<Uuid> = items
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::Uuid(u) => Some(*u),
+                        _ => None,
+                    })
+                    .collect();
+                query = query.bind(uuids);
+                continue;
+            } else if items.iter().all(|v| matches!(v, Value::Int(_))) {
+                let ints: Vec<i64> = items
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::Int(i) => Some(*i),
+                        _ => None,
+                    })
+                    .collect();
+                query = query.bind(ints);
+                continue;
+            } else if items.iter().all(|v| matches!(v, Value::String(_))) {
+                let strings: Vec<String> = items
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                query = query.bind(strings);
+                continue;
+            } else {
+                // Fallback to string array
+                let strings: Vec<String> = items
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        Value::Uuid(u) => u.to_string(),
+                        Value::Int(i) => i.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => v.to_string(),
+                    })
+                    .collect();
+                query = query.bind(strings);
+                continue;
+            }
         }
         match &p.value {
             Value::Null => {
@@ -765,47 +795,47 @@ fn map_sqlx_resource(err: sqlx::Error, resource: &ResourceDef) -> Error {
     {
         match code.as_ref() {
             "23505" => {
-                    let constraint = db_err.constraint().unwrap_or_default();
-                    for id in resource.identities {
-                        let expected_idx = format!("idx_{}_{}", resource.table_name(), id.name);
-                        if constraint == expected_idx || constraint.contains(id.name) {
-                            return Error::IdentityConflict {
-                                identity: id.name,
-                                fields: id.keys.iter().map(|s| s.to_string()).collect(),
-                                message: id
-                                    .message
-                                    .unwrap_or("Unique constraint violation")
-                                    .to_string(),
-                            };
-                        }
+                let constraint = db_err.constraint().unwrap_or_default();
+                for id in resource.identities {
+                    let expected_idx = format!("idx_{}_{}", resource.table_name(), id.name);
+                    if constraint == expected_idx || constraint.contains(id.name) {
+                        return Error::IdentityConflict {
+                            identity: id.name,
+                            fields: id.keys.iter().map(|s| s.to_string()).collect(),
+                            message: id
+                                .message
+                                .unwrap_or("Unique constraint violation")
+                                .to_string(),
+                        };
                     }
-                    let id_name = resource
-                        .identities
-                        .first()
-                        .map(|i| i.name)
-                        .unwrap_or("unique_constraint");
-                    return Error::IdentityConflict {
-                        identity: id_name,
-                        fields: Vec::new(),
-                        message: "unique constraint violation".to_string(),
-                    };
                 }
-                "23503" => {
-                    return Error::Invalid(
-                        "foreign key violation: referenced record does not exist".to_string(),
-                    );
-                }
-                "23514" => {
-                    return Error::Validation {
-                        field: "validation".to_string(),
-                        message: db_err.message().to_string(),
-                    };
-                }
-                "40P01" => {
-                    return Error::DataLayer("deadlock detected".to_string());
-                }
-                _ => {}
+                let id_name = resource
+                    .identities
+                    .first()
+                    .map(|i| i.name)
+                    .unwrap_or("unique_constraint");
+                return Error::IdentityConflict {
+                    identity: id_name,
+                    fields: Vec::new(),
+                    message: "unique constraint violation".to_string(),
+                };
             }
+            "23503" => {
+                return Error::Invalid(
+                    "foreign key violation: referenced record does not exist".to_string(),
+                );
+            }
+            "23514" => {
+                return Error::Validation {
+                    field: "validation".to_string(),
+                    message: db_err.message().to_string(),
+                };
+            }
+            "40P01" => {
+                return Error::DataLayer("deadlock detected".to_string());
+            }
+            _ => {}
         }
+    }
     Error::DataLayer(err.to_string())
 }

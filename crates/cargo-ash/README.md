@@ -15,6 +15,26 @@
 cargo install --path crates/cargo-ash
 ```
 
+## Resource codegen
+
+`cargo ash` cannot see your `resource!` definitions. Call `cargo_ash::codegen::main` from a binary in the crate that owns the domain:
+
+```rust
+fn main() -> std::process::ExitCode {
+    cargo_ash::codegen::main(&[&Helpdesk::DEF])
+}
+```
+
+```bash
+cargo run --bin ash-codegen -- create_helpdesk --dialect postgres
+cargo run --bin ash-codegen -- --check
+cargo run --bin ash-codegen -- rename_subject --rename tickets.subject=title
+```
+
+That writes dialect-suffixed SQL under `migrations/` and snapshots under `resource_snapshots/<dialect>/`. Removed columns stay in the database unless you pass `--drop-columns`. `--check` exits 1 when the resources do not match the snapshots.
+
+`--dev` writes a temporary `{version}_dev.{dialect}.*.sql` pair and updates only `resource_snapshots/<dialect>/dev/`; it takes no migration name. Before a named codegen, roll back each applied `dev` migration newest-first while the down files still exist, then delete those `_dev` SQL files. Named `run` refuses while they remain; once they are gone it writes the squash against committed snapshots.
+
 ## CLI Usage
 
 ```bash
