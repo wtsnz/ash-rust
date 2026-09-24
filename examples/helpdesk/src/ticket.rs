@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::representative::Representative;
-use ash_core::{Actor, AshEnum, Date, Float, resource};
+use ash_core::{Actor, AshEnum, Binary, Date, Float, resource};
 use uuid::Uuid;
 
 #[derive(AshEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +33,7 @@ resource! {
             representative_id: Option<Uuid>;
             estimate: Option<Float>;
             due_on: Option<Date>;
+            attachment: Option<Binary>;
         }
 
         relationships {
@@ -45,7 +46,7 @@ resource! {
 
         actions {
             create open {
-                accept [subject, estimate, due_on];
+                accept [subject, estimate, due_on, attachment];
                 validate present(subject);
                 validate string_length(subject, min: 2);
                 change set(status = Status::Open);

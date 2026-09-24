@@ -208,6 +208,12 @@ fn bind_compiled<'q>(
             Value::Uuid(u) => {
                 query = query.bind(u.to_string());
             }
+            Value::String(s) if p.binary => {
+                let bytes = ash_core::Binary::parse(s)
+                    .map(ash_core::Binary::into_bytes)
+                    .unwrap_or_default();
+                query = query.bind(bytes);
+            }
             Value::String(s) => {
                 query = query.bind(s.as_str());
             }

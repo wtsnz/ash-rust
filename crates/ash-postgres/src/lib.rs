@@ -812,6 +812,13 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
+        ash_core::AttrType::Binary => {
+            if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(col_name) {
+                Value::String(ash_core::Binary::from_bytes(bytes).encode())
+            } else {
+                Value::Null
+            }
+        }
         ash_core::AttrType::Date => {
             if let Ok(Some(date)) = row.try_get::<Option<chrono::NaiveDate>, _>(col_name) {
                 Value::String(date.format("%Y-%m-%d").to_string())

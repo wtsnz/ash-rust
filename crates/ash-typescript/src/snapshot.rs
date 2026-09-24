@@ -38,6 +38,8 @@ pub fn sql_type_to_ts_and_zod(sql_type: &str, nullable: bool) -> (&'static str, 
         ("number", "FloatFilter", "z.number()")
     } else if upper.contains("NUMERIC") || upper.contains("DECIMAL") {
         ("number", "IntFilter", "z.number()")
+    } else if upper.contains("BYTEA") || upper.contains("BLOB") {
+        ("string", "StringFilter", "z.string()")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", "JsonFilter", "z.record(z.string(), z.unknown())")
     } else {

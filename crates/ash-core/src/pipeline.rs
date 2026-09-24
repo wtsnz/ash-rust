@@ -483,6 +483,15 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 });
             }
         },
+        (AttrType::Binary, Value::String(got)) => match crate::Binary::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be base64, got {got}"),
+                });
+            }
+        },
         (AttrType::Date, Value::String(got)) => match crate::Date::parse(got) {
             Ok(_) => true,
             Err(_) => {

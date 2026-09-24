@@ -178,6 +178,12 @@ pub fn attribute_sql_default<D: SqlDialect>(
     if first != second {
         return None;
     }
+    if attr.ty == ash_core::AttrType::Binary {
+        let Value::String(encoded) = &first else {
+            return None;
+        };
+        return Some(dialect.binary_literal(encoded));
+    }
     sql_literal(dialect, &first)
 }
 

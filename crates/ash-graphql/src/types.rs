@@ -17,7 +17,11 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn(TypeRef::ID)
             }
         }
-        AttrType::String | AttrType::Date | AttrType::UtcDatetime | AttrType::Decimal => {
+        AttrType::String
+        | AttrType::Date
+        | AttrType::Binary
+        | AttrType::UtcDatetime
+        | AttrType::Decimal => {
             if allow_nil {
                 TypeRef::named(TypeRef::STRING)
             } else {
@@ -177,6 +181,12 @@ pub fn parse_input_val(
             ash_core::UtcDateTime::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::Binary => {
+            let s = acc.string()?;
+            let binary =
+                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(binary.encode()))
         }
         AttrType::Date => {
             let s = acc.string()?;

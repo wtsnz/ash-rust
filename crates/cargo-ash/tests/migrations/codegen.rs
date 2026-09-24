@@ -2333,3 +2333,74 @@ async fn codegen_creates_a_date_column(db: TestDb) {
     assert!(db.schema().await.tables.is_empty());
 }
 on_every_backend!(codegen_creates_a_date_column);
+
+async fn codegen_creates_a_binary_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_file_blobs", &[&fixtures::file_blob::FileBlob::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_file_blobs.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains("BYTEA"));
+        assert!(up.contains("decode('aGVsbG8=', 'base64')"));
+    } else {
+        assert!(up.contains("\"payload\" BLOB"));
+        assert!(up.contains("X'68656C6C6F'"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("file_blobs", "payload").ty,
+        db.binary_type()
+    );
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000b1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert(
+        "payload".into(),
+        Value::String(ash_core::Binary::from_bytes(b"world".to_vec()).encode()),
+    );
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::file_blob::FileBlob::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::file_blob::FileBlob::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::file_blob::FileBlob::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::file_blob::FileBlob::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("payload"),
+        Some(&Value::String(
+            ash_core::Binary::from_bytes(b"world".to_vec()).encode()
+        ))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_binary_column);
