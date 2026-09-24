@@ -9,10 +9,7 @@ pub fn register_primitive_filter_inputs(mut builder: SchemaBuilder) -> SchemaBui
     let str_filter = InputObject::new("StringFilterInput")
         .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
         .field(InputValue::new("ne", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new(
-            "in",
-            TypeRef::named_list(TypeRef::STRING),
-        ))
+        .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
         .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
     builder = builder.register(str_filter);
 
@@ -27,6 +24,16 @@ pub fn register_primitive_filter_inputs(mut builder: SchemaBuilder) -> SchemaBui
         .field(InputValue::new("in", TypeRef::named_list(TypeRef::INT)))
         .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
     builder = builder.register(int_filter);
+
+    let float_filter = InputObject::new("FloatFilterInput")
+        .field(InputValue::new("eq", TypeRef::named(TypeRef::FLOAT)))
+        .field(InputValue::new("ne", TypeRef::named(TypeRef::FLOAT)))
+        .field(InputValue::new("gt", TypeRef::named(TypeRef::FLOAT)))
+        .field(InputValue::new("gte", TypeRef::named(TypeRef::FLOAT)))
+        .field(InputValue::new("lt", TypeRef::named(TypeRef::FLOAT)))
+        .field(InputValue::new("lte", TypeRef::named(TypeRef::FLOAT)))
+        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
+    builder = builder.register(float_filter);
 
     // BooleanFilterInput
     let bool_filter = InputObject::new("BooleanFilterInput")
@@ -67,9 +74,15 @@ pub fn register_resource_filter_inputs(
     for attr in resource.attributes {
         let field_filter_type = match attr.ty {
             AttrType::Uuid => "UuidFilterInput".to_string(),
-            AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
+            AttrType::String
+            | AttrType::CiString
+            | AttrType::Date
+            | AttrType::Binary
+            | AttrType::UtcDatetime
+            | AttrType::Decimal => {
                 "StringFilterInput".to_string()
             }
+            AttrType::Float => "FloatFilterInput".to_string(),
             AttrType::Integer => "IntFilterInput".to_string(),
             AttrType::Boolean => "BooleanFilterInput".to_string(),
             AttrType::Atom { .. } => {
@@ -86,7 +99,10 @@ pub fn register_resource_filter_inputs(
             _ => continue,
         };
 
-        res_filter = res_filter.field(InputValue::new(attr.name, TypeRef::named(field_filter_type)));
+        res_filter = res_filter.field(InputValue::new(
+            attr.name,
+            TypeRef::named(field_filter_type),
+        ));
     }
 
     // Relationships (nested filters)
@@ -98,14 +114,8 @@ pub fn register_resource_filter_inputs(
 
     // Boolean combinators
     res_filter = res_filter
-        .field(InputValue::new(
-            "and",
-            TypeRef::named_list(&filter_name),
-        ))
-        .field(InputValue::new(
-            "or",
-            TypeRef::named_list(&filter_name),
-        ))
+        .field(InputValue::new("and", TypeRef::named_list(&filter_name)))
+        .field(InputValue::new("or", TypeRef::named_list(&filter_name)))
         .field(InputValue::new("not", TypeRef::named(&filter_name)));
 
     builder.register(res_filter)
@@ -256,11 +266,34 @@ fn parse_scalar_value(
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
+        AttrType::Binary => {
+            let s = acc.string()?;
+            let binary =
+                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(binary.encode()))
+        }
+        AttrType::Date => {
+            let s = acc.string()?;
+            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
+        AttrType::CiString => {
+            let s = acc.string()?;
+            let value = ash_core::CiString::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(value.as_str().to_string()))
+        }
         AttrType::Decimal => {
             let s = acc.string()?;
             ash_core::Decimal::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
+        }
+        AttrType::Float => {
+            let n = acc.f64()?;
+            let float = ash_core::Float::parse(&n.to_string())
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(float.as_str().to_string()))
         }
         AttrType::Integer => {
             let n = acc.i64()?;

@@ -5,6 +5,8 @@ use ash_core::Value;
 pub struct SqlParam {
     pub value: Value,
     pub is_list: bool,
+    /// The value is base64 and the driver should bind decoded bytes.
+    pub binary: bool,
 }
 
 impl SqlParam {
@@ -12,6 +14,15 @@ impl SqlParam {
         Self {
             value,
             is_list: false,
+            binary: false,
+        }
+    }
+
+    pub fn binary(value: Value) -> Self {
+        Self {
+            value,
+            is_list: false,
+            binary: true,
         }
     }
 
@@ -19,6 +30,7 @@ impl SqlParam {
         Self {
             value: Value::Array(values),
             is_list: true,
+            binary: false,
         }
     }
 }

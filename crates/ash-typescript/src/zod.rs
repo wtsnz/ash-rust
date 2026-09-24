@@ -1,13 +1,19 @@
 //! Zod validation schema generator for Ash resources and action inputs.
 
-use ash_core::{ActionDef, ActionKind, AttrType, ResourceDef, Validation};
 use crate::types::to_pascal_case;
+use ash_core::{ActionDef, ActionKind, AttrType, ResourceDef, Validation};
 
 /// Generate Zod schema for a single attribute.
 pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
     let base = match attr_ty {
         AttrType::Uuid => "z.string().uuid()".to_string(),
-        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "z.string()".to_string(),
+        AttrType::String
+        | AttrType::CiString
+        | AttrType::Date
+        | AttrType::Binary
+        | AttrType::UtcDatetime
+        | AttrType::Decimal => "z.string()".to_string(),
+        AttrType::Float => "z.number()".to_string(),
         AttrType::Integer => "z.number().int()".to_string(),
         AttrType::Boolean => "z.boolean()".to_string(),
         AttrType::Atom { one_of } => {
@@ -56,21 +62,25 @@ pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Opti
         // Collect accepted fields
         for attr_name in action.accept {
             if let Some(attr) = res.attribute(attr_name) {
-                let field_schema = build_field_zod_schema(res, action, attr_name, &attr.ty, attr.allow_nil);
+                let field_schema =
+                    build_field_zod_schema(res, action, attr_name, &attr.ty, attr.allow_nil);
                 out.push_str(&format!("  {attr_name}: {field_schema},\n"));
             }
         }
 
         // Collect action arguments
         for arg in action.arguments {
-            let field_schema = build_field_zod_schema(res, action, arg.name, &arg.ty, arg.allow_nil);
+            let field_schema =
+                build_field_zod_schema(res, action, arg.name, &arg.ty, arg.allow_nil);
             out.push_str(&format!("  {}: {},\n", arg.name, field_schema));
         }
     }
 
     out.push_str("});\n\n");
     if schema_name != alias_schema_name {
-        out.push_str(&format!("export const {alias_schema_name} = {schema_name};\n\n"));
+        out.push_str(&format!(
+            "export const {alias_schema_name} = {schema_name};\n\n"
+        ));
     }
     Some(out)
 }
@@ -117,7 +127,15 @@ fn build_field_zod_schema(
     } else {
         match ty {
             AttrType::Uuid => "z.string().uuid()".to_string(),
-            AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "z.string()".to_string(),
+            AttrType::String
+            | AttrType::CiString
+            | AttrType::Date
+            | AttrType::Binary
+            | AttrType::UtcDatetime
+            | AttrType::Decimal => {
+                "z.string()".to_string()
+            }
+            AttrType::Float => "z.number()".to_string(),
             AttrType::Integer => "z.number().int()".to_string(),
             AttrType::Boolean => "z.boolean()".to_string(),
             AttrType::Atom { one_of } => {

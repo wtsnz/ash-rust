@@ -18,6 +18,19 @@ pub trait SqlDialect: Send + Sync + 'static {
         placeholder.to_string()
     }
 
+    /// SQL literal for a standard-base64 binary value.
+    fn binary_literal(&self, encoded: &str) -> String {
+        let Ok(binary) = ash_core::Binary::parse(encoded) else {
+            return "NULL".to_string();
+        };
+        let hex: String = binary
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
+        format!("X'{hex}'")
+    }
+
     /// Map Ash [`AttributeDef`] to a native SQL column type string.
     fn column_type(&self, attr: &AttributeDef) -> String;
 
@@ -68,8 +81,12 @@ impl SqlDialect for SqliteDialect {
         match attr.ty {
             AttrType::Integer | AttrType::Boolean => "INTEGER".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
+            AttrType::Float => "REAL".to_string(),
+            AttrType::Binary => "BLOB".to_string(),
             AttrType::Uuid
             | AttrType::String
+            | AttrType::CiString
+            | AttrType::Date
             | AttrType::UtcDatetime
             | AttrType::Atom { .. }
             | AttrType::Map
@@ -134,6 +151,10 @@ impl SqlDialect for PostgresDialect {
         match ty {
             AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
             AttrType::Decimal => format!("{placeholder}::numeric"),
+            AttrType::Float => format!("{placeholder}::float8"),
+            AttrType::Date => format!("{placeholder}::date"),
+            AttrType::CiString => format!("{placeholder}::citext"),
+            AttrType::Binary => format!("decode({placeholder}, 'base64')"),
             _ => placeholder.to_string(),
         }
     }
@@ -147,6 +168,10 @@ impl SqlDialect for PostgresDialect {
             AttrType::Boolean => "BOOLEAN".to_string(),
             AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
+            AttrType::Float => "DOUBLE PRECISION".to_string(),
+            AttrType::Date => "DATE".to_string(),
+            AttrType::CiString => "CITEXT".to_string(),
+            AttrType::Binary => "BYTEA".to_string(),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }
     }
@@ -188,5 +213,9 @@ impl SqlDialect for PostgresDialect {
 
     fn render_in_list(&self, op: &str, param: &str) -> String {
         format!("{op} = ANY({param})")
+    }
+
+    fn binary_literal(&self, encoded: &str) -> String {
+        format!("decode('{}', 'base64')", encoded.replace('\'', "''"))
     }
 }

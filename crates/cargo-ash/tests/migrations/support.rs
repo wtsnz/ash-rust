@@ -123,6 +123,27 @@ impl TestDb {
         }
     }
 
+    pub fn binary_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "BLOB",
+            Db::Postgres(_) => "bytea",
+        }
+    }
+
+    pub fn date_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "TEXT",
+            Db::Postgres(_) => "date",
+        }
+    }
+
+    pub fn float_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "REAL",
+            Db::Postgres(_) => "double precision",
+        }
+    }
+
     pub fn decimal_type(&self) -> &'static str {
         match self.db {
             Db::Sqlite(_) => "NUMERIC",
@@ -358,7 +379,8 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
 
     let columns = sqlx::query(
         "SELECT c.table_name::text AS table_name, c.column_name::text AS column_name,
-                c.data_type::text AS data_type, c.is_nullable::text AS is_nullable,
+                CASE WHEN c.data_type = 'USER-DEFINED' THEN c.udt_name::text ELSE c.data_type::text END AS data_type,
+                c.is_nullable::text AS is_nullable,
                 c.column_default::text AS column_default,
                 EXISTS (
                     SELECT 1 FROM information_schema.table_constraints tc

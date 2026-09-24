@@ -531,6 +531,138 @@ pub mod bounded_notes {
     }
 }
 
+pub mod file_blob {
+    use ash_core::{Binary, resource};
+    use uuid::Uuid;
+
+    resource! {
+        FileBlob {
+            table "file_blobs";
+            attributes {
+                id: Uuid [pk];
+                payload: Binary = "aGVsbG8=";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod deadline {
+    use ash_core::{Date, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Deadline {
+            table "deadlines";
+            attributes {
+                id: Uuid [pk];
+                due_on: Date = "2024-02-29";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod gauge {
+    use ash_core::{Float, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Gauge {
+            table "gauges";
+            attributes {
+                id: Uuid [pk];
+                weight: Float = "1.50";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod contact {
+    use ash_core::{CiString, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Contact {
+            table "contacts";
+            attributes {
+                id: Uuid [pk];
+                email: CiString = "Ada@Example.com";
+            }
+            statements {
+                statement citext only postgres {
+                    up "CREATE EXTENSION IF NOT EXISTS citext";
+                    down "DROP EXTENSION IF EXISTS citext";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod marker {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Marker {
+            table "markers";
+            attributes {
+                id: Uuid [pk];
+            }
+            statements {
+                statement sidecar {
+                    up "CREATE TABLE marker_sidecar (id TEXT PRIMARY KEY)";
+                    down "DROP TABLE IF EXISTS marker_sidecar";
+                }
+                statement citext only postgres {
+                    up "CREATE EXTENSION IF NOT EXISTS citext";
+                    down "DROP EXTENSION IF EXISTS citext";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod duplicate_statement_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        DuplicateStatementNote {
+            table "duplicate_statement_notes";
+            attributes {
+                id: Uuid [pk];
+            }
+            statements {
+                statement prepare {
+                    up "SELECT 1";
+                    down "SELECT 1";
+                }
+                statement prepare {
+                    up "SELECT 2";
+                    down "SELECT 2";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod duplicate_check_notes {
     use ash_core::resource;
     use uuid::Uuid;

@@ -1,4 +1,4 @@
-use ash_core::{AshEnum, resource};
+use ash_core::{AshEnum, Binary, CiString, Date, Float, resource};
 use uuid::Uuid;
 
 use crate::representative::Representative;
@@ -25,7 +25,18 @@ resource! {
             description: Option<String>;
             status: TicketStatus [enum];
             priority: i64;
+            estimate: Option<Float>;
+            due_on: Option<Date>;
+            attachment: Option<Binary>;
+            requester_email: Option<CiString>;
             author_id: Option<Uuid>;
+        }
+
+        statements {
+            statement citext only postgres {
+                up "CREATE EXTENSION IF NOT EXISTS citext";
+                down "DROP EXTENSION IF EXISTS citext";
+            }
         }
 
         relationships {
@@ -35,7 +46,7 @@ resource! {
         actions {
             create open {
                 primary;
-                accept [title, description, status, priority, author_id];
+                accept [title, description, status, priority, author_id, estimate, due_on, attachment, requester_email];
                 validate present(title);
                 validate string_length(title, min: 5, max: 100);
                 validate numericality(priority, min: 1, max: 5);

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::snapshot::{
     CheckSnapshot, ColumnSnapshot, IdentitySnapshot, IndexSnapshot, ReferenceSnapshot,
-    TableSnapshot,
+    StatementSnapshot, TableSnapshot,
 };
 
 /// Represents a single structural DDL change operation between two database states.
@@ -59,6 +59,16 @@ pub enum SchemaOperation {
         table: String,
         check: CheckSnapshot,
     },
+    RunStatement {
+        table: String,
+        statement: StatementSnapshot,
+    },
+    DropStatement {
+        table: String,
+        name: String,
+        up: String,
+        down: String,
+    },
     DropCheck {
         table: String,
         name: String,
@@ -89,11 +99,38 @@ pub fn diff_snapshots_with_renames(
 ) -> Vec<SchemaOperation> {
     match (old, new) {
         (None, None) => Vec::new(),
-        (None, Some(n)) => vec![SchemaOperation::CreateTable(n.clone())],
-        (Some(o), None) => vec![SchemaOperation::DropTable(o.table.clone())],
+        (None, Some(n)) => {
+            let mut ops = Vec::new();
+            for statement in &n.statements {
+                ops.push(SchemaOperation::RunStatement {
+                    table: n.table.clone(),
+                    statement: statement.clone(),
+                });
+            }
+            ops.push(SchemaOperation::CreateTable(n.clone()));
+            ops
+        }
+        (Some(o), None) => {
+            let mut ops = vec![SchemaOperation::DropTable(o.table.clone())];
+            for statement in o.statements.iter().rev() {
+                ops.push(drop_statement(&o.table, statement));
+            }
+            ops
+        }
         (Some(o), Some(n)) => {
             let mut ops = Vec::new();
             let table = n.table.clone();
+
+            // Statements run before columns so CREATE EXTENSION exists first.
+            // A changed statement re-runs `up` and leaves the previous `down` alone.
+            for statement in &n.statements {
+                if !o.statements.iter().any(|old| old == statement) {
+                    ops.push(SchemaOperation::RunStatement {
+                        table: table.clone(),
+                        statement: statement.clone(),
+                    });
+                }
+            }
 
             // 1. Check renames
             let mut renamed_old = Vec::new();
@@ -246,8 +283,24 @@ pub fn diff_snapshots_with_renames(
                 }
             }
 
+            // Down SQL runs after columns are dropped, so dependents are gone first.
+            for statement in &o.statements {
+                if !n.statements.iter().any(|new| new.name == statement.name) {
+                    ops.push(drop_statement(&table, statement));
+                }
+            }
+
             ops
         }
+    }
+}
+
+fn drop_statement(table: &str, statement: &StatementSnapshot) -> SchemaOperation {
+    SchemaOperation::DropStatement {
+        table: table.to_string(),
+        name: statement.name.clone(),
+        up: statement.up.clone(),
+        down: statement.down.clone(),
     }
 }
 

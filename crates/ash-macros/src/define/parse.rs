@@ -3,6 +3,7 @@ mod aggregates;
 mod attributes;
 mod calculations;
 mod checks;
+mod statements;
 mod helpers;
 mod identities;
 mod indexes;
@@ -232,6 +233,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     let mut identities = Vec::new();
     let mut indexes = Vec::new();
     let mut checks = Vec::new();
+    let mut statements = Vec::new();
     let mut data_layer = None;
     let mut store = None;
     let mut timestamps = None;
@@ -410,6 +412,13 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
             } else if section_ident == "indexes" {
                 if let Some(parsed) = parse_braced_with(input, errors, indexes::parse_indexes) {
                     indexes = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "statements" {
+                if let Some(parsed) =
+                    parse_braced_with(input, errors, statements::parse_statements)
+                {
+                    statements = parsed;
                 }
                 let _ = helpers::optional_semi(input);
             } else if section_ident == "checks" {
@@ -601,6 +610,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         identities,
         indexes,
         checks,
+        statements,
         embedded,
         data_layer,
         store,

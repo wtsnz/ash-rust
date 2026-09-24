@@ -207,6 +207,11 @@ impl Postgres {
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
         for res in resources {
+            for statement in res.statements {
+                if statement.dialects.is_empty() || statement.dialects.contains(&"postgres") {
+                    self.execute_raw(statement.up).await?;
+                }
+            }
             let ddl = compiler.compile_create_table(res)?;
             self.execute_raw(&ddl).await?;
             for idx_ddl in compiler.compile_create_indexes(res)? {
@@ -786,7 +791,9 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
-        ash_core::AttrType::String | ash_core::AttrType::Atom { .. } => {
+        ash_core::AttrType::String
+        | ash_core::AttrType::CiString
+        | ash_core::AttrType::Atom { .. } => {
             if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 Value::String(s)
             } else {
@@ -805,6 +812,31 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
         }
         ash_core::AttrType::Decimal => {
             if let Ok(Some(n)) = row.try_get::<Option<rust_decimal::Decimal>, _>(col_name) {
+                Value::String(n.to_string())
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Binary => {
+            if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(col_name) {
+                Value::String(ash_core::Binary::from_bytes(bytes).encode())
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Date => {
+            if let Ok(Some(date)) = row.try_get::<Option<chrono::NaiveDate>, _>(col_name) {
+                Value::String(date.format("%Y-%m-%d").to_string())
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Float => {
+            if let Ok(Some(n)) = row.try_get::<Option<f64>, _>(col_name) {
                 Value::String(n.to_string())
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 Value::String(s)

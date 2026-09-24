@@ -73,7 +73,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     fn bind_typed(&mut self, ty: AttrType, val: Value) -> String {
-        let placeholder = self.push_param(val);
+        self.param_counter += 1;
+        let placeholder = self.dialect.placeholder(self.param_counter);
+        if ty == AttrType::Binary {
+            self.params.push(SqlParam::binary(val));
+        } else {
+            self.params.push(SqlParam::new(val));
+        }
         self.dialect.cast_param(ty, &placeholder)
     }
 

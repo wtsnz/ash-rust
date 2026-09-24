@@ -34,8 +34,12 @@ pub fn sql_type_to_ts_and_zod(sql_type: &str, nullable: bool) -> (&'static str, 
         ("number", "IntFilter", "z.number().int()")
     } else if upper.contains("BOOL") {
         ("boolean", "BooleanFilter", "z.boolean()")
-    } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("NUMERIC") || upper.contains("DECIMAL") || upper.contains("REAL") {
+    } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("REAL") {
+        ("number", "FloatFilter", "z.number()")
+    } else if upper.contains("NUMERIC") || upper.contains("DECIMAL") {
         ("number", "IntFilter", "z.number()")
+    } else if upper.contains("BYTEA") || upper.contains("BLOB") {
+        ("string", "StringFilter", "z.string()")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", "JsonFilter", "z.record(z.string(), z.unknown())")
     } else {

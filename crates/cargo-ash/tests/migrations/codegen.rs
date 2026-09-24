@@ -2204,3 +2204,348 @@ async fn squash_history_refuses_until_rollback_then_writes_one_migration(db: Tes
     );
 }
 on_every_backend!(squash_history_refuses_until_rollback_then_writes_one_migration);
+
+async fn codegen_creates_a_float_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_gauges", &[&fixtures::gauge::Gauge::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_gauges.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"weight\""));
+    if dialect == "postgres" {
+        assert!(up.contains("DOUBLE PRECISION"));
+    } else {
+        assert!(up.contains("\"weight\" REAL"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert_eq!(schema.column("gauges", "weight").ty, db.float_type());
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000f1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("weight".into(), Value::String("2.5".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::gauge::Gauge::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::gauge::Gauge::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::gauge::Gauge::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::gauge::Gauge::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    let weight = rows[0].get("weight").unwrap();
+    assert_eq!(
+        weight,
+        &Value::String(ash_core::Float::parse("2.5").unwrap().as_str().into())
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_float_column);
+
+async fn codegen_creates_a_date_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_deadlines", &[&fixtures::deadline::Deadline::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_deadlines.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"due_on\""));
+    if dialect == "postgres" {
+        assert!(up.contains("DATE"));
+    } else {
+        assert!(up.contains("\"due_on\" TEXT"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("deadlines", "due_on").ty,
+        db.date_type()
+    );
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000d1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("due_on".into(), Value::String("2024-03-01".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::deadline::Deadline::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::deadline::Deadline::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::deadline::Deadline::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::deadline::Deadline::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("due_on"),
+        Some(&Value::String("2024-03-01".into()))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_date_column);
+
+async fn codegen_creates_a_binary_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_file_blobs", &[&fixtures::file_blob::FileBlob::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_file_blobs.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains("BYTEA"));
+        assert!(up.contains("decode('aGVsbG8=', 'base64')"));
+    } else {
+        assert!(up.contains("\"payload\" BLOB"));
+        assert!(up.contains("X'68656C6C6F'"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("file_blobs", "payload").ty,
+        db.binary_type()
+    );
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000b1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert(
+        "payload".into(),
+        Value::String(ash_core::Binary::from_bytes(b"world".to_vec()).encode()),
+    );
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::file_blob::FileBlob::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::file_blob::FileBlob::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::file_blob::FileBlob::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::file_blob::FileBlob::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("payload"),
+        Some(&Value::String(
+            ash_core::Binary::from_bytes(b"world".to_vec()).encode()
+        ))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_binary_column);
+
+async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_markers", &[&fixtures::marker::Marker::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_markers.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    let down = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_markers.{dialect}.down.sql",
+        migration.version
+    )))
+    .unwrap();
+    let sidecar = up.find("CREATE TABLE marker_sidecar").unwrap();
+    let table = up
+        .find("CREATE TABLE IF NOT EXISTS \"markers\"")
+        .unwrap();
+    assert!(sidecar < table);
+    let drop_table = down.find("DROP TABLE IF EXISTS \"markers\"").unwrap();
+    let drop_side = down.find("DROP TABLE IF EXISTS marker_sidecar;").unwrap();
+    assert!(drop_table < drop_side);
+    if dialect == "postgres" {
+        let extension = up.find("CREATE EXTENSION IF NOT EXISTS citext;").unwrap();
+        assert!(extension < table);
+        let drop_ext = down.find("DROP EXTENSION IF EXISTS citext;").unwrap();
+        assert!(drop_table < drop_ext && drop_ext < drop_side);
+    } else {
+        assert!(!up.contains("citext"));
+        assert!(!down.contains("citext"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("markers"));
+    assert!(schema.tables.contains_key("marker_sidecar"));
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let after = db.schema().await;
+    assert!(after.tables.is_empty());
+}
+on_every_backend!(codegen_runs_custom_statements_around_the_table);
+
+async fn install_runs_custom_statements(db: TestDb) {
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("markers"));
+    assert!(schema.tables.contains_key("marker_sidecar"));
+}
+on_every_backend!(install_runs_custom_statements);
+
+async fn codegen_rejects_duplicate_statement_name_without_writing(db: TestDb) {
+    let project = Project::for_db(&db);
+    let before = project.migration_files();
+    let options = project.options(Mode::Write, Some("dup_statement"));
+    let result = project.run(
+        &options,
+        &[&fixtures::duplicate_statement_notes::DuplicateStatementNote::DEF],
+        &mut NonInteractive,
+    );
+    match result {
+        Err(CodegenError::DuplicateStatementName { table, name }) => {
+            assert_eq!(table, "duplicate_statement_notes");
+            assert_eq!(name, "prepare");
+        }
+        other => panic!("expected DuplicateStatementName, got {other:?}"),
+    }
+    assert_eq!(
+        project.migration_files(),
+        before,
+        "DuplicateStatementName must not write SQL files"
+    );
+    assert!(
+        project.snapshot_files().is_empty(),
+        "DuplicateStatementName must not write snapshot files"
+    );
+}
+on_every_backend!(codegen_rejects_duplicate_statement_name_without_writing);
+
+async fn codegen_creates_a_citext_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_contacts", &[&fixtures::contact::Contact::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_contacts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        let extension = up.find("CREATE EXTENSION IF NOT EXISTS citext;").unwrap();
+        let column = up.find("\"email\" CITEXT").unwrap();
+        assert!(extension < column);
+        assert!(up.contains("'Ada@Example.com'"));
+    } else {
+        assert!(up.contains("\"email\" TEXT"));
+        assert!(!up.contains("citext"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let expected = if dialect == "postgres" { "citext" } else { "TEXT" };
+    assert_eq!(db.schema().await.column("contacts", "email").ty, expected);
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000c1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("email".into(), Value::String("Ada@Example.com".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::contact::Contact::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::contact::Contact::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::contact::Contact::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::contact::Contact::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("email"),
+        Some(&Value::String("Ada@Example.com".into()))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_citext_column);

@@ -429,11 +429,34 @@ fn parse_input_val(
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
+        AttrType::Binary => {
+            let s = acc.string()?;
+            let binary =
+                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(binary.encode()))
+        }
+        AttrType::Date => {
+            let s = acc.string()?;
+            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
+        AttrType::CiString => {
+            let s = acc.string()?;
+            let value = ash_core::CiString::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(value.as_str().to_string()))
+        }
         AttrType::Decimal => {
             let s = acc.string()?;
             ash_core::Decimal::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
+        }
+        AttrType::Float => {
+            let n = acc.f64()?;
+            let float = ash_core::Float::parse(&n.to_string())
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(float.as_str().to_string()))
         }
         AttrType::Integer => {
             let n = acc.i64()?;

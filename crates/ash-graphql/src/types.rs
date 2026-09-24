@@ -17,7 +17,12 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn(TypeRef::ID)
             }
         }
-        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
+        AttrType::String
+        | AttrType::CiString
+        | AttrType::Date
+        | AttrType::Binary
+        | AttrType::UtcDatetime
+        | AttrType::Decimal => {
             if allow_nil {
                 TypeRef::named(TypeRef::STRING)
             } else {
@@ -29,6 +34,13 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named(TypeRef::INT)
             } else {
                 TypeRef::named_nn(TypeRef::INT)
+            }
+        }
+        AttrType::Float => {
+            if allow_nil {
+                TypeRef::named(TypeRef::FLOAT)
+            } else {
+                TypeRef::named_nn(TypeRef::FLOAT)
             }
         }
         AttrType::Boolean => {
@@ -171,11 +183,34 @@ pub fn parse_input_val(
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
         }
+        AttrType::Binary => {
+            let s = acc.string()?;
+            let binary =
+                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(binary.encode()))
+        }
+        AttrType::Date => {
+            let s = acc.string()?;
+            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::CiString => {
+            let s = acc.string()?;
+            let value = ash_core::CiString::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(value.as_str().to_string()))
+        }
         AttrType::Decimal => {
             let s = acc.string()?;
             ash_core::Decimal::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::Float => {
+            let n = acc.f64()?;
+            let float = ash_core::Float::parse(&n.to_string())
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(float.as_str().to_string()))
         }
         AttrType::Integer => {
             let n = acc.i64()?;
