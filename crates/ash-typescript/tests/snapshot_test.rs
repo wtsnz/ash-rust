@@ -27,6 +27,7 @@ fn test_generate_from_snapshots() {
         identities: vec![],
         indexes: vec![],
         checks: vec![],
+        statements: vec![],
         references: vec![],
     };
 
@@ -61,6 +62,7 @@ fn test_generate_from_snapshots() {
         identities: vec![],
         indexes: vec![],
         checks: vec![],
+        statements: vec![],
         references: vec![ReferenceSnapshot {
             name: "fk_tickets_author".to_string(),
             column: "author_id".to_string(),

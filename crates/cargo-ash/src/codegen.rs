@@ -108,6 +108,7 @@ pub enum CodegenError {
     AmbiguousRenames(Vec<RenameQuestion>),
     DuplicateIndexName { table: String, name: String },
     DuplicateCheckName { table: String, name: String },
+    DuplicateStatementName { table: String, name: String },
     Usage(String),
     Io(std::io::Error),
     Snapshot(serde_json::Error),
@@ -161,6 +162,10 @@ impl fmt::Display for CodegenError {
             Self::DuplicateCheckName { table, name } => write!(
                 f,
                 "check `{name}` on table `{table}` is defined more than once"
+            ),
+            Self::DuplicateStatementName { table, name } => write!(
+                f,
+                "statement `{name}` on table `{table}` is defined more than once"
             ),
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io(error) => write!(f, "{error}"),
@@ -279,6 +284,15 @@ fn run_with<D: SqlDialect>(
                 return Err(CodegenError::DuplicateCheckName {
                     table: resource.table_name().to_string(),
                     name: check.name.to_string(),
+                });
+            }
+        }
+        let mut statement_names = std::collections::HashSet::new();
+        for statement in resource.statements {
+            if !statement_names.insert(statement.name) {
+                return Err(CodegenError::DuplicateStatementName {
+                    table: resource.table_name().to_string(),
+                    name: statement.name.to_string(),
                 });
             }
         }

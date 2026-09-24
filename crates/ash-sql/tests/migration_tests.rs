@@ -24,6 +24,7 @@ static RES_V1: ResourceDef = ResourceDef {
     identities: &[IdentityDef::new("unique_username", &["username"])],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Postgres,
     timestamps: None,

@@ -61,6 +61,7 @@ pub fn expand(input: DeriveInput) -> Result<TokenStream> {
                 identities: &[],
                 indexes: &[],
                 checks: &[],
+                statements: &[],
                 embedded: false,
                 data_layer: ::ash_core::DataLayerKind::Memory,
                 timestamps: None,

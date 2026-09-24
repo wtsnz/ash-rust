@@ -2404,3 +2404,82 @@ async fn codegen_creates_a_binary_column(db: TestDb) {
     assert!(db.schema().await.tables.is_empty());
 }
 on_every_backend!(codegen_creates_a_binary_column);
+
+async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_markers", &[&fixtures::marker::Marker::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_markers.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    let down = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_markers.{dialect}.down.sql",
+        migration.version
+    )))
+    .unwrap();
+    let sidecar = up.find("CREATE TABLE marker_sidecar").unwrap();
+    let table = up
+        .find("CREATE TABLE IF NOT EXISTS \"markers\"")
+        .unwrap();
+    assert!(sidecar < table);
+    let drop_table = down.find("DROP TABLE IF EXISTS \"markers\"").unwrap();
+    let drop_side = down.find("DROP TABLE IF EXISTS marker_sidecar;").unwrap();
+    assert!(drop_table < drop_side);
+    if dialect == "postgres" {
+        let extension = up.find("CREATE EXTENSION IF NOT EXISTS citext;").unwrap();
+        assert!(extension < table);
+        let drop_ext = down.find("DROP EXTENSION IF EXISTS citext;").unwrap();
+        assert!(drop_table < drop_ext && drop_ext < drop_side);
+    } else {
+        assert!(!up.contains("citext"));
+        assert!(!down.contains("citext"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("markers"));
+    assert!(schema.tables.contains_key("marker_sidecar"));
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let after = db.schema().await;
+    assert!(after.tables.is_empty());
+}
+on_every_backend!(codegen_runs_custom_statements_around_the_table);
+
+async fn install_runs_custom_statements(db: TestDb) {
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("markers"));
+    assert!(schema.tables.contains_key("marker_sidecar"));
+}
+on_every_backend!(install_runs_custom_statements);
+
+async fn codegen_rejects_duplicate_statement_name_without_writing(db: TestDb) {
+    let project = Project::for_db(&db);
+    let before = project.migration_files();
+    let options = project.options(Mode::Write, Some("dup_statement"));
+    let result = project.run(
+        &options,
+        &[&fixtures::duplicate_statement_notes::DuplicateStatementNote::DEF],
+        &mut NonInteractive,
+    );
+    match result {
+        Err(CodegenError::DuplicateStatementName { table, name }) => {
+            assert_eq!(table, "duplicate_statement_notes");
+            assert_eq!(name, "prepare");
+        }
+        other => panic!("expected DuplicateStatementName, got {other:?}"),
+    }
+    assert_eq!(
+        project.migration_files(),
+        before,
+        "DuplicateStatementName must not write SQL files"
+    );
+    assert!(
+        project.snapshot_files().is_empty(),
+        "DuplicateStatementName must not write snapshot files"
+    );
+}
+on_every_backend!(codegen_rejects_duplicate_statement_name_without_writing);

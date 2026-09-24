@@ -1,7 +1,7 @@
-use ash_core::{ActionDef, AttrType, AttributeDef, IdentityDef, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, IdentityDef, ResourceDef, StatementDef};
 use ash_sql::{
-    diff_snapshots, diff_snapshots_with_renames, diff_tables, PostgresDialect, SchemaOperation,
-    SqliteDialect, TableSnapshot,
+    PostgresDialect, SchemaOperation, SqliteDialect, TableSnapshot, diff_snapshots,
+    diff_snapshots_with_renames, diff_tables,
 };
 
 static RES_V1_ATTRS: &[AttributeDef] = &[
@@ -24,6 +24,7 @@ static RES_V1: ResourceDef = ResourceDef {
     identities: &[IdentityDef::new("unique_email", &["email"])],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Postgres,
     timestamps: None,
@@ -53,6 +54,7 @@ static RES_V2: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Postgres,
     timestamps: None,
@@ -182,4 +184,105 @@ fn test_diff_tables_multiple() {
     // The second table was created
     assert_eq!(ops.len(), 1);
     assert!(matches!(&ops[0], SchemaOperation::CreateTable(_)));
+}
+
+#[test]
+fn custom_statements_are_dialect_filtered_and_ordered_around_the_table() {
+    static ATTRS: &[AttributeDef] = &[AttributeDef::uuid_pk("id")];
+    static STATEMENTS: &[StatementDef] = &[
+        StatementDef {
+            name: "sidecar",
+            dialects: &[],
+            up: "CREATE TABLE users_sidecar (id TEXT PRIMARY KEY)",
+            down: "DROP TABLE IF EXISTS users_sidecar",
+        },
+        StatementDef {
+            name: "citext",
+            dialects: &["postgres"],
+            up: "CREATE EXTENSION IF NOT EXISTS citext",
+            down: "DROP EXTENSION IF EXISTS citext",
+        },
+    ];
+    let mut resource = RES_V1;
+    resource.attributes = ATTRS;
+    resource.identities = &[];
+    resource.statements = STATEMENTS;
+
+    let sqlite = TableSnapshot::from_resource(&resource, &SqliteDialect);
+    assert_eq!(
+        sqlite
+            .statements
+            .iter()
+            .map(|statement| statement.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["sidecar"]
+    );
+    let postgres = TableSnapshot::from_resource(&resource, &PostgresDialect);
+    assert_eq!(postgres.statements.len(), 2);
+
+    let ops = diff_snapshots(None, Some(&postgres));
+    assert!(matches!(
+        &ops[0],
+        SchemaOperation::RunStatement { statement, .. } if statement.name == "sidecar"
+    ));
+    assert!(matches!(
+        &ops[1],
+        SchemaOperation::RunStatement { statement, .. } if statement.name == "citext"
+    ));
+    assert!(matches!(&ops[2], SchemaOperation::CreateTable(_)));
+
+    let files = ash_sql::generate_migration(&PostgresDialect, "create_users", &ops);
+    let sidecar = files.up_sql.find("CREATE TABLE users_sidecar").unwrap();
+    let extension = files
+        .up_sql
+        .find("CREATE EXTENSION IF NOT EXISTS citext;")
+        .unwrap();
+    let table = files
+        .up_sql
+        .find("CREATE TABLE IF NOT EXISTS \"users\"")
+        .unwrap();
+    assert!(sidecar < extension && extension < table);
+    let drop_table = files
+        .down_sql
+        .find("DROP TABLE IF EXISTS \"users\"")
+        .unwrap();
+    let drop_ext = files
+        .down_sql
+        .find("DROP EXTENSION IF EXISTS citext;")
+        .unwrap();
+    let drop_side = files
+        .down_sql
+        .find("DROP TABLE IF EXISTS users_sidecar;")
+        .unwrap();
+    assert!(drop_table < drop_ext && drop_ext < drop_side);
+
+    let sqlite_files = ash_sql::generate_migration(
+        &SqliteDialect,
+        "create_users",
+        &diff_snapshots(None, Some(&sqlite)),
+    );
+    assert!(!sqlite_files.up_sql.contains("citext"));
+    assert!(!sqlite_files.down_sql.contains("citext"));
+
+    let mut changed = postgres.clone();
+    changed.statements[0].up = "CREATE TABLE users_sidecar (id TEXT)".into();
+    let changed_ops = diff_snapshots(Some(&postgres), Some(&changed));
+    assert_eq!(changed_ops.len(), 1);
+    assert!(matches!(
+        &changed_ops[0],
+        SchemaOperation::RunStatement { statement, .. } if statement.up.contains("(id TEXT)")
+    ));
+
+    let mut bare = postgres.clone();
+    bare.statements.clear();
+    let removed = diff_snapshots(Some(&postgres), Some(&bare));
+    assert!(matches!(
+        removed.last(),
+        Some(SchemaOperation::DropStatement { name, .. }) if name == "citext"
+    ));
+
+    let mut json: serde_json::Value = serde_json::to_value(&sqlite).unwrap();
+    json.as_object_mut().unwrap().remove("statements");
+    let loaded: TableSnapshot = serde_json::from_value(json).unwrap();
+    assert!(loaded.statements.is_empty());
 }
