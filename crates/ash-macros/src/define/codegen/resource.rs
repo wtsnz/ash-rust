@@ -934,6 +934,25 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         })
         .collect();
 
+    let statement_defs: Vec<_> = def
+        .statements
+        .iter()
+        .map(|statement| {
+            let name_str = statement.name.to_string();
+            let dialects = &statement.dialects;
+            let up = &statement.up;
+            let down = &statement.down;
+            quote! {
+                ::ash_core::StatementDef {
+                    name: #name_str,
+                    dialects: &[#(#dialects),*],
+                    up: #up,
+                    down: #down,
+                }
+            }
+        })
+        .collect();
+
     let check_defs: Vec<_> = def
         .checks
         .iter()
@@ -1121,6 +1140,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     identities: &[#(#ident_defs),*],
                     indexes: &[#(#index_defs),*],
                     checks: &[#(#check_defs),*],
+                    statements: &[#(#statement_defs),*],
                     embedded: #embedded_lit,
                     data_layer: #data_layer_tokens,
                     timestamps: #timestamps_tokens,

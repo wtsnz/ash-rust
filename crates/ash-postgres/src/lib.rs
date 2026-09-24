@@ -207,6 +207,11 @@ impl Postgres {
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
         for res in resources {
+            for statement in res.statements {
+                if statement.dialects.is_empty() || statement.dialects.contains(&"postgres") {
+                    self.execute_raw(statement.up).await?;
+                }
+            }
             let ddl = compiler.compile_create_table(res)?;
             self.execute_raw(&ddl).await?;
             for idx_ddl in compiler.compile_create_indexes(res)? {

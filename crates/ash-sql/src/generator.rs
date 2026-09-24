@@ -100,6 +100,17 @@ pub fn generate_migration_with_version<D: SqlDialect>(
     }
 }
 
+fn sql_command(sql: &str) -> String {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.ends_with(';') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed};")
+    }
+}
+
 fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (String, String) {
     match op {
         SchemaOperation::CreateTable(snapshot) => {
@@ -282,6 +293,10 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let down = format!("ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {ref_name};");
             (up, down)
         }
+        SchemaOperation::RunStatement { statement, .. } => {
+            (sql_command(&statement.up), sql_command(&statement.down))
+        }
+        SchemaOperation::DropStatement { down, up, .. } => (sql_command(down), sql_command(up)),
         SchemaOperation::DropReference { table, name } => {
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(name);
@@ -384,6 +399,8 @@ fn table_of(op: &SchemaOperation) -> Option<&str> {
         | SchemaOperation::DropIndex { table, .. }
         | SchemaOperation::AddCheck { table, .. }
         | SchemaOperation::DropCheck { table, .. }
+        | SchemaOperation::RunStatement { table, .. }
+        | SchemaOperation::DropStatement { table, .. }
         | SchemaOperation::AddReference { table, .. }
         | SchemaOperation::DropReference { table, .. } => Some(table.as_str()),
     }
@@ -427,7 +444,10 @@ pub fn emit_sql<D: SqlDialect>(
         if rebuild.contains(table)
             && !matches!(
                 op,
-                SchemaOperation::CreateTable(_) | SchemaOperation::DropTable(_)
+                SchemaOperation::CreateTable(_)
+                    | SchemaOperation::DropTable(_)
+                    | SchemaOperation::RunStatement { .. }
+                    | SchemaOperation::DropStatement { .. }
             )
         {
             if matches!(op, SchemaOperation::RenameColumn { .. }) {

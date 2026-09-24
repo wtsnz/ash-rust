@@ -148,6 +148,11 @@ impl Sqlite {
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
         let resources = persistable_resources(resources);
         for resource in resources {
+            for statement in resource.statements {
+                if statement.dialects.is_empty() || statement.dialects.contains(&"sqlite") {
+                    self.execute_raw(statement.up).await?;
+                }
+            }
             let ddl = sql::create_table_sql(resource)?;
             self.execute_raw(&ddl).await?;
             for index_ddl in sql::create_indexes_sql(resource)? {

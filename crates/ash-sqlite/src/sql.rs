@@ -296,6 +296,7 @@ mod tests {
         identities: &[],
         indexes: &[],
         checks: &[],
+        statements: &[],
         embedded: false,
         data_layer: ash_core::DataLayerKind::Sqlite,
         timestamps: None,

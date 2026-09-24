@@ -19,6 +19,7 @@ pub struct ResourceDefinition {
     pub identities: Vec<IdentitySpec>,
     pub indexes: Vec<IndexSpec>,
     pub checks: Vec<CheckSpec>,
+    pub statements: Vec<StatementSpec>,
     pub embedded: bool,
     pub data_layer: Option<Ident>,
     pub store: Option<Type>,
@@ -48,6 +49,7 @@ impl ResourceDefinition {
             identities: Vec::new(),
             indexes: Vec::new(),
             checks: Vec::new(),
+            statements: Vec::new(),
             embedded: false,
             data_layer: None,
             store: None,
@@ -86,6 +88,13 @@ pub struct IndexSpec {
 pub struct CheckSpec {
     pub name: Ident,
     pub expression: String,
+}
+
+pub struct StatementSpec {
+    pub name: Ident,
+    pub dialects: Vec<String>,
+    pub up: String,
+    pub down: String,
 }
 
 pub struct ActorFieldSpec {

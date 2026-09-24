@@ -19,6 +19,8 @@ pub struct TableSnapshot {
     pub indexes: Vec<IndexSnapshot>,
     #[serde(default)]
     pub checks: Vec<CheckSnapshot>,
+    #[serde(default)]
+    pub statements: Vec<StatementSnapshot>,
     pub references: Vec<ReferenceSnapshot>,
 }
 
@@ -58,6 +60,17 @@ impl TableSnapshot {
             });
         }
 
+        let mut statements = Vec::new();
+        for statement in resource.statements {
+            if statement.dialects.is_empty() || statement.dialects.contains(&dialect.name()) {
+                statements.push(StatementSnapshot {
+                    name: statement.name.to_string(),
+                    up: statement.up.to_string(),
+                    down: statement.down.to_string(),
+                });
+            }
+        }
+
         let mut checks = Vec::new();
         for check in resource.checks {
             checks.push(CheckSnapshot {
@@ -95,6 +108,7 @@ impl TableSnapshot {
             identities,
             indexes,
             checks,
+            statements,
             references,
         }
     }
@@ -155,6 +169,14 @@ pub struct IndexSnapshot {
 pub struct CheckSnapshot {
     pub name: String,
     pub expression: String,
+}
+
+/// A hand-written SQL statement stored beside a table snapshot.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatementSnapshot {
+    pub name: String,
+    pub up: String,
+    pub down: String,
 }
 
 /// Represents a foreign key constraint in a schema snapshot.

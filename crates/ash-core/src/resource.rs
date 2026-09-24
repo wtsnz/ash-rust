@@ -105,6 +105,19 @@ pub struct CheckDef {
     pub expression: &'static str,
 }
 
+/// Raw SQL run beside the generated table migration.
+///
+/// An empty `dialects` list means every dialect. Otherwise the statement is
+/// emitted only when `SqlDialect::name` is in the list, so Postgres-only SQL
+/// such as `CREATE EXTENSION` is not sent to SQLite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatementDef {
+    pub name: &'static str,
+    pub dialects: &'static [&'static str],
+    pub up: &'static str,
+    pub down: &'static str,
+}
+
 impl CheckDef {
     pub const fn new(name: &'static str, expression: &'static str) -> Self {
         Self { name, expression }
@@ -160,6 +173,7 @@ pub struct ResourceDef {
     pub identities: &'static [IdentityDef],
     pub indexes: &'static [IndexDef],
     pub checks: &'static [CheckDef],
+    pub statements: &'static [StatementDef],
     pub embedded: bool,
     pub data_layer: DataLayerKind,
     pub timestamps: Option<(&'static str, &'static str)>,

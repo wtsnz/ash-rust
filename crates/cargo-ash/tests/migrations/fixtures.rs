@@ -585,6 +585,60 @@ pub mod gauge {
     }
 }
 
+pub mod marker {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Marker {
+            table "markers";
+            attributes {
+                id: Uuid [pk];
+            }
+            statements {
+                statement sidecar {
+                    up "CREATE TABLE marker_sidecar (id TEXT PRIMARY KEY)";
+                    down "DROP TABLE IF EXISTS marker_sidecar";
+                }
+                statement citext only postgres {
+                    up "CREATE EXTENSION IF NOT EXISTS citext";
+                    down "DROP EXTENSION IF EXISTS citext";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod duplicate_statement_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        DuplicateStatementNote {
+            table "duplicate_statement_notes";
+            attributes {
+                id: Uuid [pk];
+            }
+            statements {
+                statement prepare {
+                    up "SELECT 1";
+                    down "SELECT 1";
+                }
+                statement prepare {
+                    up "SELECT 2";
+                    down "SELECT 2";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod duplicate_check_notes {
     use ash_core::resource;
     use uuid::Uuid;
