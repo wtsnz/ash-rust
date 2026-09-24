@@ -10,7 +10,7 @@ PostgreSQL data layer for `ash-rust` powered by `sqlx`.
   - `23503` $\to$ `Error::DataLayer` (foreign key violation)
   - `23514` $\to$ `Error::Validation` (check constraint)
   - `40P01` $\to$ `Error::DataLayer` (deadlock detected)
-- **Schema Multitenancy**: Supports dynamic tenant scoping via `SET LOCAL search_path = <tenant>, public`.
+- **Schema Multitenancy**: Supports dynamic tenant scoping via `SET LOCAL search_path = <tenant>, public`. Schema migration is `Postgres::migrate_schemas`. There is no `MultitenancyStrategy::Schema`.
 - **Nested Transactions**: Full `TransactionSupport` implementation with SQL savepoints (`SAVEPOINT`, `RELEASE SAVEPOINT`, `ROLLBACK TO SAVEPOINT`).
 - **Declarative Migrations**: Embedded migration execution via `ash_postgres::migrate` or `cargo ash migrate`.
 
