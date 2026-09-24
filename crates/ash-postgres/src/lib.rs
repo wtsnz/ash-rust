@@ -791,7 +791,9 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
-        ash_core::AttrType::String | ash_core::AttrType::Atom { .. } => {
+        ash_core::AttrType::String
+        | ash_core::AttrType::CiString
+        | ash_core::AttrType::Atom { .. } => {
             if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 Value::String(s)
             } else {

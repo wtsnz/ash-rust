@@ -1,4 +1,4 @@
-use ash_core::{Binary, Date, Float};
+use ash_core::{Binary, CiString, Date, Float};
 use helpdesk::{Ticket, actor_customer, open_sqlite};
 use uuid::Uuid;
 
@@ -15,6 +15,7 @@ async fn tickets_survive_reopen() {
         .estimate(Float::parse("1.5").unwrap())
         .due_on(Date::parse("2024-02-29").unwrap())
         .attachment(Binary::from_bytes(b"hello".to_vec()))
+        .requester_email(CiString::parse("Ada@Example.com").unwrap())
         .await
         .unwrap();
     drop(ctx);
@@ -30,5 +31,9 @@ async fn tickets_survive_reopen() {
     assert_eq!(
         listed[0].attachment.as_ref().map(Binary::as_bytes),
         Some(b"hello".as_slice())
+    );
+    assert_eq!(
+        listed[0].requester_email.as_ref().map(CiString::as_str),
+        Some("Ada@Example.com")
     );
 }

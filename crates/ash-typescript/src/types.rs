@@ -34,6 +34,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
     match ty {
         AttrType::Uuid
         | AttrType::String
+        | AttrType::CiString
         | AttrType::Date
         | AttrType::Binary
         | AttrType::UtcDatetime
@@ -63,6 +64,7 @@ pub fn attr_type_to_filter_type(ty: &AttrType) -> &'static str {
     match ty {
         AttrType::Uuid => "UuidFilter",
         AttrType::String
+        | AttrType::CiString
         | AttrType::Date
         | AttrType::Binary
         | AttrType::UtcDatetime

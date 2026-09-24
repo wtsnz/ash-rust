@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::representative::Representative;
-use ash_core::{Actor, AshEnum, Binary, Date, Float, resource};
+use ash_core::{Actor, AshEnum, Binary, CiString, Date, Float, resource};
 use uuid::Uuid;
 
 #[derive(AshEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +34,14 @@ resource! {
             estimate: Option<Float>;
             due_on: Option<Date>;
             attachment: Option<Binary>;
+            requester_email: Option<CiString>;
+        }
+
+        statements {
+            statement citext only postgres {
+                up "CREATE EXTENSION IF NOT EXISTS citext";
+                down "DROP EXTENSION IF EXISTS citext";
+            }
         }
 
         relationships {
@@ -46,7 +54,7 @@ resource! {
 
         actions {
             create open {
-                accept [subject, estimate, due_on, attachment];
+                accept [subject, estimate, due_on, attachment, requester_email];
                 validate present(subject);
                 validate string_length(subject, min: 2);
                 change set(status = Status::Open);

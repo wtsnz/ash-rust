@@ -585,6 +585,30 @@ pub mod gauge {
     }
 }
 
+pub mod contact {
+    use ash_core::{CiString, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Contact {
+            table "contacts";
+            attributes {
+                id: Uuid [pk];
+                email: CiString = "Ada@Example.com";
+            }
+            statements {
+                statement citext only postgres {
+                    up "CREATE EXTENSION IF NOT EXISTS citext";
+                    down "DROP EXTENSION IF EXISTS citext";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod marker {
     use ash_core::resource;
     use uuid::Uuid;

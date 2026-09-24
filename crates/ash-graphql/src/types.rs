@@ -18,6 +18,7 @@ pub fn attr_type_to_type_ref(
             }
         }
         AttrType::String
+        | AttrType::CiString
         | AttrType::Date
         | AttrType::Binary
         | AttrType::UtcDatetime
@@ -192,6 +193,12 @@ pub fn parse_input_val(
             let s = acc.string()?;
             ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::CiString => {
+            let s = acc.string()?;
+            let value = ash_core::CiString::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(value.as_str().to_string()))
         }
         AttrType::Decimal => {
             let s = acc.string()?;

@@ -2483,3 +2483,69 @@ async fn codegen_rejects_duplicate_statement_name_without_writing(db: TestDb) {
     );
 }
 on_every_backend!(codegen_rejects_duplicate_statement_name_without_writing);
+
+async fn codegen_creates_a_citext_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_contacts", &[&fixtures::contact::Contact::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_contacts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        let extension = up.find("CREATE EXTENSION IF NOT EXISTS citext;").unwrap();
+        let column = up.find("\"email\" CITEXT").unwrap();
+        assert!(extension < column);
+        assert!(up.contains("'Ada@Example.com'"));
+    } else {
+        assert!(up.contains("\"email\" TEXT"));
+        assert!(!up.contains("citext"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let expected = if dialect == "postgres" { "citext" } else { "TEXT" };
+    assert_eq!(db.schema().await.column("contacts", "email").ty, expected);
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000c1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("email".into(), Value::String("Ada@Example.com".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::contact::Contact::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::contact::Contact::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::contact::Contact::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::contact::Contact::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("email"),
+        Some(&Value::String("Ada@Example.com".into()))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_citext_column);
