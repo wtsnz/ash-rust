@@ -105,7 +105,7 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
                 Uuid::parse_str(&text).map_err(|err| Error::DataLayer(err.to_string()))?,
             )),
         },
-        AttrType::String | AttrType::Atom { .. } | AttrType::UtcDatetime => {
+        AttrType::String | AttrType::Atom { .. } | AttrType::Date | AttrType::UtcDatetime => {
             match optional_text(row, col)? {
                 None => Ok(Value::Null),
                 Some(text) => Ok(Value::String(text)),
@@ -156,7 +156,7 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::String | AttrType::Atom { .. } | AttrType::UtcDatetime => {
+        AttrType::String | AttrType::Atom { .. } | AttrType::Date | AttrType::UtcDatetime => {
             match optional_text(row, agg.name)? {
                 None => Ok(Value::Null),
                 Some(text) => Ok(Value::String(text)),

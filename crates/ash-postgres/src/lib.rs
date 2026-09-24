@@ -812,6 +812,15 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
+        ash_core::AttrType::Date => {
+            if let Ok(Some(date)) = row.try_get::<Option<chrono::NaiveDate>, _>(col_name) {
+                Value::String(date.format("%Y-%m-%d").to_string())
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
         ash_core::AttrType::Float => {
             if let Ok(Some(n)) = row.try_get::<Option<f64>, _>(col_name) {
                 Value::String(n.to_string())

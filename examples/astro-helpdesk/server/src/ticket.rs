@@ -1,4 +1,4 @@
-use ash_core::{AshEnum, Float, resource};
+use ash_core::{AshEnum, Date, Float, resource};
 use uuid::Uuid;
 
 use crate::representative::Representative;
@@ -26,6 +26,7 @@ resource! {
             status: TicketStatus [enum];
             priority: i64;
             estimate: Option<Float>;
+            due_on: Option<Date>;
             author_id: Option<Uuid>;
         }
 
@@ -36,7 +37,7 @@ resource! {
         actions {
             create open {
                 primary;
-                accept [title, description, status, priority, author_id, estimate];
+                accept [title, description, status, priority, author_id, estimate, due_on];
                 validate present(title);
                 validate string_length(title, min: 5, max: 100);
                 validate numericality(priority, min: 1, max: 5);

@@ -429,6 +429,11 @@ fn parse_input_val(
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
+        AttrType::Date => {
+            let s = acc.string()?;
+            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
         AttrType::Decimal => {
             let s = acc.string()?;
             ash_core::Decimal::parse(s)

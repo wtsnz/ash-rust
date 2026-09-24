@@ -74,7 +74,7 @@ pub fn register_resource_filter_inputs(
     for attr in resource.attributes {
         let field_filter_type = match attr.ty {
             AttrType::Uuid => "UuidFilterInput".to_string(),
-            AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
+            AttrType::String | AttrType::Date | AttrType::UtcDatetime | AttrType::Decimal => {
                 "StringFilterInput".to_string()
             }
             AttrType::Float => "FloatFilterInput".to_string(),
@@ -259,6 +259,11 @@ fn parse_scalar_value(
             let s = acc.string()?;
             ash_core::UtcDateTime::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
+        AttrType::Date => {
+            let s = acc.string()?;
+            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
         AttrType::Decimal => {

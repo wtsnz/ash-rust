@@ -189,6 +189,89 @@ impl Float {
     }
 }
 
+/// Calendar date stored as `YYYY-MM-DD`.
+///
+/// Postgres columns use `date`. SQLite has no date type, so the column is `TEXT`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Date(String);
+
+impl Date {
+    pub fn parse(raw: &str) -> Result<Self> {
+        if is_calendar_date(raw) {
+            Ok(Self(raw.to_string()))
+        } else {
+            Err(Error::Invalid(format!(
+                "invalid date `{raw}`: expected YYYY-MM-DD"
+            )))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<Date> for Value {
+    fn from(value: Date) -> Self {
+        value.to_value()
+    }
+}
+
+impl crate::value::IntoOption<Date> for Date {
+    fn into_option(self) -> Option<Date> {
+        Some(self)
+    }
+}
+
+impl AshType for Date {
+    const ATTR_TYPE: AttrType = AttrType::Date;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected date".into())),
+        }
+    }
+}
+
+fn is_calendar_date(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    if !bytes.iter().enumerate().all(|(i, b)| match i {
+        4 | 7 => true,
+        _ => b.is_ascii_digit(),
+    }) {
+        return false;
+    }
+    let Ok(year) = raw[..4].parse::<i32>() else {
+        return false;
+    };
+    let Ok(month) = raw[5..7].parse::<u8>() else {
+        return false;
+    };
+    let Ok(day) = raw[8..10].parse::<u8>() else {
+        return false;
+    };
+    let max = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=max).contains(&day)
+}
+
+fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
 impl From<Float> for Value {
     fn from(value: Float) -> Self {
         value.to_value()
@@ -368,5 +451,14 @@ mod tests {
         assert!(Float::parse("inf").is_err());
         assert!(Float::parse("nan").is_err());
         assert!(Float::parse("nope").is_err());
+    }
+
+    #[test]
+    fn date_rejects_impossible_days() {
+        assert_eq!(Date::parse("2024-02-29").unwrap().as_str(), "2024-02-29");
+        assert!(Date::parse("2023-02-29").is_err());
+        assert!(Date::parse("2024-04-31").is_err());
+        assert!(Date::parse("2024-1-02").is_err());
+        assert!(Date::parse("2024-01-02T00:00:00Z").is_err());
     }
 }
