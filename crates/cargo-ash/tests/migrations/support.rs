@@ -123,6 +123,13 @@ impl TestDb {
         }
     }
 
+    pub fn date_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "TEXT",
+            Db::Postgres(_) => "date",
+        }
+    }
+
     pub fn float_type(&self) -> &'static str {
         match self.db {
             Db::Sqlite(_) => "REAL",

@@ -71,6 +71,7 @@ impl SqlDialect for SqliteDialect {
             AttrType::Float => "REAL".to_string(),
             AttrType::Uuid
             | AttrType::String
+            | AttrType::Date
             | AttrType::UtcDatetime
             | AttrType::Atom { .. }
             | AttrType::Map
@@ -136,6 +137,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
             AttrType::Decimal => format!("{placeholder}::numeric"),
             AttrType::Float => format!("{placeholder}::float8"),
+            AttrType::Date => format!("{placeholder}::date"),
             _ => placeholder.to_string(),
         }
     }
@@ -150,6 +152,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Float => "DOUBLE PRECISION".to_string(),
+            AttrType::Date => "DATE".to_string(),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }
     }

@@ -32,7 +32,7 @@ pub fn to_camel_case(s: &str) -> String {
 /// Map an Ash `AttrType` to its corresponding TypeScript type string.
 pub fn attr_type_to_ts(ty: &AttrType) -> String {
     match ty {
-        AttrType::Uuid | AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
+        AttrType::Uuid | AttrType::String | AttrType::Date | AttrType::UtcDatetime | AttrType::Decimal => {
             "string".to_string()
         }
         AttrType::Float | AttrType::Integer => "number".to_string(),
@@ -59,7 +59,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
 pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
     match ty {
         AttrType::Uuid => Some("UuidFilter"),
-        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => Some("StringFilter"),
+        AttrType::String | AttrType::Date | AttrType::UtcDatetime | AttrType::Decimal => Some("StringFilter"),
         AttrType::Float => Some("FloatFilter"),
         AttrType::Integer => Some("IntFilter"),
         AttrType::Boolean => Some("BooleanFilter"),

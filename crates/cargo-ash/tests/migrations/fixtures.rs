@@ -531,6 +531,24 @@ pub mod bounded_notes {
     }
 }
 
+pub mod deadline {
+    use ash_core::{Date, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Deadline {
+            table "deadlines";
+            attributes {
+                id: Uuid [pk];
+                due_on: Date = "2024-02-29";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod gauge {
     use ash_core::{Float, resource};
     use uuid::Uuid;

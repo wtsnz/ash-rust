@@ -2268,3 +2268,68 @@ async fn codegen_creates_a_float_column(db: TestDb) {
     assert!(db.schema().await.tables.is_empty());
 }
 on_every_backend!(codegen_creates_a_float_column);
+
+async fn codegen_creates_a_date_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_deadlines", &[&fixtures::deadline::Deadline::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_deadlines.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"due_on\""));
+    if dialect == "postgres" {
+        assert!(up.contains("DATE"));
+    } else {
+        assert!(up.contains("\"due_on\" TEXT"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("deadlines", "due_on").ty,
+        db.date_type()
+    );
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000d1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("due_on".into(), Value::String("2024-03-01".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::deadline::Deadline::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::deadline::Deadline::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::deadline::Deadline::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::deadline::Deadline::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("due_on"),
+        Some(&Value::String("2024-03-01".into()))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_date_column);

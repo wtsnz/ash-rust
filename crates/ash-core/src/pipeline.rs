@@ -483,6 +483,15 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 });
             }
         },
+        (AttrType::Date, Value::String(got)) => match crate::Date::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a calendar date, got {got}"),
+                });
+            }
+        },
         (AttrType::Float, Value::String(got)) => match crate::Float::parse(got) {
             Ok(_) => true,
             Err(_) => {
