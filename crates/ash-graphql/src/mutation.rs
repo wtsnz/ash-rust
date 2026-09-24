@@ -435,6 +435,12 @@ fn parse_input_val(
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
+        AttrType::Float => {
+            let n = acc.f64()?;
+            let float = ash_core::Float::parse(&n.to_string())
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(float.as_str().to_string()))
+        }
         AttrType::Integer => {
             let n = acc.i64()?;
             Ok(Value::Int(n))

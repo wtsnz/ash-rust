@@ -531,6 +531,24 @@ pub mod bounded_notes {
     }
 }
 
+pub mod gauge {
+    use ash_core::{Float, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Gauge {
+            table "gauges";
+            attributes {
+                id: Uuid [pk];
+                weight: Float = "1.50";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod duplicate_check_notes {
     use ash_core::resource;
     use uuid::Uuid;

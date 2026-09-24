@@ -2,7 +2,7 @@ use super::board::Board;
 use super::checklist_item::ChecklistItem;
 use super::comment::Comment;
 use super::list::List;
-use ash_core::resource;
+use ash_core::{Float, resource};
 use uuid::Uuid;
 
 resource! {
@@ -16,6 +16,7 @@ resource! {
         title: String;
         description: Option<String>;
         position: i64;
+        estimate: Option<Float>;
         archived: bool;
         creator_id: Option<Uuid>;
         assignee_id: Option<Uuid>;
@@ -40,7 +41,7 @@ resource! {
 
     actions {
         create create {
-            accept [board_id, list_id, title, description, position];
+            accept [board_id, list_id, title, description, position, estimate];
             validate present(title);
             validate string_length(title, min: 1);
             change set(archived = false);

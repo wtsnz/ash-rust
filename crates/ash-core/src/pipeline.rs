@@ -483,6 +483,15 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 });
             }
         },
+        (AttrType::Float, Value::String(got)) => match crate::Float::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a finite float, got {got}"),
+                });
+            }
+        },
         (AttrType::Atom { one_of }, Value::String(got)) => {
             if one_of.contains(&got.as_str()) {
                 true

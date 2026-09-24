@@ -35,7 +35,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         AttrType::Uuid | AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
             "string".to_string()
         }
-        AttrType::Integer => "number".to_string(),
+        AttrType::Float | AttrType::Integer => "number".to_string(),
         AttrType::Boolean => "boolean".to_string(),
         AttrType::Atom { one_of } => {
             if one_of.is_empty() {
@@ -58,6 +58,7 @@ pub fn attr_type_to_filter_type(ty: &AttrType) -> &'static str {
     match ty {
         AttrType::Uuid => "UuidFilter",
         AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "StringFilter",
+        AttrType::Float => "FloatFilter",
         AttrType::Integer => "IntFilter",
         AttrType::Boolean => "BooleanFilter",
         AttrType::Atom { .. } => "StringFilter",
@@ -98,6 +99,16 @@ export interface StringFilter {
   ends_with?: string;
   in?: string[];
   is_nil?: boolean;
+}
+
+export interface FloatFilter {
+  eq?: number | null;
+  ne?: number | null;
+  gt?: number | null;
+  gte?: number | null;
+  lt?: number | null;
+  lte?: number | null;
+  isNil?: boolean | null;
 }
 
 export interface IntFilter {
