@@ -220,6 +220,7 @@ pub struct DbSchema {
 pub struct Table {
     pub columns: BTreeMap<String, Column>,
     pub unique_indexes: BTreeMap<String, Vec<String>>,
+    pub indexes: BTreeMap<String, Vec<String>>,
     pub foreign_keys: Vec<ForeignKey>,
 }
 
@@ -302,7 +303,7 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
         {
             let unique: i64 = row.get("unique");
             let origin: String = row.get("origin");
-            if unique == 0 || origin == "pk" {
+            if origin == "pk" {
                 continue;
             }
             let index: String = row.get("name");
@@ -313,7 +314,11 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
                 .iter()
                 .map(|r| r.get("name"))
                 .collect();
-            table.unique_indexes.insert(index, columns);
+            if unique == 0 {
+                table.indexes.insert(index, columns);
+            } else {
+                table.unique_indexes.insert(index, columns);
+            }
         }
 
         for row in sqlx::query(&format!("PRAGMA foreign_key_list(\"{name}\")"))
@@ -394,6 +399,29 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
         let table: String = row.get("table_name");
         if let Some(t) = schema.tables.get_mut(&table) {
             t.unique_indexes
+                .insert(row.get("index_name"), row.get("columns"));
+        }
+    }
+
+    let non_unique = sqlx::query(
+        "SELECT t.relname::text AS table_name, i.relname::text AS index_name,
+                array_agg(a.attname::text ORDER BY k.ord) AS columns
+         FROM pg_index ix
+         JOIN pg_class t ON t.oid = ix.indrelid
+         JOIN pg_class i ON i.oid = ix.indexrelid
+         JOIN pg_namespace n ON n.oid = t.relnamespace
+         CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+         WHERE n.nspname = current_schema() AND NOT ix.indisunique AND NOT ix.indisprimary
+         GROUP BY t.relname, i.relname",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    for row in non_unique {
+        let table: String = row.get("table_name");
+        if let Some(t) = schema.tables.get_mut(&table) {
+            t.indexes
                 .insert(row.get("index_name"), row.get("columns"));
         }
     }

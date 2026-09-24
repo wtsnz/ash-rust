@@ -4,6 +4,7 @@ mod attributes;
 mod calculations;
 mod helpers;
 mod identities;
+mod indexes;
 mod policies;
 mod recover;
 mod relationships;
@@ -228,6 +229,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     let mut extends = Vec::new();
     let mut optimistic_lock = None;
     let mut identities = Vec::new();
+    let mut indexes = Vec::new();
     let mut data_layer = None;
     let mut store = None;
     let mut timestamps = None;
@@ -401,6 +403,12 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                 if let Some(parsed) = parse_braced_with(input, errors, identities::parse_identities)
                 {
                     identities = parsed;
+                }
+                let _ = helpers::optional_semi(input);
+            } else if section_ident == "indexes" {
+                if let Some(parsed) = parse_braced_with(input, errors, indexes::parse_indexes)
+                {
+                    indexes = parsed;
                 }
                 let _ = helpers::optional_semi(input);
             } else if section_ident == "actor" {
@@ -584,6 +592,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         extends,
         optimistic_lock,
         identities,
+        indexes,
         embedded,
         data_layer,
         store,

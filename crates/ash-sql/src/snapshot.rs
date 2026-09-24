@@ -15,6 +15,8 @@ pub struct TableSnapshot {
     pub columns: Vec<ColumnSnapshot>,
     pub primary_key: Vec<String>,
     pub identities: Vec<IdentitySnapshot>,
+    #[serde(default)]
+    pub indexes: Vec<IndexSnapshot>,
     pub references: Vec<ReferenceSnapshot>,
 }
 
@@ -46,6 +48,14 @@ impl TableSnapshot {
             });
         }
 
+        let mut indexes = Vec::new();
+        for index in resource.indexes {
+            indexes.push(IndexSnapshot {
+                name: format!("idx_{}_{}", resource.table_name(), index.name),
+                columns: index.keys.iter().map(|k| k.to_string()).collect(),
+            });
+        }
+
         let mut references = Vec::new();
         for rel in resource.relationships {
             if rel.kind == RelKind::BelongsTo {
@@ -73,6 +83,7 @@ impl TableSnapshot {
             columns,
             primary_key,
             identities,
+            indexes,
             references,
         }
     }
@@ -119,6 +130,13 @@ pub struct IdentitySnapshot {
     pub name: String,
     pub columns: Vec<String>,
     pub unique: bool,
+}
+
+/// Represents a non-unique index in a schema snapshot.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexSnapshot {
+    pub name: String,
+    pub columns: Vec<String>,
 }
 
 /// Represents a foreign key constraint in a schema snapshot.

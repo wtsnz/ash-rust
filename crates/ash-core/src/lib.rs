@@ -63,7 +63,7 @@ pub use policy::{
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
-    AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, MultitenancyDef,
+    AttrType, AttributeDef, DataLayerKind, Domain, DomainDef, IdentityDef, IndexDef, MultitenancyDef,
     MultitenancyStrategy, OnDelete, RelKind, RelationshipDef, Resource, ResourceDef, ResourceExt,
     utc_now_iso8601, utc_now_timestamp,
 };

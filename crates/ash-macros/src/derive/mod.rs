@@ -59,6 +59,7 @@ pub fn expand(input: DeriveInput) -> Result<TokenStream> {
                 extensions: &[],
                 notifiers: &[],
                 identities: &[],
+                indexes: &[],
                 embedded: false,
                 data_layer: ::ash_core::DataLayerKind::Memory,
                 timestamps: None,

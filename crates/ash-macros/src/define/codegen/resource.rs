@@ -919,6 +919,21 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         })
         .collect();
 
+    let index_defs: Vec<_> = def
+        .indexes
+        .iter()
+        .map(|index| {
+            let name_str = index.name.to_string();
+            let key_strs: Vec<String> = index.keys.iter().map(|k| k.to_string()).collect();
+            quote! {
+                ::ash_core::IndexDef {
+                    name: #name_str,
+                    keys: &[#(#key_strs),*],
+                }
+            }
+        })
+        .collect();
+
     let embedded_lit = def.embedded;
     let data_layer_tokens = if def.embedded {
         quote! { ::ash_core::DataLayerKind::Embedded }
@@ -1089,6 +1104,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     extensions: EXTENSIONS,
                     notifiers: NOTIFIERS,
                     identities: &[#(#ident_defs),*],
+                    indexes: &[#(#index_defs),*],
                     embedded: #embedded_lit,
                     data_layer: #data_layer_tokens,
                     timestamps: #timestamps_tokens,

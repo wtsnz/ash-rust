@@ -22,6 +22,7 @@ static RES_V1: ResourceDef = ResourceDef {
     extensions: &[],
     notifiers: &[],
     identities: &[IdentityDef::new("unique_email", &["email"])],
+    indexes: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Postgres,
     timestamps: None,
@@ -49,6 +50,7 @@ static RES_V2: ResourceDef = ResourceDef {
     extensions: &[],
     notifiers: &[],
     identities: &[],
+    indexes: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Postgres,
     timestamps: None,
@@ -103,9 +105,9 @@ fn test_diff_add_column_and_drop_identity() {
     assert_eq!(ops.len(), 2);
 
     // Should have AddColumn for `age`
-    let has_add_age = ops.iter().any(|op| {
-        matches!(op, SchemaOperation::AddColumn { column, .. } if column.name == "age")
-    });
+    let has_add_age = ops
+        .iter()
+        .any(|op| matches!(op, SchemaOperation::AddColumn { column, .. } if column.name == "age"));
     assert!(has_add_age);
 
     // Should have DropIdentity for `idx_users_unique_email`
@@ -154,11 +156,7 @@ fn test_diff_rename_column() {
     let mut new = old.clone();
     new.columns[1].name = "contact_email".to_string();
 
-    let ops = diff_snapshots_with_renames(
-        Some(&old),
-        Some(&new),
-        &[("email", "contact_email")],
-    );
+    let ops = diff_snapshots_with_renames(Some(&old), Some(&new), &[("email", "contact_email")]);
 
     assert_eq!(ops.len(), 1);
     assert_eq!(

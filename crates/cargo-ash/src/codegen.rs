@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use ash_core::{DomainDef, ResourceDef};
 use ash_sql::{
-    PostgresDialect, SchemaPlan, SqlDialect, SqliteDialect, TableSnapshot, emit_sql,
-    generate_migration_version, persistable_resources, plan_schema, reverse_plan,
+    emit_sql, generate_migration_version, persistable_resources, plan_schema, reverse_plan,
+    PostgresDialect, SchemaPlan, SqlDialect, SqliteDialect, TableSnapshot,
 };
 use clap::Parser;
 
@@ -98,6 +98,7 @@ pub enum CodegenError {
     DevAndName,
     RollbackDevFirst { versions: Vec<String> },
     AmbiguousRenames(Vec<RenameQuestion>),
+    DuplicateIndexName { table: String, name: String },
     Usage(String),
     Io(std::io::Error),
     Snapshot(serde_json::Error),
@@ -127,6 +128,10 @@ impl fmt::Display for CodegenError {
                 }
                 Ok(())
             }
+            Self::DuplicateIndexName { table, name } => write!(
+                f,
+                "index `{name}` on table `{table}` clashes with an identity name"
+            ),
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::Snapshot(error) => write!(f, "{error}"),
@@ -217,6 +222,18 @@ fn run_with<D: SqlDialect>(
     }
 
     let resources = persistable_resources(resources);
+    for resource in &resources {
+        let identity_names: std::collections::HashSet<&str> =
+            resource.identities.iter().map(|i| i.name).collect();
+        for index in resource.indexes {
+            if identity_names.contains(index.name) {
+                return Err(CodegenError::DuplicateIndexName {
+                    table: resource.table_name().to_string(),
+                    name: index.name.to_string(),
+                });
+            }
+        }
+    }
     let new: Vec<TableSnapshot> = resources
         .iter()
         .map(|resource| TableSnapshot::from_resource(resource, dialect))
@@ -258,9 +275,15 @@ fn run_with<D: SqlDialect>(
     match options.mode {
         Mode::Check => Ok(CodegenOutcome::OutOfDate { up_sql }),
         Mode::DryRun => Ok(CodegenOutcome::WouldWrite { up_sql, down_sql }),
-        Mode::Write if options.dev => {
-            write_plan(dialect, options, "dev", &dev_snap_dir(options), &plan, &up_sql, &down_sql)
-        }
+        Mode::Write if options.dev => write_plan(
+            dialect,
+            options,
+            "dev",
+            &dev_snap_dir(options),
+            &plan,
+            &up_sql,
+            &down_sql,
+        ),
         Mode::Write => {
             let name = options.name.as_deref().ok_or(CodegenError::MissingName)?;
             let outcome = write_plan(

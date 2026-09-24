@@ -1667,3 +1667,77 @@ async fn codegen_converts_text_values_into_datetime_and_decimal(db: TestDb) {
     );
 }
 on_every_backend!(codegen_converts_text_values_into_datetime_and_decimal);
+
+async fn codegen_creates_a_non_unique_index(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_labeled_notes",
+        &[&fixtures::labeled_notes::LabeledNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_labeled_notes.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains("CREATE INDEX IF NOT EXISTS \"idx_labeled_notes_by_status\""),
+        "up SQL missing non-unique index:\n{up}"
+    );
+    assert!(
+        !up.contains("CREATE UNIQUE INDEX IF NOT EXISTS \"idx_labeled_notes_by_status\""),
+        "by_status must not be unique:\n{up}"
+    );
+    assert!(
+        up.contains("CREATE UNIQUE INDEX IF NOT EXISTS \"idx_labeled_notes_unique_title\""),
+        "identity unique index missing:\n{up}"
+    );
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert_eq!(
+        schema
+            .table("labeled_notes")
+            .indexes
+            .get("idx_labeled_notes_by_status"),
+        Some(&vec!["status".to_string()])
+    );
+    assert!(
+        !schema
+            .table("labeled_notes")
+            .unique_indexes
+            .contains_key("idx_labeled_notes_by_status")
+    );
+    assert_eq!(
+        schema
+            .table("labeled_notes")
+            .unique_indexes
+            .get("idx_labeled_notes_unique_title"),
+        Some(&vec!["title".to_string()])
+    );
+
+    let note_a = "00000000-0000-0000-0000-0000000000a1";
+    let note_b = "00000000-0000-0000-0000-0000000000a2";
+    db.exec(&format!(
+        "INSERT INTO labeled_notes (id, title, status) VALUES ('{note_a}', 'alpha', 'open')"
+    ))
+    .await
+    .unwrap();
+    db.exec(&format!(
+        "INSERT INTO labeled_notes (id, title, status) VALUES ('{note_b}', 'beta', 'open')"
+    ))
+    .await
+    .unwrap();
+    let dup_identity = db
+        .exec(
+            "INSERT INTO labeled_notes (id, title, status) VALUES ('00000000-0000-0000-0000-0000000000a3', 'alpha', 'closed')",
+        )
+        .await;
+    assert!(dup_identity.is_err(), "duplicate identity title must fail");
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let after = db.schema().await;
+    assert!(after.tables.is_empty() || !after.tables.contains_key("labeled_notes"));
+}
+on_every_backend!(codegen_creates_a_non_unique_index);
+

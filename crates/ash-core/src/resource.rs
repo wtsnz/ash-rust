@@ -87,6 +87,19 @@ impl IdentityDef {
     }
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndexDef {
+    pub name: &'static str,
+    pub keys: &'static [&'static str],
+}
+
+impl IndexDef {
+    pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
+        Self { name, keys }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MultitenancyStrategy {
     Attribute(&'static str),
@@ -134,6 +147,7 @@ pub struct ResourceDef {
     pub extensions: &'static [&'static dyn ResourceExtension],
     pub notifiers: &'static [&'static dyn Notifier],
     pub identities: &'static [IdentityDef],
+    pub indexes: &'static [IndexDef],
     pub embedded: bool,
     pub data_layer: DataLayerKind,
     pub timestamps: Option<(&'static str, &'static str)>,
