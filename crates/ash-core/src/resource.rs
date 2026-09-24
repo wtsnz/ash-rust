@@ -362,6 +362,7 @@ pub enum AttrType {
     Array,
     UtcDatetime,
     Decimal,
+    Float,
 }
 
 impl AttrType {
@@ -376,6 +377,7 @@ impl AttrType {
             Self::Array => "array",
             Self::UtcDatetime => "utc_datetime",
             Self::Decimal => "decimal",
+            Self::Float => "float",
         }
     }
 }

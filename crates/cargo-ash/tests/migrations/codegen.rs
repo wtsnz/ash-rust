@@ -2204,3 +2204,67 @@ async fn squash_history_refuses_until_rollback_then_writes_one_migration(db: Tes
     );
 }
 on_every_backend!(squash_history_refuses_until_rollback_then_writes_one_migration);
+
+async fn codegen_creates_a_float_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_gauges", &[&fixtures::gauge::Gauge::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_gauges.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"weight\""));
+    if dialect == "postgres" {
+        assert!(up.contains("DOUBLE PRECISION"));
+    } else {
+        assert!(up.contains("\"weight\" REAL"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert_eq!(schema.column("gauges", "weight").ty, db.float_type());
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000f1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("weight".into(), Value::String("2.5".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::gauge::Gauge::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::gauge::Gauge::DEF, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::gauge::Gauge::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::gauge::Gauge::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    let weight = rows[0].get("weight").unwrap();
+    assert_eq!(
+        weight,
+        &Value::String(ash_core::Float::parse("2.5").unwrap().as_str().into())
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_float_column);

@@ -1,3 +1,4 @@
+use ash_core::Float;
 use helpdesk::{Ticket, actor_customer, open_sqlite};
 use uuid::Uuid;
 
@@ -11,6 +12,7 @@ async fn tickets_survive_reopen() {
     let as_customer = ctx.with_actor(actor_customer(customer));
     let opened = Ticket::open(&as_customer)
         .subject("Printer is jammed")
+        .estimate(Float::parse("1.5").unwrap())
         .await
         .unwrap();
     drop(ctx);
@@ -21,4 +23,5 @@ async fn tickets_survive_reopen() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, opened.id);
     assert_eq!(listed[0].subject, "Printer is jammed");
+    assert_eq!(listed[0].estimate.as_ref().map(Float::as_str), Some("1.5"));
 }

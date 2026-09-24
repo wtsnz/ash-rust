@@ -290,6 +290,7 @@ async fn test_typescript_filters_match_graphql_filter_inputs() {
         ("UuidFilter", "UuidFilterInput"),
         ("StringFilter", "StringFilterInput"),
         ("IntFilter", "IntFilterInput"),
+        ("FloatFilter", "FloatFilterInput"),
         ("TicketFilterInput", "TicketFilterInput"),
         ("RepresentativeFilterInput", "RepresentativeFilterInput"),
     ] {

@@ -43,7 +43,7 @@ pub fn sql_type_to_ts_and_zod(
         // Decimals travel as strings, like GraphQL's Decimal fields.
         ("string", Some("StringFilter"), "z.string()")
     } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("REAL") {
-        ("number", Some("IntFilter"), "z.number()")
+        ("number", Some("FloatFilter"), "z.number()")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", None, "z.record(z.string(), z.unknown())")
     } else {

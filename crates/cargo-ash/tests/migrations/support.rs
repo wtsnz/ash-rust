@@ -123,6 +123,13 @@ impl TestDb {
         }
     }
 
+    pub fn float_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "REAL",
+            Db::Postgres(_) => "double precision",
+        }
+    }
+
     pub fn decimal_type(&self) -> &'static str {
         match self.db {
             Db::Sqlite(_) => "NUMERIC",

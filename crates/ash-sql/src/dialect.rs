@@ -68,6 +68,7 @@ impl SqlDialect for SqliteDialect {
         match attr.ty {
             AttrType::Integer | AttrType::Boolean => "INTEGER".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
+            AttrType::Float => "REAL".to_string(),
             AttrType::Uuid
             | AttrType::String
             | AttrType::UtcDatetime
@@ -134,6 +135,7 @@ impl SqlDialect for PostgresDialect {
         match ty {
             AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
             AttrType::Decimal => format!("{placeholder}::numeric"),
+            AttrType::Float => format!("{placeholder}::float8"),
             _ => placeholder.to_string(),
         }
     }
@@ -147,6 +149,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Boolean => "BOOLEAN".to_string(),
             AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
+            AttrType::Float => "DOUBLE PRECISION".to_string(),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }
     }

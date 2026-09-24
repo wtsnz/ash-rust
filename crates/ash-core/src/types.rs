@@ -165,6 +165,57 @@ impl Decimal {
     }
 }
 
+/// IEEE-754 binary64 number stored as its canonical decimal text.
+///
+/// Postgres columns use `double precision`. SQLite columns use `REAL`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Float(String);
+
+impl Float {
+    pub fn parse(raw: &str) -> Result<Self> {
+        let parsed: f64 = raw.parse().map_err(|_| {
+            Error::Invalid(format!("invalid float `{raw}`: expected a finite number"))
+        })?;
+        if !parsed.is_finite() {
+            return Err(Error::Invalid(format!(
+                "invalid float `{raw}`: expected a finite number"
+            )));
+        }
+        Ok(Self(parsed.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<Float> for Value {
+    fn from(value: Float) -> Self {
+        value.to_value()
+    }
+}
+
+impl crate::value::IntoOption<Float> for Float {
+    fn into_option(self) -> Option<Float> {
+        Some(self)
+    }
+}
+
+impl AshType for Float {
+    const ATTR_TYPE: AttrType = AttrType::Float;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected float".into())),
+        }
+    }
+}
+
 impl AshType for Decimal {
     const ATTR_TYPE: AttrType = AttrType::Decimal;
 
@@ -308,5 +359,14 @@ mod tests {
         assert!(Decimal::parse("12.").is_err());
         assert!(Decimal::parse("1e2").is_err());
         assert!(Decimal::parse("").is_err());
+    }
+
+    #[test]
+    fn float_canonicalizes_finite_numbers() {
+        assert_eq!(Float::parse("1.50").unwrap().as_str(), "1.5");
+        assert_eq!(Float::parse("-0").unwrap().as_str(), "-0");
+        assert!(Float::parse("inf").is_err());
+        assert!(Float::parse("nan").is_err());
+        assert!(Float::parse("nope").is_err());
     }
 }

@@ -31,6 +31,13 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn(TypeRef::INT)
             }
         }
+        AttrType::Float => {
+            if allow_nil {
+                TypeRef::named(TypeRef::FLOAT)
+            } else {
+                TypeRef::named_nn(TypeRef::FLOAT)
+            }
+        }
         AttrType::Boolean => {
             if allow_nil {
                 TypeRef::named(TypeRef::BOOLEAN)
@@ -176,6 +183,12 @@ pub fn parse_input_val(
             ash_core::Decimal::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::Float => {
+            let n = acc.f64()?;
+            let float = ash_core::Float::parse(&n.to_string())
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(float.as_str().to_string()))
         }
         AttrType::Integer => {
             let n = acc.i64()?;

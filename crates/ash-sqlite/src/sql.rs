@@ -2,10 +2,10 @@ use ash_core::{
     AggregateDef, AttrType, CompiledQuery, Error, FieldMap, IdentityDef, ResourceDef, Result, Value,
 };
 use ash_sql::{
-    column as sql_column, ident as sql_ident, CompiledSql, QueryCompiler, SqliteDialect,
+    CompiledSql, QueryCompiler, SqliteDialect, column as sql_column, ident as sql_ident,
 };
-use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 pub fn ident(name: &str) -> Result<String> {
@@ -115,6 +115,10 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
+        AttrType::Float => match optional_float(row, col)? {
+            None => Ok(Value::Null),
+            Some(text) => Ok(Value::String(text)),
+        },
         AttrType::Integer => match optional_i64(row, col)? {
             None => Ok(Value::Null),
             Some(int) => Ok(Value::Int(int)),
@@ -162,6 +166,10 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
+        AttrType::Float => match optional_float(row, agg.name)? {
+            None => Ok(Value::Null),
+            Some(text) => Ok(Value::String(text)),
+        },
         AttrType::Uuid => match optional_text(row, agg.name)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::Uuid(
@@ -190,6 +198,22 @@ fn optional_decimal(row: &SqliteRow, name: &str) -> Result<Option<String>> {
         Err(sqlx::Error::ColumnNotFound(_)) => Ok(None),
         Err(err) => Err(Error::DataLayer(err.to_string())),
     }
+}
+
+fn optional_float(row: &SqliteRow, name: &str) -> Result<Option<String>> {
+    match row.try_get::<Option<f64>, _>(name) {
+        Ok(Some(n)) => return Ok(Some(n.to_string())),
+        Ok(None) => return Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => return Ok(None),
+        Err(_) => {}
+    }
+    match row.try_get::<Option<i64>, _>(name) {
+        Ok(Some(n)) => return Ok(Some(n.to_string())),
+        Ok(None) => return Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => return Ok(None),
+        Err(_) => {}
+    }
+    optional_text(row, name)
 }
 
 fn format_real(n: f64) -> String {
