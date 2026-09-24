@@ -255,6 +255,7 @@ mod tests {
         notifiers: &[],
         identities: &[],
         indexes: &[],
+        checks: &[],
         embedded: false,
         data_layer: ash_core::DataLayerKind::Sqlite,
         timestamps: None,

@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::PathBuf;
 use ash_sql::{ColumnSnapshot, TableSnapshot};
 use clap::Args;
 use sqlx::Row;
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub struct DumpArgs {
@@ -37,7 +37,11 @@ pub async fn run(args: DumpArgs) -> Result<(), Box<dyn std::error::Error>> {
         println!("  Dumped table snapshot: {}", file_path.display());
     }
 
-    println!("Successfully dumped {} table snapshot(s) to `{}`.", count, args.output.display());
+    println!(
+        "Successfully dumped {} table snapshot(s) to `{}`.",
+        count,
+        args.output.display()
+    );
     Ok(())
 }
 
@@ -87,6 +91,7 @@ async fn dump_sqlite(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error
             primary_key,
             identities: Vec::new(),
             indexes: Vec::new(),
+            checks: Vec::new(),
             references: Vec::new(),
         });
     }
@@ -96,7 +101,9 @@ async fn dump_sqlite(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error
 
 async fn dump_postgres(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error::Error>> {
     let db = ash_postgres::Postgres::connect(url).await?;
-    let pool = db.pool().ok_or("Cannot acquire PostgreSQL connection pool")?;
+    let pool = db
+        .pool()
+        .ok_or("Cannot acquire PostgreSQL connection pool")?;
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name != '_ash_schema_migrations' ORDER BY table_name ASC",
@@ -140,6 +147,7 @@ async fn dump_postgres(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::err
             primary_key,
             identities: Vec::new(),
             indexes: Vec::new(),
+            checks: Vec::new(),
             references: Vec::new(),
         });
     }

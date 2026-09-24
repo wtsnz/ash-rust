@@ -221,6 +221,7 @@ pub struct Table {
     pub columns: BTreeMap<String, Column>,
     pub unique_indexes: BTreeMap<String, Vec<String>>,
     pub indexes: BTreeMap<String, Vec<String>>,
+    pub checks: BTreeMap<String, String>,
     pub foreign_keys: Vec<ForeignKey>,
 }
 
@@ -335,6 +336,18 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
         }
         table.foreign_keys.sort();
 
+        let create_sql: Option<String> =
+            sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(&name)
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+        if let Some(sql) = create_sql {
+            for (ck_name, expression) in parse_sqlite_checks(&sql) {
+                table.checks.insert(ck_name, expression);
+            }
+        }
+
         schema.tables.insert(name, table);
     }
     schema
@@ -421,8 +434,7 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
     for row in non_unique {
         let table: String = row.get("table_name");
         if let Some(t) = schema.tables.get_mut(&table) {
-            t.indexes
-                .insert(row.get("index_name"), row.get("columns"));
+            t.indexes.insert(row.get("index_name"), row.get("columns"));
         }
     }
 
@@ -462,6 +474,30 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
         }
     }
 
+    let checks = sqlx::query(
+        "SELECT cl.relname::text AS table_name, c.conname::text AS check_name,
+                pg_get_constraintdef(c.oid)::text AS definition
+         FROM pg_constraint c
+         JOIN pg_class cl ON cl.oid = c.conrelid
+         JOIN pg_namespace n ON n.oid = cl.relnamespace
+         WHERE c.contype = 'c' AND n.nspname = current_schema()",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    for row in checks {
+        let table: String = row.get("table_name");
+        if let Some(t) = schema.tables.get_mut(&table) {
+            let definition: String = row.get("definition");
+            let expression = definition
+                .strip_prefix("CHECK (")
+                .and_then(|s| s.strip_suffix(')'))
+                .unwrap_or(&definition)
+                .to_string();
+            t.checks.insert(row.get("check_name"), expression);
+        }
+    }
+
     schema
 }
 
@@ -470,6 +506,54 @@ fn strip_postgres_cast(default: String) -> String {
         Some(at) if default[..at].ends_with('\'') => default[..at].to_string(),
         _ => default,
     }
+}
+
+fn parse_sqlite_checks(create_sql: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let upper = create_sql.to_ascii_uppercase();
+    let mut search_from = 0;
+    while let Some(rel) = upper[search_from..].find("CONSTRAINT ") {
+        let start = search_from + rel + "CONSTRAINT ".len();
+        let rest = &create_sql[start..];
+        let name_end = rest
+            .find(|c: char| c.is_whitespace() || c == '(')
+            .unwrap_or(rest.len());
+        let name = rest[..name_end].trim().trim_matches('"').to_string();
+        let after_name = rest[name_end..].trim_start();
+        let after_upper = after_name.to_ascii_uppercase();
+        if !after_upper.starts_with("CHECK") {
+            search_from = start + name_end;
+            continue;
+        }
+        let check_body = after_name[after_upper.find("CHECK").unwrap() + 5..].trim_start();
+        if !check_body.starts_with('(') {
+            search_from = start + name_end;
+            continue;
+        }
+        let mut depth = 0;
+        let mut end = None;
+        for (i, ch) in check_body.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(end) = end {
+            let expression = check_body[1..end].to_string();
+            out.push((name, expression));
+            search_from = start + (rest.len() - after_name.len()) + end + 1;
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 pub struct Project {

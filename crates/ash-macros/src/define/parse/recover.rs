@@ -241,3 +241,25 @@ pub fn skip_index(input: ParseStream) {
         }
     }
 }
+
+/// Skip a broken `check` item. Stops before the next `check`.
+pub fn skip_check(input: ParseStream) {
+    while !input.is_empty() {
+        if peek_ident_is(input, &["check"]) {
+            return;
+        }
+        if skip_group(input, Delimiter::Brace)
+            || skip_group(input, Delimiter::Bracket)
+            || skip_group(input, Delimiter::Parenthesis)
+        {
+            continue;
+        }
+        if input.peek(Token![;]) {
+            let _ = input.parse::<Token![;]>();
+            return;
+        }
+        if !skip_one_tree(input) {
+            return;
+        }
+    }
+}
