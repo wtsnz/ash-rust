@@ -7,7 +7,7 @@ use ash_core::{ActionDef, ActionKind, AttrType, ResourceDef, Validation};
 pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
     let base = match attr_ty {
         AttrType::Uuid => "z.string().uuid()".to_string(),
-        AttrType::String | AttrType::Date | AttrType::UtcDatetime | AttrType::Decimal => {
+        AttrType::String | AttrType::Date | AttrType::Binary | AttrType::UtcDatetime | AttrType::Decimal => {
             "z.string()".to_string()
         }
         AttrType::Float => "z.number()".to_string(),
@@ -124,7 +124,7 @@ fn build_field_zod_schema(
     } else {
         match ty {
             AttrType::Uuid => "z.string().uuid()".to_string(),
-            AttrType::String | AttrType::Date | AttrType::UtcDatetime | AttrType::Decimal => {
+            AttrType::String | AttrType::Date | AttrType::Binary | AttrType::UtcDatetime | AttrType::Decimal => {
                 "z.string()".to_string()
             }
             AttrType::Float => "z.number()".to_string(),

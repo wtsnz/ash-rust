@@ -364,6 +364,7 @@ pub enum AttrType {
     Decimal,
     Float,
     Date,
+    Binary,
 }
 
 impl AttrType {
@@ -380,6 +381,7 @@ impl AttrType {
             Self::Decimal => "decimal",
             Self::Float => "float",
             Self::Date => "date",
+            Self::Binary => "binary",
         }
     }
 }

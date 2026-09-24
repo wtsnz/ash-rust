@@ -429,6 +429,12 @@ fn parse_input_val(
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
         }
+        AttrType::Binary => {
+            let s = acc.string()?;
+            let binary =
+                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(binary.encode()))
+        }
         AttrType::Date => {
             let s = acc.string()?;
             ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;

@@ -531,6 +531,24 @@ pub mod bounded_notes {
     }
 }
 
+pub mod file_blob {
+    use ash_core::{Binary, resource};
+    use uuid::Uuid;
+
+    resource! {
+        FileBlob {
+            table "file_blobs";
+            attributes {
+                id: Uuid [pk];
+                payload: Binary = "aGVsbG8=";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod deadline {
     use ash_core::{Date, resource};
     use uuid::Uuid;

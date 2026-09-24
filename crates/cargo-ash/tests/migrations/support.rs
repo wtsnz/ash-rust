@@ -123,6 +123,13 @@ impl TestDb {
         }
     }
 
+    pub fn binary_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "BLOB",
+            Db::Postgres(_) => "bytea",
+        }
+    }
+
     pub fn date_type(&self) -> &'static str {
         match self.db {
             Db::Sqlite(_) => "TEXT",

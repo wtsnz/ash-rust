@@ -115,6 +115,10 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
+        AttrType::Binary => match optional_blob(row, col)? {
+            None => Ok(Value::Null),
+            Some(bytes) => Ok(Value::String(ash_core::Binary::from_bytes(bytes).encode())),
+        },
         AttrType::Float => match optional_float(row, col)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
@@ -166,6 +170,10 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
+        AttrType::Binary => match optional_blob(row, agg.name)? {
+            None => Ok(Value::Null),
+            Some(bytes) => Ok(Value::String(ash_core::Binary::from_bytes(bytes).encode())),
+        },
         AttrType::Float => match optional_float(row, agg.name)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
@@ -195,6 +203,14 @@ fn optional_decimal(row: &SqliteRow, name: &str) -> Result<Option<String>> {
     match row.try_get::<Option<f64>, _>(name) {
         Ok(Some(n)) => Ok(Some(format_real(n))),
         Ok(None) => Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => Ok(None),
+        Err(err) => Err(Error::DataLayer(err.to_string())),
+    }
+}
+
+fn optional_blob(row: &SqliteRow, name: &str) -> Result<Option<Vec<u8>>> {
+    match row.try_get::<Option<Vec<u8>>, _>(name) {
+        Ok(value) => Ok(value),
         Err(sqlx::Error::ColumnNotFound(_)) => Ok(None),
         Err(err) => Err(Error::DataLayer(err.to_string())),
     }

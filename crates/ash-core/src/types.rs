@@ -1,3 +1,6 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
 use crate::error::{Error, Result};
 use crate::resource::AttrType;
 use crate::value::Value;
@@ -186,6 +189,64 @@ impl Float {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Opaque bytes stored as standard base64.
+///
+/// Postgres columns use `bytea`. SQLite columns use `BLOB`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Binary(Vec<u8>);
+
+impl Binary {
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
+        Self(bytes.into())
+    }
+
+    pub fn parse(raw: &str) -> Result<Self> {
+        STANDARD
+            .decode(raw)
+            .map(Self)
+            .map_err(|err| Error::Invalid(format!("invalid base64 `{raw}`: {err}")))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+
+    pub fn encode(&self) -> String {
+        STANDARD.encode(&self.0)
+    }
+}
+
+impl From<Binary> for Value {
+    fn from(value: Binary) -> Self {
+        value.to_value()
+    }
+}
+
+impl crate::value::IntoOption<Binary> for Binary {
+    fn into_option(self) -> Option<Binary> {
+        Some(self)
+    }
+}
+
+impl AshType for Binary {
+    const ATTR_TYPE: AttrType = AttrType::Binary;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.encode())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected binary".into())),
+        }
     }
 }
 
@@ -460,5 +521,13 @@ mod tests {
         assert!(Date::parse("2024-04-31").is_err());
         assert!(Date::parse("2024-1-02").is_err());
         assert!(Date::parse("2024-01-02T00:00:00Z").is_err());
+    }
+
+    #[test]
+    fn binary_round_trips_base64() {
+        let bytes = Binary::from_bytes(b"hello".to_vec());
+        assert_eq!(bytes.encode(), "aGVsbG8=");
+        assert_eq!(Binary::parse("aGVsbG8=").unwrap().as_bytes(), b"hello");
+        assert!(Binary::parse("!!!!").is_err());
     }
 }

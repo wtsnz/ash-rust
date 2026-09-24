@@ -44,6 +44,8 @@ pub fn sql_type_to_ts_and_zod(
         ("string", Some("StringFilter"), "z.string()")
     } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("REAL") {
         ("number", Some("FloatFilter"), "z.number()")
+    } else if upper.contains("BYTEA") || upper.contains("BLOB") {
+        ("string", Some("StringFilter"), "z.string()")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", None, "z.record(z.string(), z.unknown())")
     } else {
