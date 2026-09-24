@@ -7,7 +7,7 @@ use crate::types::to_pascal_case;
 pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
     let base = match attr_ty {
         AttrType::Uuid => "z.string().uuid()".to_string(),
-        AttrType::String => "z.string()".to_string(),
+        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "z.string()".to_string(),
         AttrType::Integer => "z.number().int()".to_string(),
         AttrType::Boolean => "z.boolean()".to_string(),
         AttrType::Atom { one_of } => {
@@ -117,7 +117,7 @@ fn build_field_zod_schema(
     } else {
         match ty {
             AttrType::Uuid => "z.string().uuid()".to_string(),
-            AttrType::String => "z.string()".to_string(),
+            AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "z.string()".to_string(),
             AttrType::Integer => "z.number().int()".to_string(),
             AttrType::Boolean => "z.boolean()".to_string(),
             AttrType::Atom { one_of } => {

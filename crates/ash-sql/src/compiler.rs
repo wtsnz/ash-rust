@@ -1,6 +1,6 @@
 use ash_core::{
-    AggregateDef, AggregateFilter, AggregateKind, CompiledQuery, Error, Expr, FieldMap, Filter,
-    IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
+    AggregateDef, AggregateFilter, AggregateKind, AttrType, CompiledQuery, Error, Expr, FieldMap,
+    Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
 use uuid::Uuid;
 
@@ -70,6 +70,18 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         self.param_counter += 1;
         self.params.push(SqlParam::new(val));
         self.dialect.placeholder(self.param_counter)
+    }
+
+    fn bind_typed(&mut self, ty: AttrType, val: Value) -> String {
+        let placeholder = self.push_param(val);
+        self.dialect.cast_param(ty, &placeholder)
+    }
+
+    fn bind_field(&mut self, resource: &ResourceDef, field: &str, val: Value) -> String {
+        match resource.attribute(field).map(|attr| attr.ty) {
+            Some(ty) => self.bind_typed(ty, val),
+            None => self.push_param(val),
+        }
     }
 
     /// Pushes a bound list parameter and returns the dialect placeholder.
@@ -236,7 +248,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             Filter::Eq(field, val) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, field, val.clone());
                 Ok(format!("{op} = {p}"))
             }
             Filter::Ne(field, val) if val.is_null() => {
@@ -245,27 +257,27 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             Filter::Ne(field, val) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, field, val.clone());
                 Ok(format!("{op} <> {p}"))
             }
             Filter::Gt(field, val) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, field, val.clone());
                 Ok(format!("{op} > {p}"))
             }
             Filter::Gte(field, val) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, field, val.clone());
                 Ok(format!("{op} >= {p}"))
             }
             Filter::Lt(field, val) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, field, val.clone());
                 Ok(format!("{op} < {p}"))
             }
             Filter::Lte(field, val) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, field, val.clone());
                 Ok(format!("{op} <= {p}"))
             }
             Filter::IsNil(field) => {
@@ -522,7 +534,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for prev in sorts.iter().take(i) {
                 let prev_col = column(self.dialect, resource, &prev.field)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
-                    let p = self.push_param(val.clone());
+                    let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
@@ -530,7 +542,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let col = column(self.dialect, resource, &sort.field)?;
             let op = if sort.descending { "<" } else { ">" };
             if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &sort.field) {
-                let p = self.push_param(val.clone());
+                let p = self.bind_field(resource, &sort.field, val.clone());
                 let mut branch = format!("{col} {op} {p}");
                 if !prefix_match.is_empty() {
                     branch = format!("{} AND {branch}", prefix_match.join(" AND "));
@@ -546,7 +558,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for prev in sorts {
                 let prev_col = column(self.dialect, resource, &prev.field)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
-                    let p = self.push_param(val.clone());
+                    let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
@@ -683,7 +695,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         for attr in resource.attributes {
             if let Some(val) = fields.get(attr.name) {
                 col_names.push(ident(self.dialect, attr.name)?);
-                placeholders.push(self.push_param(val.clone()));
+                placeholders.push(self.bind_typed(attr.ty, val.clone()));
             }
         }
 
@@ -726,7 +738,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 } else {
                     fields.get(attr.name).cloned().unwrap_or(Value::Null)
                 };
-                placeholders.push(self.push_param(val));
+                placeholders.push(self.bind_typed(attr.ty, val));
             }
             row_placeholders.push(format!("({})", placeholders.join(", ")));
         }
@@ -762,7 +774,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             if let Some(val) = fields.get(attr.name) {
                 let col = ident(self.dialect, attr.name)?;
-                let p = self.push_param(val.clone());
+                let p = self.bind_typed(attr.ty, val.clone());
                 set_clauses.push(format!("{col} = {p}"));
             }
         }

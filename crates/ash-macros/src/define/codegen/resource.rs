@@ -513,7 +513,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::std::option::Option::Some(val) if !val.is_null() => {
                             <#inner_ty as ::ash_core::AshType>::from_value(val)?
                         }
-                        _ => #default_expr,
+                        _ => <#inner_ty as ::ash_core::AshType>::from_value(
+                            &::ash_core::Value::from(#default_expr),
+                        )?,
                     }
                 });
             } else if let Some(default_fn) = &a.default_fn {

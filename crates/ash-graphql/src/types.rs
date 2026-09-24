@@ -17,7 +17,7 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn(TypeRef::ID)
             }
         }
-        AttrType::String => {
+        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
             if allow_nil {
                 TypeRef::named(TypeRef::STRING)
             } else {
@@ -163,6 +163,18 @@ pub fn parse_input_val(
         }
         AttrType::String => {
             let s = acc.string()?;
+            Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::UtcDatetime => {
+            let s = acc.string()?;
+            ash_core::UtcDateTime::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(AshValue::String(s.to_string()))
+        }
+        AttrType::Decimal => {
+            let s = acc.string()?;
+            ash_core::Decimal::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
         }
         AttrType::Integer => {

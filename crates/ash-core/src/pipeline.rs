@@ -465,6 +465,24 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
         | (AttrType::Boolean, Value::Bool(_))
         | (AttrType::Map, Value::Map(_))
         | (AttrType::Array, Value::Array(_)) => true,
+        (AttrType::UtcDatetime, Value::String(got)) => match crate::UtcDateTime::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be an RFC3339 timestamp, got {got}"),
+                });
+            }
+        },
+        (AttrType::Decimal, Value::String(got)) => match crate::Decimal::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a decimal number, got {got}"),
+                });
+            }
+        },
         (AttrType::Atom { one_of }, Value::String(got)) => {
             if one_of.contains(&got.as_str()) {
                 true

@@ -423,6 +423,18 @@ fn parse_input_val(
             let s = acc.string()?;
             Ok(Value::String(s.to_string()))
         }
+        AttrType::UtcDatetime => {
+            let s = acc.string()?;
+            ash_core::UtcDateTime::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
+        AttrType::Decimal => {
+            let s = acc.string()?;
+            ash_core::Decimal::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(s.to_string()))
+        }
         AttrType::Integer => {
             let n = acc.i64()?;
             Ok(Value::Int(n))

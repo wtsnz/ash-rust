@@ -1,4 +1,4 @@
-use ash_core::Resource;
+use ash_core::{DataLayer, FieldMap, Resource, Value};
 use cargo_ash::codegen::{
     CodegenError, CodegenOptions, CodegenOutcome, Mode, NonInteractive, RenameQuestion, Resolution,
 };
@@ -907,12 +907,7 @@ async fn named_codegen_refuses_to_drop_dev_files_before_rollback(db: TestDb) {
         "{err:?}"
     );
     assert_eq!(project.migration_files(), files_before);
-    assert!(
-        db.migrate(&project.migrations())
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(db.migrate(&project.migrations()).await.unwrap().is_empty());
     assert!(db.schema().await.has_column("tickets", "priority"));
 
     let reverted = project
@@ -988,11 +983,13 @@ async fn named_codegen_squashes_dev_migrations_and_keeps_rows(db: TestDb) {
         "{:?}",
         project.migration_files()
     );
-    assert!(!project
-        .snapshots()
-        .join(db.dialect().name())
-        .join("dev")
-        .exists());
+    assert!(
+        !project
+            .snapshots()
+            .join(db.dialect().name())
+            .join("dev")
+            .exists()
+    );
 
     let applied = db.migrate(&project.migrations()).await.unwrap();
     assert_eq!(applied, vec![squash.version.clone()]);
@@ -1073,7 +1070,10 @@ async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestD
         other => panic!("expected the rename dev migration, got {other:?}"),
     };
     assert!(
-        !renamed.up_sql.to_ascii_lowercase().contains("create table \"tickets\""),
+        !renamed
+            .up_sql
+            .to_ascii_lowercase()
+            .contains("create table \"tickets\""),
         "{}",
         renamed.up_sql
     );
@@ -1128,7 +1128,11 @@ async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestD
         "open"
     );
     assert_eq!(
-        db.schema().await.column("tickets", "status").default.as_deref(),
+        db.schema()
+            .await
+            .column("tickets", "status")
+            .default
+            .as_deref(),
         Some("'new'")
     );
     let comment_id = "00000000-0000-0000-0000-0000000000c1";
@@ -1238,7 +1242,8 @@ async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestD
         3
     );
     assert_eq!(
-        db.int("SELECT COUNT(*) FROM tickets WHERE estimate IS NULL").await,
+        db.int("SELECT COUNT(*) FROM tickets WHERE estimate IS NULL")
+            .await,
         1
     );
     let schema = db.schema().await;
@@ -1317,7 +1322,9 @@ async fn check_sees_dev_work_as_pending(db: TestDb) {
 
     let resources = fixtures::helpdesk_with(&fixtures::with_priority::Ticket::DEF);
     let check = project.options(Mode::Check, None);
-    let stale = project.run(&check, &resources, &mut NonInteractive).unwrap();
+    let stale = project
+        .run(&check, &resources, &mut NonInteractive)
+        .unwrap();
     match &stale {
         CodegenOutcome::OutOfDate { up_sql } => assert!(up_sql.contains("priority"), "{up_sql}"),
         other => panic!("expected OutOfDate, got {other:?}"),
@@ -1405,3 +1412,258 @@ async fn named_codegen_recovers_after_dev_files_were_deleted(db: TestDb) {
 }
 on_every_backend!(named_codegen_recovers_after_dev_files_were_deleted);
 
+const OPENED_AT: &str = "2024-01-02T03:04:05Z";
+const INVOICE_ID: &str = "00000000-0000-0000-0000-0000000000d1";
+const WRITTEN_INVOICE_ID: &str = "00000000-0000-0000-0000-0000000000d2";
+
+fn same_decimal(got: &str, expected: &str) -> bool {
+    fn canonical(raw: &str) -> Option<(bool, String, String)> {
+        let negative = raw.starts_with('-');
+        let raw = raw.strip_prefix(['+', '-']).unwrap_or(raw);
+        let (whole, fraction) = raw.split_once('.').unwrap_or((raw, ""));
+        if whole.is_empty() && fraction.is_empty() {
+            return None;
+        }
+        let whole = whole.trim_start_matches('0');
+        let whole = if whole.is_empty() { "0" } else { whole };
+        let fraction = fraction.trim_end_matches('0');
+        let negative = negative && !(whole == "0" && fraction.is_empty());
+        Some((negative, whole.to_string(), fraction.to_string()))
+    }
+    canonical(got) == canonical(expected)
+}
+
+async fn opened_at_text(db: &TestDb, id: &str) -> String {
+    match db.dialect().name() {
+        "postgres" => {
+            db.text(&format!(
+                "SELECT to_char(opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM invoices WHERE id = '{id}'"
+            ))
+            .await
+        }
+        _ => {
+            db.text(&format!(
+                "SELECT opened_at FROM invoices WHERE id = '{id}'"
+            ))
+            .await
+        }
+    }
+}
+
+async fn amount_text(db: &TestDb, id: &str) -> String {
+    match db.dialect().name() {
+        "postgres" => {
+            db.text(&format!(
+                "SELECT amount::text FROM invoices WHERE id = '{id}'"
+            ))
+            .await
+        }
+        _ => {
+            db.text(&format!(
+                "SELECT CAST(amount AS TEXT) FROM invoices WHERE id = '{id}'"
+            ))
+            .await
+        }
+    }
+}
+
+async fn invoice_rows(db: &TestDb) -> Vec<FieldMap> {
+    let query = ash_core::CompiledQuery::default();
+    match &db.db {
+        crate::support::Db::Sqlite(sqlite) => sqlite
+            .run_query(&fixtures::invoice::Invoice::DEF, &query)
+            .await
+            .unwrap(),
+        crate::support::Db::Postgres(pg) => pg
+            .run_query(&fixtures::invoice::Invoice::DEF, &query)
+            .await
+            .unwrap(),
+    }
+}
+
+fn assert_invoice_values(row: &FieldMap, opened_at: &str, amount: &str) {
+    match row.get("opened_at") {
+        Some(Value::String(got)) => {
+            assert_eq!(
+                ash_core::UtcDateTime::parse(got).unwrap().as_str(),
+                opened_at
+            );
+        }
+        other => panic!("opened_at decoded as {other:?}"),
+    }
+    match row.get("amount") {
+        Some(Value::String(got)) => {
+            assert!(same_decimal(got, amount), "amount {got} is not {amount}");
+            ash_core::Decimal::parse(got).unwrap();
+        }
+        other => panic!("amount decoded as {other:?}"),
+    }
+}
+
+async fn codegen_creates_timestamptz_and_numeric_columns(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_invoices", &[&fixtures::invoice::Invoice::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_invoices.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"opened_at\""));
+    assert!(up.contains("\"amount\" NUMERIC") || up.contains("\"amount\" numeric"));
+    if dialect == "postgres" {
+        assert!(up.contains("TIMESTAMPTZ"));
+    } else {
+        assert!(up.contains("\"opened_at\" TEXT"));
+    }
+    assert!(up.contains("DEFAULT '12.50'"));
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert_eq!(
+        schema.column("invoices", "opened_at"),
+        &Column {
+            ty: db.datetime_type().into(),
+            nullable: false,
+            default: None,
+            primary_key: false,
+        }
+    );
+    assert_eq!(
+        schema.column("invoices", "amount"),
+        &Column {
+            ty: db.decimal_type().into(),
+            nullable: false,
+            default: Some(
+                if dialect == "postgres" {
+                    "12.50"
+                } else {
+                    "'12.50'"
+                }
+                .into(),
+            ),
+            primary_key: false,
+        }
+    );
+
+    db.exec(&format!(
+        "INSERT INTO invoices (id, opened_at) VALUES ('{INVOICE_ID}', '{OPENED_AT}')"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(opened_at_text(&db, INVOICE_ID).await, OPENED_AT);
+    let defaulted = amount_text(&db, INVOICE_ID).await;
+    assert!(
+        same_decimal(&defaulted, "12.50"),
+        "default amount was {defaulted}"
+    );
+    if dialect == "postgres" {
+        assert_eq!(defaulted, "12.50");
+    }
+
+    let written_id = uuid::Uuid::parse_str(WRITTEN_INVOICE_ID).unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(written_id));
+    fields.insert("opened_at".into(), Value::String(OPENED_AT.into()));
+    fields.insert("amount".into(), Value::String("7.25".into()));
+    match &db.db {
+        crate::support::Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::invoice::Invoice::DEF, written_id, fields)
+                .await
+                .unwrap();
+        }
+        crate::support::Db::Postgres(pg) => {
+            pg.create(&fixtures::invoice::Invoice::DEF, written_id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(opened_at_text(&db, WRITTEN_INVOICE_ID).await, OPENED_AT);
+    let written = amount_text(&db, WRITTEN_INVOICE_ID).await;
+    assert!(
+        same_decimal(&written, "7.25"),
+        "written amount was {written}"
+    );
+
+    let rows = invoice_rows(&db).await;
+    assert_eq!(rows.len(), 2);
+    let seeded = rows
+        .iter()
+        .find(|row| row.get("id") == Some(&Value::Uuid(uuid::Uuid::parse_str(INVOICE_ID).unwrap())))
+        .unwrap();
+    let written_row = rows
+        .iter()
+        .find(|row| row.get("id") == Some(&Value::Uuid(written_id)))
+        .unwrap();
+    assert_invoice_values(seeded, OPENED_AT, "12.50");
+    assert_invoice_values(written_row, OPENED_AT, "7.25");
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_timestamptz_and_numeric_columns);
+
+async fn codegen_converts_text_values_into_datetime_and_decimal(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_invoices", &[&fixtures::invoice_text::Invoice::DEF]);
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(&format!(
+        "INSERT INTO invoices (id, opened_at, amount) VALUES ('{INVOICE_ID}', '{OPENED_AT}', '12.50')"
+    ))
+    .await
+    .unwrap();
+    let before = db.schema().await;
+
+    project.generate("invoice_typed_columns", &[&fixtures::invoice::Invoice::DEF]);
+    db.migrate(&project.migrations()).await.unwrap();
+
+    let schema = db.schema().await;
+    assert_eq!(
+        schema.column("invoices", "opened_at").ty,
+        db.datetime_type()
+    );
+    assert_eq!(schema.column("invoices", "amount").ty, db.decimal_type());
+    assert_eq!(opened_at_text(&db, INVOICE_ID).await, OPENED_AT);
+    let amount = amount_text(&db, INVOICE_ID).await;
+    assert!(
+        same_decimal(&amount, "12.50"),
+        "converted amount was {amount}"
+    );
+    if db.dialect().name() == "postgres" {
+        assert_eq!(amount, "12.50");
+    }
+    let rows = invoice_rows(&db).await;
+    assert_eq!(rows.len(), 1);
+    assert_invoice_values(&rows[0], OPENED_AT, "12.50");
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert_eq!(db.schema().await, before);
+    let restored_opened = db
+        .text(&format!(
+            "SELECT opened_at FROM invoices WHERE id = '{INVOICE_ID}'"
+        ))
+        .await;
+    if db.dialect().name() == "postgres" {
+        assert_eq!(
+            db.int(&format!(
+                "SELECT CASE WHEN opened_at::timestamptz = '2024-01-02T03:04:05Z'::timestamptz THEN 1::bigint ELSE 0::bigint END FROM invoices WHERE id = '{INVOICE_ID}'"
+            ))
+            .await,
+            1,
+            "restored opened_at was {restored_opened}"
+        );
+    } else {
+        assert_eq!(restored_opened, OPENED_AT);
+    }
+    let restored_amount = db
+        .text(&format!(
+            "SELECT amount FROM invoices WHERE id = '{INVOICE_ID}'"
+        ))
+        .await;
+    assert!(
+        same_decimal(&restored_amount, "12.50"),
+        "restored amount was {restored_amount}"
+    );
+}
+on_every_backend!(codegen_converts_text_values_into_datetime_and_decimal);

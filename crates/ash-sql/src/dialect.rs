@@ -13,6 +13,11 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// SQL parameter placeholder (e.g. `$1` for Postgres, `?` for SQLite).
     fn placeholder(&self, index: usize) -> String;
 
+    /// Cast a bound placeholder when the column rejects an untyped string parameter.
+    fn cast_param(&self, _ty: AttrType, placeholder: &str) -> String {
+        placeholder.to_string()
+    }
+
     /// Map Ash [`AttributeDef`] to a native SQL column type string.
     fn column_type(&self, attr: &AttributeDef) -> String;
 
@@ -62,8 +67,10 @@ impl SqlDialect for SqliteDialect {
     fn column_type(&self, attr: &AttributeDef) -> String {
         match attr.ty {
             AttrType::Integer | AttrType::Boolean => "INTEGER".to_string(),
+            AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Uuid
             | AttrType::String
+            | AttrType::UtcDatetime
             | AttrType::Atom { .. }
             | AttrType::Map
             | AttrType::Array => "TEXT".to_string(),
@@ -123,6 +130,14 @@ impl SqlDialect for PostgresDialect {
         format!("${index}")
     }
 
+    fn cast_param(&self, ty: AttrType, placeholder: &str) -> String {
+        match ty {
+            AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
+            AttrType::Decimal => format!("{placeholder}::numeric"),
+            _ => placeholder.to_string(),
+        }
+    }
+
     fn column_type(&self, attr: &AttributeDef) -> String {
         match attr.ty {
             AttrType::Uuid => "UUID".to_string(),
@@ -130,6 +145,8 @@ impl SqlDialect for PostgresDialect {
             AttrType::Atom { .. } => "VARCHAR(255)".to_string(),
             AttrType::Integer => "BIGINT".to_string(),
             AttrType::Boolean => "BOOLEAN".to_string(),
+            AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
+            AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }
     }

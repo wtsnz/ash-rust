@@ -106,6 +106,165 @@ impl AshType for bool {
     }
 }
 
+/// UTC instant stored as an RFC3339 string.
+///
+/// Postgres columns use `timestamptz`. SQLite has no timestamp type, so the column is `TEXT`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UtcDateTime(String);
+
+impl UtcDateTime {
+    pub fn parse(raw: &str) -> Result<Self> {
+        if is_rfc3339(raw) {
+            Ok(Self(raw.to_string()))
+        } else {
+            Err(Error::Invalid(format!(
+                "invalid UTC datetime `{raw}`: expected an RFC3339 timestamp"
+            )))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AshType for UtcDateTime {
+    const ATTR_TYPE: AttrType = AttrType::UtcDatetime;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected UTC datetime".into())),
+        }
+    }
+}
+
+/// Base-10 number stored as a string so trailing zeros survive a round trip.
+///
+/// Postgres columns use `numeric`. SQLite columns use `NUMERIC`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decimal(String);
+
+impl Decimal {
+    pub fn parse(raw: &str) -> Result<Self> {
+        if is_decimal(raw) {
+            Ok(Self(raw.to_string()))
+        } else {
+            Err(Error::Invalid(format!(
+                "invalid decimal `{raw}`: expected a base-10 number"
+            )))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AshType for Decimal {
+    const ATTR_TYPE: AttrType = AttrType::Decimal;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected decimal".into())),
+        }
+    }
+}
+
+fn is_rfc3339(raw: &str) -> bool {
+    let (body, offset) = if let Some(body) = raw.strip_suffix('Z') {
+        (body, true)
+    } else if raw.len() >= 6 {
+        let split = raw.len() - 6;
+        let (body, off) = raw.split_at(split);
+        let bytes = off.as_bytes();
+        let signed = bytes[0] == b'+' || bytes[0] == b'-';
+        let hours = off[1..3].parse::<u8>().ok();
+        let minutes = off[4..6].parse::<u8>().ok();
+        (
+            body,
+            signed
+                && bytes[3] == b':'
+                && hours.is_some_and(|h| h <= 23)
+                && minutes.is_some_and(|m| m <= 59),
+        )
+    } else {
+        ("", false)
+    };
+    if !offset {
+        return false;
+    }
+    let (date, fraction) = match body.split_once('.') {
+        Some((date, fraction)) => {
+            if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+                return false;
+            }
+            (date, true)
+        }
+        None => (body, false),
+    };
+    let _ = fraction;
+    let bytes = date.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return false;
+    }
+    let year = date[..4].parse::<u16>().is_ok();
+    let month = date[5..7]
+        .parse::<u8>()
+        .ok()
+        .is_some_and(|n| (1..=12).contains(&n));
+    let day = date[8..10]
+        .parse::<u8>()
+        .ok()
+        .is_some_and(|n| (1..=31).contains(&n));
+    let hour = date[11..13].parse::<u8>().ok().is_some_and(|n| n <= 23);
+    let minute = date[14..16].parse::<u8>().ok().is_some_and(|n| n <= 59);
+    let second = date[17..19].parse::<u8>().ok().is_some_and(|n| n <= 60);
+    year && month
+        && day
+        && hour
+        && minute
+        && second
+        && date.bytes().enumerate().all(|(i, b)| match i {
+            4 | 7 | 10 | 13 | 16 => true,
+            _ => b.is_ascii_digit(),
+        })
+}
+
+fn is_decimal(raw: &str) -> bool {
+    let rest = raw.strip_prefix(['+', '-']).unwrap_or(raw);
+    if rest.is_empty() {
+        return false;
+    }
+    let mut parts = rest.split('.');
+    let whole = parts.next().unwrap_or("");
+    let fraction = parts.next();
+    if parts.next().is_some() {
+        return false;
+    }
+    let whole_ok = whole.bytes().all(|b| b.is_ascii_digit());
+    let fraction_ok = match fraction {
+        Some(fraction) => !fraction.is_empty() && fraction.bytes().all(|b| b.is_ascii_digit()),
+        None => true,
+    };
+    whole_ok && fraction_ok && !(whole.is_empty() && fraction.is_none())
+}
+
 impl<T: AshType> AshType for Option<T> {
     const ATTR_TYPE: AttrType = T::ATTR_TYPE;
 
@@ -122,5 +281,32 @@ impl<T: AshType> AshType for Option<T> {
         } else {
             T::from_value(value).map(Some)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc_datetime_accepts_rfc3339() {
+        assert!(UtcDateTime::parse("2024-01-02T03:04:05Z").is_ok());
+        assert!(UtcDateTime::parse("2024-01-02T03:04:05.123Z").is_ok());
+        assert!(UtcDateTime::parse("2024-01-02T03:04:05+00:00").is_ok());
+        assert!(UtcDateTime::parse("2024-01-02").is_err());
+        assert!(UtcDateTime::parse("2024-01-02T03:04:05").is_err());
+        assert!(UtcDateTime::parse("nope").is_err());
+    }
+
+    #[test]
+    fn decimal_keeps_the_written_scale() {
+        let amount = Decimal::parse("12.50").unwrap();
+        assert_eq!(amount.as_str(), "12.50");
+        assert_eq!(amount.to_value(), Value::String("12.50".into()));
+        assert!(Decimal::parse("-0.5").is_ok());
+        assert!(Decimal::parse(".5").is_ok());
+        assert!(Decimal::parse("12.").is_err());
+        assert!(Decimal::parse("1e2").is_err());
+        assert!(Decimal::parse("").is_err());
     }
 }
