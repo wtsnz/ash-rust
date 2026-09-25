@@ -246,6 +246,34 @@ fn composite_foreign_key_lists_every_column() {
     ));
 }
 
+#[test]
+fn atom_one_of_becomes_a_named_check() {
+    static ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required(
+            "status",
+            AttrType::Atom {
+                one_of: &["open", "closed"],
+            },
+        ),
+    ];
+    let mut resource = RES_V1;
+    resource.attributes = ATTRS;
+    resource.identities = &[];
+    let sql = generate_migration_with_version(
+        &SqliteDialect,
+        "20260903000005",
+        "create_accounts",
+        &diff_snapshots(
+            None,
+            Some(&TableSnapshot::from_resource(&resource, &SqliteDialect)),
+        ),
+    );
+    assert!(sql.up_sql.contains(
+        "CONSTRAINT \"ck_accounts_status_one_of\" CHECK (\"status\" IN ('open', 'closed'))"
+    ));
+}
+
 #[tokio::test]
 async fn test_migrator_run_and_rollback_lifecycle() {
     let temp_dir =

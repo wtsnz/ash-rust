@@ -663,6 +663,30 @@ pub mod duplicate_check_notes {
     }
 }
 
+pub mod enum_labels {
+    use ash_core::{AshEnum, resource};
+    use uuid::Uuid;
+
+    #[derive(AshEnum, Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Label {
+        Open,
+        Closed,
+    }
+
+    resource! {
+        LabeledNote {
+            table "enum_labels";
+            attributes {
+                id: Uuid [pk];
+                label: Label [enum];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod tenant_accounts {
     pub mod account {
         use ash_core::resource;

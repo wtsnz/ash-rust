@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use ash_core::{OnDelete, OnUpdate, RelKind, ResourceDef, Value};
+use ash_core::{AttrType, AttributeDef, OnDelete, OnUpdate, RelKind, ResourceDef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::dialect::SqlDialect;
@@ -68,6 +68,11 @@ impl TableSnapshot {
                 name: format!("ck_{}_{}", resource.table_name(), check.name),
                 expression: check.expression.to_string(),
             });
+        }
+        for attr in resource.attributes {
+            if let Some(check) = enum_check(dialect, resource.table_name(), attr) {
+                checks.push(check);
+            }
         }
 
         let mut references = Vec::new();
@@ -167,6 +172,28 @@ pub struct IdentitySnapshot {
 
 fn nils_are_distinct() -> bool {
     true
+}
+
+fn enum_check<D: SqlDialect>(
+    dialect: &D,
+    table: &str,
+    attr: &AttributeDef,
+) -> Option<CheckSnapshot> {
+    let AttrType::Atom { one_of } = attr.ty else {
+        return None;
+    };
+    if one_of.is_empty() {
+        return None;
+    }
+    let values = one_of
+        .iter()
+        .map(|value| format!("'{}'", value.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(CheckSnapshot {
+        name: format!("ck_{table}_{}_one_of", attr.name),
+        expression: format!("{} IN ({values})", dialect.quote_identifier(attr.name)),
+    })
 }
 
 /// Represents a non-unique index in a schema snapshot.

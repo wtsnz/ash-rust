@@ -2415,3 +2415,39 @@ async fn codegen_enforces_composite_foreign_keys(db: TestDb) {
     db.rollback(&project.migrations()).await.unwrap();
 }
 on_every_backend!(codegen_enforces_composite_foreign_keys);
+
+async fn codegen_checks_enum_variants(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_enum_labels",
+        &[&fixtures::enum_labels::LabeledNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_enum_labels.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "CONSTRAINT \"ck_enum_labels_label_one_of\" CHECK (\"label\" IN ('closed', 'open'))"
+        ) || up.contains(
+            "CONSTRAINT \"ck_enum_labels_label_one_of\" CHECK (\"label\" IN ('open', 'closed'))"
+        ),
+        "enum check missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO enum_labels (id, label) VALUES ('00000000-0000-0000-0000-0000000000e1', 'open')",
+    )
+    .await
+    .unwrap();
+    let bad = db
+        .exec(
+            "INSERT INTO enum_labels (id, label) VALUES ('00000000-0000-0000-0000-0000000000e2', 'archived')",
+        )
+        .await;
+    assert!(bad.is_err(), "a value outside the enum must fail");
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_checks_enum_variants);
