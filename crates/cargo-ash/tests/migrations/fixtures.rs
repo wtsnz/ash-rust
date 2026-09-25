@@ -531,6 +531,49 @@ pub mod bounded_notes {
     }
 }
 
+pub mod moved_files {
+    pub mod folder {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Folder {
+                table "folders";
+                attributes {
+                    id: Uuid [pk];
+                    name: String;
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod file {
+        use super::folder::Folder;
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            File {
+                table "files";
+                attributes {
+                    id: Uuid [pk];
+                    name: String;
+                    folder_id: Uuid;
+                }
+                relationships {
+                    belongs_to folder: Folder [fk: folder_id, on_delete: restrict, on_update: cascade];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+}
+
 pub mod tagged_notes {
     use ash_core::resource;
     use uuid::Uuid;

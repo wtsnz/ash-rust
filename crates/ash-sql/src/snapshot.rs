@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use ash_core::{OnDelete, RelKind, ResourceDef, Value};
+use ash_core::{OnDelete, OnUpdate, RelKind, ResourceDef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::dialect::SqlDialect;
@@ -74,11 +74,12 @@ impl TableSnapshot {
         for rel in resource.relationships {
             if rel.kind == RelKind::BelongsTo {
                 let dest = (rel.destination)();
-                let on_delete_str = match rel.on_delete {
-                    OnDelete::Cascade => "CASCADE",
-                    OnDelete::Nilify => "SET NULL",
-                    OnDelete::Restrict => "RESTRICT",
-                    OnDelete::Nothing => "NO ACTION",
+                let on_delete_str = referential_action(rel.on_delete);
+                let on_update_str = match rel.on_update {
+                    OnUpdate::Cascade => "CASCADE",
+                    OnUpdate::Nilify => "SET NULL",
+                    OnUpdate::Restrict => "RESTRICT",
+                    OnUpdate::Nothing => "NO ACTION",
                 };
                 references.push(ReferenceSnapshot {
                     name: format!("fk_{}_{}", resource.table_name(), rel.name),
@@ -86,6 +87,7 @@ impl TableSnapshot {
                     target_table: dest.table_name().to_string(),
                     target_column: rel.destination_attribute.to_string(),
                     on_delete: on_delete_str.to_string(),
+                    on_update: on_update_str.to_string(),
                 });
             }
         }
@@ -181,6 +183,31 @@ pub struct ReferenceSnapshot {
     pub target_table: String,
     pub target_column: String,
     pub on_delete: String,
+    #[serde(default = "no_action")]
+    pub on_update: String,
+}
+
+fn referential_action(action: OnDelete) -> &'static str {
+    match action {
+        OnDelete::Cascade => "CASCADE",
+        OnDelete::Nilify => "SET NULL",
+        OnDelete::Restrict => "RESTRICT",
+        OnDelete::Nothing => "NO ACTION",
+    }
+}
+
+fn no_action() -> String {
+    "NO ACTION".to_string()
+}
+
+impl ReferenceSnapshot {
+    pub fn on_update_sql(&self) -> String {
+        if self.on_update.is_empty() || self.on_update == "NO ACTION" {
+            String::new()
+        } else {
+            format!(" ON UPDATE {}", self.on_update)
+        }
+    }
 }
 
 /// SQL default for a constant attribute default. A function that returns a new value each call is skipped.

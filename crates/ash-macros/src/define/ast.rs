@@ -155,6 +155,7 @@ pub struct RelationshipSpec {
     pub source_attribute_on_join_resource: Option<String>,
     pub destination_attribute_on_join_resource: Option<String>,
     pub on_delete: OnDeleteSpec,
+    pub on_update: OnDeleteSpec,
 }
 
 pub struct CalculationSpec {

@@ -303,7 +303,8 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let on_del = &reference.on_delete;
 
             let up = format!(
-                "ALTER TABLE {t} ADD CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {on_del};"
+                "ALTER TABLE {t} ADD CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {on_del}{};",
+                reference.on_update_sql()
             );
             let down = format!("ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {ref_name};");
             (up, down)
@@ -348,8 +349,9 @@ pub fn emit_create_table<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -
         let target_t = dialect.quote_identifier(&reference.target_table);
         let target_col = dialect.quote_identifier(&reference.target_column);
         cols.push(format!(
-            "CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}",
-            reference.on_delete
+            "CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}{}",
+            reference.on_delete,
+            reference.on_update_sql(),
         ));
     }
 

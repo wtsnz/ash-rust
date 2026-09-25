@@ -239,6 +239,7 @@ pub struct ForeignKey {
     pub references_table: String,
     pub references_column: String,
     pub on_delete: String,
+    pub on_update: String,
 }
 
 impl DbSchema {
@@ -332,6 +333,7 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
                 references_table: row.get("table"),
                 references_column: row.get("to"),
                 on_delete: row.get("on_delete"),
+                on_update: row.get("on_update"),
             });
         }
         table.foreign_keys.sort();
@@ -351,6 +353,16 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
         schema.tables.insert(name, table);
     }
     schema
+}
+
+fn referential_action_name(code: &str) -> &'static str {
+    match code {
+        "c" => "CASCADE",
+        "n" => "SET NULL",
+        "r" => "RESTRICT",
+        "d" => "SET DEFAULT",
+        _ => "NO ACTION",
+    }
 }
 
 async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
@@ -441,7 +453,8 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
     let foreign_keys = sqlx::query(
         "SELECT cl.relname::text AS table_name, a.attname::text AS column_name,
                 rt.relname::text AS references_table, ra.attname::text AS references_column,
-                c.confdeltype::text AS on_delete
+                c.confdeltype::text AS on_delete,
+                c.confupdtype::text AS on_update
          FROM pg_constraint c
          JOIN pg_class cl ON cl.oid = c.conrelid
          JOIN pg_namespace n ON n.oid = cl.relnamespace
@@ -456,19 +469,16 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
     for row in foreign_keys {
         let table: String = row.get("table_name");
         let code: String = row.get("on_delete");
-        let on_delete = match code.as_str() {
-            "c" => "CASCADE",
-            "n" => "SET NULL",
-            "r" => "RESTRICT",
-            "d" => "SET DEFAULT",
-            _ => "NO ACTION",
-        };
+        let on_delete = referential_action_name(&code);
+        let update_code: String = row.get("on_update");
+        let on_update = referential_action_name(&update_code);
         if let Some(t) = schema.tables.get_mut(&table) {
             t.foreign_keys.push(ForeignKey {
                 column: row.get("column_name"),
                 references_table: row.get("references_table"),
                 references_column: row.get("references_column"),
                 on_delete: on_delete.to_string(),
+                on_update: on_update.to_string(),
             });
             t.foreign_keys.sort();
         }

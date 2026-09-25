@@ -1,5 +1,5 @@
 use ash_core::{
-    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, RelKind, RelationshipDef,
+    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind, RelationshipDef,
     ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -22,6 +22,7 @@ static AUTHOR_RELS: &[RelationshipDef] = &[RelationshipDef {
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Cascade,
+    on_update: OnUpdate::Nothing,
 }];
 
 static AUTHOR_DEF: ResourceDef = ResourceDef {
@@ -63,6 +64,7 @@ static POST_RELS: &[RelationshipDef] = &[RelationshipDef {
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Nothing,
+    on_update: OnUpdate::Nothing,
 }];
 
 static POST_DEF: ResourceDef = ResourceDef {

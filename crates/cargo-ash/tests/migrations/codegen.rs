@@ -73,6 +73,7 @@ async fn initial_codegen_creates_every_table(db: TestDb) {
             references_table: "orgs".into(),
             references_column: "id".into(),
             on_delete: "CASCADE".into(),
+            on_update: "NO ACTION".into(),
         }]
     );
 
@@ -1269,6 +1270,7 @@ async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestD
             references_table: "tickets".into(),
             references_column: "id".into(),
             on_delete: "CASCADE".into(),
+            on_update: "NO ACTION".into(),
         }]
     );
     db.exec(&format!(
@@ -2326,3 +2328,48 @@ async fn codegen_emits_postgres_index_methods(db: TestDb) {
     db.rollback(&project.migrations()).await.unwrap();
 }
 on_every_backend!(codegen_emits_postgres_index_methods);
+
+async fn codegen_cascades_foreign_key_updates(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_moved_files",
+        &[
+            &fixtures::moved_files::folder::Folder::DEF,
+            &fixtures::moved_files::file::File::DEF,
+        ],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_moved_files.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains("ON DELETE RESTRICT ON UPDATE CASCADE"),
+        "on update missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let fk = &schema.table("files").foreign_keys[0];
+    assert_eq!(fk.on_delete, "RESTRICT");
+    assert_eq!(fk.on_update, "CASCADE");
+    db.exec("INSERT INTO folders (id, name) VALUES ('00000000-0000-0000-0000-0000000000c1', 'inbox')")
+        .await
+        .unwrap();
+    db.exec(
+        "INSERT INTO files (id, name, folder_id) VALUES ('00000000-0000-0000-0000-0000000000c2', 'note', '00000000-0000-0000-0000-0000000000c1')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "UPDATE folders SET id = '00000000-0000-0000-0000-0000000000c3' WHERE id = '00000000-0000-0000-0000-0000000000c1'",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.text("SELECT folder_id FROM files").await,
+        "00000000-0000-0000-0000-0000000000c3"
+    );
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_cascades_foreign_key_updates);
