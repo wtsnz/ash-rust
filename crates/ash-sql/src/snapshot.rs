@@ -335,8 +335,55 @@ pub fn sql_literal<D: SqlDialect>(dialect: &D, value: &Value) -> Option<String> 
         Value::Int(v) => Some(v.to_string()),
         Value::String(v) => Some(format!("'{}'", v.replace('\'', "''"))),
         Value::Uuid(v) => Some(format!("'{v}'")),
-        Value::Map(_) | Value::Array(_) => None,
+        Value::Map(_) | Value::Array(_) => {
+            let json = format!("'{}'", value_json(value).replace('\'', "''"));
+            if dialect.name() == "postgres" {
+                Some(format!("{json}::jsonb"))
+            } else {
+                Some(json)
+            }
+        }
     }
+}
+
+fn value_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(true) => "true".to_string(),
+        Value::Bool(false) => "false".to_string(),
+        Value::Int(v) => v.to_string(),
+        Value::Uuid(v) => format!("\"{v}\""),
+        Value::String(v) => format!("\"{}\"", json_escape(v)),
+        Value::Array(items) => {
+            let parts = items.iter().map(value_json).collect::<Vec<_>>().join(",");
+            format!("[{parts}]")
+        }
+        Value::Map(fields) => {
+            let mut keys = fields.keys().collect::<Vec<_>>();
+            keys.sort();
+            let parts = keys
+                .into_iter()
+                .map(|key| format!("\"{}\":{}", json_escape(key), value_json(&fields[key])))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{parts}}}")
+        }
+    }
+}
+
+fn json_escape(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Resources that persist as tables, parents before children.

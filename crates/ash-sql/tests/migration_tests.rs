@@ -246,6 +246,48 @@ fn composite_foreign_key_lists_every_column() {
     ));
 }
 
+fn sample_tags() -> ash_core::Value {
+    ash_core::Value::Array(vec![ash_core::Value::String("red".into())])
+}
+
+fn sample_meta() -> ash_core::Value {
+    let mut fields = ash_core::FieldMap::new();
+    fields.insert("role".into(), ash_core::Value::String("owner".into()));
+    ash_core::Value::Map(fields)
+}
+
+#[test]
+fn map_and_array_defaults_are_sql_literals() {
+    static ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::with_default("tags", AttrType::Array, sample_tags),
+        AttributeDef::with_default("meta", AttrType::Map, sample_meta),
+    ];
+    let mut resource = RES_V1;
+    resource.attributes = ATTRS;
+    resource.identities = &[];
+    let postgres = TableSnapshot::from_resource(&resource, &PostgresDialect);
+    let tags = postgres
+        .columns
+        .iter()
+        .find(|col| col.name == "tags")
+        .unwrap();
+    let meta = postgres
+        .columns
+        .iter()
+        .find(|col| col.name == "meta")
+        .unwrap();
+    assert_eq!(tags.default.as_deref(), Some("'[\"red\"]'::jsonb"));
+    assert_eq!(meta.default.as_deref(), Some("'{\"role\":\"owner\"}'::jsonb"));
+    let sqlite = TableSnapshot::from_resource(&resource, &SqliteDialect);
+    let tags = sqlite
+        .columns
+        .iter()
+        .find(|col| col.name == "tags")
+        .unwrap();
+    assert_eq!(tags.default.as_deref(), Some("'[\"red\"]'"));
+}
+
 #[test]
 fn atom_one_of_becomes_a_named_check() {
     static ATTRS: &[AttributeDef] = &[
