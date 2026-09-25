@@ -19,6 +19,83 @@ fn try_from_i64(ty: &Type, n: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     }
 }
 
+fn composite_keys(
+    rel: &crate::define::ast::RelationshipSpec,
+    name: &str,
+    resource: &str,
+) -> Result<TokenStream> {
+    if rel.fk_columns.len() <= 1 && rel.reference_columns.is_empty() {
+        return Ok(quote! {});
+    }
+    if matches!(rel.kind, RelType::ManyToMany) {
+        return Err(Error::new_spanned(
+            &rel.ident,
+            "many_to_many does not take a composite foreign key",
+        ));
+    }
+    let source_default = match rel.kind {
+        RelType::BelongsTo => rel
+            .fk
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{name}_id")),
+        _ => "id".to_string(),
+    };
+    let dest_default = match rel.kind {
+        RelType::BelongsTo => "id".to_string(),
+        _ => rel
+            .fk
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{}_id", snake_case(resource))),
+    };
+    let (source, destination) = match rel.kind {
+        RelType::BelongsTo => {
+            let source = if rel.fk_columns.is_empty() {
+                vec![source_default]
+            } else {
+                rel.fk_columns.iter().map(|id| id.to_string()).collect()
+            };
+            let destination = if rel.reference_columns.is_empty() {
+                vec![dest_default]
+            } else {
+                rel.reference_columns
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+            (source, destination)
+        }
+        _ => {
+            let destination = if rel.fk_columns.is_empty() {
+                vec![dest_default]
+            } else {
+                rel.fk_columns.iter().map(|id| id.to_string()).collect()
+            };
+            let source = if rel.reference_columns.is_empty() {
+                vec![source_default]
+            } else {
+                rel.reference_columns
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+            (source, destination)
+        }
+    };
+    if source.len() != destination.len() {
+        return Err(Error::new_spanned(
+            &rel.ident,
+            format!(
+                "relationship `{name}` has {} key columns and {} referenced columns",
+                source.len(),
+                destination.len()
+            ),
+        ));
+    }
+    Ok(quote! { .with_keys(&[#(#source),*], &[#(#destination),*]) })
+}
+
 pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     if def.attributes.is_empty() {
         return Ok(quote! {});
@@ -213,6 +290,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnUpdate::Nilify },
             crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnUpdate::Restrict },
         };
+        let keys = composite_keys(r, &name_str, &resource_str)?;
         match r.kind {
             RelType::BelongsTo => {
                 let fk_str =
@@ -224,7 +302,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::HasMany => {
@@ -237,7 +315,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::HasOne => {
@@ -250,7 +328,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::ManyToMany => {

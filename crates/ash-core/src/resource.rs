@@ -465,6 +465,10 @@ pub struct RelationshipDef {
     pub destination: fn() -> &'static ResourceDef,
     pub source_attribute: &'static str,
     pub destination_attribute: &'static str,
+    /// Extra key columns on this resource. Empty means [`Self::source_attribute`] alone.
+    pub source_attributes: &'static [&'static str],
+    /// Matching columns on the destination. Empty means [`Self::destination_attribute`] alone.
+    pub destination_attributes: &'static [&'static str],
     pub through: Option<fn() -> &'static ResourceDef>,
     pub source_attribute_on_join_resource: Option<&'static str>,
     pub destination_attribute_on_join_resource: Option<&'static str>,
@@ -491,6 +495,39 @@ impl RelationshipDef {
         self
     }
 
+    /// Sets a composite key. The first column of each side is also stored in the single-column fields.
+    pub const fn with_keys(
+        mut self,
+        source: &'static [&'static str],
+        destination: &'static [&'static str],
+    ) -> Self {
+        if let Some(first) = source.first() {
+            self.source_attribute = first;
+        }
+        if let Some(first) = destination.first() {
+            self.destination_attribute = first;
+        }
+        self.source_attributes = source;
+        self.destination_attributes = destination;
+        self
+    }
+
+    pub fn source_columns(&self) -> Vec<&'static str> {
+        if self.source_attributes.is_empty() {
+            vec![self.source_attribute]
+        } else {
+            self.source_attributes.to_vec()
+        }
+    }
+
+    pub fn destination_columns(&self) -> Vec<&'static str> {
+        if self.destination_attributes.is_empty() {
+            vec![self.destination_attribute]
+        } else {
+            self.destination_attributes.to_vec()
+        }
+    }
+
     pub const fn belongs_to(
         name: &'static str,
         destination: fn() -> &'static ResourceDef,
@@ -502,6 +539,8 @@ impl RelationshipDef {
             destination,
             source_attribute,
             destination_attribute: "id",
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
@@ -521,6 +560,8 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute,
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
@@ -540,6 +581,8 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute,
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
@@ -561,6 +604,8 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute: "id",
+            source_attributes: &[],
+            destination_attributes: &[],
             through: Some(through),
             source_attribute_on_join_resource: Some(source_attribute_on_join_resource),
             destination_attribute_on_join_resource: Some(destination_attribute_on_join_resource),
