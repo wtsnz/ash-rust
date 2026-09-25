@@ -907,6 +907,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 identity.predicate,
                 self.dialect.name(),
                 identity.nils_distinct,
+                None,
             ));
         }
 
@@ -928,6 +929,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 index.predicate,
                 self.dialect.name(),
                 true,
+                index.method,
             ));
         }
 

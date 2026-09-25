@@ -1,4 +1,4 @@
-use ash_core::{ActionDef, AttrType, AttributeDef, IdentityDef, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, IdentityDef, IndexDef, ResourceDef};
 use ash_sql::{
     MemoryMigrationExecutor, Migrator, PostgresDialect, SqliteDialect, TableSnapshot,
     diff_snapshots, generate_migration_with_version,
@@ -110,6 +110,39 @@ fn unique_index_nulls_not_distinct_is_postgres_only() {
         .up_sql
         .contains("CREATE UNIQUE INDEX IF NOT EXISTS \"idx_accounts_unique_username\" ON \"accounts\" (\"username\");"));
     assert!(!sqlite_sql.up_sql.contains("NULLS NOT DISTINCT"));
+}
+
+#[test]
+fn index_using_is_emitted_for_postgres_only() {
+    static INDEXES: &[IndexDef] = &[IndexDef::new("by_body", &["username"]).with_method("gin")];
+    let mut resource = RES_V1;
+    resource.identities = &[];
+    resource.indexes = INDEXES;
+    let postgres = generate_migration_with_version(
+        &PostgresDialect,
+        "20260903000003",
+        "create_accounts",
+        &diff_snapshots(
+            None,
+            Some(&TableSnapshot::from_resource(&resource, &PostgresDialect)),
+        ),
+    );
+    assert!(postgres.up_sql.contains(
+        "CREATE INDEX IF NOT EXISTS \"idx_accounts_by_body\" ON \"accounts\" USING gin (\"username\");"
+    ));
+    let sqlite = generate_migration_with_version(
+        &SqliteDialect,
+        "20260903000003",
+        "create_accounts",
+        &diff_snapshots(
+            None,
+            Some(&TableSnapshot::from_resource(&resource, &SqliteDialect)),
+        ),
+    );
+    assert!(sqlite.up_sql.contains(
+        "CREATE INDEX IF NOT EXISTS \"idx_accounts_by_body\" ON \"accounts\" (\"username\");"
+    ));
+    assert!(!sqlite.up_sql.contains("USING"));
 }
 
 #[tokio::test]

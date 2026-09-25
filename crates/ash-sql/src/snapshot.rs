@@ -58,6 +58,7 @@ impl TableSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), index.name),
                 columns: index.keys.iter().map(|k| k.to_string()).collect(),
                 predicate: index.predicate.map(str::to_string),
+                method: index.method.map(str::to_string),
             });
         }
 
@@ -161,6 +162,8 @@ pub struct IndexSnapshot {
     pub columns: Vec<String>,
     #[serde(default)]
     pub predicate: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
 }
 
 /// Represents a CHECK constraint in a schema snapshot.

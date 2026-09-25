@@ -2291,3 +2291,38 @@ async fn codegen_unique_nulls_follow_the_dialect(db: TestDb) {
     db.rollback(&project.migrations()).await.unwrap();
 }
 on_every_backend!(codegen_unique_nulls_follow_the_dialect);
+
+async fn codegen_emits_postgres_index_methods(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_tagged_notes",
+        &[&fixtures::tagged_notes::TaggedNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_tagged_notes.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_tagged_notes_by_body\" ON \"tagged_notes\" USING gin (\"body\");"
+        ));
+        return;
+    }
+    assert!(up.contains(
+        "CREATE INDEX IF NOT EXISTS \"idx_tagged_notes_by_body\" ON \"tagged_notes\" (\"body\");"
+    ));
+    assert!(!up.contains("USING"));
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema()
+            .await
+            .table("tagged_notes")
+            .indexes
+            .get("idx_tagged_notes_by_body"),
+        Some(&vec!["body".to_string()])
+    );
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_emits_postgres_index_methods);

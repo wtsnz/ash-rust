@@ -111,6 +111,8 @@ pub struct IndexDef {
     pub keys: &'static [&'static str],
     /// SQL predicate for a partial index (`CREATE INDEX ... WHERE ...`).
     pub predicate: Option<&'static str>,
+    /// Index access method. `None` and `btree` stay the default and are omitted from SQL. Other methods are emitted as `USING` on Postgres only.
+    pub method: Option<&'static str>,
 }
 
 impl IndexDef {
@@ -119,11 +121,17 @@ impl IndexDef {
             name,
             keys,
             predicate: None,
+            method: None,
         }
     }
 
     pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
         self.predicate = Some(predicate);
+        self
+    }
+
+    pub const fn with_method(mut self, method: &'static str) -> Self {
+        self.method = Some(method);
         self
     }
 }

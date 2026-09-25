@@ -531,6 +531,27 @@ pub mod bounded_notes {
     }
 }
 
+pub mod tagged_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        TaggedNote {
+            table "tagged_notes";
+            attributes {
+                id: Uuid [pk];
+                body: String;
+            }
+            indexes {
+                index by_body: [body], using: gin;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod optional_emails {
     use ash_core::resource;
     use uuid::Uuid;

@@ -233,6 +233,7 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                     identity.predicate.as_deref(),
                     dialect.name(),
                     identity.nils_distinct,
+                    None,
                 )
             );
             let down = format!("DROP INDEX IF EXISTS {id_name};");
@@ -264,6 +265,7 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                     index.predicate.as_deref(),
                     dialect.name(),
                     true,
+                    index.method.as_deref(),
                 )
             );
             let down = format!("DROP INDEX IF EXISTS {idx_name};");
@@ -383,6 +385,7 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             identity.predicate.as_deref(),
             dialect.name(),
             identity.nils_distinct,
+            None,
         ));
         sql.push(';');
     }
@@ -404,6 +407,7 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             index.predicate.as_deref(),
             dialect.name(),
             true,
+            index.method.as_deref(),
         ));
         sql.push(';');
     }
@@ -419,9 +423,16 @@ pub(crate) fn format_create_index(
     predicate: Option<&str>,
     dialect: &str,
     nils_distinct: bool,
+    method: Option<&str>,
 ) -> String {
     let unique_sql = if unique { "UNIQUE " } else { "" };
     let exists_sql = if if_not_exists { "IF NOT EXISTS " } else { "" };
+    let using_sql = match method {
+        Some(method) if dialect == "postgres" && !method.eq_ignore_ascii_case("btree") => {
+            format!(" USING {method}")
+        }
+        _ => String::new(),
+    };
     let nulls_sql = if unique && !nils_distinct && dialect == "postgres" {
         " NULLS NOT DISTINCT"
     } else {
@@ -432,7 +443,7 @@ pub(crate) fn format_create_index(
         .map(|predicate| format!(" WHERE {predicate}"))
         .unwrap_or_default();
     format!(
-        "CREATE {unique_sql}INDEX {exists_sql}{name} ON {table} ({columns}){nulls_sql}{where_sql}"
+        "CREATE {unique_sql}INDEX {exists_sql}{name} ON {table}{using_sql} ({columns}){nulls_sql}{where_sql}"
     )
 }
 
