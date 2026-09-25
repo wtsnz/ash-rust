@@ -936,11 +936,16 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 Some(sql) => quote! { ::std::option::Option::Some(#sql) },
                 None => quote! { ::std::option::Option::None },
             };
+            let method_tokens = match &index.method {
+                Some(method) => quote! { ::std::option::Option::Some(#method) },
+                None => quote! { ::std::option::Option::None },
+            };
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
                     predicate: #predicate_tokens,
+                    method: #method_tokens,
                 }
             }
         })

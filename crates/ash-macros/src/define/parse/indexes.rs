@@ -44,6 +44,7 @@ fn parse_one_index(input: ParseStream, errors: &mut Vec<Error>) -> Result<IndexS
     let list = Punctuated::<Ident, Token![,]>::parse_terminated(&keys_content)?;
     let keys: Vec<Ident> = list.into_iter().collect();
     let mut predicate = None;
+    let mut method = None;
     while input.peek(Token![,]) {
         let _: Token![,] = input.parse()?;
         if input.peek(Token![;]) || input.is_empty() {
@@ -59,15 +60,32 @@ fn parse_one_index(input: ParseStream, errors: &mut Vec<Error>) -> Result<IndexS
             continue;
         }
         let key: Ident = input.parse()?;
-        return Err(Error::new_spanned(
-            key,
-            "unknown index clause, expected `where`",
-        ));
+        match key.to_string().as_str() {
+            "using" => {
+                if input.peek(Token![:]) || input.peek(Token![=]) {
+                    let _ = input.parse::<proc_macro2::TokenTree>()?;
+                }
+                if input.peek(syn::LitStr) {
+                    let lit: syn::LitStr = input.parse()?;
+                    method = Some(lit.value());
+                } else {
+                    let method_name: Ident = input.parse()?;
+                    method = Some(method_name.to_string());
+                }
+            }
+            other => {
+                return Err(Error::new_spanned(
+                    key,
+                    format!("unknown index clause `{other}`, expected `where` or `using`"),
+                ));
+            }
+        }
     }
     require_semi(input, errors, "index");
     Ok(IndexSpec {
         name,
         keys,
         predicate,
+        method,
     })
 }
