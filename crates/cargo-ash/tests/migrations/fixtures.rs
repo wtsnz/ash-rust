@@ -488,6 +488,43 @@ pub fn helpdesk_with(ticket: &'static ResourceDef) -> [&'static ResourceDef; 2] 
     [&base::Org::DEF, ticket]
 }
 
+pub mod renamed_table {
+    pub use super::base::Org;
+    use ash_core::{domain, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Issue {
+            table "issues";
+            attributes {
+                id: Uuid [pk];
+                subject: String;
+                status: String = "open";
+                notes: Option<String>;
+                org_id: Uuid;
+            }
+            relationships {
+                belongs_to org: Org [fk: org_id, on_delete: cascade];
+            }
+            identities {
+                identity unique_subject: [subject];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+
+    domain! {
+        Helpdesk {
+            resources {
+                Org;
+                Issue;
+            }
+        }
+    }
+}
+
 pub const ORG_ID: &str = "00000000-0000-0000-0000-00000000000a";
 pub const OTHER_ORG_ID: &str = "00000000-0000-0000-0000-00000000000b";
 pub const TICKET_ID: &str = "00000000-0000-0000-0000-000000000001";

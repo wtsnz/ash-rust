@@ -136,6 +136,13 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let down = format!("-- Rollback for dropped column {col_name} on {t}");
             (up, down)
         }
+        SchemaOperation::RenameTable { old_name, new_name } => {
+            let old_table = dialect.quote_identifier(old_name);
+            let new_table = dialect.quote_identifier(new_name);
+            let up = format!("ALTER TABLE {old_table} RENAME TO {new_table};");
+            let down = format!("ALTER TABLE {new_table} RENAME TO {old_table};");
+            (up, down)
+        }
         SchemaOperation::RenameColumn {
             table,
             old_name,
@@ -414,6 +421,7 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
     sql
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn format_create_index(
     unique: bool,
     if_not_exists: bool,
@@ -451,6 +459,7 @@ fn table_of(op: &SchemaOperation) -> Option<&str> {
     match op {
         SchemaOperation::CreateTable(snapshot) => Some(snapshot.table.as_str()),
         SchemaOperation::DropTable(name) => Some(name.as_str()),
+        SchemaOperation::RenameTable { new_name, .. } => Some(new_name.as_str()),
         SchemaOperation::AddColumn { table, .. }
         | SchemaOperation::DropColumn { table, .. }
         | SchemaOperation::RenameColumn { table, .. }
@@ -502,6 +511,13 @@ pub fn emit_sql<D: SqlDialect>(
     let mut rebuilt = HashSet::new();
 
     for op in operations {
+        if matches!(op, SchemaOperation::RenameTable { .. }) {
+            let (up, _) = generate_operation_sql(dialect, op);
+            if !up.is_empty() {
+                stmts.push(up);
+            }
+            continue;
+        }
         let table = table_of(op).unwrap_or_default();
         if rebuild.contains(table)
             && !matches!(

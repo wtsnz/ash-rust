@@ -326,7 +326,7 @@ fn run_with<D: SqlDialect>(
         return Ok(CodegenOutcome::NoChanges);
     }
 
-    let down_ops = reverse_plan(&old, &plan.targets, &plan.renames);
+    let down_ops = reverse_plan(&old, &plan.targets, &plan.renames, &plan.table_renames);
     let down_sql = emit_sql(dialect, &down_ops, &plan.targets, &old);
 
     match options.mode {

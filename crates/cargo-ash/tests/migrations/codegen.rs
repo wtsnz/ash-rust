@@ -348,7 +348,8 @@ async fn confirmed_rename_preserves_data(db: TestDb) {
         vec![RenameQuestion {
             table: "tickets".into(),
             added: "title".into(),
-            candidates: vec!["subject".into()]
+            candidates: vec!["subject".into()],
+            table_rename: false,
         }]
     );
     assert_eq!(
@@ -412,7 +413,8 @@ async fn unresolved_rename_fails_and_writes_nothing(db: TestDb) {
             vec![RenameQuestion {
                 table: "tickets".into(),
                 added: "title".into(),
-                candidates: vec!["subject".into()]
+                candidates: vec!["subject".into()],
+                table_rename: false,
             }]
         ),
         other => panic!("expected AmbiguousRenames, got {other:?}"),
@@ -420,6 +422,50 @@ async fn unresolved_rename_fails_and_writes_nothing(db: TestDb) {
     assert_eq!(project.migration_files(), files_before);
 }
 on_every_backend!(unresolved_rename_fails_and_writes_nothing);
+
+async fn confirmed_table_rename_keeps_rows(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut resolver = |question: &RenameQuestion| {
+        if question.table_rename {
+            Resolution::RenamedFrom("tickets".into())
+        } else {
+            Resolution::NotRenamed
+        }
+    };
+    let options = project.options(Mode::Write, Some("rename_tickets"));
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::renamed_table::Issue::DEF),
+            &mut resolver,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.contains_key("issues"));
+    assert!(!db.schema().await.tables.contains_key("tickets"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM issues WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.contains_key("tickets"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+}
+on_every_backend!(confirmed_table_rename_keeps_rows);
 
 async fn changing_nullability_and_default_keeps_data(db: TestDb) {
     let project = Project::for_db(&db);
