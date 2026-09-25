@@ -662,3 +662,50 @@ pub mod duplicate_check_notes {
         }
     }
 }
+
+pub mod tenant_accounts {
+    pub mod account {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Account {
+                table "accounts";
+                attributes {
+                    id: Uuid [pk];
+                    tenant_id: Uuid;
+                    code: String;
+                }
+                identities {
+                    identity tenant_code: [tenant_id, code];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod membership {
+        use super::account::Account;
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Membership {
+                table "memberships";
+                attributes {
+                    id: Uuid [pk];
+                    tenant_id: Uuid;
+                    code: String;
+                }
+                relationships {
+                    belongs_to account: Account [fk: [tenant_id, code], references: [tenant_id, code]];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+}

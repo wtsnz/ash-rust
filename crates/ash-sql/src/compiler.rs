@@ -33,6 +33,34 @@ pub fn ident<D: SqlDialect>(dialect: &D, name: &str) -> Result<String> {
     Ok(dialect.quote_identifier(name))
 }
 
+/// `dest_alias.dest_col = outer_alias.source_col`, AND-ed when the relationship is composite.
+fn relationship_equalities<D: SqlDialect>(
+    dialect: &D,
+    dest_alias: &str,
+    dest: &ResourceDef,
+    outer_alias: &str,
+    outer: &ResourceDef,
+    rel: &ash_core::RelationshipDef,
+) -> Result<String> {
+    let source_cols = rel.source_columns();
+    let dest_cols = rel.destination_columns();
+    if source_cols.len() != dest_cols.len() {
+        return Err(Error::Invalid(format!(
+            "relationship `{}` has {} source columns and {} destination columns",
+            rel.name,
+            source_cols.len(),
+            dest_cols.len()
+        )));
+    }
+    let mut parts = Vec::new();
+    for (source_col, dest_col) in source_cols.iter().zip(dest_cols.iter()) {
+        let dest_sql = column(dialect, dest, dest_col)?;
+        let outer_sql = column(dialect, outer, source_col)?;
+        parts.push(format!("{dest_alias}.{dest_sql} = {outer_alias}.{outer_sql}"));
+    }
+    Ok(parts.join(" AND "))
+}
+
 /// Validates that a column exists on the resource and returns its quoted identifier.
 pub fn column<D: SqlDialect>(dialect: &D, resource: &ResourceDef, field: &str) -> Result<String> {
     if resource.attribute(field).is_none()
@@ -325,8 +353,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let outer_scope = scope_alias
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| ident(self.dialect, resource.table_name()).unwrap());
-                let outer_col = column(self.dialect, resource, rel.source_attribute)?;
-                let dest_col = column(self.dialect, dest_res, rel.destination_attribute)?;
+                let join_sql = relationship_equalities(
+                    self.dialect,
+                    &dest_alias,
+                    dest_res,
+                    &outer_scope,
+                    resource,
+                    rel,
+                )?;
                 let inner_sql = self.compile_filter_scoped(dest_res, filter, Some(&dest_alias))?;
 
                 match rel.kind {
@@ -345,6 +379,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                             self.param_counter
                         );
                         let through_table = ident(self.dialect, through_res.table_name())?;
+                        let outer_col = column(self.dialect, resource, rel.source_attribute)?;
+                        let dest_col = column(self.dialect, dest_res, rel.destination_attribute)?;
                         let source_on_join = column(
                             self.dialect,
                             through_res,
@@ -362,7 +398,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         ))
                     }
                     RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => Ok(format!(
-                        "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_col} = {outer_scope}.{outer_col} AND {inner_sql})"
+                        "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {join_sql} AND {inner_sql})"
                     )),
                 }
             }
@@ -401,6 +437,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let dest_table = ident(self.dialect, dest.table_name())?;
         let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
         let source_table = ident(self.dialect, resource.table_name())?;
+        let join_sql = relationship_equalities(
+            self.dialect,
+            &dest_alias,
+            dest,
+            &source_table,
+            resource,
+            rel,
+        )?;
         let source_attr = ident(self.dialect, rel.source_attribute)?;
         let dest_attr = ident(self.dialect, rel.destination_attribute)?;
 
@@ -408,7 +452,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             RelKind::HasMany | RelKind::BelongsTo | RelKind::HasOne => match &agg.kind {
                 AggregateKind::Count => {
                     let mut s = format!(
-                        "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
                     s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push(')');
@@ -416,7 +460,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 }
                 AggregateKind::Exists => {
                     let mut s = format!(
-                        "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
                     s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push_str("))");
@@ -425,7 +469,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 AggregateKind::First { field } => {
                     let f = ident(self.dialect, field)?;
                     let mut s = format!(
-                        "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
                     s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push_str(" LIMIT 1)");
@@ -434,7 +478,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 AggregateKind::Sum { field } => {
                     let f = ident(self.dialect, field)?;
                     let mut s = format!(
-                        "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
                     s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
                     s.push(')');

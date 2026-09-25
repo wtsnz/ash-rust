@@ -81,11 +81,23 @@ impl TableSnapshot {
                     OnUpdate::Restrict => "RESTRICT",
                     OnUpdate::Nothing => "NO ACTION",
                 };
+                let columns = rel
+                    .source_columns()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                let target_columns = rel
+                    .destination_columns()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
                 references.push(ReferenceSnapshot {
                     name: format!("fk_{}_{}", resource.table_name(), rel.name),
-                    column: rel.source_attribute.to_string(),
+                    column: columns.first().cloned().unwrap_or_default(),
+                    columns: columns.clone(),
                     target_table: dest.table_name().to_string(),
-                    target_column: rel.destination_attribute.to_string(),
+                    target_column: target_columns.first().cloned().unwrap_or_default(),
+                    target_columns,
                     on_delete: on_delete_str.to_string(),
                     on_update: on_update_str.to_string(),
                 });
@@ -176,15 +188,60 @@ pub struct CheckSnapshot {
 }
 
 /// Represents a foreign key constraint in a schema snapshot.
+///
+/// `column` and `target_column` stay the first key so older snapshots still load.
+/// `columns` and `target_columns` hold the full key, including a one-column key.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "ReferenceSnapshotRaw")]
 pub struct ReferenceSnapshot {
     pub name: String,
     pub column: String,
+    pub columns: Vec<String>,
     pub target_table: String,
     pub target_column: String,
+    pub target_columns: Vec<String>,
     pub on_delete: String,
-    #[serde(default = "no_action")]
     pub on_update: String,
+}
+
+#[derive(Deserialize)]
+struct ReferenceSnapshotRaw {
+    name: String,
+    column: String,
+    #[serde(default)]
+    columns: Vec<String>,
+    target_table: String,
+    target_column: String,
+    #[serde(default)]
+    target_columns: Vec<String>,
+    on_delete: String,
+    #[serde(default = "no_action")]
+    on_update: String,
+}
+
+impl From<ReferenceSnapshotRaw> for ReferenceSnapshot {
+    fn from(raw: ReferenceSnapshotRaw) -> Self {
+        let columns = if raw.columns.is_empty() {
+            vec![raw.column]
+        } else {
+            raw.columns
+        };
+        let target_columns = if raw.target_columns.is_empty() {
+            vec![raw.target_column]
+        } else {
+            raw.target_columns
+        };
+        Self {
+            name: raw.name,
+            column: columns.first().cloned().unwrap_or_default(),
+            columns,
+            target_table: raw.target_table,
+            target_column: target_columns.first().cloned().unwrap_or_default(),
+            target_columns,
+            on_delete: raw.on_delete,
+            on_update: raw.on_update,
+        }
+    }
 }
 
 fn referential_action(action: OnDelete) -> &'static str {
@@ -201,6 +258,26 @@ fn no_action() -> String {
 }
 
 impl ReferenceSnapshot {
+    pub fn key_sql<D: SqlDialect>(&self, dialect: &D) -> (String, String) {
+        let quote = |cols: &[String]| {
+            cols.iter()
+                .map(|col| dialect.quote_identifier(col))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let source = if self.columns.is_empty() {
+            dialect.quote_identifier(&self.column)
+        } else {
+            quote(&self.columns)
+        };
+        let target = if self.target_columns.is_empty() {
+            dialect.quote_identifier(&self.target_column)
+        } else {
+            quote(&self.target_columns)
+        };
+        (source, target)
+    }
+
     pub fn on_update_sql(&self) -> String {
         if self.on_update.is_empty() || self.on_update == "NO ACTION" {
             String::new()

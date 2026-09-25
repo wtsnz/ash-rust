@@ -51,6 +51,8 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
     let ty: Type = input.parse()?;
 
     let mut fk = None;
+    let mut fk_columns = Vec::new();
+    let mut reference_columns = Vec::new();
     let mut through = None;
     let mut source_attribute_on_join_resource = None;
     let mut destination_attribute_on_join_resource = None;
@@ -69,7 +71,18 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
                     } else if flags_content.peek(Token![=]) {
                         let _: Token![=] = flags_content.parse()?;
                     }
-                    if flags_content.peek(syn::LitStr) {
+                    if flags_content.peek(syn::token::Bracket) {
+                        let list;
+                        syn::bracketed!(list in flags_content);
+                        fk_columns = parse_ident_list(&list)?;
+                        fk = fk_columns.first().cloned();
+                        if fk_columns.is_empty() {
+                            return Err(Error::new_spanned(
+                                flag_ident,
+                                "fk: [...] needs at least one column",
+                            ));
+                        }
+                    } else if flags_content.peek(syn::LitStr) {
                         let s: syn::LitStr = flags_content.parse()?;
                         errors.push(Error::new_spanned(
                             &s,
@@ -79,6 +92,21 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
                     } else {
                         let id: Ident = flags_content.parse()?;
                         fk = Some(id);
+                    }
+                }
+                "references" => {
+                    if flags_content.peek(Token![:]) {
+                        let _: Token![:] = flags_content.parse()?;
+                    } else if flags_content.peek(Token![=]) {
+                        let _: Token![=] = flags_content.parse()?;
+                    }
+                    if flags_content.peek(syn::token::Bracket) {
+                        let list;
+                        syn::bracketed!(list in flags_content);
+                        reference_columns = parse_ident_list(&list)?;
+                    } else {
+                        let id: Ident = flags_content.parse()?;
+                        reference_columns = vec![id];
                     }
                 }
                 "through" => {
@@ -167,6 +195,7 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
                 _ => {
                     const REL_OPTIONS: &[&str] = &[
                         "fk",
+                        "references",
                         "through",
                         "source_fk",
                         "source_attribute_on_join_resource",
@@ -256,12 +285,25 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
         dest,
         struct_field_ty,
         fk,
+        fk_columns,
+        reference_columns,
         through,
         source_attribute_on_join_resource,
         destination_attribute_on_join_resource,
         on_delete,
         on_update,
     })
+}
+
+fn parse_ident_list(input: ParseStream) -> Result<Vec<Ident>> {
+    let mut cols = Vec::new();
+    while !input.is_empty() {
+        cols.push(input.parse()?);
+        if input.peek(Token![,]) {
+            let _: Token![,] = input.parse()?;
+        }
+    }
+    Ok(cols)
 }
 
 fn parse_referential_action(flag: &Ident, value: &str, name: &str) -> Result<OnDeleteSpec> {

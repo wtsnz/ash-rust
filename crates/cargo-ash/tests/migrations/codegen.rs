@@ -2373,3 +2373,45 @@ async fn codegen_cascades_foreign_key_updates(db: TestDb) {
     db.rollback(&project.migrations()).await.unwrap();
 }
 on_every_backend!(codegen_cascades_foreign_key_updates);
+
+async fn codegen_enforces_composite_foreign_keys(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_tenant_accounts",
+        &[
+            &fixtures::tenant_accounts::account::Account::DEF,
+            &fixtures::tenant_accounts::membership::Membership::DEF,
+        ],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_tenant_accounts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "FOREIGN KEY (\"tenant_id\", \"code\") REFERENCES \"accounts\" (\"tenant_id\", \"code\")"
+        ),
+        "composite foreign key missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO accounts (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000d0', 'acme')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "INSERT INTO memberships (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d0', 'acme')",
+    )
+    .await
+    .unwrap();
+    let missing = db
+        .exec(
+            "INSERT INTO memberships (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d3', '00000000-0000-0000-0000-0000000000d0', 'other')",
+        )
+        .await;
+    assert!(missing.is_err(), "a missing parent key must fail");
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_enforces_composite_foreign_keys);

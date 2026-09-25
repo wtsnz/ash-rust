@@ -1,4 +1,6 @@
-use ash_core::{ActionDef, AttrType, AttributeDef, IdentityDef, IndexDef, ResourceDef};
+use ash_core::{
+    ActionDef, AttrType, AttributeDef, IdentityDef, IndexDef, RelationshipDef, ResourceDef,
+};
 use ash_sql::{
     MemoryMigrationExecutor, Migrator, PostgresDialect, SqliteDialect, TableSnapshot,
     diff_snapshots, generate_migration_with_version,
@@ -143,6 +145,105 @@ fn index_using_is_emitted_for_postgres_only() {
         "CREATE INDEX IF NOT EXISTS \"idx_accounts_by_body\" ON \"accounts\" (\"username\");"
     ));
     assert!(!sqlite.up_sql.contains("USING"));
+}
+
+#[test]
+fn old_reference_snapshot_keeps_a_single_column_key() {
+    let json = r#"{
+        "name": "fk_tickets_org",
+        "column": "org_id",
+        "target_table": "orgs",
+        "target_column": "id",
+        "on_delete": "CASCADE"
+    }"#;
+    let loaded: ash_sql::ReferenceSnapshot = serde_json::from_str(json).unwrap();
+    let fresh = ash_sql::ReferenceSnapshot {
+        name: "fk_tickets_org".into(),
+        column: "org_id".into(),
+        columns: vec!["org_id".into()],
+        target_table: "orgs".into(),
+        target_column: "id".into(),
+        target_columns: vec!["id".into()],
+        on_delete: "CASCADE".into(),
+        on_update: "NO ACTION".into(),
+    };
+    assert_eq!(loaded, fresh);
+}
+
+#[test]
+fn composite_foreign_key_lists_every_column() {
+    static PARENT_ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("tenant_id", AttrType::Uuid),
+        AttributeDef::required("code", AttrType::String),
+    ];
+    static PARENT: ResourceDef = ResourceDef {
+        name: "Account",
+        table: "accounts",
+        attributes: PARENT_ATTRS,
+        relationships: &[],
+        actions: &[],
+        policies: &[],
+        field_policies: &[],
+        calculations: &[],
+        aggregates: &[],
+        extensions: &[],
+        notifiers: &[],
+        identities: &[IdentityDef::new("tenant_code", &["tenant_id", "code"])],
+        indexes: &[],
+        checks: &[],
+        embedded: false,
+        data_layer: ash_core::DataLayerKind::Postgres,
+        timestamps: None,
+        store_type_id: ash_core::default_store_type_id,
+        store_name: "default",
+        multitenancy: None,
+    };
+    static CHILD_ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("tenant_id", AttrType::Uuid),
+        AttributeDef::required("code", AttrType::String),
+    ];
+    static CHILD_RELS: &[RelationshipDef] = &[RelationshipDef::belongs_to(
+        "account",
+        || &PARENT,
+        "tenant_id",
+    )
+    .with_keys(&["tenant_id", "code"], &["tenant_id", "code"])];
+    static CHILD: ResourceDef = ResourceDef {
+        name: "Membership",
+        table: "memberships",
+        attributes: CHILD_ATTRS,
+        relationships: CHILD_RELS,
+        actions: &[],
+        policies: &[],
+        field_policies: &[],
+        calculations: &[],
+        aggregates: &[],
+        extensions: &[],
+        notifiers: &[],
+        identities: &[],
+        indexes: &[],
+        checks: &[],
+        embedded: false,
+        data_layer: ash_core::DataLayerKind::Postgres,
+        timestamps: None,
+        store_type_id: ash_core::default_store_type_id,
+        store_name: "default",
+        multitenancy: None,
+    };
+    let sql = generate_migration_with_version(
+        &PostgresDialect,
+        "20260903000004",
+        "create_memberships",
+        &diff_snapshots(
+            None,
+            Some(&TableSnapshot::from_resource(&CHILD, &PostgresDialect)),
+        ),
+    );
+    assert!(sql.up_sql.contains(
+        "FOREIGN KEY (\"tenant_id\", \"code\") REFERENCES \"accounts\" (\"tenant_id\", \"code\") ON DELETE NO ACTION"
+    ));
 }
 
 #[tokio::test]

@@ -297,9 +297,8 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
         SchemaOperation::AddReference { table, reference } => {
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(&reference.name);
-            let col = dialect.quote_identifier(&reference.column);
+            let (col, target_col) = reference.key_sql(dialect);
             let target_t = dialect.quote_identifier(&reference.target_table);
-            let target_col = dialect.quote_identifier(&reference.target_column);
             let on_del = &reference.on_delete;
 
             let up = format!(
@@ -345,9 +344,8 @@ pub fn emit_create_table<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -
 
     for reference in &snapshot.references {
         let ref_name = dialect.quote_identifier(&reference.name);
-        let col = dialect.quote_identifier(&reference.column);
+        let (col, target_col) = reference.key_sql(dialect);
         let target_t = dialect.quote_identifier(&reference.target_table);
-        let target_col = dialect.quote_identifier(&reference.target_column);
         cols.push(format!(
             "CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}{}",
             reference.on_delete,
