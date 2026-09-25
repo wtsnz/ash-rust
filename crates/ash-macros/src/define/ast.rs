@@ -77,6 +77,7 @@ pub struct IdentitySpec {
     pub keys: Vec<Ident>,
     pub message: Option<String>,
     pub predicate: Option<String>,
+    pub nils_distinct: bool,
 }
 
 pub struct IndexSpec {

@@ -1,7 +1,7 @@
 use ash_core::{ActionDef, AttrType, AttributeDef, IdentityDef, ResourceDef};
 use ash_sql::{
-    diff_snapshots, generate_migration_with_version, MemoryMigrationExecutor, Migrator,
-    PostgresDialect, SqliteDialect, TableSnapshot,
+    MemoryMigrationExecutor, Migrator, PostgresDialect, SqliteDialect, TableSnapshot,
+    diff_snapshots, generate_migration_with_version,
 };
 
 static RES_V1_ATTRS: &[AttributeDef] = &[
@@ -37,31 +37,95 @@ fn test_generate_migration_sql_postgres_and_sqlite() {
     let snap_pg = TableSnapshot::from_resource(&RES_V1, &PostgresDialect);
     let ops_pg = diff_snapshots(None, Some(&snap_pg));
 
-    let files_pg = generate_migration_with_version(&PostgresDialect, "20260903000001", "create_accounts", &ops_pg);
-    assert_eq!(files_pg.up_filename, "20260903000001_create_accounts.postgres.up.sql");
-    assert_eq!(files_pg.down_filename, "20260903000001_create_accounts.postgres.down.sql");
+    let files_pg = generate_migration_with_version(
+        &PostgresDialect,
+        "20260903000001",
+        "create_accounts",
+        &ops_pg,
+    );
+    assert_eq!(
+        files_pg.up_filename,
+        "20260903000001_create_accounts.postgres.up.sql"
+    );
+    assert_eq!(
+        files_pg.down_filename,
+        "20260903000001_create_accounts.postgres.down.sql"
+    );
 
-    assert!(files_pg.up_sql.contains("CREATE TABLE IF NOT EXISTS \"accounts\""));
+    assert!(
+        files_pg
+            .up_sql
+            .contains("CREATE TABLE IF NOT EXISTS \"accounts\"")
+    );
     assert!(files_pg.up_sql.contains("\"id\" UUID PRIMARY KEY"));
     assert!(files_pg.up_sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS \"idx_accounts_unique_username\" ON \"accounts\" (\"username\");"));
-    assert!(files_pg.down_sql.contains("DROP TABLE IF EXISTS \"accounts\";"));
+    assert!(
+        files_pg
+            .down_sql
+            .contains("DROP TABLE IF EXISTS \"accounts\";")
+    );
 
     let snap_sqlite = TableSnapshot::from_resource(&RES_V1, &SqliteDialect);
     let ops_sqlite = diff_snapshots(None, Some(&snap_sqlite));
 
-    let files_sqlite = generate_migration_with_version(&SqliteDialect, "20260903000001", "create_accounts", &ops_sqlite);
-    assert_eq!(files_sqlite.up_filename, "20260903000001_create_accounts.sqlite.up.sql");
+    let files_sqlite = generate_migration_with_version(
+        &SqliteDialect,
+        "20260903000001",
+        "create_accounts",
+        &ops_sqlite,
+    );
+    assert_eq!(
+        files_sqlite.up_filename,
+        "20260903000001_create_accounts.sqlite.up.sql"
+    );
     assert!(files_sqlite.up_sql.contains("\"id\" TEXT PRIMARY KEY"));
+}
+
+#[test]
+fn unique_index_nulls_not_distinct_is_postgres_only() {
+    static NULLS_IDENT: &[IdentityDef] =
+        &[IdentityDef::new("unique_username", &["username"]).with_nils_distinct(false)];
+    let mut resource = RES_V1;
+    resource.identities = NULLS_IDENT;
+    let postgres = TableSnapshot::from_resource(&resource, &PostgresDialect);
+    let postgres_sql = generate_migration_with_version(
+        &PostgresDialect,
+        "20260903000002",
+        "create_accounts",
+        &diff_snapshots(None, Some(&postgres)),
+    );
+    assert!(
+        postgres_sql.up_sql.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_accounts_unique_username\" ON \"accounts\" (\"username\") NULLS NOT DISTINCT;"
+        )
+    );
+    let sqlite = TableSnapshot::from_resource(&resource, &SqliteDialect);
+    let sqlite_sql = generate_migration_with_version(
+        &SqliteDialect,
+        "20260903000002",
+        "create_accounts",
+        &diff_snapshots(None, Some(&sqlite)),
+    );
+    assert!(sqlite_sql
+        .up_sql
+        .contains("CREATE UNIQUE INDEX IF NOT EXISTS \"idx_accounts_unique_username\" ON \"accounts\" (\"username\");"));
+    assert!(!sqlite_sql.up_sql.contains("NULLS NOT DISTINCT"));
 }
 
 #[tokio::test]
 async fn test_migrator_run_and_rollback_lifecycle() {
-    let temp_dir = std::env::temp_dir().join(format!("ash_test_migrations_{}", uuid::Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("ash_test_migrations_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir).unwrap();
 
     let snap = TableSnapshot::from_resource(&RES_V1, &PostgresDialect);
     let ops = diff_snapshots(None, Some(&snap));
-    let files = generate_migration_with_version(&PostgresDialect, "20260903100000", "create_accounts", &ops);
+    let files = generate_migration_with_version(
+        &PostgresDialect,
+        "20260903100000",
+        "create_accounts",
+        &ops,
+    );
 
     let up_file = temp_dir.join(&files.up_filename);
     let down_file = temp_dir.join(&files.down_filename);

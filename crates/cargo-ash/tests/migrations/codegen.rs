@@ -2257,3 +2257,37 @@ async fn codegen_creates_partial_indexes(db: TestDb) {
     assert!(!db.schema().await.tables.contains_key("live_accounts"));
 }
 on_every_backend!(codegen_creates_partial_indexes);
+
+async fn codegen_unique_nulls_follow_the_dialect(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_optional_emails",
+        &[&fixtures::optional_emails::OptionalEmail::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_optional_emails.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO optional_emails (id, email) VALUES ('00000000-0000-0000-0000-0000000000b1', NULL)",
+    )
+    .await
+    .unwrap();
+    let second = db
+        .exec(
+            "INSERT INTO optional_emails (id, email) VALUES ('00000000-0000-0000-0000-0000000000b2', NULL)",
+        )
+        .await;
+    if dialect == "postgres" {
+        assert!(up.contains("NULLS NOT DISTINCT"));
+        assert!(second.is_err(), "postgres must reject a second null email");
+    } else {
+        assert!(!up.contains("NULLS NOT DISTINCT"));
+        assert!(second.is_ok(), "sqlite keeps nulls distinct");
+    }
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_unique_nulls_follow_the_dialect);

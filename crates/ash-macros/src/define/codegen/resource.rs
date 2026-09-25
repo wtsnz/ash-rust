@@ -913,12 +913,14 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 Some(sql) => quote! { ::std::option::Option::Some(#sql) },
                 None => quote! { ::std::option::Option::None },
             };
+            let nils_distinct = ident.nils_distinct;
             quote! {
                 ::ash_core::IdentityDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
                     message: #msg_tokens,
                     predicate: #predicate_tokens,
+                    nils_distinct: #nils_distinct,
                 }
             }
         })
@@ -1005,7 +1007,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         format!("unknown attribute `{key}` in identity `{name}`"),
                     )
                 })?;
-            let ty = &attr.ty;
+            let ty = option_inner(&attr.ty).unwrap_or(&attr.ty);
             arg_names.push(key);
             arg_tys.push(ty);
             filter_exprs.push(quote! {

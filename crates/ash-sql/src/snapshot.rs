@@ -48,6 +48,7 @@ impl TableSnapshot {
                 columns: id.keys.iter().map(|k| k.to_string()).collect(),
                 unique: true,
                 predicate: id.predicate.map(str::to_string),
+                nils_distinct: id.nils_distinct,
             });
         }
 
@@ -145,6 +146,12 @@ pub struct IdentitySnapshot {
     pub unique: bool,
     #[serde(default)]
     pub predicate: Option<String>,
+    #[serde(default = "nils_are_distinct")]
+    pub nils_distinct: bool,
+}
+
+fn nils_are_distinct() -> bool {
+    true
 }
 
 /// Represents a non-unique index in a schema snapshot.

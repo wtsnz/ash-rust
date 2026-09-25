@@ -905,6 +905,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 &table,
                 &key_cols.join(", "),
                 identity.predicate,
+                self.dialect.name(),
+                identity.nils_distinct,
             ));
         }
 
@@ -924,6 +926,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 &table,
                 &key_cols.join(", "),
                 index.predicate,
+                self.dialect.name(),
+                true,
             ));
         }
 

@@ -231,6 +231,8 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                     &t,
                     &key_cols,
                     identity.predicate.as_deref(),
+                    dialect.name(),
+                    identity.nils_distinct,
                 )
             );
             let down = format!("DROP INDEX IF EXISTS {id_name};");
@@ -260,6 +262,8 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                     &t,
                     &key_cols,
                     index.predicate.as_deref(),
+                    dialect.name(),
+                    true,
                 )
             );
             let down = format!("DROP INDEX IF EXISTS {idx_name};");
@@ -377,6 +381,8 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             &table,
             &key_cols,
             identity.predicate.as_deref(),
+            dialect.name(),
+            identity.nils_distinct,
         ));
         sql.push(';');
     }
@@ -396,6 +402,8 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             &table,
             &key_cols,
             index.predicate.as_deref(),
+            dialect.name(),
+            true,
         ));
         sql.push(';');
     }
@@ -409,14 +417,23 @@ pub(crate) fn format_create_index(
     table: &str,
     columns: &str,
     predicate: Option<&str>,
+    dialect: &str,
+    nils_distinct: bool,
 ) -> String {
     let unique_sql = if unique { "UNIQUE " } else { "" };
     let exists_sql = if if_not_exists { "IF NOT EXISTS " } else { "" };
+    let nulls_sql = if unique && !nils_distinct && dialect == "postgres" {
+        " NULLS NOT DISTINCT"
+    } else {
+        ""
+    };
     let where_sql = predicate
         .filter(|predicate| !predicate.is_empty())
         .map(|predicate| format!(" WHERE {predicate}"))
         .unwrap_or_default();
-    format!("CREATE {unique_sql}INDEX {exists_sql}{name} ON {table} ({columns}){where_sql}")
+    format!(
+        "CREATE {unique_sql}INDEX {exists_sql}{name} ON {table} ({columns}){nulls_sql}{where_sql}"
+    )
 }
 
 fn table_of(op: &SchemaOperation) -> Option<&str> {
