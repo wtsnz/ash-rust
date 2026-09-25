@@ -45,6 +45,7 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
     let keys: Vec<Ident> = list.into_iter().collect();
     let mut message = None;
     let mut predicate = None;
+    let mut nils_distinct = true;
     while input.peek(Token![,]) {
         let _: Token![,] = input.parse()?;
         if input.peek(Token![;]) || input.is_empty() {
@@ -64,10 +65,17 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
                 let lit: syn::LitStr = input.parse()?;
                 message = Some(lit.value());
             }
+            "nils_distinct" => {
+                expect_clause_sep(input)?;
+                let lit: syn::LitBool = input.parse()?;
+                nils_distinct = lit.value;
+            }
             other => {
                 return Err(Error::new_spanned(
                     key,
-                    format!("unknown identity clause `{other}`, expected `where` or `message`"),
+                    format!(
+                        "unknown identity clause `{other}`, expected `where`, `message`, or `nils_distinct`"
+                    ),
                 ));
             }
         }
@@ -78,6 +86,7 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
         keys,
         message,
         predicate,
+        nils_distinct,
     })
 }
 

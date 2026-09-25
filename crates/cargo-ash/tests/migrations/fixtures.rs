@@ -744,6 +744,27 @@ pub mod duplicate_statement_notes {
     }
 }
 
+pub mod optional_emails {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        OptionalEmail {
+            table "optional_emails";
+            attributes {
+                id: Uuid [pk];
+                email: Option<String>;
+            }
+            identities {
+                identity one_email: [email], nils_distinct: false;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod live_accounts {
     use ash_core::resource;
     use uuid::Uuid;

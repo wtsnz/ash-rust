@@ -65,15 +65,23 @@ pub struct IdentityDef {
     pub message: Option<&'static str>,
     /// SQL predicate for a partial unique index (`CREATE UNIQUE INDEX ... WHERE ...`).
     pub predicate: Option<&'static str>,
+    /// When false, Postgres emits `UNIQUE NULLS NOT DISTINCT`. SQLite has no equivalent and keeps the default unique index.
+    pub nils_distinct: bool,
 }
 
 impl IdentityDef {
+    pub const fn with_nils_distinct(mut self, nils_distinct: bool) -> Self {
+        self.nils_distinct = nils_distinct;
+        self
+    }
+
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
         Self {
             name,
             keys,
             message: None,
             predicate: None,
+            nils_distinct: true,
         }
     }
 
@@ -87,6 +95,7 @@ impl IdentityDef {
             keys,
             message: Some(message),
             predicate: None,
+            nils_distinct: true,
         }
     }
 
