@@ -909,11 +909,16 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 Some(msg) => quote! { ::std::option::Option::Some(#msg) },
                 None => quote! { ::std::option::Option::None },
             };
+            let predicate_tokens = match &ident.predicate {
+                Some(sql) => quote! { ::std::option::Option::Some(#sql) },
+                None => quote! { ::std::option::Option::None },
+            };
             quote! {
                 ::ash_core::IdentityDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
                     message: #msg_tokens,
+                    predicate: #predicate_tokens,
                 }
             }
         })
@@ -925,10 +930,15 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         .map(|index| {
             let name_str = index.name.to_string();
             let key_strs: Vec<String> = index.keys.iter().map(|k| k.to_string()).collect();
+            let predicate_tokens = match &index.predicate {
+                Some(sql) => quote! { ::std::option::Option::Some(#sql) },
+                None => quote! { ::std::option::Option::None },
+            };
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
+                    predicate: #predicate_tokens,
                 }
             }
         })

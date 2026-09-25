@@ -76,11 +76,13 @@ pub struct IdentitySpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
     pub message: Option<String>,
+    pub predicate: Option<String>,
 }
 
 pub struct IndexSpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
+    pub predicate: Option<String>,
 }
 
 pub struct CheckSpec {

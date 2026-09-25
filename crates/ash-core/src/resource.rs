@@ -63,6 +63,8 @@ pub struct IdentityDef {
     pub name: &'static str,
     pub keys: &'static [&'static str],
     pub message: Option<&'static str>,
+    /// SQL predicate for a partial unique index (`CREATE UNIQUE INDEX ... WHERE ...`).
+    pub predicate: Option<&'static str>,
 }
 
 impl IdentityDef {
@@ -71,6 +73,7 @@ impl IdentityDef {
             name,
             keys,
             message: None,
+            predicate: None,
         }
     }
 
@@ -83,7 +86,13 @@ impl IdentityDef {
             name,
             keys,
             message: Some(message),
+            predicate: None,
         }
+    }
+
+    pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
+        self.predicate = Some(predicate);
+        self
     }
 }
 
@@ -91,11 +100,22 @@ impl IdentityDef {
 pub struct IndexDef {
     pub name: &'static str,
     pub keys: &'static [&'static str],
+    /// SQL predicate for a partial index (`CREATE INDEX ... WHERE ...`).
+    pub predicate: Option<&'static str>,
 }
 
 impl IndexDef {
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
-        Self { name, keys }
+        Self {
+            name,
+            keys,
+            predicate: None,
+        }
+    }
+
+    pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
+        self.predicate = Some(predicate);
+        self
     }
 }
 

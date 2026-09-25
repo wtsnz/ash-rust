@@ -898,9 +898,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for key in identity.keys {
                 key_cols.push(ident(self.dialect, key)?);
             }
-            stmts.push(format!(
-                "CREATE UNIQUE INDEX {if_not_exists}{idx_name} ON {table} ({})",
-                key_cols.join(", ")
+            stmts.push(crate::generator::format_create_index(
+                true,
+                !if_not_exists.is_empty(),
+                &idx_name,
+                &table,
+                &key_cols.join(", "),
+                identity.predicate,
             ));
         }
 
@@ -913,9 +917,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for key in index.keys {
                 key_cols.push(ident(self.dialect, key)?);
             }
-            stmts.push(format!(
-                "CREATE INDEX {if_not_exists}{idx_name} ON {table} ({})",
-                key_cols.join(", ")
+            stmts.push(crate::generator::format_create_index(
+                false,
+                !if_not_exists.is_empty(),
+                &idx_name,
+                &table,
+                &key_cols.join(", "),
+                index.predicate,
             ));
         }
 

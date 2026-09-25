@@ -47,6 +47,7 @@ impl TableSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), id.name),
                 columns: id.keys.iter().map(|k| k.to_string()).collect(),
                 unique: true,
+                predicate: id.predicate.map(str::to_string),
             });
         }
 
@@ -55,6 +56,7 @@ impl TableSnapshot {
             indexes.push(IndexSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), index.name),
                 columns: index.keys.iter().map(|k| k.to_string()).collect(),
+                predicate: index.predicate.map(str::to_string),
             });
         }
 
@@ -141,6 +143,8 @@ pub struct IdentitySnapshot {
     pub name: String,
     pub columns: Vec<String>,
     pub unique: bool,
+    #[serde(default)]
+    pub predicate: Option<String>,
 }
 
 /// Represents a non-unique index in a schema snapshot.
@@ -148,6 +152,8 @@ pub struct IdentitySnapshot {
 pub struct IndexSnapshot {
     pub name: String,
     pub columns: Vec<String>,
+    #[serde(default)]
+    pub predicate: Option<String>,
 }
 
 /// Represents a CHECK constraint in a schema snapshot.

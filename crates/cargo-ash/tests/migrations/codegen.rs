@@ -2204,3 +2204,56 @@ async fn squash_history_refuses_until_rollback_then_writes_one_migration(db: Tes
     );
 }
 on_every_backend!(squash_history_refuses_until_rollback_then_writes_one_migration);
+
+async fn codegen_creates_partial_indexes(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_live_accounts",
+        &[&fixtures::live_accounts::LiveAccount::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_live_accounts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_live_accounts_live_email\" ON \"live_accounts\" (\"email\") WHERE deleted_at IS NULL;"
+        ),
+        "partial unique index missing:\n{up}"
+    );
+    assert!(
+        up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_live_accounts_active_email\" ON \"live_accounts\" (\"email\") WHERE deleted_at IS NULL;"
+        ),
+        "partial index missing:\n{up}"
+    );
+
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a1', 'ada@example.com', NULL)",
+    )
+    .await
+    .unwrap();
+    let duplicate_live = db
+        .exec(
+            "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a2', 'ada@example.com', NULL)",
+        )
+        .await;
+    assert!(duplicate_live.is_err(), "live emails must stay unique");
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a3', 'ada@example.com', '2024-01-01')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a4', 'ada@example.com', '2024-02-01')",
+    )
+    .await
+    .unwrap();
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(!db.schema().await.tables.contains_key("live_accounts"));
+}
+on_every_backend!(codegen_creates_partial_indexes);

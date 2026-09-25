@@ -531,6 +531,31 @@ pub mod bounded_notes {
     }
 }
 
+pub mod live_accounts {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        LiveAccount {
+            table "live_accounts";
+            attributes {
+                id: Uuid [pk];
+                email: String;
+                deleted_at: Option<String>;
+            }
+            identities {
+                identity live_email: [email], where: "deleted_at IS NULL";
+            }
+            indexes {
+                index active_email: [email], where: "deleted_at IS NULL";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod duplicate_check_notes {
     use ash_core::resource;
     use uuid::Uuid;

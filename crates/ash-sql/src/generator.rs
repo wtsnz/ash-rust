@@ -222,7 +222,17 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                 .map(|k| dialect.quote_identifier(k))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let up = format!("CREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {t} ({key_cols});");
+            let up = format!(
+                "{};",
+                format_create_index(
+                    true,
+                    true,
+                    &id_name,
+                    &t,
+                    &key_cols,
+                    identity.predicate.as_deref(),
+                )
+            );
             let down = format!("DROP INDEX IF EXISTS {id_name};");
             (up, down)
         }
@@ -241,7 +251,17 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                 .map(|k| dialect.quote_identifier(k))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let up = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {t} ({key_cols});");
+            let up = format!(
+                "{};",
+                format_create_index(
+                    false,
+                    true,
+                    &idx_name,
+                    &t,
+                    &key_cols,
+                    index.predicate.as_deref(),
+                )
+            );
             let down = format!("DROP INDEX IF EXISTS {idx_name};");
             (up, down)
         }
@@ -349,9 +369,16 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             .map(|k| dialect.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        sql.push_str(&format!(
-            "\n\nCREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {table} ({key_cols});"
+        sql.push_str("\n\n");
+        sql.push_str(&format_create_index(
+            true,
+            true,
+            &id_name,
+            &table,
+            &key_cols,
+            identity.predicate.as_deref(),
         ));
+        sql.push(';');
     }
     for index in &snapshot.indexes {
         let idx_name = dialect.quote_identifier(&index.name);
@@ -361,11 +388,35 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             .map(|k| dialect.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        sql.push_str(&format!(
-            "\n\nCREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({key_cols});"
+        sql.push_str("\n\n");
+        sql.push_str(&format_create_index(
+            false,
+            true,
+            &idx_name,
+            &table,
+            &key_cols,
+            index.predicate.as_deref(),
         ));
+        sql.push(';');
     }
     sql
+}
+
+pub(crate) fn format_create_index(
+    unique: bool,
+    if_not_exists: bool,
+    name: &str,
+    table: &str,
+    columns: &str,
+    predicate: Option<&str>,
+) -> String {
+    let unique_sql = if unique { "UNIQUE " } else { "" };
+    let exists_sql = if if_not_exists { "IF NOT EXISTS " } else { "" };
+    let where_sql = predicate
+        .filter(|predicate| !predicate.is_empty())
+        .map(|predicate| format!(" WHERE {predicate}"))
+        .unwrap_or_default();
+    format!("CREATE {unique_sql}INDEX {exists_sql}{name} ON {table} ({columns}){where_sql}")
 }
 
 fn table_of(op: &SchemaOperation) -> Option<&str> {
