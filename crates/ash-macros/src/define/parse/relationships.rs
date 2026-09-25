@@ -55,6 +55,7 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
     let mut source_attribute_on_join_resource = None;
     let mut destination_attribute_on_join_resource = None;
     let mut on_delete = OnDeleteSpec::Nothing;
+    let mut on_update = OnDeleteSpec::Nothing;
 
     if input.peek(syn::token::Bracket) {
         let flags_content;
@@ -142,20 +143,26 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
                         let id: Ident = flags_content.parse()?;
                         id.to_string()
                     };
-                    on_delete = match val_str.as_str() {
-                        "cascade" => OnDeleteSpec::Cascade,
-                        "nilify" => OnDeleteSpec::Nilify,
-                        "restrict" => OnDeleteSpec::Restrict,
-                        "nothing" => OnDeleteSpec::Nothing,
-                        other => {
-                            return Err(Error::new_spanned(
-                                flag_ident,
-                                format!(
-                                    "unknown on_delete value `{other}`, expected `cascade`, `nilify`, `restrict`, or `nothing`"
-                                ),
-                            ));
-                        }
+                    on_delete = parse_referential_action(&flag_ident, &val_str, "on_delete")?;
+                }
+                "on_update" => {
+                    if flags_content.peek(Token![:]) {
+                        let _: Token![:] = flags_content.parse()?;
+                    } else if flags_content.peek(Token![=]) {
+                        let _: Token![=] = flags_content.parse()?;
+                    }
+                    let val_str = if flags_content.peek(syn::LitStr) {
+                        let s: syn::LitStr = flags_content.parse()?;
+                        errors.push(Error::new_spanned(
+                            &s,
+                            "use `on_update: cascade`, not a string literal",
+                        ));
+                        s.value()
+                    } else {
+                        let id: Ident = flags_content.parse()?;
+                        id.to_string()
                     };
+                    on_update = parse_referential_action(&flag_ident, &val_str, "on_update")?;
                 }
                 _ => {
                     const REL_OPTIONS: &[&str] = &[
@@ -166,6 +173,7 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
                         "dest_fk",
                         "destination_attribute_on_join_resource",
                         "on_delete",
+                        "on_update",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &flag_ident,
@@ -252,5 +260,21 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
         source_attribute_on_join_resource,
         destination_attribute_on_join_resource,
         on_delete,
+        on_update,
     })
+}
+
+fn parse_referential_action(flag: &Ident, value: &str, name: &str) -> Result<OnDeleteSpec> {
+    match value {
+        "cascade" => Ok(OnDeleteSpec::Cascade),
+        "nilify" => Ok(OnDeleteSpec::Nilify),
+        "restrict" => Ok(OnDeleteSpec::Restrict),
+        "nothing" => Ok(OnDeleteSpec::Nothing),
+        other => Err(Error::new_spanned(
+            flag,
+            format!(
+                "unknown {name} value `{other}`, expected `cascade`, `nilify`, `restrict`, or `nothing`"
+            ),
+        )),
+    }
 }

@@ -207,6 +207,12 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnDelete::Nilify },
             crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnDelete::Restrict },
         };
+        let on_update_tok = match r.on_update {
+            crate::define::ast::OnDeleteSpec::Nothing => quote! { ::ash_core::OnUpdate::Nothing },
+            crate::define::ast::OnDeleteSpec::Cascade => quote! { ::ash_core::OnUpdate::Cascade },
+            crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnUpdate::Nilify },
+            crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnUpdate::Restrict },
+        };
         match r.kind {
             RelType::BelongsTo => {
                 let fk_str =
@@ -218,7 +224,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
                 });
             }
             RelType::HasMany => {
@@ -231,7 +237,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
                 });
             }
             RelType::HasOne => {
@@ -244,7 +250,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
                 });
             }
             RelType::ManyToMany => {
@@ -269,7 +275,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         || &<#through_ident as ::ash_core::Resource>::DEF,
                         #source_on_join,
                         #dest_on_join,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
                 });
             }
         }

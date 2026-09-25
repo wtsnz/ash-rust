@@ -448,6 +448,16 @@ pub enum OnDelete {
     Restrict,
 }
 
+/// Referential action for `ON UPDATE`. `Nothing` is `NO ACTION` and is omitted from generated SQL.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnUpdate {
+    #[default]
+    Nothing,
+    Cascade,
+    Nilify,
+    Restrict,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RelationshipDef {
     pub name: &'static str,
@@ -459,6 +469,7 @@ pub struct RelationshipDef {
     pub source_attribute_on_join_resource: Option<&'static str>,
     pub destination_attribute_on_join_resource: Option<&'static str>,
     pub on_delete: OnDelete,
+    pub on_update: OnUpdate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -472,6 +483,11 @@ pub enum RelKind {
 impl RelationshipDef {
     pub const fn with_on_delete(mut self, on_delete: OnDelete) -> Self {
         self.on_delete = on_delete;
+        self
+    }
+
+    pub const fn with_on_update(mut self, on_update: OnUpdate) -> Self {
+        self.on_update = on_update;
         self
     }
 
@@ -490,6 +506,7 @@ impl RelationshipDef {
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -508,6 +525,7 @@ impl RelationshipDef {
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -526,6 +544,7 @@ impl RelationshipDef {
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -546,6 +565,7 @@ impl RelationshipDef {
             source_attribute_on_join_resource: Some(source_attribute_on_join_resource),
             destination_attribute_on_join_resource: Some(destination_attribute_on_join_resource),
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 }
