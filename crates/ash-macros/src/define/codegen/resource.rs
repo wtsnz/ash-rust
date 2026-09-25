@@ -19,6 +19,83 @@ fn try_from_i64(ty: &Type, n: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     }
 }
 
+fn composite_keys(
+    rel: &crate::define::ast::RelationshipSpec,
+    name: &str,
+    resource: &str,
+) -> Result<TokenStream> {
+    if rel.fk_columns.len() <= 1 && rel.reference_columns.is_empty() {
+        return Ok(quote! {});
+    }
+    if matches!(rel.kind, RelType::ManyToMany) {
+        return Err(Error::new_spanned(
+            &rel.ident,
+            "many_to_many does not take a composite foreign key",
+        ));
+    }
+    let source_default = match rel.kind {
+        RelType::BelongsTo => rel
+            .fk
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{name}_id")),
+        _ => "id".to_string(),
+    };
+    let dest_default = match rel.kind {
+        RelType::BelongsTo => "id".to_string(),
+        _ => rel
+            .fk
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{}_id", snake_case(resource))),
+    };
+    let (source, destination) = match rel.kind {
+        RelType::BelongsTo => {
+            let source = if rel.fk_columns.is_empty() {
+                vec![source_default]
+            } else {
+                rel.fk_columns.iter().map(|id| id.to_string()).collect()
+            };
+            let destination = if rel.reference_columns.is_empty() {
+                vec![dest_default]
+            } else {
+                rel.reference_columns
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+            (source, destination)
+        }
+        _ => {
+            let destination = if rel.fk_columns.is_empty() {
+                vec![dest_default]
+            } else {
+                rel.fk_columns.iter().map(|id| id.to_string()).collect()
+            };
+            let source = if rel.reference_columns.is_empty() {
+                vec![source_default]
+            } else {
+                rel.reference_columns
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+            (source, destination)
+        }
+    };
+    if source.len() != destination.len() {
+        return Err(Error::new_spanned(
+            &rel.ident,
+            format!(
+                "relationship `{name}` has {} key columns and {} referenced columns",
+                source.len(),
+                destination.len()
+            ),
+        ));
+    }
+    Ok(quote! { .with_keys(&[#(#source),*], &[#(#destination),*]) })
+}
+
 pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     if def.attributes.is_empty() {
         return Ok(quote! {});
@@ -207,6 +284,13 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnDelete::Nilify },
             crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnDelete::Restrict },
         };
+        let on_update_tok = match r.on_update {
+            crate::define::ast::OnDeleteSpec::Nothing => quote! { ::ash_core::OnUpdate::Nothing },
+            crate::define::ast::OnDeleteSpec::Cascade => quote! { ::ash_core::OnUpdate::Cascade },
+            crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnUpdate::Nilify },
+            crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnUpdate::Restrict },
+        };
+        let keys = composite_keys(r, &name_str, &resource_str)?;
         match r.kind {
             RelType::BelongsTo => {
                 let fk_str =
@@ -218,7 +302,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::HasMany => {
@@ -231,7 +315,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::HasOne => {
@@ -244,7 +328,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::ManyToMany => {
@@ -269,7 +353,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         || &<#through_ident as ::ash_core::Resource>::DEF,
                         #source_on_join,
                         #dest_on_join,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
                 });
             }
         }
@@ -909,11 +993,18 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 Some(msg) => quote! { ::std::option::Option::Some(#msg) },
                 None => quote! { ::std::option::Option::None },
             };
+            let predicate_tokens = match &ident.predicate {
+                Some(sql) => quote! { ::std::option::Option::Some(#sql) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let nils_distinct = ident.nils_distinct;
             quote! {
                 ::ash_core::IdentityDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
                     message: #msg_tokens,
+                    predicate: #predicate_tokens,
+                    nils_distinct: #nils_distinct,
                 }
             }
         })
@@ -925,10 +1016,20 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         .map(|index| {
             let name_str = index.name.to_string();
             let key_strs: Vec<String> = index.keys.iter().map(|k| k.to_string()).collect();
+            let predicate_tokens = match &index.predicate {
+                Some(sql) => quote! { ::std::option::Option::Some(#sql) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let method_tokens = match &index.method {
+                Some(method) => quote! { ::std::option::Option::Some(#method) },
+                None => quote! { ::std::option::Option::None },
+            };
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
+                    predicate: #predicate_tokens,
+                    method: #method_tokens,
                 }
             }
         })
@@ -995,7 +1096,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         format!("unknown attribute `{key}` in identity `{name}`"),
                     )
                 })?;
-            let ty = &attr.ty;
+            let ty = option_inner(&attr.ty).unwrap_or(&attr.ty);
             arg_names.push(key);
             arg_tys.push(ty);
             filter_exprs.push(quote! {

@@ -10,6 +10,10 @@ use crate::snapshot::{
 pub enum SchemaOperation {
     CreateTable(TableSnapshot),
     DropTable(String),
+    RenameTable {
+        old_name: String,
+        new_name: String,
+    },
     AddColumn {
         table: String,
         column: ColumnSnapshot,

@@ -488,6 +488,43 @@ pub fn helpdesk_with(ticket: &'static ResourceDef) -> [&'static ResourceDef; 2] 
     [&base::Org::DEF, ticket]
 }
 
+pub mod renamed_table {
+    pub use super::base::Org;
+    use ash_core::{domain, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Issue {
+            table "issues";
+            attributes {
+                id: Uuid [pk];
+                subject: String;
+                status: String = "open";
+                notes: Option<String>;
+                org_id: Uuid;
+            }
+            relationships {
+                belongs_to org: Org [fk: org_id, on_delete: cascade];
+            }
+            identities {
+                identity unique_subject: [subject];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+
+    domain! {
+        Helpdesk {
+            resources {
+                Org;
+                Issue;
+            }
+        }
+    }
+}
+
 pub const ORG_ID: &str = "00000000-0000-0000-0000-00000000000a";
 pub const OTHER_ORG_ID: &str = "00000000-0000-0000-0000-00000000000b";
 pub const TICKET_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -531,6 +568,116 @@ pub mod bounded_notes {
     }
 }
 
+pub mod moved_files {
+    pub mod folder {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Folder {
+                table "folders";
+                attributes {
+                    id: Uuid [pk];
+                    name: String;
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod file {
+        use super::folder::Folder;
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            File {
+                table "files";
+                attributes {
+                    id: Uuid [pk];
+                    name: String;
+                    folder_id: Uuid;
+                }
+                relationships {
+                    belongs_to folder: Folder [fk: folder_id, on_delete: restrict, on_update: cascade];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+}
+
+pub mod tagged_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        TaggedNote {
+            table "tagged_notes";
+            attributes {
+                id: Uuid [pk];
+                body: String;
+            }
+            indexes {
+                index by_body: [body], using: gin;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod optional_emails {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        OptionalEmail {
+            table "optional_emails";
+            attributes {
+                id: Uuid [pk];
+                email: Option<String>;
+            }
+            identities {
+                identity one_email: [email], nils_distinct: false;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod live_accounts {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        LiveAccount {
+            table "live_accounts";
+            attributes {
+                id: Uuid [pk];
+                email: String;
+                deleted_at: Option<String>;
+            }
+            identities {
+                identity live_email: [email], where: "deleted_at IS NULL";
+            }
+            indexes {
+                index active_email: [email], where: "deleted_at IS NULL";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod duplicate_check_notes {
     use ash_core::resource;
     use uuid::Uuid;
@@ -548,6 +695,77 @@ pub mod duplicate_check_notes {
             }
             actions {
                 read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod enum_labels {
+    use ash_core::{AshEnum, resource};
+    use uuid::Uuid;
+
+    #[derive(AshEnum, Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Label {
+        Open,
+        Closed,
+    }
+
+    resource! {
+        LabeledNote {
+            table "enum_labels";
+            attributes {
+                id: Uuid [pk];
+                label: Label [enum];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod tenant_accounts {
+    pub mod account {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Account {
+                table "accounts";
+                attributes {
+                    id: Uuid [pk];
+                    tenant_id: Uuid;
+                    code: String;
+                }
+                identities {
+                    identity tenant_code: [tenant_id, code];
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod membership {
+        use super::account::Account;
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Membership {
+                table "memberships";
+                attributes {
+                    id: Uuid [pk];
+                    tenant_id: Uuid;
+                    code: String;
+                }
+                relationships {
+                    belongs_to account: Account [fk: [tenant_id, code], references: [tenant_id, code]];
+                }
+                actions {
+                    read read { primary; }
+                }
             }
         }
     }

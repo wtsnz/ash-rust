@@ -433,28 +433,33 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
         if rel.kind != RelType::BelongsTo {
             continue;
         }
-        let fk_ident = rel
-            .fk
-            .clone()
-            .unwrap_or_else(|| Ident::new(&format!("{}_id", rel.ident), rel.ident.span()));
-        let fk = fk_ident.to_string();
-        if attr_names.iter().any(|n| n == &fk) {
-            continue;
-        }
-        let span = fk_ident.span();
-        let suggestion = find_closest_match(&fk, ident_refs(&attr_names));
-        let msg = if let Some(closest) = suggestion {
-            format!(
-                "belongs_to relationship `{}` requires foreign key `{fk}`, but no such attribute exists. Did you mean `{closest}`? Define `{fk}: Uuid`.",
-                rel.ident
-            )
+        let fk_idents = if rel.fk_columns.is_empty() {
+            vec![rel.fk.clone().unwrap_or_else(|| {
+                Ident::new(&format!("{}_id", rel.ident), rel.ident.span())
+            })]
         } else {
-            format!(
-                "belongs_to relationship `{}` requires foreign key `{fk}`, but no such attribute exists. Define `{fk}: Uuid`.",
-                rel.ident
-            )
+            rel.fk_columns.clone()
         };
-        errors.push(Error::new(span, msg));
+        for fk_ident in fk_idents {
+            let fk = fk_ident.to_string();
+            if attr_names.iter().any(|n| n == &fk) {
+                continue;
+            }
+            let span = fk_ident.span();
+            let suggestion = find_closest_match(&fk, ident_refs(&attr_names));
+            let msg = if let Some(closest) = suggestion {
+                format!(
+                    "belongs_to relationship `{}` requires foreign key `{fk}`, but no such attribute exists. Did you mean `{closest}`? Define `{fk}: Uuid`.",
+                    rel.ident
+                )
+            } else {
+                format!(
+                    "belongs_to relationship `{}` requires foreign key `{fk}`, but no such attribute exists. Define `{fk}: Uuid`.",
+                    rel.ident
+                )
+            };
+            errors.push(Error::new(span, msg));
+        }
     }
 
     for calc in &def.calculations {

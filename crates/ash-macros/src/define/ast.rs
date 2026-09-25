@@ -76,11 +76,15 @@ pub struct IdentitySpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
     pub message: Option<String>,
+    pub predicate: Option<String>,
+    pub nils_distinct: bool,
 }
 
 pub struct IndexSpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
+    pub predicate: Option<String>,
+    pub method: Option<String>,
 }
 
 pub struct CheckSpec {
@@ -147,10 +151,13 @@ pub struct RelationshipSpec {
     pub dest: Ident,
     pub struct_field_ty: Type,
     pub fk: Option<Ident>,
+    pub fk_columns: Vec<Ident>,
+    pub reference_columns: Vec<Ident>,
     pub through: Option<Ident>,
     pub source_attribute_on_join_resource: Option<String>,
     pub destination_attribute_on_join_resource: Option<String>,
     pub on_delete: OnDeleteSpec,
+    pub on_update: OnDeleteSpec,
 }
 
 pub struct CalculationSpec {

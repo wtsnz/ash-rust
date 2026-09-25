@@ -73,6 +73,7 @@ async fn initial_codegen_creates_every_table(db: TestDb) {
             references_table: "orgs".into(),
             references_column: "id".into(),
             on_delete: "CASCADE".into(),
+            on_update: "NO ACTION".into(),
         }]
     );
 
@@ -347,7 +348,8 @@ async fn confirmed_rename_preserves_data(db: TestDb) {
         vec![RenameQuestion {
             table: "tickets".into(),
             added: "title".into(),
-            candidates: vec!["subject".into()]
+            candidates: vec!["subject".into()],
+            table_rename: false,
         }]
     );
     assert_eq!(
@@ -411,7 +413,8 @@ async fn unresolved_rename_fails_and_writes_nothing(db: TestDb) {
             vec![RenameQuestion {
                 table: "tickets".into(),
                 added: "title".into(),
-                candidates: vec!["subject".into()]
+                candidates: vec!["subject".into()],
+                table_rename: false,
             }]
         ),
         other => panic!("expected AmbiguousRenames, got {other:?}"),
@@ -419,6 +422,50 @@ async fn unresolved_rename_fails_and_writes_nothing(db: TestDb) {
     assert_eq!(project.migration_files(), files_before);
 }
 on_every_backend!(unresolved_rename_fails_and_writes_nothing);
+
+async fn confirmed_table_rename_keeps_rows(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut resolver = |question: &RenameQuestion| {
+        if question.table_rename {
+            Resolution::RenamedFrom("tickets".into())
+        } else {
+            Resolution::NotRenamed
+        }
+    };
+    let options = project.options(Mode::Write, Some("rename_tickets"));
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::renamed_table::Issue::DEF),
+            &mut resolver,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.contains_key("issues"));
+    assert!(!db.schema().await.tables.contains_key("tickets"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM issues WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.contains_key("tickets"));
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+}
+on_every_backend!(confirmed_table_rename_keeps_rows);
 
 async fn changing_nullability_and_default_keeps_data(db: TestDb) {
     let project = Project::for_db(&db);
@@ -1269,6 +1316,7 @@ async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestD
             references_table: "tickets".into(),
             references_column: "id".into(),
             on_delete: "CASCADE".into(),
+            on_update: "NO ACTION".into(),
         }]
     );
     db.exec(&format!(
@@ -2204,3 +2252,248 @@ async fn squash_history_refuses_until_rollback_then_writes_one_migration(db: Tes
     );
 }
 on_every_backend!(squash_history_refuses_until_rollback_then_writes_one_migration);
+
+async fn codegen_creates_partial_indexes(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_live_accounts",
+        &[&fixtures::live_accounts::LiveAccount::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_live_accounts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_live_accounts_live_email\" ON \"live_accounts\" (\"email\") WHERE deleted_at IS NULL;"
+        ),
+        "partial unique index missing:\n{up}"
+    );
+    assert!(
+        up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_live_accounts_active_email\" ON \"live_accounts\" (\"email\") WHERE deleted_at IS NULL;"
+        ),
+        "partial index missing:\n{up}"
+    );
+
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a1', 'ada@example.com', NULL)",
+    )
+    .await
+    .unwrap();
+    let duplicate_live = db
+        .exec(
+            "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a2', 'ada@example.com', NULL)",
+        )
+        .await;
+    assert!(duplicate_live.is_err(), "live emails must stay unique");
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a3', 'ada@example.com', '2024-01-01')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a4', 'ada@example.com', '2024-02-01')",
+    )
+    .await
+    .unwrap();
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(!db.schema().await.tables.contains_key("live_accounts"));
+}
+on_every_backend!(codegen_creates_partial_indexes);
+
+async fn codegen_unique_nulls_follow_the_dialect(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_optional_emails",
+        &[&fixtures::optional_emails::OptionalEmail::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_optional_emails.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO optional_emails (id, email) VALUES ('00000000-0000-0000-0000-0000000000b1', NULL)",
+    )
+    .await
+    .unwrap();
+    let second = db
+        .exec(
+            "INSERT INTO optional_emails (id, email) VALUES ('00000000-0000-0000-0000-0000000000b2', NULL)",
+        )
+        .await;
+    if dialect == "postgres" {
+        assert!(up.contains("NULLS NOT DISTINCT"));
+        assert!(second.is_err(), "postgres must reject a second null email");
+    } else {
+        assert!(!up.contains("NULLS NOT DISTINCT"));
+        assert!(second.is_ok(), "sqlite keeps nulls distinct");
+    }
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_unique_nulls_follow_the_dialect);
+
+async fn codegen_emits_postgres_index_methods(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_tagged_notes",
+        &[&fixtures::tagged_notes::TaggedNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_tagged_notes.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_tagged_notes_by_body\" ON \"tagged_notes\" USING gin (\"body\");"
+        ));
+        return;
+    }
+    assert!(up.contains(
+        "CREATE INDEX IF NOT EXISTS \"idx_tagged_notes_by_body\" ON \"tagged_notes\" (\"body\");"
+    ));
+    assert!(!up.contains("USING"));
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema()
+            .await
+            .table("tagged_notes")
+            .indexes
+            .get("idx_tagged_notes_by_body"),
+        Some(&vec!["body".to_string()])
+    );
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_emits_postgres_index_methods);
+
+async fn codegen_cascades_foreign_key_updates(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_moved_files",
+        &[
+            &fixtures::moved_files::folder::Folder::DEF,
+            &fixtures::moved_files::file::File::DEF,
+        ],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_moved_files.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains("ON DELETE RESTRICT ON UPDATE CASCADE"),
+        "on update missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let fk = &schema.table("files").foreign_keys[0];
+    assert_eq!(fk.on_delete, "RESTRICT");
+    assert_eq!(fk.on_update, "CASCADE");
+    db.exec("INSERT INTO folders (id, name) VALUES ('00000000-0000-0000-0000-0000000000c1', 'inbox')")
+        .await
+        .unwrap();
+    db.exec(
+        "INSERT INTO files (id, name, folder_id) VALUES ('00000000-0000-0000-0000-0000000000c2', 'note', '00000000-0000-0000-0000-0000000000c1')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "UPDATE folders SET id = '00000000-0000-0000-0000-0000000000c3' WHERE id = '00000000-0000-0000-0000-0000000000c1'",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.text("SELECT folder_id FROM files").await,
+        "00000000-0000-0000-0000-0000000000c3"
+    );
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_cascades_foreign_key_updates);
+
+async fn codegen_enforces_composite_foreign_keys(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_tenant_accounts",
+        &[
+            &fixtures::tenant_accounts::account::Account::DEF,
+            &fixtures::tenant_accounts::membership::Membership::DEF,
+        ],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_tenant_accounts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "FOREIGN KEY (\"tenant_id\", \"code\") REFERENCES \"accounts\" (\"tenant_id\", \"code\")"
+        ),
+        "composite foreign key missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO accounts (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000d0', 'acme')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "INSERT INTO memberships (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d0', 'acme')",
+    )
+    .await
+    .unwrap();
+    let missing = db
+        .exec(
+            "INSERT INTO memberships (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d3', '00000000-0000-0000-0000-0000000000d0', 'other')",
+        )
+        .await;
+    assert!(missing.is_err(), "a missing parent key must fail");
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_enforces_composite_foreign_keys);
+
+async fn codegen_checks_enum_variants(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_enum_labels",
+        &[&fixtures::enum_labels::LabeledNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_enum_labels.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "CONSTRAINT \"ck_enum_labels_label_one_of\" CHECK (\"label\" IN ('closed', 'open'))"
+        ) || up.contains(
+            "CONSTRAINT \"ck_enum_labels_label_one_of\" CHECK (\"label\" IN ('open', 'closed'))"
+        ),
+        "enum check missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO enum_labels (id, label) VALUES ('00000000-0000-0000-0000-0000000000e1', 'open')",
+    )
+    .await
+    .unwrap();
+    let bad = db
+        .exec(
+            "INSERT INTO enum_labels (id, label) VALUES ('00000000-0000-0000-0000-0000000000e2', 'archived')",
+        )
+        .await;
+    assert!(bad.is_err(), "a value outside the enum must fail");
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_checks_enum_variants);

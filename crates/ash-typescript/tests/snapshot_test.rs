@@ -64,9 +64,12 @@ fn test_generate_from_snapshots() {
         references: vec![ReferenceSnapshot {
             name: "fk_tickets_author".to_string(),
             column: "author_id".to_string(),
+            columns: vec!["author_id".to_string()],
             target_table: "users".to_string(),
             target_column: "id".to_string(),
+            target_columns: vec!["id".to_string()],
             on_delete: "SET NULL".to_string(),
+            on_update: "NO ACTION".to_string(),
         }],
     };
 

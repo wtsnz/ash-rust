@@ -63,14 +63,25 @@ pub struct IdentityDef {
     pub name: &'static str,
     pub keys: &'static [&'static str],
     pub message: Option<&'static str>,
+    /// SQL predicate for a partial unique index (`CREATE UNIQUE INDEX ... WHERE ...`).
+    pub predicate: Option<&'static str>,
+    /// When false, Postgres emits `UNIQUE NULLS NOT DISTINCT`. SQLite has no equivalent and keeps the default unique index.
+    pub nils_distinct: bool,
 }
 
 impl IdentityDef {
+    pub const fn with_nils_distinct(mut self, nils_distinct: bool) -> Self {
+        self.nils_distinct = nils_distinct;
+        self
+    }
+
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
         Self {
             name,
             keys,
             message: None,
+            predicate: None,
+            nils_distinct: true,
         }
     }
 
@@ -83,7 +94,14 @@ impl IdentityDef {
             name,
             keys,
             message: Some(message),
+            predicate: None,
+            nils_distinct: true,
         }
+    }
+
+    pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
+        self.predicate = Some(predicate);
+        self
     }
 }
 
@@ -91,11 +109,30 @@ impl IdentityDef {
 pub struct IndexDef {
     pub name: &'static str,
     pub keys: &'static [&'static str],
+    /// SQL predicate for a partial index (`CREATE INDEX ... WHERE ...`).
+    pub predicate: Option<&'static str>,
+    /// Index access method. `None` and `btree` stay the default and are omitted from SQL. Other methods are emitted as `USING` on Postgres only.
+    pub method: Option<&'static str>,
 }
 
 impl IndexDef {
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
-        Self { name, keys }
+        Self {
+            name,
+            keys,
+            predicate: None,
+            method: None,
+        }
+    }
+
+    pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
+        self.predicate = Some(predicate);
+        self
+    }
+
+    pub const fn with_method(mut self, method: &'static str) -> Self {
+        self.method = Some(method);
+        self
     }
 }
 
@@ -389,6 +426,16 @@ pub enum OnDelete {
     Restrict,
 }
 
+/// Referential action for `ON UPDATE`. `Nothing` is `NO ACTION` and is omitted from generated SQL.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnUpdate {
+    #[default]
+    Nothing,
+    Cascade,
+    Nilify,
+    Restrict,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RelationshipDef {
     pub name: &'static str,
@@ -396,10 +443,15 @@ pub struct RelationshipDef {
     pub destination: fn() -> &'static ResourceDef,
     pub source_attribute: &'static str,
     pub destination_attribute: &'static str,
+    /// Extra key columns on this resource. Empty means [`Self::source_attribute`] alone.
+    pub source_attributes: &'static [&'static str],
+    /// Matching columns on the destination. Empty means [`Self::destination_attribute`] alone.
+    pub destination_attributes: &'static [&'static str],
     pub through: Option<fn() -> &'static ResourceDef>,
     pub source_attribute_on_join_resource: Option<&'static str>,
     pub destination_attribute_on_join_resource: Option<&'static str>,
     pub on_delete: OnDelete,
+    pub on_update: OnUpdate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -416,6 +468,44 @@ impl RelationshipDef {
         self
     }
 
+    pub const fn with_on_update(mut self, on_update: OnUpdate) -> Self {
+        self.on_update = on_update;
+        self
+    }
+
+    /// Sets a composite key. The first column of each side is also stored in the single-column fields.
+    pub const fn with_keys(
+        mut self,
+        source: &'static [&'static str],
+        destination: &'static [&'static str],
+    ) -> Self {
+        if let Some(first) = source.first() {
+            self.source_attribute = first;
+        }
+        if let Some(first) = destination.first() {
+            self.destination_attribute = first;
+        }
+        self.source_attributes = source;
+        self.destination_attributes = destination;
+        self
+    }
+
+    pub fn source_columns(&self) -> Vec<&'static str> {
+        if self.source_attributes.is_empty() {
+            vec![self.source_attribute]
+        } else {
+            self.source_attributes.to_vec()
+        }
+    }
+
+    pub fn destination_columns(&self) -> Vec<&'static str> {
+        if self.destination_attributes.is_empty() {
+            vec![self.destination_attribute]
+        } else {
+            self.destination_attributes.to_vec()
+        }
+    }
+
     pub const fn belongs_to(
         name: &'static str,
         destination: fn() -> &'static ResourceDef,
@@ -427,10 +517,13 @@ impl RelationshipDef {
             destination,
             source_attribute,
             destination_attribute: "id",
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -445,10 +538,13 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute,
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -463,10 +559,13 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute,
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -483,10 +582,13 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute: "id",
+            source_attributes: &[],
+            destination_attributes: &[],
             through: Some(through),
             source_attribute_on_join_resource: Some(source_attribute_on_join_resource),
             destination_attribute_on_join_resource: Some(destination_attribute_on_join_resource),
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 }

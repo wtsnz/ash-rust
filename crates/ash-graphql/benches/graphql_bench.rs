@@ -1,5 +1,5 @@
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, RelKind,
+    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
     RelationshipDef, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -22,10 +22,13 @@ static USER_RELS: &[RelationshipDef] = &[RelationshipDef {
     destination: || &TICKET_DEF,
     source_attribute: "id",
     destination_attribute: "author_id",
+    source_attributes: &[],
+    destination_attributes: &[],
     through: None,
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Cascade,
+    on_update: OnUpdate::Nothing,
 }];
 
 static USER_ACTIONS: &[ActionDef] = &[
@@ -77,10 +80,13 @@ static TICKET_RELS: &[RelationshipDef] = &[RelationshipDef {
     destination: || &USER_DEF,
     source_attribute: "author_id",
     destination_attribute: "id",
+    source_attributes: &[],
+    destination_attributes: &[],
     through: None,
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Nothing,
+    on_update: OnUpdate::Nothing,
 }];
 
 static TICKET_ACTIONS: &[ActionDef] = &[
