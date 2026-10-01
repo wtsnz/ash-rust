@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use ash_core::{
-    CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
+    AttrType, CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
 use ash_sql::{CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam};
@@ -838,8 +838,16 @@ fn bind_compiled<'q>(
             }
         }
         match &p.value {
+            // Bind NULL with the column's type: a cached statement keeps the parameter
+            // types of its first run, so a text NULL would break a later uuid value.
             Value::Null => {
-                query = query.bind(None::<String>);
+                query = match p.ty {
+                    Some(AttrType::Uuid) => query.bind(None::<Uuid>),
+                    Some(AttrType::Integer) => query.bind(None::<i64>),
+                    Some(AttrType::Boolean) => query.bind(None::<bool>),
+                    Some(AttrType::Map | AttrType::Array) => query.bind(None::<serde_json::Value>),
+                    _ => query.bind(None::<String>),
+                };
             }
             Value::Bool(b) => {
                 query = query.bind(*b);

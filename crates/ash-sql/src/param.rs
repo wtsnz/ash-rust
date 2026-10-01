@@ -1,4 +1,4 @@
-use ash_core::Value;
+use ash_core::{AttrType, Value};
 
 /// Represents a bound SQL parameter value.
 #[derive(Clone, Debug, PartialEq)]
@@ -7,6 +7,8 @@ pub struct SqlParam {
     pub is_list: bool,
     /// The value is base64 and the driver should bind decoded bytes.
     pub binary: bool,
+    /// The column type, when known, so a driver can bind NULL with the right type.
+    pub ty: Option<AttrType>,
 }
 
 impl SqlParam {
@@ -15,6 +17,7 @@ impl SqlParam {
             value,
             is_list: false,
             binary: false,
+            ty: None,
         }
     }
 
@@ -23,6 +26,7 @@ impl SqlParam {
             value,
             is_list: false,
             binary: true,
+            ty: Some(AttrType::Binary),
         }
     }
 
@@ -31,6 +35,14 @@ impl SqlParam {
             value: Value::Array(values),
             is_list: true,
             binary: false,
+            ty: None,
+        }
+    }
+
+    pub fn typed(value: Value, ty: AttrType) -> Self {
+        Self {
+            ty: Some(ty),
+            ..Self::new(value)
         }
     }
 }

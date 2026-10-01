@@ -79,6 +79,9 @@ pub fn column<D: SqlDialect>(dialect: &D, resource: &ResourceDef, field: &str) -
 pub struct QueryCompiler<'a, D: SqlDialect> {
     pub dialect: &'a D,
     param_counter: usize,
+    /// Numbers subquery aliases. Kept apart from `param_counter` so Postgres
+    /// placeholders stay consecutive.
+    alias_counter: usize,
     pub params: Vec<SqlParam>,
     /// A bound value that cannot be sent, reported when the filter finishes compiling.
     invalid_param: Option<Error>,
@@ -90,6 +93,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Self {
             dialect,
             param_counter: 0,
+            alias_counter: 0,
             params: Vec::new(),
             invalid_param: None,
             current_calc_args: None,
@@ -119,7 +123,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             self.params.push(SqlParam::binary(val));
         } else {
-            self.params.push(SqlParam::new(val));
+            self.params.push(SqlParam::typed(val, ty));
         }
         self.dialect.cast_param(ty, &placeholder)
     }
@@ -435,8 +439,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     ))
                 })?;
                 let dest_res = (rel.destination)();
-                self.param_counter += 1;
-                let dest_alias = format!("rel_{}_{}", dest_res.table_name(), self.param_counter);
+                self.alias_counter += 1;
+                let dest_alias = format!("rel_{}_{}", dest_res.table_name(), self.alias_counter);
                 let dest_table = ident(self.dialect, dest_res.table_name())?;
                 let outer_scope = scope_alias
                     .map(|s| s.to_string())
@@ -460,11 +464,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                             ))
                         })?;
                         let through_res = through_fn();
-                        self.param_counter += 1;
+                        self.alias_counter += 1;
                         let join_alias = format!(
                             "rel_join_{}_{}",
                             through_res.table_name(),
-                            self.param_counter
+                            self.alias_counter
                         );
                         let through_table = ident(self.dialect, through_res.table_name())?;
                         let outer_col = column(self.dialect, resource, rel.source_attribute)?;

@@ -491,3 +491,71 @@ async fn test_postgres_empty_in_and_empty_bulk_operations() {
     // 4. bulk_destroy with empty IDs -> returns Ok(())
     pg.bulk_destroy(&CUSTOMER_DEF, &[]).await.unwrap();
 }
+
+static NULLABLE_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::optional("owner_id", AttrType::Uuid),
+    AttributeDef::optional("score", AttrType::Integer),
+    AttributeDef::optional("active", AttrType::Boolean),
+    AttributeDef::optional("settings", AttrType::Map),
+];
+
+static NULLABLE_DEF: ResourceDef = ResourceDef {
+    name: "NullableSample",
+    table: "nullable_samples",
+    attributes: NULLABLE_ATTRS,
+    relationships: &[],
+    actions: &[ActionDef::read("read").primary()],
+    policies: &[],
+    field_policies: &[],
+    calculations: &[],
+    aggregates: &[],
+    extensions: &[],
+    notifiers: &[],
+    identities: &[],
+    indexes: &[],
+    checks: &[],
+    statements: &[],
+    embedded: false,
+    data_layer: ash_core::DataLayerKind::Postgres,
+    timestamps: None,
+    store_type_id: ash_core::default_store_type_id,
+    store_name: "default",
+    multitenancy: None,
+};
+
+#[tokio::test]
+async fn test_postgres_stores_null_in_typed_columns() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&NULLABLE_DEF]).await.unwrap();
+
+    let id = Uuid::new_v4();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    for name in ["owner_id", "score", "active", "settings"] {
+        fields.insert(name.into(), Value::Null);
+    }
+    let created = pg.create(&NULLABLE_DEF, id, fields).await.unwrap();
+    for name in ["owner_id", "score", "active", "settings"] {
+        assert_eq!(created.get(name), Some(&Value::Null), "{name}");
+    }
+
+    let rows = pg
+        .run_query(
+            &NULLABLE_DEF,
+            &CompiledQuery {
+                filter: Some(Filter::and([
+                    Filter::eq("id", id),
+                    Filter::is_nil("owner_id"),
+                    Filter::is_nil("score"),
+                ])),
+                ..CompiledQuery::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+}
