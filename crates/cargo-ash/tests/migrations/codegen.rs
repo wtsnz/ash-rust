@@ -3006,7 +3006,7 @@ async fn codegen_cascades_foreign_key_updates(db: TestDb) {
     .await
     .unwrap();
     assert_eq!(
-        db.text("SELECT folder_id FROM files").await,
+        db.text("SELECT CAST(folder_id AS TEXT) FROM files").await,
         "00000000-0000-0000-0000-0000000000c3"
     );
     db.rollback(&project.migrations()).await.unwrap();
