@@ -48,8 +48,8 @@ pub use data_layer::{
 };
 pub use engine::{
     KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
-    get, handle_managed_relationships, insert, manual_create, query, run, update, update_dynamic,
-    update_existing,
+    get, handle_managed_relationships, insert, load_related, manual_create, query, record_visible,
+    run, scope_read, update, update_dynamic, update_existing,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};

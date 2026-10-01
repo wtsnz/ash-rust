@@ -17,7 +17,7 @@ pub fn action_named<'a>(def: &'a ResourceDef, name: &str) -> Result<&'a ActionDe
 pub fn read_action<'a>(def: &'a ResourceDef, name: Option<&str>) -> Result<&'a ActionDef> {
     let action = match name {
         Some(name) => action_named(def, name)?,
-        None => def.primary_read().ok_or(Error::NoPrimaryRead(def.name))?,
+        None => def.default_read(),
     };
     expect_kind(action, ActionKind::Read)?;
     Ok(action)

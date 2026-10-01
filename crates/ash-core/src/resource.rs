@@ -329,6 +329,15 @@ impl ResourceDef {
         }
     }
 
+    /// The read this resource is read through when no action is named: typed queries,
+    /// relationship loads and GraphQL all use it. That's its primary read, or for a
+    /// resource that declares no read action, an implicit `read` without preparations,
+    /// through which its read policies still apply.
+    pub fn default_read(&self) -> &ActionDef {
+        static IMPLICIT_READ: ActionDef = ActionDef::read("read");
+        self.primary_read().unwrap_or(&IMPLICIT_READ)
+    }
+
     pub fn primary_read(&self) -> Option<&ActionDef> {
         self.actions
             .iter()

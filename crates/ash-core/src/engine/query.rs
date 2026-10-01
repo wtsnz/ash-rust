@@ -8,13 +8,13 @@ use crate::data_layer::{CompiledQuery, DataLayer, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::keys::{AggregateName, CalcName, FieldName, RelName};
-use crate::pipeline::{and_filters, apply_tenant_scope, pk_name, read_action};
-use crate::policy::compile_read_filter;
+use crate::pipeline::{pk_name, read_action};
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
 use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record};
+use super::read::scope_read;
 use super::relations::attach_relationships;
 
 pub struct Query<'a, R, D> {
@@ -152,83 +152,28 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self.load_rel(name)
     }
 
-    fn apply_preparations(mut self, action: &crate::action::ActionDef) -> Self {
-        for prep in action.preparations {
-            match *prep {
-                crate::action::PreparationDef::Filter(filter_fn) => {
-                    let prep_filter = filter_fn();
-                    self.filter = match self.filter {
-                        Some(user_filter) => Some(Filter::and([prep_filter, user_filter])),
-                        None => Some(prep_filter),
-                    };
-                }
-                crate::action::PreparationDef::FilterWithArgs(filter_fn) => {
-                    let prep_filter = filter_fn(&self.arguments);
-                    self.filter = match self.filter {
-                        Some(user_filter) => Some(Filter::and([prep_filter, user_filter])),
-                        None => Some(prep_filter),
-                    };
-                }
-                crate::action::PreparationDef::Sort { field, descending } => {
-                    if self.sort.is_empty() {
-                        self.sort.push(Sort {
-                            field: field.to_string(),
-                            descending,
-                        });
-                    }
-                }
-                crate::action::PreparationDef::Limit(limit) => {
-                    if self.limit.is_none() {
-                        self.limit = Some(limit);
-                    }
-                }
-                crate::action::PreparationDef::Offset(offset) => {
-                    if self.offset.is_none() {
-                        self.offset = Some(offset);
-                    }
-                }
-            }
-        }
-        self
-    }
-
-    fn apply_argument_filters(&self, mut filter: Option<Filter>) -> Option<Filter> {
-        for (arg_name, arg_val) in &self.arguments {
-            if R::DEF
-                .attributes
-                .iter()
-                .any(|a| a.name == arg_name.as_str())
-            {
-                let attr_filter = Filter::eq(arg_name.as_str(), arg_val.clone());
-                filter = Some(match filter {
-                    Some(existing) => Filter::and([existing, attr_filter]),
-                    None => attr_filter,
-                });
-            }
-        }
-        filter
-    }
-
-    fn scoped_filter(
+    /// This query as its read action runs it; see [`scope_read`].
+    fn scoped(
         &self,
         action: &crate::action::ActionDef,
-    ) -> Result<(Option<Filter>, Option<String>)> {
-        let policy_filter = compile_read_filter(&R::DEF, action, self.ctx.actor.as_ref())?;
-        let filter = and_filters(
-            self.apply_argument_filters(self.filter.clone()),
-            policy_filter,
-        );
+        query: CompiledQuery,
+    ) -> Result<CompiledQuery> {
         let tenant = self
             .tenant
             .clone()
-            .or_else(|| self.ctx.tenant().map(|s| s.to_string()));
-        apply_tenant_scope(&R::DEF, filter, tenant)
+            .or_else(|| self.ctx.tenant().map(str::to_string));
+        scope_read(
+            &R::DEF,
+            action,
+            self.ctx.actor.as_ref(),
+            &self.arguments,
+            CompiledQuery { tenant, ..query },
+        )
     }
 
     pub async fn load(self) -> Result<Vec<R>> {
         let action = read_action(&R::DEF, self.action)?;
-        let this = self.apply_preparations(action);
-        let (filter, tenant) = this.scoped_filter(action)?;
+        let this = self;
 
         for name in &this.calculations {
             if R::DEF.calculation(name).is_none() {
@@ -248,23 +193,20 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
         }
 
-        let rows = this
-            .ctx
-            .data
-            .run_query(
-                &R::DEF,
-                &CompiledQuery {
-                    filter,
-                    sort: this.sort,
-                    calculations: this.calculations,
-                    calculation_args: this.calculation_args,
-                    aggregates: this.aggregates,
-                    limit: this.limit,
-                    offset: this.offset,
-                    tenant,
-                },
-            )
-            .await?;
+        let query = this.scoped(
+            action,
+            CompiledQuery {
+                filter: this.filter.clone(),
+                sort: this.sort.clone(),
+                calculations: this.calculations.clone(),
+                calculation_args: this.calculation_args.clone(),
+                aggregates: this.aggregates.clone(),
+                limit: this.limit,
+                offset: this.offset,
+                tenant: None,
+            },
+        )?;
+        let rows = this.ctx.data.run_query(&R::DEF, &query).await?;
 
         let mut records = Vec::with_capacity(rows.len());
         for mut row in rows {
@@ -295,26 +237,18 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
 
     pub async fn count(self) -> Result<usize> {
         let action = read_action(&R::DEF, self.action)?;
-        let this = self.apply_preparations(action);
-        let (filter, tenant) = this.scoped_filter(action)?;
-
-        let rows = this
-            .ctx
-            .data
-            .run_query(
-                &R::DEF,
-                &CompiledQuery {
-                    filter,
-                    sort: Vec::new(),
-                    calculations: Vec::new(),
-                    calculation_args: std::collections::HashMap::new(),
-                    aggregates: Vec::new(),
-                    limit: None,
-                    offset: None,
-                    tenant,
-                },
-            )
-            .await?;
+        let mut query = self.scoped(
+            action,
+            CompiledQuery {
+                filter: self.filter.clone(),
+                ..CompiledQuery::default()
+            },
+        )?;
+        // Count every matching record, whatever page the action would return.
+        query.limit = None;
+        query.offset = None;
+        query.sort.clear();
+        let rows = self.ctx.data.run_query(&R::DEF, &query).await?;
         Ok(rows.len())
     }
 
