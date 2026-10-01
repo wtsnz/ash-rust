@@ -1,5 +1,6 @@
 //! `build_<action>()` builds records against `NoDataLayer`, so defining resources needs
 //! no real data layer, and persisting through it fails with a clear message.
+//! `build_records.rs` covers what `build()` itself produces.
 
 use ash_core::{DataLayer, Error, FieldMap, NoDataLayer, Resource, resource};
 use uuid::Uuid;

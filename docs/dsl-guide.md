@@ -315,6 +315,13 @@ resource! {
 }
 ```
 
+Every create action gets `Resource::build_<action>()`, and every update action `record.build_<action>()`. `.build()` returns the record the action would store without saving it: like Ash's `apply_attributes`, it sets the primary key, lock version, defaults, and timestamps and runs the action's changes and validations, but checks no policies, sets no tenant, and manages no relationships. Embedded resources are built this way, and it works for resources with a table too.
+
+```rust
+let address = Address::build_create().street("221B Baker Street").city("London").postal_code("NW1").build()?;
+let draft = Ticket::build_open().title("Printer on fire").build()?; // has an id, not saved
+```
+
 ---
 
 ## 3. Relationships

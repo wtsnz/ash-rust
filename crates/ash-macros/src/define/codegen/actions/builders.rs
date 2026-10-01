@@ -705,9 +705,11 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                                 Ok(cs)
                             }
 
+                            /// The record this action would create, without saving it. Like
+                            /// Ash's `apply_attributes`, it checks no policies and sets no tenant.
                             pub fn build(self) -> ::ash_core::Result<#resource> {
                                 let fields = self.into_fields();
-                                ::ash_core::Changeset::<#resource>::apply_embedded(#act_name_str, fields)
+                                ::ash_core::Changeset::<#resource>::apply_create(#act_name_str, fields)
                             }
 
                             pub async fn call(self) -> ::ash_core::Result<#resource> {
@@ -1059,11 +1061,13 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                             }
                         }
 
+                        /// The record this action would store, without saving it. Like
+                        /// Ash's `apply_attributes`, it checks no policies and sets no tenant.
                         pub fn build(self) -> ::ash_core::Result<#resource> {
                             let fields = self.into_fields();
                             match self.target {
                                 #target_enum::Existing(record) => {
-                                    ::ash_core::Changeset::<#resource>::apply_embedded_update(#act_name_str, record, fields)
+                                    ::ash_core::Changeset::<#resource>::apply_update(#act_name_str, record, fields)
                                 }
                                 #target_enum::Id(_) => Err(::ash_core::Error::Invalid(
                                     "build for update requires an existing record; call on an instance instead".into(),

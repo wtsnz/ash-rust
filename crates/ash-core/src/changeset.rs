@@ -17,7 +17,7 @@ use crate::pipeline::{
     generate_pk, pk_name, run_validations, run_validations_with_context, split_input, validate,
 };
 use crate::policy::authorize_write;
-use crate::resource::Resource;
+use crate::resource::{Resource, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
 /// Hook running before persistence with mutable access to the changeset.
@@ -177,31 +177,7 @@ impl<R: Resource> Changeset<R> {
         let action = action_named(&R::DEF, action)?;
         expect_kind(action, ActionKind::Create)?;
         let (mut fields, arguments) = split_input(action, input)?;
-        generate_pk(&R::DEF, &mut fields);
-
-        if let Some(v_attr) = R::DEF.optimistic_lock_attribute()
-            && (!fields.contains_key(v_attr) || fields.get(v_attr) == Some(&Value::Null))
-        {
-            fields.insert(v_attr.to_string(), Value::Int(1));
-        }
-
-        for attr in R::DEF.attributes {
-            if let Some(def_fn) = attr.default_fn
-                && (!fields.contains_key(attr.name) || fields.get(attr.name) == Some(&Value::Null))
-            {
-                fields.insert(attr.name.to_string(), def_fn());
-            }
-        }
-
-        if let Some((created_at, updated_at)) = R::DEF.timestamps {
-            let now = crate::resource::utc_now_iso8601();
-            if !fields.contains_key(created_at) || fields.get(created_at) == Some(&Value::Null) {
-                fields.insert(created_at.to_string(), Value::String(now.clone()));
-            }
-            if !fields.contains_key(updated_at) || fields.get(updated_at) == Some(&Value::Null) {
-                fields.insert(updated_at.to_string(), Value::String(now));
-            }
-        }
+        prepare_create_fields(&R::DEF, &mut fields);
 
         let mut before_actions: Vec<BeforeActionHook<R>> = Vec::new();
         let mut dynamic_after_actions = Vec::new();
@@ -297,22 +273,7 @@ impl<R: Resource> Changeset<R> {
         let mut fields = existing.to_fields();
         let existing_fields = fields.clone();
         fields.extend(accepted.clone());
-
-        if let Some(v_attr) = R::DEF.optimistic_lock_attribute() {
-            let current_v = existing_fields
-                .get(v_attr)
-                .and_then(|v| match v {
-                    Value::Int(n) => Some(*n),
-                    _ => None,
-                })
-                .unwrap_or(1);
-            fields.insert(v_attr.to_string(), Value::Int(current_v + 1));
-        }
-
-        if let Some((_created_at, updated_at)) = R::DEF.timestamps {
-            let now = crate::resource::utc_now_iso8601();
-            fields.insert(updated_at.to_string(), Value::String(now));
-        }
+        prepare_update_fields(&R::DEF, &existing_fields, &mut fields);
 
         let mut before_actions: Vec<BeforeActionHook<R>> = Vec::new();
         let mut dynamic_after_actions = Vec::new();
@@ -394,48 +355,31 @@ impl<R: Resource> Changeset<R> {
         })
     }
 
-    pub fn apply_embedded(action: &str, input: FieldMap) -> Result<R> {
+    /// The record a create action would store, without a context or data layer. Like
+    /// Ash's `apply_attributes`, it sets the primary key, defaults, and timestamps and runs
+    /// the action's changes and validations, but checks no policies, sets no tenant, and
+    /// manages no relationships. `Resource::build_<action>().build()` calls it.
+    pub fn apply_create(action: &str, input: FieldMap) -> Result<R> {
         let action = action_named(&R::DEF, action)?;
         expect_kind(action, ActionKind::Create)?;
         let (mut fields, arguments) = split_input(action, input)?;
-
-        for attr in R::DEF.attributes {
-            if let Some(def_fn) = attr.default_fn
-                && (!fields.contains_key(attr.name) || fields.get(attr.name) == Some(&Value::Null))
-            {
-                fields.insert(attr.name.to_string(), def_fn());
-            }
-        }
-
-        if let Some((created_at, updated_at)) = R::DEF.timestamps {
-            let now = crate::resource::utc_now_iso8601();
-            if !fields.contains_key(created_at) || fields.get(created_at) == Some(&Value::Null) {
-                fields.insert(created_at.to_string(), Value::String(now.clone()));
-            }
-            if !fields.contains_key(updated_at) || fields.get(updated_at) == Some(&Value::Null) {
-                fields.insert(updated_at.to_string(), Value::String(now));
-            }
-        }
-
+        prepare_create_fields(&R::DEF, &mut fields);
         apply_changes(&mut fields, action, None, &arguments)?;
         validate(&R::DEF, &mut fields)?;
         run_validations(&R::DEF, action, None, &fields, &arguments)?;
         R::from_fields(&fields)
     }
 
-    pub fn apply_embedded_update(action: &str, existing: R, input: FieldMap) -> Result<R> {
+    /// The record an update action would store, without a context or data layer. See
+    /// [`Self::apply_create`] for what it leaves out.
+    pub fn apply_update(action: &str, existing: R, input: FieldMap) -> Result<R> {
         let action = action_named(&R::DEF, action)?;
         expect_kind(action, ActionKind::Update)?;
         let (accepted, arguments) = split_input(action, input)?;
         let mut fields = existing.to_fields();
         let existing_fields = fields.clone();
         fields.extend(accepted);
-
-        if let Some((_created_at, updated_at)) = R::DEF.timestamps {
-            let now = crate::resource::utc_now_iso8601();
-            fields.insert(updated_at.to_string(), Value::String(now));
-        }
-
+        prepare_update_fields(&R::DEF, &existing_fields, &mut fields);
         apply_changes(&mut fields, action, None, &arguments)?;
         validate(&R::DEF, &mut fields)?;
         run_validations(&R::DEF, action, Some(&existing_fields), &fields, &arguments)?;
@@ -771,4 +715,51 @@ pub(crate) fn authorize<R: Resource, D>(changeset: &Changeset<R>, ctx: &Context<
         .map(Resource::to_fields)
         .unwrap_or_else(|| changeset.fields.clone());
     authorize_write(&R::DEF, changeset.action, ctx.actor.as_ref(), Some(&record))
+}
+
+/// Values a new record gets before its action's changes run: a generated primary key,
+/// the first lock version, attribute defaults, and timestamps.
+fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
+    let missing = |fields: &FieldMap, name: &str| {
+        matches!(fields.get(name), None | Some(Value::Null))
+    };
+    generate_pk(def, fields);
+    if let Some(version) = def.optimistic_lock_attribute()
+        && missing(fields, version)
+    {
+        fields.insert(version.to_string(), Value::Int(1));
+    }
+    for attr in def.attributes {
+        if let Some(default) = attr.default_fn
+            && missing(fields, attr.name)
+        {
+            fields.insert(attr.name.to_string(), default());
+        }
+    }
+    if let Some((created_at, updated_at)) = def.timestamps {
+        let now = crate::resource::utc_now_iso8601();
+        for name in [created_at, updated_at] {
+            if missing(fields, name) {
+                fields.insert(name.to_string(), Value::String(now.clone()));
+            }
+        }
+    }
+}
+
+/// Values an update sets before its action's changes run: the next lock version and a
+/// new `updated_at`.
+fn prepare_update_fields(def: &ResourceDef, existing: &FieldMap, fields: &mut FieldMap) {
+    if let Some(version) = def.optimistic_lock_attribute() {
+        let current = match existing.get(version) {
+            Some(Value::Int(n)) => *n,
+            _ => 1,
+        };
+        fields.insert(version.to_string(), Value::Int(current + 1));
+    }
+    if let Some((_created_at, updated_at)) = def.timestamps {
+        fields.insert(
+            updated_at.to_string(),
+            Value::String(crate::resource::utc_now_iso8601()),
+        );
+    }
 }
