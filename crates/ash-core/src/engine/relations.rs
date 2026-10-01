@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::context::Context;
@@ -20,41 +20,31 @@ pub(crate) async fn attach_relationships<R: Resource, D: DataLayer>(
         })?;
         let dest = (rel.destination)();
         match rel.kind {
-            RelKind::BelongsTo => {
-                let mut ids = HashSet::new();
-                for record in records.iter() {
-                    if let Some(Value::Uuid(id)) = record.to_fields().get(rel.source_attribute) {
-                        ids.insert(*id);
-                    }
-                }
-                let related = fetch_related(ctx, dest, rel.destination_attribute, &ids).await?;
-                let by_id: HashMap<Uuid, FieldMap> = related
-                    .into_iter()
-                    .filter_map(|row| {
-                        required_uuid(&row, rel.destination_attribute)
-                            .ok()
-                            .map(|id| (id, row))
-                    })
+            // Rows link on every key column, so composite and non-`id` keys work too.
+            RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
+                let keys: Vec<Option<Vec<Value>>> = records
+                    .iter()
+                    .map(|record| rel.source_key(&record.to_fields()))
                     .collect();
-                for record in records.iter_mut() {
-                    let attached = match record.to_fields().get(rel.source_attribute) {
-                        Some(Value::Uuid(id)) => by_id.get(id).cloned().into_iter().collect(),
-                        _ => Vec::new(),
-                    };
-                    record.attach(name, attached)?;
-                }
-            }
-            RelKind::HasMany | RelKind::HasOne => {
-                let ids: HashSet<Uuid> = records.iter().map(Resource::id).collect();
-                let related = fetch_related(ctx, dest, rel.destination_attribute, &ids).await?;
-                let mut groups: HashMap<Uuid, Vec<FieldMap>> = HashMap::new();
+                let first_values: BTreeSet<Value> = keys
+                    .iter()
+                    .flatten()
+                    .filter_map(|key| key.first().cloned())
+                    .collect();
+                let first_column = rel.destination_columns()[0];
+                let related =
+                    fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect())
+                        .await?;
+                let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
                 for row in related {
-                    if let Ok(fk) = required_uuid(&row, rel.destination_attribute) {
-                        groups.entry(fk).or_default().push(row);
+                    if let Some(key) = rel.destination_key(&row) {
+                        groups.entry(key).or_default().push(row);
                     }
                 }
-                for record in records.iter_mut() {
-                    let attached = groups.remove(&record.id()).unwrap_or_default();
+                for (record, key) in records.iter_mut().zip(keys) {
+                    let attached = key
+                        .and_then(|key| groups.get(&key).cloned())
+                        .unwrap_or_default();
                     record.attach(name, attached)?;
                 }
             }
@@ -123,11 +113,21 @@ pub(crate) async fn fetch_related<D: DataLayer>(
     id_field: &str,
     ids: &HashSet<Uuid>,
 ) -> Result<Vec<FieldMap>> {
-    if ids.is_empty() {
+    let values: Vec<Value> = ids.iter().copied().map(Value::Uuid).collect();
+    fetch_related_values(ctx, dest, id_field, values).await
+}
+
+/// Rows of `dest` whose `field` is one of `values`, through its read policies and filters.
+pub(crate) async fn fetch_related_values<D: DataLayer>(
+    ctx: &Context<D>,
+    dest: &ResourceDef,
+    field: &str,
+    values: Vec<Value>,
+) -> Result<Vec<FieldMap>> {
+    if values.is_empty() {
         return Ok(Vec::new());
     }
-    let values: Vec<Value> = ids.iter().copied().map(Value::Uuid).collect();
-    let id_filter = Filter::In(id_field.to_string(), values);
+    let id_filter = Filter::In(field.to_string(), values);
     let read = dest.primary_read().ok_or(Error::NoPrimaryRead(dest.name))?;
     let policy_filter = compile_read_filter(dest, read, ctx.actor.as_ref())?;
     let filter = match policy_filter {

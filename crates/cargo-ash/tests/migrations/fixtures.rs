@@ -525,6 +525,36 @@ pub mod renamed_table {
     }
 }
 
+/// `tickets` renamed to `issues`, with `subject` renamed to `title`, a new default (which
+/// rebuilds the table on SQLite), and `on_delete: restrict`.
+pub mod renamed_table_changed {
+    pub use super::base::Org;
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Issue {
+            table "issues";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                status: String = "closed";
+                notes: Option<String>;
+                org_id: Uuid;
+            }
+            relationships {
+                belongs_to org: Org [fk: org_id, on_delete: restrict];
+            }
+            identities {
+                identity unique_title: [title];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub const ORG_ID: &str = "00000000-0000-0000-0000-00000000000a";
 pub const OTHER_ORG_ID: &str = "00000000-0000-0000-0000-00000000000b";
 pub const TICKET_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -836,7 +866,8 @@ pub mod tagged_notes {
                 body: String;
             }
             indexes {
-                index by_body: [body], using: gin;
+                // hash works on text; gin needs jsonb, arrays, or tsvector.
+                index by_body: [body], using: hash;
             }
             actions {
                 read read { primary; }
@@ -932,6 +963,107 @@ pub mod enum_labels {
             }
             actions {
                 read read { primary; }
+            }
+        }
+    }
+}
+
+/// An embedded resource stored in a JSON column.
+pub mod json_profiles {
+    pub mod address {
+        use ash_core::resource;
+
+        resource! {
+            embedded Address {
+                attributes {
+                    street: String;
+                    city: String;
+                }
+            }
+        }
+    }
+
+    pub mod profile {
+        use super::address::Address;
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Profile {
+                table "json_profiles";
+                attributes {
+                    id: Uuid [pk];
+                    address: Option<Address>;
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+}
+
+/// A user check whose name matches the generated `<attr>_one_of` enum check.
+pub mod colliding_checks {
+    use super::enum_labels::Label;
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        CollidingNote {
+            table "colliding_notes";
+            attributes {
+                id: Uuid [pk];
+                label: Label [enum];
+            }
+            checks {
+                check label_one_of: "label <> ''";
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+/// A foreign key to a column with no unique key behind it.
+pub mod unkeyed_reference {
+    pub mod parent {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Parent {
+                table "unkeyed_parents";
+                attributes {
+                    id: Uuid [pk];
+                    tenant_id: Uuid;
+                }
+                actions {
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod child {
+        use super::parent::Parent;
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        resource! {
+            Child {
+                table "unkeyed_children";
+                attributes {
+                    id: Uuid [pk];
+                    tenant_id: Uuid;
+                }
+                relationships {
+                    belongs_to parent: Parent [fk: tenant_id, references: tenant_id];
+                }
+                actions {
+                    read read { primary; }
+                }
             }
         }
     }

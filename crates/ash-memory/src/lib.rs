@@ -44,17 +44,22 @@ fn check_identities(
     fields: &FieldMap,
 ) -> Result<()> {
     for ident in resource.identities {
+        // A `where:` predicate is SQL the in-memory store cannot evaluate, so it leaves
+        // partial identities to the database rather than reject rows they do not cover.
+        if ident.predicate.is_some() {
+            continue;
+        }
         for (existing_id, row) in table.iter() {
             if *existing_id == id {
                 continue;
             }
             let matches_all = ident.keys.iter().all(|k| {
-                let new_val = fields.get(*k);
-                let existing_val = row.get(*k);
+                let new_val = fields.get(*k).filter(|v| !v.is_null());
+                let existing_val = row.get(*k).filter(|v| !v.is_null());
                 match (new_val, existing_val) {
-                    (Some(a), Some(b)) if !a.is_null() && !b.is_null() => {
-                        same_value(field_type(resource, k), a, b)
-                    }
+                    (Some(a), Some(b)) => same_value(field_type(resource, k), a, b),
+                    // NULLS NOT DISTINCT: two nulls collide.
+                    (None, None) => !ident.nils_distinct,
                     _ => false,
                 }
             });
@@ -141,16 +146,25 @@ impl DataLayer for Memory {
         update_fields: &[String],
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
+            // Which rows a partial identity covers is decided by its SQL predicate, so
+            // upserting on one here could overwrite a row the database would leave alone.
+            if identity.predicate.is_some() {
+                return Err(Error::Invalid(format!(
+                    "the memory data layer cannot upsert on partial identity `{}` of {}",
+                    identity.name, resource.name
+                )));
+            }
             let mut tables = self.lock()?;
             let table = tables.entry(resource.name.to_string()).or_default();
             let existing_entry = table
                 .iter()
                 .find(|(_, row)| {
                     identity.keys.iter().all(|k| {
-                        let new_val = fields.get(*k);
-                        let existing_val = row.get(*k);
+                        let new_val = fields.get(*k).filter(|v| !v.is_null());
+                        let existing_val = row.get(*k).filter(|v| !v.is_null());
                         match (new_val, existing_val) {
-                            (Some(a), Some(b)) if !a.is_null() && !b.is_null() => a == b,
+                            (Some(a), Some(b)) => same_value(field_type(resource, k), a, b),
+                            (None, None) => !identity.nils_distinct,
                             _ => false,
                         }
                     })
@@ -361,24 +375,14 @@ fn row_matches_filter(
             };
 
             match rel.kind {
-                ash_core::RelKind::BelongsTo => {
-                    let Some(fk_val) = row.get(rel.source_attribute) else {
-                        return false;
-                    };
-                    let Value::Uuid(fk_id) = fk_val else {
-                        return false;
-                    };
-                    let Some(dest_row) = dest_table.get(fk_id) else {
-                        return false;
-                    };
-                    row_matches_filter(tables, dest_res, rel_filter, dest_row)
-                }
-                ash_core::RelKind::HasMany | ash_core::RelKind::HasOne => {
-                    let Some(source_val) = row.get(rel.source_attribute) else {
+                ash_core::RelKind::BelongsTo
+                | ash_core::RelKind::HasMany
+                | ash_core::RelKind::HasOne => {
+                    let Some(key) = rel.source_key(row) else {
                         return false;
                     };
                     dest_table.values().any(|dest_row| {
-                        dest_row.get(rel.destination_attribute) == Some(source_val)
+                        rel.destination_key(dest_row).as_ref() == Some(&key)
                             && row_matches_filter(tables, dest_res, rel_filter, dest_row)
                     })
                 }
@@ -568,15 +572,10 @@ fn apply_aggregates(
                     })
                     .collect()
             } else {
+                let key = rel.source_key(row);
                 dest_rows
                     .iter()
-                    .filter(|dest_row| {
-                        let dest_val = dest_row
-                            .get(rel.destination_attribute)
-                            .cloned()
-                            .unwrap_or(Value::Null);
-                        dest_val == source_val
-                    })
+                    .filter(|dest_row| key.is_some() && rel.destination_key(dest_row) == key)
                     .collect()
             };
 

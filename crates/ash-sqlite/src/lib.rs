@@ -250,13 +250,8 @@ fn bind_compiled<'q>(
             Value::String(s) => {
                 query = query.bind(s.as_str());
             }
-            Value::Map(m) => {
-                let json = serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string());
-                query = query.bind(json);
-            }
-            Value::Array(a) => {
-                let json = serde_json::to_string(a).unwrap_or_else(|_| "[]".to_string());
-                query = query.bind(json);
+            Value::Map(_) | Value::Array(_) => {
+                query = query.bind(p.value.to_plain_json().to_string());
             }
         }
     }
@@ -474,8 +469,21 @@ impl DataLayer for Sqlite {
                 where_parts.push(format!("\"{}\" IS NULL", key));
             }
         }
+        // Rows outside a partial identity never conflict, so the result is either the
+        // row we just inserted or the one inside the predicate that absorbed the write.
+        let mut order = String::new();
+        if let Some(predicate) = identity.predicate {
+            let pk = resource
+                .primary_key()
+                .ok_or(Error::NoPrimaryKey(resource.name))?;
+            let pk_value = fields.get(pk.name).cloned().unwrap_or(Value::Null);
+            where_parts.push(format!("(\"{}\" = ? OR ({predicate}))", pk.name));
+            params.push(SqlParam::new(pk_value.clone()));
+            order = format!(" ORDER BY \"{}\" = ? DESC LIMIT 1", pk.name);
+            params.push(SqlParam::new(pk_value));
+        }
         let fetch_sql = format!(
-            "SELECT * FROM \"{}\" WHERE {}",
+            "SELECT * FROM \"{}\" WHERE {}{order}",
             resource.table_name(),
             where_parts.join(" AND ")
         );

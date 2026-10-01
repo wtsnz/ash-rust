@@ -1,5 +1,6 @@
 use syn::parse::ParseStream;
 use syn::parse::discouraged::Speculative;
+use syn::punctuated::Punctuated;
 use syn::{Error, Ident, Result, Token, Type};
 
 use crate::ast_helpers::{last_ident, option_inner, vec_inner};
@@ -278,6 +279,30 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
         }
     };
 
+    let key_count = fk_columns.len().max(usize::from(fk.is_some()));
+    if !reference_columns.is_empty() && key_count > 0 && reference_columns.len() != key_count {
+        return Err(Error::new_spanned(
+            &ident,
+            format!(
+                "`fk` names {key_count} column(s) but `references` names {}; they must match",
+                reference_columns.len()
+            ),
+        ));
+    }
+    if matches!(kind, RelType::ManyToMany) && (fk_columns.len() > 1 || reference_columns.len() > 1)
+    {
+        return Err(Error::new_spanned(
+            &ident,
+            "composite keys are not supported on many_to_many relationships",
+        ));
+    }
+    if !matches!(kind, RelType::BelongsTo) && !matches!(on_update, OnDeleteSpec::Nothing) {
+        return Err(Error::new_spanned(
+            &ident,
+            "`on_update` applies to the foreign key, so it belongs on the `belongs_to` side",
+        ));
+    }
+
     Ok(RelationshipSpec {
         outer_attrs,
         kind,
@@ -296,14 +321,9 @@ fn parse_one_relationship(input: ParseStream, errors: &mut Vec<Error>) -> Result
 }
 
 fn parse_ident_list(input: ParseStream) -> Result<Vec<Ident>> {
-    let mut cols = Vec::new();
-    while !input.is_empty() {
-        cols.push(input.parse()?);
-        if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
-        }
-    }
-    Ok(cols)
+    Ok(Punctuated::<Ident, Token![,]>::parse_terminated(input)?
+        .into_iter()
+        .collect())
 }
 
 fn parse_referential_action(flag: &Ident, value: &str, name: &str) -> Result<OnDeleteSpec> {

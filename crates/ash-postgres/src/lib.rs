@@ -768,15 +768,8 @@ fn bind_compiled<'q>(
             Value::String(s) => {
                 query = query.bind(s.clone());
             }
-            Value::Map(m) => {
-                let json = serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string());
-                let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-                query = query.bind(parsed);
-            }
-            Value::Array(a) => {
-                let json = serde_json::to_string(a).unwrap_or_else(|_| "[]".to_string());
-                let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-                query = query.bind(parsed);
+            Value::Map(_) | Value::Array(_) => {
+                query = query.bind(p.value.to_plain_json());
             }
         }
     }
@@ -895,10 +888,10 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
         }
         ash_core::AttrType::Map => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
-                json_to_ash_value(json_val)
+                Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 serde_json::from_str::<serde_json::Value>(&s)
-                    .map(json_to_ash_value)
+                    .map(Value::from_plain_json)
                     .unwrap_or(Value::Null)
             } else {
                 Value::Null
@@ -906,10 +899,10 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
         }
         ash_core::AttrType::Array => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
-                json_to_ash_value(json_val)
+                Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 serde_json::from_str::<serde_json::Value>(&s)
-                    .map(json_to_ash_value)
+                    .map(Value::from_plain_json)
                     .unwrap_or(Value::Null)
             } else {
                 Value::Null
@@ -925,38 +918,6 @@ fn format_utc(dt: chrono::DateTime<chrono::Utc>) -> String {
         chrono::SecondsFormat::AutoSi
     };
     dt.to_rfc3339_opts(format, true)
-}
-
-fn json_to_ash_value(val: serde_json::Value) -> Value {
-    match val {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
-        serde_json::Value::String(s) => {
-            if let Ok(u) = Uuid::parse_str(&s) {
-                Value::Uuid(u)
-            } else {
-                Value::String(s)
-            }
-        }
-        serde_json::Value::Array(a) => {
-            let arr = a.into_iter().map(json_to_ash_value).collect();
-            Value::Array(arr)
-        }
-        serde_json::Value::Object(o) => {
-            let mut map = FieldMap::new();
-            for (k, v) in o {
-                map.insert(k, json_to_ash_value(v));
-            }
-            Value::Map(map)
-        }
-    }
 }
 
 fn map_sqlx(err: sqlx::Error) -> Error {

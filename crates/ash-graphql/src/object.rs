@@ -137,6 +137,8 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let rel_kind = rel.kind;
         let source_attr = rel.source_attribute;
         let dest_attr = rel.destination_attribute;
+        // The dataloader batches single uuid keys; composite keys query directly.
+        let composite = rel.key_pairs().len() > 1;
         let through_fn = rel.through;
         let source_join = rel.source_attribute_on_join_resource;
         let dest_join = rel.destination_attribute_on_join_resource;
@@ -181,7 +183,9 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     }
 
                     // Try DataLoader
-                    if let Some(loader) = ctx.data_opt::<DataLoader<AshBatchLoader<D>>>() {
+                    if !composite
+                        && let Some(loader) = ctx.data_opt::<DataLoader<AshBatchLoader<D>>>()
+                    {
                         match rel_kind {
                             RelKind::BelongsTo => {
                                 if let Some(foreign_id) =
@@ -289,14 +293,12 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     if let Ok(ctx_ash) = ctx.data::<Context<D>>() {
                         match rel_kind {
                             RelKind::BelongsTo => {
-                                if let Some(foreign_id) =
-                                    map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
+                                if let Some(link) = rel.destination_filter(map) {
                                     let query = CompiledQuery {
                                         filter: scoped_read_filter(
                                             dest_res,
                                             ctx_ash.actor.as_ref(),
-                                            Some(Filter::eq(dest_attr, Value::Uuid(foreign_id))),
+                                            Some(link),
                                         ),
                                         tenant: ctx_ash.tenant.clone(),
                                         limit: Some(1),
@@ -317,14 +319,12 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                 return Ok(None);
                             }
                             RelKind::HasOne => {
-                                if let Some(source_id) =
-                                    map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
+                                if let Some(link) = rel.destination_filter(map) {
                                     let query = CompiledQuery {
                                         filter: scoped_read_filter(
                                             dest_res,
                                             ctx_ash.actor.as_ref(),
-                                            Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
+                                            Some(link),
                                         ),
                                         tenant: ctx_ash.tenant.clone(),
                                         limit: Some(1),
@@ -345,14 +345,12 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                                 return Ok(None);
                             }
                             RelKind::HasMany => {
-                                if let Some(source_id) =
-                                    map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
+                                if let Some(link) = rel.destination_filter(map) {
                                     let query = CompiledQuery {
                                         filter: scoped_read_filter(
                                             dest_res,
                                             ctx_ash.actor.as_ref(),
-                                            Some(Filter::eq(dest_attr, Value::Uuid(source_id))),
+                                            Some(link),
                                         ),
                                         tenant: ctx_ash.tenant.clone(),
                                         ..CompiledQuery::default()

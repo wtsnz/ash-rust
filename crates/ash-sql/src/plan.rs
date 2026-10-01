@@ -56,14 +56,60 @@ pub fn plan_schema(
     drop_columns: bool,
 ) -> SchemaPlan {
     let mut unresolved = Vec::new();
+
+    // Table renames come first, so a renamed table's columns are compared with its old
+    // snapshot rather than treated as all new.
+    let removed_tables: Vec<&TableSnapshot> = old
+        .iter()
+        .filter(|table| new.iter().all(|incoming| incoming.table != table.table))
+        .collect();
+    let mut table_renames: Vec<(String, String)> = Vec::new();
+    for incoming in new {
+        if old.iter().any(|table| table.table == incoming.table) {
+            continue;
+        }
+        let candidates: Vec<String> = removed_tables
+            .iter()
+            .filter(|table| table_renames.iter().all(|(old, _)| old != &table.table))
+            .map(|table| table.table.clone())
+            .collect();
+        if candidates.is_empty() {
+            continue;
+        }
+        let question = RenameQuestion {
+            table: incoming.table.clone(),
+            added: incoming.table.clone(),
+            candidates,
+            table_rename: true,
+        };
+        match resolver.resolve(&question) {
+            Resolution::RenamedFrom(old_name) if question.candidates.contains(&old_name) => {
+                table_renames.push((old_name, incoming.table.clone()));
+            }
+            Resolution::NotRenamed => {}
+            Resolution::Unresolved | Resolution::RenamedFrom(_) => {
+                unresolved.push(question);
+            }
+        }
+    }
+    let renamed_from = |table: &str| {
+        table_renames
+            .iter()
+            .find(|(_, new_name)| new_name == table)
+            .and_then(|(old_name, _)| old.iter().find(|t| &t.table == old_name))
+    };
+
     let mut deferred_drops = Vec::new();
     let mut renames_by_table: Vec<(String, Vec<(String, String)>)> = Vec::new();
     let mut targets = Vec::new();
-
     for incoming in new {
-        let previous = old.iter().find(|table| table.table == incoming.table);
+        let previous = old
+            .iter()
+            .find(|table| table.table == incoming.table)
+            .cloned()
+            .or_else(|| renamed_from(&incoming.table).map(|t| t.renamed(&incoming.table)));
         let mut target = incoming.clone();
-        if let Some(previous) = previous {
+        if let Some(previous) = &previous {
             let added: Vec<&ColumnSnapshot> = incoming
                 .columns
                 .iter()
@@ -75,7 +121,7 @@ pub fn plan_schema(
                 .filter(|column| incoming.columns.iter().all(|new| new.name != column.name))
                 .collect();
 
-            let mut table_renames = Vec::new();
+            let mut column_renames = Vec::new();
             let mut claimed_old = Vec::new();
             for added_col in &added {
                 if removed.is_empty() {
@@ -99,7 +145,7 @@ pub fn plan_schema(
                         if question.candidates.contains(&old_name) =>
                     {
                         claimed_old.push(old_name.clone());
-                        table_renames.push((old_name, added_col.name.clone()));
+                        column_renames.push((old_name, added_col.name.clone()));
                     }
                     Resolution::NotRenamed => {}
                     Resolution::Unresolved | Resolution::RenamedFrom(_) => {
@@ -119,8 +165,8 @@ pub fn plan_schema(
                 deferred_drops.push((incoming.table.clone(), removed_col.name.clone()));
             }
 
-            if !table_renames.is_empty() {
-                renames_by_table.push((incoming.table.clone(), table_renames));
+            if !column_renames.is_empty() {
+                renames_by_table.push((incoming.table.clone(), column_renames));
             }
         }
         targets.push(target);
@@ -136,42 +182,6 @@ pub fn plan_schema(
         })
         .collect();
 
-    let removed_tables: Vec<&TableSnapshot> = old
-        .iter()
-        .filter(|table| new.iter().all(|incoming| incoming.table != table.table))
-        .collect();
-    let mut table_renames = Vec::new();
-    let mut claimed_tables = Vec::new();
-    for incoming in new {
-        if old.iter().any(|table| table.table == incoming.table) {
-            continue;
-        }
-        let candidates: Vec<String> = removed_tables
-            .iter()
-            .filter(|table| !claimed_tables.contains(&table.table))
-            .map(|table| table.table.clone())
-            .collect();
-        if candidates.is_empty() {
-            continue;
-        }
-        let question = RenameQuestion {
-            table: incoming.table.clone(),
-            added: incoming.table.clone(),
-            candidates,
-            table_rename: true,
-        };
-        match resolver.resolve(&question) {
-            Resolution::RenamedFrom(old_name) if question.candidates.contains(&old_name) => {
-                claimed_tables.push(old_name.clone());
-                table_renames.push((old_name, incoming.table.clone()));
-            }
-            Resolution::NotRenamed => {}
-            Resolution::Unresolved | Resolution::RenamedFrom(_) => {
-                unresolved.push(question);
-            }
-        }
-    }
-
     if !unresolved.is_empty() {
         return SchemaPlan {
             operations: Vec::new(),
@@ -185,8 +195,7 @@ pub fn plan_schema(
 
     let mut operations = Vec::new();
     for target in &targets {
-        let previous = old.iter().find(|table| table.table == target.table);
-        let renames = renames_by_table
+        let column_renames = renames_by_table
             .iter()
             .find(|(table, _)| table == &target.table)
             .map(|(_, pairs)| {
@@ -196,29 +205,29 @@ pub fn plan_schema(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        if let Some((old_name, _)) = table_renames
-            .iter()
-            .find(|(_, new_name)| new_name == &target.table)
-        {
-            let Some(previous) = old.iter().find(|table| table.table == *old_name) else {
-                continue;
-            };
+        if let Some(previous) = renamed_from(&target.table) {
             operations.push(SchemaOperation::RenameTable {
-                old_name: old_name.clone(),
+                old_name: previous.table.clone(),
                 new_name: target.table.clone(),
             });
-            let previous_as_new = rename_snapshot(previous, &target.table);
-            operations.extend(diff_snapshots(Some(&previous_as_new), Some(target)));
+            operations.extend(rename_objects(previous, &target.table));
+            let previous_as_new = previous.renamed(&target.table);
+            operations.extend(diff_snapshots_with_renames(
+                Some(&previous_as_new),
+                Some(target),
+                &column_renames,
+            ));
             continue;
         }
+        let previous = old.iter().find(|table| table.table == target.table);
         operations.extend(diff_snapshots_with_renames(
             previous,
             Some(target),
-            &renames,
+            &column_renames,
         ));
     }
     for previous in old {
-        if claimed_tables.iter().any(|name| name == &previous.table) {
+        if table_renames.iter().any(|(name, _)| name == &previous.table) {
             continue;
         }
         if targets.iter().all(|target| target.table != previous.table) {
@@ -236,44 +245,83 @@ pub fn plan_schema(
     }
 }
 
-fn rename_snapshot(snapshot: &TableSnapshot, new_name: &str) -> TableSnapshot {
-    let mut copy = snapshot.clone();
-    let old_name = copy.table.clone();
-    copy.table = new_name.to_string();
-    let rewrite = |name: &mut String, old_prefix: &str, new_prefix: &str| {
-        if let Some(rest) = name.strip_prefix(old_prefix) {
-            *name = format!("{new_prefix}{rest}");
+/// Renames the indexes and constraints whose generated names include the table name, which
+/// `ALTER TABLE ... RENAME TO` leaves behind.
+fn rename_objects(previous: &TableSnapshot, new_name: &str) -> Vec<SchemaOperation> {
+    let renamed = previous.renamed(new_name);
+    let mut operations = Vec::new();
+    let index_names = previous
+        .identities
+        .iter()
+        .map(|i| &i.name)
+        .zip(renamed.identities.iter().map(|i| &i.name))
+        .chain(
+            previous
+                .indexes
+                .iter()
+                .map(|i| &i.name)
+                .zip(renamed.indexes.iter().map(|i| &i.name)),
+        );
+    for (old_name, renamed_name) in index_names {
+        if old_name != renamed_name {
+            operations.push(SchemaOperation::RenameIndex {
+                table: new_name.to_string(),
+                old_name: old_name.clone(),
+                new_name: renamed_name.clone(),
+            });
         }
-    };
-    for identity in &mut copy.identities {
-        rewrite(
-            &mut identity.name,
-            &format!("idx_{old_name}_"),
-            &format!("idx_{new_name}_"),
-        );
     }
-    for index in &mut copy.indexes {
-        rewrite(
-            &mut index.name,
-            &format!("idx_{old_name}_"),
-            &format!("idx_{new_name}_"),
+    let constraint_names = previous
+        .checks
+        .iter()
+        .map(|c| &c.name)
+        .zip(renamed.checks.iter().map(|c| &c.name))
+        .chain(
+            previous
+                .references
+                .iter()
+                .map(|r| &r.name)
+                .zip(renamed.references.iter().map(|r| &r.name)),
         );
+    for (old_name, renamed_name) in constraint_names {
+        if old_name != renamed_name {
+            operations.push(SchemaOperation::RenameConstraint {
+                table: new_name.to_string(),
+                old_name: old_name.clone(),
+                new_name: renamed_name.clone(),
+            });
+        }
     }
-    for check in &mut copy.checks {
-        rewrite(
-            &mut check.name,
-            &format!("ck_{old_name}_"),
-            &format!("ck_{new_name}_"),
-        );
-    }
-    for reference in &mut copy.references {
-        rewrite(
-            &mut reference.name,
-            &format!("fk_{old_name}_"),
-            &format!("fk_{new_name}_"),
-        );
-    }
-    copy
+    operations
+}
+
+/// Undoes [`rename_objects`] while the table still has its new name.
+fn unrename_objects(previous: &TableSnapshot, new_name: &str) -> Vec<SchemaOperation> {
+    rename_objects(previous, new_name)
+        .into_iter()
+        .rev()
+        .map(|op| match op {
+            SchemaOperation::RenameIndex {
+                table,
+                old_name,
+                new_name,
+            } => SchemaOperation::RenameIndex {
+                table,
+                old_name: new_name,
+                new_name: old_name,
+            },
+            SchemaOperation::RenameConstraint {
+                table,
+                old_name,
+                new_name,
+            } => SchemaOperation::RenameConstraint {
+                table,
+                old_name: new_name,
+                new_name: old_name,
+            },
+            other => other,
+        })
+        .collect()
 }
 
 pub fn reverse_plan(
@@ -282,6 +330,13 @@ pub fn reverse_plan(
     renames: &[(String, String, String)],
     table_renames: &[(String, String)],
 ) -> Vec<SchemaOperation> {
+    let inverted_for = |table: &str| -> Vec<(&str, &str)> {
+        renames
+            .iter()
+            .filter(|(t, _, _)| t == table)
+            .map(|(_, old, new)| (new.as_str(), old.as_str()))
+            .collect()
+    };
     let mut operations = Vec::new();
     for (old_name, new_name) in table_renames {
         let Some(previous) = old.iter().find(|table| table.table == *old_name) else {
@@ -290,8 +345,13 @@ pub fn reverse_plan(
         let Some(next) = new.iter().find(|table| table.table == *new_name) else {
             continue;
         };
-        let previous_as_new = rename_snapshot(previous, new_name);
-        operations.extend(diff_snapshots(Some(next), Some(&previous_as_new)));
+        let previous_as_new = previous.renamed(new_name);
+        operations.extend(diff_snapshots_with_renames(
+            Some(next),
+            Some(&previous_as_new),
+            &inverted_for(new_name),
+        ));
+        operations.extend(unrename_objects(previous, new_name));
         operations.push(SchemaOperation::RenameTable {
             old_name: new_name.clone(),
             new_name: old_name.clone(),
@@ -302,12 +362,11 @@ pub fn reverse_plan(
             continue;
         }
         let next = new.iter().find(|table| table.table == previous.table);
-        let inverted: Vec<(&str, &str)> = renames
-            .iter()
-            .filter(|(table, _, _)| table == &previous.table)
-            .map(|(_, old, new)| (new.as_str(), old.as_str()))
-            .collect();
-        operations.extend(diff_snapshots_with_renames(next, Some(previous), &inverted));
+        operations.extend(diff_snapshots_with_renames(
+            next,
+            Some(previous),
+            &inverted_for(&previous.table),
+        ));
     }
     for next in new.iter().rev() {
         if table_renames.iter().any(|(_, new_name)| new_name == &next.table) {

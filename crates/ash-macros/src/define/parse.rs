@@ -1196,6 +1196,42 @@ mod tests {
         );
     }
 
+    fn relationship_err(relationship: proc_macro2::TokenStream) -> String {
+        parse_err(quote! {
+            TestResource {
+                attributes { id: Uuid [pk]; tenant_id: Uuid; code: String; }
+                relationships { #relationship }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn test_relationship_key_validation() {
+        let cases = [
+            (
+                quote! { belongs_to parent: Parent [fk: [tenant_id, code], references: [tenant_id]]; },
+                "`fk` names 2 column(s) but `references` names 1; they must match",
+            ),
+            (
+                quote! { many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id, references: [tenant_id, code]]; },
+                "composite keys are not supported on many_to_many relationships",
+            ),
+            (
+                quote! { has_many children: Child [fk: parent_id, on_update: cascade]; },
+                "`on_update` applies to the foreign key, so it belongs on the `belongs_to` side",
+            ),
+            (
+                quote! { belongs_to parent: Parent [fk: [tenant_id code], references: [tenant_id, code]]; },
+                "expected `,`",
+            ),
+        ];
+        for (relationship, expected) in cases {
+            let err = relationship_err(relationship.clone());
+            assert!(err.contains(expected), "{relationship}: got {err}");
+        }
+    }
+
     #[test]
     fn test_old_resource_header_is_an_error() {
         let tokens = quote! {

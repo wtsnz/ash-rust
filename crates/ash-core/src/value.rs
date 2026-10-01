@@ -73,6 +73,47 @@ impl Value {
         serde_json::from_str(s).map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Plain JSON for a JSON column: maps become objects and strings stay strings, unlike
+    /// [`Value::to_json`], which tags each value with its variant.
+    pub fn to_plain_json(&self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Bool(b) => serde_json::Value::Bool(*b),
+            Self::Int(i) => serde_json::Value::from(*i),
+            Self::Uuid(u) => serde_json::Value::String(u.to_string()),
+            Self::String(s) => serde_json::Value::String(s.clone()),
+            Self::Map(m) => serde_json::Value::Object(
+                m.iter().map(|(k, v)| (k.clone(), v.to_plain_json())).collect(),
+            ),
+            Self::Array(a) => serde_json::Value::Array(a.iter().map(Self::to_plain_json).collect()),
+        }
+    }
+
+    /// Reads plain JSON from a JSON column. Integers become [`Value::Int`], other numbers
+    /// their text, and strings that parse as UUIDs [`Value::Uuid`].
+    pub fn from_plain_json(json: serde_json::Value) -> Self {
+        match json {
+            serde_json::Value::Null => Self::Null,
+            serde_json::Value::Bool(b) => Self::Bool(b),
+            serde_json::Value::Number(n) => match n.as_i64() {
+                Some(i) => Self::Int(i),
+                None => Self::String(n.to_string()),
+            },
+            serde_json::Value::String(s) => match Uuid::parse_str(&s) {
+                Ok(u) => Self::Uuid(u),
+                Err(_) => Self::String(s),
+            },
+            serde_json::Value::Array(a) => {
+                Self::Array(a.into_iter().map(Self::from_plain_json).collect())
+            }
+            serde_json::Value::Object(o) => Self::Map(
+                o.into_iter()
+                    .map(|(k, v)| (k, Self::from_plain_json(v)))
+                    .collect(),
+            ),
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "null",

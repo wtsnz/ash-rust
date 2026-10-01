@@ -13,12 +13,22 @@ use crate::value::{FieldMap, Value, required_uuid};
 
 use super::lifecycle::{create_dynamic, destroy_dynamic, update_dynamic};
 
+/// `fields` with the primary key filled in, so a key built from it never misses `id`.
+fn with_primary_key(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Result<FieldMap> {
+    let mut fields = fields.clone();
+    fields
+        .entry(pk_name(resource)?.to_string())
+        .or_insert(Value::Uuid(id));
+    Ok(fields)
+}
+
 pub async fn handle_cascading_deletes<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     parent_id: Uuid,
     parent_fields: &FieldMap,
 ) -> Result<()> {
+    let parent = with_primary_key(resource, parent_id, parent_fields)?;
     for rel in resource.relationships {
         match rel.kind {
             RelKind::HasMany | RelKind::HasOne => {
@@ -26,11 +36,9 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                     OnDelete::Nothing => {}
                     OnDelete::Restrict => {
                         let dest_def = (rel.destination)();
-                        let parent_val = parent_fields
-                            .get(rel.source_attribute)
-                            .cloned()
-                            .unwrap_or_else(|| Value::from(parent_id));
-                        let filter = Filter::eq(rel.destination_attribute, parent_val);
+                        let Some(filter) = rel.destination_filter(&parent) else {
+                            continue;
+                        };
                         let rows = ctx
                             .data
                             .run_query(
@@ -52,11 +60,9 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                     }
                     OnDelete::Cascade => {
                         let dest_def = (rel.destination)();
-                        let parent_val = parent_fields
-                            .get(rel.source_attribute)
-                            .cloned()
-                            .unwrap_or_else(|| Value::from(parent_id));
-                        let filter = Filter::eq(rel.destination_attribute, parent_val);
+                        let Some(filter) = rel.destination_filter(&parent) else {
+                            continue;
+                        };
                         let rows = ctx
                             .data
                             .run_query(
@@ -93,11 +99,9 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                     }
                     OnDelete::Nilify => {
                         let dest_def = (rel.destination)();
-                        let parent_val = parent_fields
-                            .get(rel.source_attribute)
-                            .cloned()
-                            .unwrap_or_else(|| Value::from(parent_id));
-                        let filter = Filter::eq(rel.destination_attribute, parent_val);
+                        let Some(filter) = rel.destination_filter(&parent) else {
+                            continue;
+                        };
                         let rows = ctx
                             .data
                             .run_query(
@@ -113,7 +117,9 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                         for child_row in rows {
                             let child_id = required_uuid(&child_row, child_pk)?;
                             let mut patch = FieldMap::new();
-                            patch.insert(rel.destination_attribute.to_string(), Value::Null);
+                            for column in rel.destination_columns() {
+                                patch.insert(column.to_string(), Value::Null);
+                            }
                             ctx.data.update(dest_def, child_id, patch).await?;
                         }
                     }
@@ -199,8 +205,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     parent_id: Uuid,
+    parent_fields: &FieldMap,
     managed_list: Vec<ManagedRelationshipSpec>,
 ) -> Result<()> {
+    let parent = with_primary_key(resource, parent_id, parent_fields)?;
     for managed in managed_list {
         let rel = resource
             .relationship(managed.relationship)
@@ -209,7 +217,15 @@ pub async fn handle_managed_relationships<D: DataLayer>(
         match rel.kind {
             RelKind::HasMany | RelKind::HasOne => {
                 let dest_def = (rel.destination)();
-                let child_fk = rel.destination_attribute;
+                // Children take every key column from the parent.
+                let link: Vec<(String, Value)> = rel
+                    .key_pairs()
+                    .into_iter()
+                    .map(|(source, destination)| {
+                        let value = parent.get(source).cloned().unwrap_or(Value::Null);
+                        (destination.to_string(), value)
+                    })
+                    .collect();
                 let child_pk = pk_name(dest_def)?;
                 let child_create_action = dest_def
                     .actions
@@ -230,7 +246,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                 match managed.rel_type {
                     ManagedRelType::Create | ManagedRelType::Append => {
                         for mut child_fields in managed.inputs {
-                            child_fields.insert(child_fk.to_string(), Value::from(parent_id));
+                            child_fields.extend(link.iter().cloned());
                             if let Some(create_act) = child_create_action {
                                 Box::pin(create_dynamic(ctx, dest_def, create_act, child_fields)).await?;
                             } else {
@@ -241,7 +257,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                         }
                     }
                     ManagedRelType::DirectControl => {
-                        let filter = Filter::eq(child_fk, Value::from(parent_id));
+                        let filter = rel.destination_filter(&parent).unwrap_or(Filter::False);
                         let existing_rows = ctx
                             .data
                             .run_query(
@@ -263,7 +279,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
 
                         let mut kept_ids = HashSet::new();
                         for mut child_fields in managed.inputs {
-                            child_fields.insert(child_fk.to_string(), Value::from(parent_id));
+                            child_fields.extend(link.iter().cloned());
                             let given_id = child_fields
                                 .get(child_pk)
                                 .and_then(|v| match v {
@@ -299,11 +315,15 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                 if rel.on_delete == OnDelete::Nilify {
                                     if let Some(update_act) = child_update_action {
                                         let mut patch = FieldMap::new();
-                                        patch.insert(child_fk.to_string(), Value::Null);
+                                        for (column, _) in &link {
+                                            patch.insert(column.clone(), Value::Null);
+                                        }
                                         Box::pin(update_dynamic(ctx, dest_def, update_act, existing_id, patch)).await?;
                                     } else {
                                         let mut updated = existing_fields;
-                                        updated.insert(child_fk.to_string(), Value::Null);
+                                        for (column, _) in &link {
+                                            updated.insert(column.clone(), Value::Null);
+                                        }
                                         ctx.data.update(dest_def, existing_id, updated).await?;
                                     }
                                 } else if let Some(destroy_act) = child_destroy_action {

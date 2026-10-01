@@ -14,6 +14,18 @@ pub enum SchemaOperation {
         old_name: String,
         new_name: String,
     },
+    /// Keeps an index's name in step with a renamed table.
+    RenameIndex {
+        table: String,
+        old_name: String,
+        new_name: String,
+    },
+    /// Keeps a check or foreign key's name in step with a renamed table.
+    RenameConstraint {
+        table: String,
+        old_name: String,
+        new_name: String,
+    },
     AddColumn {
         table: String,
         column: ColumnSnapshot,

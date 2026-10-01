@@ -112,15 +112,20 @@ impl SqlDialect for SqliteDialect {
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
+        // A partial unique index only matches a conflict target that repeats its predicate.
+        let target = match identity.predicate {
+            Some(predicate) => format!("({key_cols}) WHERE {predicate}"),
+            None => format!("({key_cols})"),
+        };
         if update_fields.is_empty() {
-            format!("ON CONFLICT ({key_cols}) DO NOTHING")
+            format!("ON CONFLICT {target} DO NOTHING")
         } else {
             let set_clauses = update_fields
                 .iter()
                 .map(|f| format!("{} = excluded.{}", self.quote_identifier(f), self.quote_identifier(f)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("ON CONFLICT ({key_cols}) DO UPDATE SET {set_clauses}")
+            format!("ON CONFLICT {target} DO UPDATE SET {set_clauses}")
         }
     }
 
@@ -194,15 +199,27 @@ impl SqlDialect for PostgresDialect {
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        if update_fields.is_empty() {
-            format!("ON CONFLICT ({key_cols}) DO NOTHING")
+        // A partial unique index only matches a conflict target that repeats its predicate.
+        let target = match identity.predicate {
+            Some(predicate) => format!("({key_cols}) WHERE {predicate}"),
+            None => format!("({key_cols})"),
+        };
+        // `DO NOTHING` returns no row for an existing record, so with nothing to update
+        // we rewrite a key column to itself and `RETURNING *` still yields the record.
+        let fields: Vec<&str> = if update_fields.is_empty() {
+            identity.keys.iter().take(1).copied().collect()
         } else {
-            let set_clauses = update_fields
+            update_fields.iter().map(String::as_str).collect()
+        };
+        if fields.is_empty() {
+            format!("ON CONFLICT {target} DO NOTHING")
+        } else {
+            let set_clauses = fields
                 .iter()
                 .map(|f| format!("{} = EXCLUDED.{}", self.quote_identifier(f), self.quote_identifier(f)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("ON CONFLICT ({key_cols}) DO UPDATE SET {set_clauses}")
+            format!("ON CONFLICT {target} DO UPDATE SET {set_clauses}")
         }
     }
 

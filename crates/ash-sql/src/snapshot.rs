@@ -25,6 +25,47 @@ pub struct TableSnapshot {
 }
 
 impl TableSnapshot {
+    /// This table under `new_name`, with generated index and constraint names following it.
+    pub fn renamed(&self, new_name: &str) -> TableSnapshot {
+        let mut copy = self.clone();
+        let old_name = copy.table.clone();
+        copy.table = new_name.to_string();
+        let rewrite = |name: &mut String, old_prefix: &str, new_prefix: &str| {
+            if let Some(rest) = name.strip_prefix(old_prefix) {
+                *name = format!("{new_prefix}{rest}");
+            }
+        };
+        for identity in &mut copy.identities {
+            rewrite(
+                &mut identity.name,
+                &format!("idx_{old_name}_"),
+                &format!("idx_{new_name}_"),
+            );
+        }
+        for index in &mut copy.indexes {
+            rewrite(
+                &mut index.name,
+                &format!("idx_{old_name}_"),
+                &format!("idx_{new_name}_"),
+            );
+        }
+        for check in &mut copy.checks {
+            rewrite(
+                &mut check.name,
+                &format!("ck_{old_name}_"),
+                &format!("ck_{new_name}_"),
+            );
+        }
+        for reference in &mut copy.references {
+            rewrite(
+                &mut reference.name,
+                &format!("fk_{old_name}_"),
+                &format!("fk_{new_name}_"),
+            );
+        }
+        copy
+    }
+
     /// Builds a [`TableSnapshot`] from an Ash [`ResourceDef`] and concrete [`SqlDialect`].
     pub fn from_resource<D: SqlDialect>(resource: &ResourceDef, dialect: &D) -> Self {
         let mut columns = Vec::new();
@@ -399,19 +440,10 @@ fn value_json(value: &Value) -> String {
     }
 }
 
+/// JSON string contents for `value`, escaping quotes, backslashes, and control characters.
 fn json_escape(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out
+    let quoted = serde_json::Value::String(value.to_string()).to_string();
+    quoted[1..quoted.len() - 1].to_string()
 }
 
 /// Resources that persist as tables, parents before children.

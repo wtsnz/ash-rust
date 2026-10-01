@@ -213,6 +213,19 @@ let user = User::create(&ctx)
     .await?;
 ```
 
+### Partial identities and null keys
+
+`where:` makes the identity a partial unique index. Only rows matching the SQL predicate must be unique. `nils_distinct: false` makes two `NULL` keys collide (`NULLS NOT DISTINCT`; Postgres 15+).
+
+```rust
+identities {
+    identity live_email: [email], where: "deleted_at IS NULL";
+    identity one_nickname: [nickname], nils_distinct: false;
+}
+```
+
+A partial identity can still be an upsert target; the conflict clause repeats its predicate. It gets the `User::live_email` constant but no `get_by_` or `find_by_` lookup, because the key alone does not pick one row. The memory data layer cannot evaluate the predicate: it does not enforce partial identities and rejects upserts on them.
+
 ---
 
 ## 2b2. Non-unique indexes
@@ -241,6 +254,15 @@ resource! {
 }
 ```
 
+`where:` makes a partial index. `using:` picks the Postgres access method: `btree` (the default), `hash`, `gin`, `gist`, `brin`, or `spgist`. SQLite ignores it and builds a B-tree. GIN and GiST need an operator class for the column type: they work on `JSONB` and arrays, but a plain text column needs an extension such as `pg_trgm`, so declare that index in a `statements` block instead.
+
+```rust
+indexes {
+    index open_by_status: [status], where: "status <> 'closed'";
+    index by_title: [title], using: hash;
+}
+```
+
 ---
 
 ## 2b3. Check constraints
@@ -264,7 +286,7 @@ resource! {
 }
 ```
 
-Codegen names each check `ck_{table}_{name}` and emits it inside `CREATE TABLE`.
+Codegen names each check `ck_{table}_{name}` and emits it inside `CREATE TABLE`. Enum attributes get a generated `ck_{table}_{attr}_one_of` check, so a user check with that name is a codegen error.
 
 ---
 
@@ -322,7 +344,16 @@ has_many comments: Comment [fk: post_id];
 many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
 ```
 
-`on_delete` is `cascade`, `nilify`, `restrict`, or `nothing` (identifiers, not `"cascade"` strings). `source_attribute_on_join_resource` / `destination_attribute_on_join_resource` are aliases of `source_fk` / `dest_fk`.
+### Composite keys
+
+`fk` and `references` take a list. They must name the same number of columns, in order. `references` defaults to the destination primary key; any other target must be a non-partial identity on exactly those columns, or codegen refuses to write the foreign key. `many_to_many` takes single columns only.
+
+```rust
+belongs_to project: Project [fk: [tenant_id, project_code], references: [tenant_id, code]];
+has_many tasks: Task [fk: [tenant_id, project_code], references: [tenant_id, code]];
+```
+
+`on_delete` is `cascade`, `nilify`, `restrict`, or `nothing` (identifiers, not `"cascade"` strings). `on_update` takes the same values and belongs on `belongs_to`, since it acts on the foreign key. `source_attribute_on_join_resource` / `destination_attribute_on_join_resource` are aliases of `source_fk` / `dest_fk`.
 
 ---
 

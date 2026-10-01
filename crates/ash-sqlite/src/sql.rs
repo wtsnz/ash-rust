@@ -136,17 +136,10 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::Map => match optional_text(row, col)? {
+        AttrType::Map | AttrType::Array => match optional_text(row, col)? {
             None => Ok(Value::Null),
-            Some(text) => match serde_json::from_str::<FieldMap>(&text) {
-                Ok(m) => Ok(Value::Map(m)),
-                Err(_) => Ok(Value::Null),
-            },
-        },
-        AttrType::Array => match optional_text(row, col)? {
-            None => Ok(Value::Null),
-            Some(text) => match serde_json::from_str::<Vec<Value>>(&text) {
-                Ok(a) => Ok(Value::Array(a)),
+            Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(json) => Ok(Value::from_plain_json(json)),
                 Err(_) => Ok(Value::Null),
             },
         },

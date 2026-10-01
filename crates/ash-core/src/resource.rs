@@ -476,6 +476,16 @@ pub struct RelationshipDef {
     pub on_update: OnUpdate,
 }
 
+fn key_values(fields: &FieldMap, columns: &[&str]) -> Option<Vec<crate::value::Value>> {
+    columns
+        .iter()
+        .map(|column| match fields.get(*column) {
+            Some(value) if !value.is_null() => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelKind {
     BelongsTo,
@@ -526,6 +536,36 @@ impl RelationshipDef {
         } else {
             self.destination_attributes.to_vec()
         }
+    }
+
+    /// `(column on this resource, column on the destination)` for each key column.
+    pub fn key_pairs(&self) -> Vec<(&'static str, &'static str)> {
+        self.source_columns()
+            .into_iter()
+            .zip(self.destination_columns())
+            .collect()
+    }
+
+    /// This side's key values in `source`, or `None` when any of them is null or missing.
+    pub fn source_key(&self, source: &FieldMap) -> Option<Vec<crate::value::Value>> {
+        key_values(source, &self.source_columns())
+    }
+
+    /// The destination's key values in `destination`, or `None` when any is null or missing.
+    pub fn destination_key(&self, destination: &FieldMap) -> Option<Vec<crate::value::Value>> {
+        key_values(destination, &self.destination_columns())
+    }
+
+    /// Selects the destination rows linked to `source`, or `None` when its key is null,
+    /// since a null key links to nothing.
+    pub fn destination_filter(&self, source: &FieldMap) -> Option<crate::filter::Filter> {
+        let key = self.source_key(source)?;
+        Some(crate::filter::Filter::and(
+            self.destination_columns()
+                .into_iter()
+                .zip(key)
+                .map(|(column, value)| crate::filter::Filter::eq(column, value)),
+        ))
     }
 
     pub const fn belongs_to(

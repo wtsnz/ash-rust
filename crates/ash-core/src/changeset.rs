@@ -596,8 +596,26 @@ impl<R: Resource> Changeset<R> {
                 let dest_def = (rel.destination)();
                 let dest_pk = pk_name(dest_def)?;
                 if let Some(mut child_fields) = managed.inputs.pop() {
-                    let child_id = if let Ok(cid) = required_uuid(&child_fields, dest_pk) {
-                        cid
+                    // The related row, so every key column can be copied from it.
+                    let related: FieldMap = if let Ok(cid) = required_uuid(&child_fields, dest_pk)
+                    {
+                        if rel.destination_columns() == [dest_pk] {
+                            child_fields
+                        } else {
+                            ctx.data
+                                .run_query(
+                                    dest_def,
+                                    &crate::data_layer::CompiledQuery {
+                                        filter: Some(crate::filter::Filter::eq(dest_pk, cid)),
+                                        tenant: ctx.tenant.clone(),
+                                        ..crate::data_layer::CompiledQuery::default()
+                                    },
+                                )
+                                .await?
+                                .into_iter()
+                                .next()
+                                .ok_or(Error::NotFound)?
+                        }
                     } else {
                         let create_act = dest_def
                             .actions
@@ -610,23 +628,23 @@ impl<R: Resource> Changeset<R> {
                                     .find(|a| a.kind == ActionKind::Create)
                             });
                         if let Some(create_act) = create_act {
-                            let stored = Box::pin(crate::engine::create_dynamic(
+                            Box::pin(crate::engine::create_dynamic(
                                 ctx,
                                 dest_def,
                                 create_act,
                                 child_fields,
                             ))
-                            .await?;
-                            required_uuid(&stored, dest_pk)?
+                            .await?
                         } else {
                             generate_pk(dest_def, &mut child_fields);
                             let cid = required_uuid(&child_fields, dest_pk)?;
-                            ctx.data.create(dest_def, cid, child_fields).await?;
-                            cid
+                            ctx.data.create(dest_def, cid, child_fields).await?
                         }
                     };
-                    self.fields
-                        .insert(rel.source_attribute.to_string(), Value::from(child_id));
+                    for (source, destination) in rel.key_pairs() {
+                        let value = related.get(destination).cloned().unwrap_or(Value::Null);
+                        self.fields.insert(source.to_string(), value);
+                    }
                 }
             }
         }
@@ -693,7 +711,8 @@ impl<R: Resource> Changeset<R> {
 
         let managed_list = std::mem::take(&mut self.managed_relationships);
         if let Err(err) =
-            crate::engine::handle_managed_relationships(ctx, &R::DEF, id, managed_list).await
+            crate::engine::handle_managed_relationships(ctx, &R::DEF, id, &stored, managed_list)
+                .await
         {
             if self.action.kind == ActionKind::Create {
                 let _ = ctx.data.destroy(&R::DEF, id).await;

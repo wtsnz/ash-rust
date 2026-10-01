@@ -1097,6 +1097,15 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     let mut identity_methods = Vec::new();
     for ident in &def.identities {
         let name = &ident.name;
+        if ident.predicate.is_some() {
+            // A `where:` predicate is raw SQL that a generated lookup cannot apply, so it
+            // could return a row the identity does not cover. Query explicitly instead.
+            let name_str = name.to_string();
+            identity_methods.push(quote! {
+                pub const #name: &'static str = #name_str;
+            });
+            continue;
+        }
         let fn_get = format_ident!("get_by_{}", name);
         let fn_find = format_ident!("find_by_{}", name);
 

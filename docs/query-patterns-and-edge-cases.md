@@ -153,7 +153,7 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 | **Boolean Literals** | `1` and `0` (integers) | `TRUE` and `FALSE` |
 | **Insert / Update Return** | Two-step (execute + SELECT by PK) | `RETURNING *` (single roundtrip) |
 | **UUID Storage** | `TEXT` (36 chars) | Native `UUID` type |
-| **JSON Storage** | `TEXT` stringified JSON | Native `JSONB` |
+| **JSON Storage** | `TEXT` holding plain JSON | Native `JSONB` holding plain JSON |
 | **Lateral Subqueries** | Window functions / Subqueries | Native `LEFT JOIN LATERAL (...) ON true` |
 | **Upsert Syntax** | `ON CONFLICT (...) DO UPDATE SET ...` | `ON CONFLICT (...) DO UPDATE SET ... RETURNING *` |
 | **Schema Migrations** | `_ash_schema_migrations` (TEXT) | `_ash_schema_migrations` (VARCHAR) |

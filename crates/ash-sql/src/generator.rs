@@ -154,6 +154,35 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let down = format!("ALTER TABLE {new_table} RENAME TO {old_table};");
             (up, down)
         }
+        // SQLite cannot rename an index; emit_sql recreates it from the target snapshot.
+        SchemaOperation::RenameIndex {
+            old_name, new_name, ..
+        } if dialect.name() == "postgres" => {
+            let old_index = dialect.quote_identifier(old_name);
+            let new_index = dialect.quote_identifier(new_name);
+            (
+                format!("ALTER INDEX {old_index} RENAME TO {new_index};"),
+                format!("ALTER INDEX {new_index} RENAME TO {old_index};"),
+            )
+        }
+        // SQLite keeps constraint names inside the table definition and rebuilds the table
+        // from the snapshot whenever a constraint changes, so only Postgres renames them.
+        SchemaOperation::RenameConstraint {
+            table,
+            old_name,
+            new_name,
+        } if dialect.name() == "postgres" => {
+            let t = dialect.quote_identifier(table);
+            let old_constraint = dialect.quote_identifier(old_name);
+            let new_constraint = dialect.quote_identifier(new_name);
+            (
+                format!("ALTER TABLE {t} RENAME CONSTRAINT {old_constraint} TO {new_constraint};"),
+                format!("ALTER TABLE {t} RENAME CONSTRAINT {new_constraint} TO {old_constraint};"),
+            )
+        }
+        SchemaOperation::RenameIndex { .. } | SchemaOperation::RenameConstraint { .. } => {
+            (String::new(), String::new())
+        }
         SchemaOperation::RenameColumn {
             table,
             old_name,
@@ -475,6 +504,8 @@ fn table_of(op: &SchemaOperation) -> Option<&str> {
         SchemaOperation::CreateTable(snapshot) => Some(snapshot.table.as_str()),
         SchemaOperation::DropTable(name) => Some(name.as_str()),
         SchemaOperation::RenameTable { new_name, .. } => Some(new_name.as_str()),
+        SchemaOperation::RenameIndex { table, .. }
+        | SchemaOperation::RenameConstraint { table, .. } => Some(table.as_str()),
         SchemaOperation::AddColumn { table, .. }
         | SchemaOperation::DropColumn { table, .. }
         | SchemaOperation::RenameColumn { table, .. }
@@ -543,6 +574,34 @@ pub fn required_extensions<D: SqlDialect>(
     extension_sql(dialect, &[SchemaOperation::CreateTable(snapshot)])
 }
 
+/// The snapshot of `table` in `snapshots`. A table renamed in `operations` may be filed under
+/// its other name there, in either direction, so it is returned under `table`.
+fn snapshot_for(
+    snapshots: &[TableSnapshot],
+    operations: &[SchemaOperation],
+    table: &str,
+) -> Option<TableSnapshot> {
+    if let Some(snapshot) = snapshots.iter().find(|s| s.table == table) {
+        return Some(snapshot.clone());
+    }
+    operations.iter().find_map(|op| match op {
+        SchemaOperation::RenameTable { old_name, new_name } => {
+            let other = if new_name == table {
+                old_name
+            } else if old_name == table {
+                new_name
+            } else {
+                return None;
+            };
+            snapshots
+                .iter()
+                .find(|s| &s.table == other)
+                .map(|s| s.renamed(table))
+        }
+        _ => None,
+    })
+}
+
 pub fn emit_sql<D: SqlDialect>(
     dialect: &D,
     operations: &[SchemaOperation],
@@ -564,14 +623,63 @@ pub fn emit_sql<D: SqlDialect>(
     let mut rebuilt = HashSet::new();
 
     for op in operations {
-        if matches!(op, SchemaOperation::RenameTable { .. }) {
+        let table = table_of(op).unwrap_or_default();
+        // A table not yet rebuilt gets fresh indexes and constraints under the target names
+        // when it is, so renaming them first is unnecessary and would rebuild too early.
+        // After the rebuild, renames apply as usual.
+        if rebuild.contains(table)
+            && !rebuilt.contains(table)
+            && matches!(
+                op,
+                SchemaOperation::RenameIndex { .. } | SchemaOperation::RenameConstraint { .. }
+            )
+        {
+            continue;
+        }
+        if let SchemaOperation::RenameIndex {
+            table,
+            old_name,
+            new_name,
+        } = op
+            && dialect.name() == "sqlite"
+        {
+            stmts.push(format!(
+                "DROP INDEX IF EXISTS {};",
+                dialect.quote_identifier(old_name)
+            ));
+            // Generated index names include the table, so the name finds the definition
+            // whichever name the table has in these snapshots.
+            let recreate = targets.iter().find_map(|target| {
+                if let Some(identity) = target.identities.iter().find(|i| &i.name == new_name) {
+                    Some(SchemaOperation::CreateIdentity {
+                        table: table.clone(),
+                        identity: identity.clone(),
+                    })
+                } else {
+                    target.indexes.iter().find(|i| &i.name == new_name).map(|index| {
+                        SchemaOperation::CreateIndex {
+                            table: table.clone(),
+                            index: index.clone(),
+                        }
+                    })
+                }
+            });
+            let recreate = recreate.unwrap_or_else(|| {
+                panic!("index `{new_name}` is missing from the target snapshot for `{table}`")
+            });
+            stmts.push(generate_operation_sql(dialect, &recreate).0);
+            continue;
+        }
+        if matches!(
+            op,
+            SchemaOperation::RenameTable { .. } | SchemaOperation::RenameConstraint { .. }
+        ) {
             let (up, _) = generate_operation_sql(dialect, op);
             if !up.is_empty() {
                 stmts.push(up);
             }
             continue;
         }
-        let table = table_of(op).unwrap_or_default();
         if rebuild.contains(table)
             && !matches!(
                 op,
@@ -587,13 +695,14 @@ pub fn emit_sql<D: SqlDialect>(
                     stmts.push(up);
                 }
             }
-            if rebuilt.insert(table.to_string())
-                && let (Some(old), Some(new)) = (
-                    previous.iter().find(|s| s.table == table),
-                    targets.iter().find(|s| s.table == table),
-                )
-            {
-                stmts.push(emit_sqlite_rebuild(dialect, old, new, previous, operations));
+            if rebuilt.insert(table.to_string()) {
+                let (Some(old), Some(new)) = (
+                    snapshot_for(previous, operations, table),
+                    snapshot_for(targets, operations, table),
+                ) else {
+                    panic!("cannot rebuild `{table}`: its previous or target snapshot is missing");
+                };
+                stmts.push(emit_sqlite_rebuild(dialect, &old, &new, previous, operations));
             }
             continue;
         }
