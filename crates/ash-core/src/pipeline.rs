@@ -362,28 +362,15 @@ pub fn apply_tenant_scope(
     filter: Option<Filter>,
     tenant: Option<String>,
 ) -> Result<(Option<Filter>, Option<String>)> {
-    let mut filter = filter;
-    if let Some(mt) = resource.multitenancy {
-        match mt.strategy {
-            crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
-                if let Some(ref tenant) = tenant {
-                    let tenant_filter = Filter::eq(attr_name, Value::String(tenant.clone()));
-                    filter = and_filters(filter, Some(tenant_filter));
-                } else if !mt.global {
-                    return Err(Error::TenantRequired {
-                        resource: resource.name,
-                    });
-                }
-            }
-            crate::resource::MultitenancyStrategy::Context => {
-                if tenant.is_none() && !mt.global {
-                    return Err(Error::TenantRequired {
-                        resource: resource.name,
-                    });
-                }
-            }
-        }
+    if let Some(mt) = resource.multitenancy
+        && tenant.is_none()
+        && !mt.global
+    {
+        return Err(Error::TenantRequired {
+            resource: resource.name,
+        });
     }
+    let filter = and_filters(filter, resource.tenant_filter(tenant.as_deref()));
     Ok((filter, tenant))
 }
 

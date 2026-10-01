@@ -93,6 +93,8 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     /// Resources whose primary-read filters are being compiled. A read filter that leads
     /// back to its own resource is not applied again inside itself, which would recurse.
     applying_read_filters: Vec<&'static str>,
+    /// The query's tenant, which also limits the rows read through relationships.
+    tenant: Option<String>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -107,6 +109,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             current_calc_arguments: &[],
             calc_args: std::collections::HashMap::new(),
             applying_read_filters: Vec::new(),
+            tenant: None,
         }
     }
 
@@ -125,23 +128,31 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         compiled
     }
 
-    /// `resource`'s primary-read filter compiled against `alias`, unless it is already
-    /// being compiled further out.
+    /// What a read of `resource` through a relationship sees, compiled against `alias`:
+    /// the query's tenant, and the primary-read filter unless it is already being
+    /// compiled further out.
     fn compile_read_filter(
         &mut self,
         resource: &'static ResourceDef,
         alias: &str,
     ) -> Result<Option<String>> {
-        if self.applying_read_filters.contains(&resource.name) {
-            return Ok(None);
+        let mut parts = Vec::new();
+        if let Some(tenant_filter) = resource.tenant_filter(self.tenant.as_deref()) {
+            parts.push(self.compile_filter_scoped(resource, &tenant_filter, Some(alias))?);
         }
-        let Some(read_filter) = resource.primary_read_filter() else {
-            return Ok(None);
-        };
-        self.applying_read_filters.push(resource.name);
-        let compiled = self.compile_filter_scoped(resource, &read_filter, Some(alias));
-        self.applying_read_filters.pop();
-        compiled.map(Some)
+        if !self.applying_read_filters.contains(&resource.name)
+            && let Some(read_filter) = resource.primary_read_filter()
+        {
+            self.applying_read_filters.push(resource.name);
+            let compiled = self.compile_filter_scoped(resource, &read_filter, Some(alias));
+            self.applying_read_filters.pop();
+            parts.push(compiled?);
+        }
+        Ok(match parts.len() {
+            0 => None,
+            1 => parts.pop(),
+            _ => Some(format!("({})", parts.join(" AND "))),
+        })
     }
 
     /// Pushes a bound parameter and returns the dialect placeholder (e.g. `?` or `$1`).
@@ -822,6 +833,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         cursor: Option<&KeysetCursor>,
     ) -> Result<CompiledSql> {
         self.calc_args = query.calculation_args.clone();
+        self.tenant = query.tenant.clone();
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 

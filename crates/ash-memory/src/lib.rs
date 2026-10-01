@@ -266,10 +266,11 @@ impl DataLayer for Memory {
             }
 
             let needed_aggs = needed_aggregates(resource, query);
-            apply_aggregates(&tables, resource, &mut rows, &needed_aggs)?;
+            let tenant = query.tenant.as_deref();
+            apply_aggregates(&tables, tenant, resource, &mut rows, &needed_aggs)?;
 
             if let Some(filter) = &query.filter {
-                rows.retain(|row| row_matches_filter(&tables, resource, filter, row));
+                rows.retain(|row| row_matches_filter(&tables, tenant, resource, filter, row));
             }
 
             if !query.sort.is_empty() {
@@ -321,8 +322,16 @@ fn is_ci_string(resource: &ResourceDef, field: &str) -> bool {
 
 type Tables = HashMap<String, HashMap<Uuid, FieldMap>>;
 
-fn row_matches_filter(tables: &Tables, resource: &ResourceDef, filter: &Filter, row: &FieldMap) -> bool {
-    eval_filter(tables, resource, filter, row, None) == Some(true)
+/// `tenant` is the query's: rows reached through a relationship are limited to it, as
+/// the rows of the query itself are.
+fn row_matches_filter(
+    tables: &Tables,
+    tenant: Option<&str>,
+    resource: &ResourceDef,
+    filter: &Filter,
+    row: &FieldMap,
+) -> bool {
+    eval_filter(tables, tenant, resource, filter, row, None) == Some(true)
 }
 
 /// Resources whose primary-read filters are being applied, innermost first. As in the
@@ -344,14 +353,21 @@ fn is_applying(scope: Option<&Applying>, name: &str) -> bool {
     false
 }
 
-/// Whether `row` passes `resource`'s primary-read filter, as every read through a
-/// relationship must, unless that filter is already being applied further out.
+/// Whether `row` is in the query's tenant and passes `resource`'s primary-read filter,
+/// as every read through a relationship must. The read filter is skipped when it is
+/// already being applied further out.
 fn passes_read_filter(
     tables: &Tables,
+    tenant: Option<&str>,
     resource: &'static ResourceDef,
     row: &FieldMap,
     scope: Option<&Applying>,
 ) -> bool {
+    if let Some(tenant_filter) = resource.tenant_filter(tenant)
+        && eval_filter(tables, tenant, resource, &tenant_filter, row, scope) != Some(true)
+    {
+        return false;
+    }
     if is_applying(scope, resource.name) {
         return true;
     }
@@ -363,7 +379,7 @@ fn passes_read_filter(
         outer: scope,
     };
     let row = with_calculations(resource, &read_filter, row);
-    eval_filter(tables, resource, &read_filter, &row, Some(&inner)) == Some(true)
+    eval_filter(tables, tenant, resource, &read_filter, &row, Some(&inner)) == Some(true)
 }
 
 /// `row` with the calculations `filter` reads. Stored rows hold none, and the SQL
@@ -392,6 +408,7 @@ fn with_calculations<'r>(
 /// is unknown (`None`), and `NOT` of unknown stays unknown, so the row is left out.
 fn eval_filter(
     tables: &Tables,
+    tenant: Option<&str>,
     resource: &ResourceDef,
     filter: &Filter,
     row: &FieldMap,
@@ -438,13 +455,13 @@ fn eval_filter(
         }
         Filter::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
         Filter::And(parts) => {
-            all_of(parts.iter().map(|part| eval_filter(tables, resource, part, row, scope)))
+            all_of(parts.iter().map(|part| eval_filter(tables, tenant, resource, part, row, scope)))
         }
         Filter::Or(parts) => {
-            any_of(parts.iter().map(|part| eval_filter(tables, resource, part, row, scope)))
+            any_of(parts.iter().map(|part| eval_filter(tables, tenant, resource, part, row, scope)))
         }
         Filter::Not(inner) => {
-            eval_filter(tables, resource, inner, row, scope).map(|matched| !matched)
+            eval_filter(tables, tenant, resource, inner, row, scope).map(|matched| !matched)
         }
         // `EXISTS (...)` in SQL: true or false, never unknown.
         Filter::Related { relationship, filter: rel_filter } => Some((|| {
@@ -458,8 +475,8 @@ fn eval_filter(
             };
             let matches = |dest_row: &FieldMap| {
                 let dest_row = with_calculations(dest_res, rel_filter, dest_row);
-                eval_filter(tables, dest_res, rel_filter, &dest_row, scope) == Some(true)
-                    && passes_read_filter(tables, dest_res, &dest_row, scope)
+                eval_filter(tables, tenant, dest_res, rel_filter, &dest_row, scope) == Some(true)
+                    && passes_read_filter(tables, tenant, dest_res, &dest_row, scope)
             };
 
             match rel.kind {
@@ -492,7 +509,7 @@ fn eval_filter(
                     let matching_dest_ids: Vec<&Value> = through_table
                         .values()
                         .filter(|jr| jr.get(source_on_join) == Some(source_val))
-                        .filter(|jr| passes_read_filter(tables, through_res, jr, scope))
+                        .filter(|jr| passes_read_filter(tables, tenant, through_res, jr, scope))
                         .filter_map(|jr| jr.get(dest_on_join))
                         .collect();
 
@@ -595,6 +612,7 @@ fn strip_unrequested_aggregates(
 
 fn apply_aggregates(
     tables: &Tables,
+    tenant: Option<&str>,
     resource: &ResourceDef,
     rows: &mut [FieldMap],
     needed: &[&str],
@@ -614,7 +632,7 @@ fn apply_aggregates(
             .get(dest.name)
             .map(|t| {
                 t.values()
-                    .filter(|dest_row| passes_read_filter(tables, dest, dest_row, None))
+                    .filter(|dest_row| passes_read_filter(tables, tenant, dest, dest_row, None))
                     .collect()
             })
             .unwrap_or_default();
@@ -647,7 +665,7 @@ fn apply_aggregates(
                     .get(through_def.name)
                     .map(|t| {
                         t.values()
-                            .filter(|jr| passes_read_filter(tables, through_def, jr, None))
+                            .filter(|jr| passes_read_filter(tables, tenant, through_def, jr, None))
                             .collect()
                     })
                     .unwrap_or_default();

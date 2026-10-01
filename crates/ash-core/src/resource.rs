@@ -329,6 +329,18 @@ impl ResourceDef {
         }
     }
 
+    /// Limits a read in `tenant` to that tenant's rows of an attribute-tenant resource,
+    /// whether it reads the resource directly or through a relationship. Context-tenant
+    /// resources are kept apart by the data layer instead.
+    pub fn tenant_filter(&self, tenant: Option<&str>) -> Option<crate::filter::Filter> {
+        match (self.multitenancy?.strategy, tenant) {
+            (MultitenancyStrategy::Attribute(attribute), Some(tenant)) => Some(
+                crate::filter::Filter::eq(attribute, crate::value::Value::String(tenant.to_string())),
+            ),
+            _ => None,
+        }
+    }
+
     /// The read this resource is read through when no action is named: typed queries,
     /// relationship loads and GraphQL all use it. That's its primary read, or for a
     /// resource that declares no read action, an implicit `read` without preparations,
