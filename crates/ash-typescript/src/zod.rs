@@ -12,8 +12,10 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
         | AttrType::Date
         | AttrType::Binary
         | AttrType::UtcDatetime
+        | AttrType::Inet
         | AttrType::Decimal => "z.string()".to_string(),
         AttrType::Float => "z.number()".to_string(),
+        AttrType::Vector { dimensions } => format!("z.array(z.number()).length({dimensions})"),
         AttrType::Integer => "z.number().int()".to_string(),
         AttrType::Boolean => "z.boolean()".to_string(),
         AttrType::Atom { one_of } => {
@@ -132,10 +134,14 @@ fn build_field_zod_schema(
             | AttrType::Date
             | AttrType::Binary
             | AttrType::UtcDatetime
+            | AttrType::Inet
             | AttrType::Decimal => {
                 "z.string()".to_string()
             }
             AttrType::Float => "z.number()".to_string(),
+            AttrType::Vector { dimensions } => {
+                format!("z.array(z.number()).length({dimensions})")
+            }
             AttrType::Integer => "z.number().int()".to_string(),
             AttrType::Boolean => "z.boolean()".to_string(),
             AttrType::Atom { one_of } => {

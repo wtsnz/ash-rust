@@ -417,6 +417,8 @@ pub enum AttrType {
     Date,
     Binary,
     CiString,
+    Inet,
+    Vector { dimensions: u32 },
 }
 
 impl AttrType {
@@ -435,6 +437,8 @@ impl AttrType {
             Self::Date => "date",
             Self::Binary => "binary",
             Self::CiString => "ci_string",
+            Self::Inet => "inet",
+            Self::Vector { .. } => "vector",
         }
     }
 }

@@ -501,6 +501,26 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 });
             }
         },
+        (AttrType::Inet, Value::String(got)) => match crate::Inet::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be an IP address, got {got}"),
+                });
+            }
+        },
+        (AttrType::Vector { dimensions }, Value::String(got)) => {
+            match crate::parse_vector(got).and_then(|v| crate::check_vector(&v, dimensions)) {
+                Ok(()) => true,
+                Err(err) => {
+                    return Err(Error::Constraint {
+                        field: attribute.name.to_string(),
+                        message: err.to_string(),
+                    });
+                }
+            }
+        }
         (AttrType::CiString, Value::String(got)) => match crate::CiString::parse(got) {
             Ok(_) => true,
             Err(_) => {

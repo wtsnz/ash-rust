@@ -161,6 +161,8 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 | **Insert / Update Return** | Two-step (execute + SELECT by PK) | `RETURNING *` (single roundtrip) |
 | **UUID Storage** | `TEXT` (36 chars) | Native `UUID` type |
 | **JSON Storage** | `TEXT` holding plain JSON | Native `JSONB` holding plain JSON |
+| **IP Addresses (`Inet`)** | `TEXT` | Native `INET` |
+| **Embeddings (`Vector<N>`)** | `TEXT` like `[1,2.5,3]` | pgvector `VECTOR(N)` (needs `CREATE EXTENSION vector`) |
 | **Lateral Subqueries** | Window functions / Subqueries | Native `LEFT JOIN LATERAL (...) ON true` |
 | **Text Filters** | `GLOB` (`String`), `LIKE ... ESCAPE '\'` (`CiString`) | `LIKE` (`citext` ignores case) |
 | **Upsert Syntax** | `ON CONFLICT (...) DO UPDATE SET ...` | `ON CONFLICT (...) DO UPDATE SET ... RETURNING *` |

@@ -61,7 +61,8 @@ impl TestDb {
             .await
             .expect("DATABASE_URL is set but Postgres is unreachable");
         // Tests run in parallel, and concurrent `CREATE EXTENSION` calls race on a fresh
-        // database. Install citext once under a lock so migrations find it already there.
+        // database. Install extensions once under a lock so migrations find them already
+        // there. pgvector is optional locally; vector tests skip without it.
         let mut tx = admin.pool().unwrap().begin().await.unwrap();
         sqlx::query("SELECT pg_advisory_xact_lock(7303013)")
             .execute(&mut *tx)
@@ -71,6 +72,16 @@ impl TestDb {
             .execute(&mut *tx)
             .await
             .unwrap();
+        sqlx::raw_sql(
+            "DO $$ BEGIN
+               IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+                 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+               END IF;
+             END $$",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         let schema = format!("codegen_{}", Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
@@ -140,6 +151,22 @@ impl TestDb {
             Db::Sqlite(_) => "BLOB",
             Db::Postgres(_) => "bytea",
         }
+    }
+
+    /// Whether pgvector is installed. CI always has it, so a missing extension fails there.
+    pub async fn has_vector(&self) -> bool {
+        let Db::Postgres(_) = &self.db else {
+            return true;
+        };
+        let installed = self
+            .int("SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector'")
+            .await
+            == 1;
+        assert!(
+            installed || std::env::var_os("CI").is_none(),
+            "CI must run Postgres with pgvector available"
+        );
+        installed
     }
 
     pub fn date_type(&self) -> &'static str {

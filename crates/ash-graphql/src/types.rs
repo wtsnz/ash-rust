@@ -22,6 +22,7 @@ pub fn attr_type_to_type_ref(
         | AttrType::Date
         | AttrType::Binary
         | AttrType::UtcDatetime
+        | AttrType::Inet
         | AttrType::Decimal => {
             if allow_nil {
                 TypeRef::named(TypeRef::STRING)
@@ -73,6 +74,13 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn_list_nn(TypeRef::STRING)
             }
         }
+        AttrType::Vector { .. } => {
+            if allow_nil {
+                TypeRef::named_nn_list(TypeRef::FLOAT)
+            } else {
+                TypeRef::named_nn_list_nn(TypeRef::FLOAT)
+            }
+        }
     }
 }
 
@@ -120,8 +128,46 @@ pub fn ash_value_to_graphql_value_typed(val: &AshValue, ty: AttrType) -> GqlValu
     match (val, ty) {
         (AshValue::Null, _) => GqlValue::Null,
         (AshValue::String(s), AttrType::Atom { .. }) => GqlValue::Enum(Name::new(s.to_uppercase())),
+        (AshValue::String(s), AttrType::Vector { .. }) => match ash_core::parse_vector(s) {
+            Ok(values) => GqlValue::List(
+                values
+                    .into_iter()
+                    .map(|value| float_value(value as f64))
+                    .collect(),
+            ),
+            Err(_) => GqlValue::Null,
+        },
         _ => ash_value_to_graphql_value(val),
     }
+}
+
+fn float_value(value: f64) -> GqlValue {
+    async_graphql::Number::from_f64(value)
+        .map(GqlValue::Number)
+        .unwrap_or(GqlValue::Null)
+}
+
+/// Parses an IP address input into its normalized text form.
+pub fn parse_inet_input(
+    acc: &async_graphql::dynamic::ValueAccessor<'_>,
+) -> Result<String, async_graphql::Error> {
+    let inet = ash_core::Inet::parse(acc.string()?)
+        .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+    Ok(inet.as_str().to_string())
+}
+
+/// Parses a `[Float!]` input into pgvector text, checking its dimensions.
+pub fn parse_vector_input(
+    acc: &async_graphql::dynamic::ValueAccessor<'_>,
+    dimensions: u32,
+) -> Result<String, async_graphql::Error> {
+    let mut values = Vec::new();
+    for item in acc.list()?.iter() {
+        values.push(item.f64()? as f32);
+    }
+    ash_core::check_vector(&values, dimensions)
+        .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+    Ok(ash_core::format_vector(&values))
 }
 
 /// Converts an `async_graphql` [`GqlValue`] into an [`ash_core::Value`].
@@ -219,6 +265,10 @@ pub fn parse_input_val(
         AttrType::Boolean => {
             let b = acc.boolean()?;
             Ok(AshValue::Bool(b))
+        }
+        AttrType::Inet => Ok(AshValue::String(parse_inet_input(acc)?)),
+        AttrType::Vector { dimensions } => {
+            Ok(AshValue::String(parse_vector_input(acc, dimensions)?))
         }
         AttrType::Atom { one_of } => {
             let name = acc.enum_name()?;

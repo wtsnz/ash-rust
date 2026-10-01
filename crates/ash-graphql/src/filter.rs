@@ -86,9 +86,11 @@ pub fn register_resource_filter_inputs(
         let field_filter_type = match attr.ty {
             AttrType::Uuid => "UuidFilterInput".to_string(),
             AttrType::String | AttrType::CiString => "TextFilterInput".to_string(),
-            AttrType::Date | AttrType::Binary | AttrType::UtcDatetime | AttrType::Decimal => {
-                "StringFilterInput".to_string()
-            }
+            AttrType::Date
+            | AttrType::Binary
+            | AttrType::UtcDatetime
+            | AttrType::Decimal
+            | AttrType::Inet => "StringFilterInput".to_string(),
             AttrType::Float => "FloatFilterInput".to_string(),
             AttrType::Integer => "IntFilterInput".to_string(),
             AttrType::Boolean => "BooleanFilterInput".to_string(),
@@ -321,6 +323,10 @@ fn parse_scalar_value(
             let b = acc.boolean()?;
             Ok(Value::Bool(b))
         }
+        AttrType::Inet => Ok(Value::String(crate::types::parse_inet_input(acc)?)),
+        AttrType::Vector { dimensions } => Ok(Value::String(
+            crate::types::parse_vector_input(acc, dimensions)?,
+        )),
         AttrType::Atom { one_of } => {
             let name = acc.enum_name()?;
             if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {

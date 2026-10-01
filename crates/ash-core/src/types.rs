@@ -296,6 +296,169 @@ impl AshType for CiString {
     }
 }
 
+/// IP address with an optional network prefix, such as `10.0.0.1` or `10.0.0.0/8`.
+///
+/// Postgres columns use `inet`. SQLite has no address type, so the column is `TEXT`.
+/// The text form drops a prefix that covers the whole address, as Postgres does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inet(String);
+
+impl Inet {
+    pub fn parse(raw: &str) -> Result<Self> {
+        let invalid = || Error::Invalid(format!("invalid inet `{raw}`: expected an IP address"));
+        let (addr, prefix) = match raw.split_once('/') {
+            Some((addr, prefix)) => (addr, Some(prefix)),
+            None => (raw, None),
+        };
+        let addr: std::net::IpAddr = addr.parse().map_err(|_| invalid())?;
+        let max = if addr.is_ipv4() { 32 } else { 128 };
+        let prefix = match prefix {
+            Some(prefix) if prefix.bytes().all(|b| b.is_ascii_digit()) => {
+                prefix.parse::<u8>().map_err(|_| invalid())?
+            }
+            Some(_) => return Err(invalid()),
+            None => max,
+        };
+        if prefix > max {
+            return Err(invalid());
+        }
+        Ok(Self(format_inet(addr, prefix)))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Postgres text form of an inet value: the address, then `/prefix` unless it is the full width.
+pub fn format_inet(addr: std::net::IpAddr, prefix: u8) -> String {
+    let max = if addr.is_ipv4() { 32 } else { 128 };
+    if prefix == max {
+        addr.to_string()
+    } else {
+        format!("{addr}/{prefix}")
+    }
+}
+
+impl From<Inet> for Value {
+    fn from(value: Inet) -> Self {
+        value.to_value()
+    }
+}
+
+impl crate::value::IntoOption<Inet> for Inet {
+    fn into_option(self) -> Option<Inet> {
+        Some(self)
+    }
+}
+
+impl AshType for Inet {
+    const ATTR_TYPE: AttrType = AttrType::Inet;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected inet".into())),
+        }
+    }
+}
+
+/// Embedding with exactly `N` finite `f32` values, stored as text like `[1,2.5,3]`.
+///
+/// Postgres columns use pgvector's `vector(N)`, which needs `CREATE EXTENSION vector`.
+/// SQLite stores the same text in a `TEXT` column.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Vector<const N: usize>(Vec<f32>);
+
+impl<const N: usize> Vector<N> {
+    pub fn new(values: impl Into<Vec<f32>>) -> Result<Self> {
+        let values = values.into();
+        check_vector(&values, N as u32)?;
+        Ok(Self(values))
+    }
+
+    pub fn parse(raw: &str) -> Result<Self> {
+        Self::new(parse_vector(raw)?)
+    }
+
+    pub fn as_slice(&self) -> &[f32] {
+        &self.0
+    }
+}
+
+// Values are always finite, since `new` rejects NaN, so equality is reflexive.
+impl<const N: usize> Eq for Vector<N> {}
+
+/// Parses pgvector text such as `[1,2.5,3]`.
+pub fn parse_vector(raw: &str) -> Result<Vec<f32>> {
+    let invalid = || Error::Invalid(format!("invalid vector `{raw}`: expected [1,2,3]"));
+    let inner = raw
+        .trim()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .ok_or_else(invalid)?;
+    if inner.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    inner
+        .split(',')
+        .map(|part| part.trim().parse::<f32>().map_err(|_| invalid()))
+        .collect()
+}
+
+/// Checks that a vector has `dimensions` finite values.
+pub fn check_vector(values: &[f32], dimensions: u32) -> Result<()> {
+    if values.len() != dimensions as usize {
+        return Err(Error::Invalid(format!(
+            "expected a vector with {dimensions} dimensions, got {}",
+            values.len()
+        )));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(Error::Invalid("vector values must be finite".into()));
+    }
+    Ok(())
+}
+
+/// pgvector text form of `values`, such as `[1,2.5,3]`.
+pub fn format_vector(values: &[f32]) -> String {
+    let parts: Vec<String> = values.iter().map(|value| value.to_string()).collect();
+    format!("[{}]", parts.join(","))
+}
+
+impl<const N: usize> From<Vector<N>> for Value {
+    fn from(value: Vector<N>) -> Self {
+        value.to_value()
+    }
+}
+
+impl<const N: usize> crate::value::IntoOption<Vector<N>> for Vector<N> {
+    fn into_option(self) -> Option<Vector<N>> {
+        Some(self)
+    }
+}
+
+impl<const N: usize> AshType for Vector<N> {
+    const ATTR_TYPE: AttrType = AttrType::Vector {
+        dimensions: N as u32,
+    };
+
+    fn to_value(&self) -> Value {
+        Value::String(format_vector(&self.0))
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Self::parse(s),
+            _ => Err(Error::Invalid("expected vector".into())),
+        }
+    }
+}
+
 /// Calendar date stored as `YYYY-MM-DD`.
 ///
 /// Postgres columns use `date`. SQLite has no date type, so the column is `TEXT`.
@@ -579,6 +742,37 @@ impl<T: AshType> AshType for Option<T> {
         } else {
             T::from_value(value).map(Some)
         }
+    }
+}
+
+#[cfg(test)]
+mod network_and_vector_tests {
+    use super::{Inet, Vector};
+
+    #[test]
+    fn inet_normalizes_full_prefixes_and_rejects_bad_input() {
+        assert_eq!(Inet::parse("10.0.0.1").unwrap().as_str(), "10.0.0.1");
+        assert_eq!(Inet::parse("10.0.0.1/32").unwrap().as_str(), "10.0.0.1");
+        assert_eq!(Inet::parse("10.0.0.0/8").unwrap().as_str(), "10.0.0.0/8");
+        assert_eq!(
+            Inet::parse("2001:DB8:0:0:0:0:0:1/64").unwrap().as_str(),
+            "2001:db8::1/64"
+        );
+        assert_eq!(Inet::parse("::1/128").unwrap().as_str(), "::1");
+        for bad in ["10.0.0", "10.0.0.1/33", "::1/129", "10.0.0.1/", "10.0.0.1/+8", "host"] {
+            assert!(Inet::parse(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn vector_checks_dimensions_and_round_trips_text() {
+        let v = Vector::<3>::new(vec![1.0, 2.5, -3.0]).unwrap();
+        assert_eq!(super::format_vector(v.as_slice()), "[1,2.5,-3]");
+        assert_eq!(Vector::<3>::parse("[1, 2.5, -3]").unwrap(), v);
+        assert!(Vector::<3>::new(vec![1.0, 2.0]).is_err());
+        assert!(Vector::<2>::new(vec![1.0, f32::NAN]).is_err());
+        assert!(Vector::<2>::parse("1,2").is_err());
+        assert!(Vector::<2>::parse("[1,x]").is_err());
     }
 }
 

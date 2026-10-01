@@ -466,6 +466,10 @@ fn parse_input_val(
             let b = acc.boolean()?;
             Ok(Value::Bool(b))
         }
+        AttrType::Inet => Ok(Value::String(crate::types::parse_inet_input(acc)?)),
+        AttrType::Vector { dimensions } => Ok(Value::String(
+            crate::types::parse_vector_input(acc, dimensions)?,
+        )),
         AttrType::Atom { one_of } => {
             let name = acc.enum_name()?;
             if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {

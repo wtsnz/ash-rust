@@ -756,6 +756,30 @@ pub mod searchable_notes {
     }
 }
 
+pub mod device {
+    use ash_core::{Inet, Vector, resource};
+    use uuid::Uuid;
+
+    resource! {
+        Device {
+            table "devices";
+            attributes {
+                id: Uuid [pk];
+                address: Inet;
+                embedding: Option<Vector<3>>;
+            }
+            statements {
+                statement vector only postgres {
+                    up "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod contact {
     use ash_core::{CiString, resource};
     use uuid::Uuid;

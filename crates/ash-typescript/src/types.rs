@@ -48,10 +48,12 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         | AttrType::Date
         | AttrType::Binary
         | AttrType::UtcDatetime
+        | AttrType::Inet
         | AttrType::Decimal => {
             "string".to_string()
         }
         AttrType::Float | AttrType::Integer => "number".to_string(),
+        AttrType::Vector { .. } => "number[]".to_string(),
         AttrType::Boolean => "boolean".to_string(),
         AttrType::Atom { one_of } => {
             if one_of.is_empty() {
@@ -76,14 +78,16 @@ pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
     match ty {
         AttrType::Uuid => Some("UuidFilter"),
         AttrType::String | AttrType::CiString => Some("TextFilter"),
-        AttrType::Date | AttrType::Binary | AttrType::UtcDatetime | AttrType::Decimal => {
-            Some("StringFilter")
-        }
+        AttrType::Date
+        | AttrType::Binary
+        | AttrType::UtcDatetime
+        | AttrType::Decimal
+        | AttrType::Inet => Some("StringFilter"),
         AttrType::Float => Some("FloatFilter"),
         AttrType::Integer => Some("IntFilter"),
         AttrType::Boolean => Some("BooleanFilter"),
         AttrType::Atom { .. } => Some("StringFilter"),
-        AttrType::Map | AttrType::Array => None,
+        AttrType::Map | AttrType::Array | AttrType::Vector { .. } => None,
     }
 }
 

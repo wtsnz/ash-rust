@@ -151,6 +151,8 @@ impl SqlDialect for SqliteDialect {
             | AttrType::String
             | AttrType::Date
             | AttrType::UtcDatetime
+            | AttrType::Inet
+            | AttrType::Vector { .. }
             | AttrType::Atom { .. }
             | AttrType::Map
             | AttrType::Array => "TEXT".to_string(),
@@ -239,6 +241,8 @@ impl SqlDialect for PostgresDialect {
             AttrType::Float => format!("{placeholder}::float8"),
             AttrType::Date => format!("{placeholder}::date"),
             AttrType::CiString => format!("{placeholder}::citext"),
+            AttrType::Inet => format!("{placeholder}::inet"),
+            AttrType::Vector { .. } => format!("{placeholder}::vector"),
             AttrType::Binary => format!("decode({placeholder}, 'base64')"),
             _ => placeholder.to_string(),
         }
@@ -257,6 +261,8 @@ impl SqlDialect for PostgresDialect {
             AttrType::Date => "DATE".to_string(),
             AttrType::CiString => "CITEXT".to_string(),
             AttrType::Binary => "BYTEA".to_string(),
+            AttrType::Inet => "INET".to_string(),
+            AttrType::Vector { dimensions } => format!("VECTOR({dimensions})"),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }
     }

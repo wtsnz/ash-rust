@@ -2488,6 +2488,106 @@ async fn codegen_creates_a_date_column(db: TestDb) {
 }
 on_every_backend!(codegen_creates_a_date_column);
 
+async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
+    if !db.has_vector().await {
+        eprintln!("skipping: pgvector is not available");
+        return;
+    }
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_devices", &[&fixtures::device::Device::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_devices.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains("\"address\" INET"), "{up}");
+        assert!(up.contains("\"embedding\" VECTOR(3)"), "{up}");
+    } else {
+        assert!(up.contains("\"address\" TEXT"), "{up}");
+        assert!(up.contains("\"embedding\" TEXT"), "{up}");
+        assert!(!up.contains("EXTENSION"), "{up}");
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let (inet_type, vector_type) = match dialect {
+        "postgres" => ("inet", "vector"),
+        _ => ("TEXT", "TEXT"),
+    };
+    assert_eq!(schema.column("devices", "address").ty, inet_type);
+    assert_eq!(schema.column("devices", "embedding").ty, vector_type);
+
+    let rows_in = [
+        ("00000000-0000-0000-0000-0000000000e1", "10.0.0.1", Some("[1,2.5,-3]")),
+        ("00000000-0000-0000-0000-0000000000e2", "2001:DB8::1/64", None),
+    ];
+    for (id, address, embedding) in rows_in {
+        let id = uuid::Uuid::parse_str(id).unwrap();
+        let mut fields = FieldMap::new();
+        fields.insert("id".into(), Value::Uuid(id));
+        fields.insert(
+            "address".into(),
+            ash_core::Inet::parse(address).unwrap().into(),
+        );
+        fields.insert(
+            "embedding".into(),
+            embedding.map_or(Value::Null, |e| Value::String(e.into())),
+        );
+        match &db.db {
+            Db::Sqlite(sqlite) => {
+                sqlite.create(&fixtures::device::Device::DEF, id, fields).await.unwrap();
+            }
+            Db::Postgres(pg) => {
+                pg.create(&fixtures::device::Device::DEF, id, fields).await.unwrap();
+            }
+        }
+    }
+
+    let read = |filter: Option<ash_core::Filter>| {
+        let db = &db;
+        async move {
+            let query = ash_core::CompiledQuery {
+                filter,
+                sort: vec![ash_core::Sort {
+                    field: "id".into(),
+                    descending: false,
+                }],
+                ..Default::default()
+            };
+            match &db.db {
+                Db::Sqlite(sqlite) => sqlite
+                    .run_query(&fixtures::device::Device::DEF, &query)
+                    .await
+                    .unwrap(),
+                Db::Postgres(pg) => pg
+                    .run_query(&fixtures::device::Device::DEF, &query)
+                    .await
+                    .unwrap(),
+            }
+        }
+    };
+    let rows = read(None).await;
+    assert_eq!(rows[0].get("address"), Some(&Value::String("10.0.0.1".into())));
+    assert_eq!(
+        rows[0].get("embedding"),
+        Some(&Value::String("[1,2.5,-3]".into()))
+    );
+    assert_eq!(
+        rows[1].get("address"),
+        Some(&Value::String("2001:db8::1/64".into()))
+    );
+    assert_eq!(rows[1].get("embedding"), Some(&Value::Null));
+
+    let matched = read(Some(ash_core::Filter::eq("address", "10.0.0.1"))).await;
+    assert_eq!(matched.len(), 1);
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_inet_and_vector_columns);
+
 async fn codegen_creates_a_binary_column(db: TestDb) {
     let project = Project::for_db(&db);
     let migration = project.generate("create_file_blobs", &[&fixtures::file_blob::FileBlob::DEF]);

@@ -854,8 +854,64 @@ fn row_to_fields(
     Ok(map)
 }
 
+/// Reads a column sqlx has no Rust type for, decoding Postgres's binary or text form.
+fn raw_column(
+    row: &PgRow,
+    col_name: &str,
+    binary: fn(&[u8]) -> Option<String>,
+    text: fn(&str) -> Option<String>,
+) -> Value {
+    use sqlx::ValueRef;
+    let Ok(raw) = row.try_get_raw(col_name) else {
+        return Value::Null;
+    };
+    if raw.is_null() {
+        return Value::Null;
+    }
+    let decoded = match raw.format() {
+        sqlx::postgres::PgValueFormat::Binary => raw.as_bytes().ok().and_then(binary),
+        sqlx::postgres::PgValueFormat::Text => raw.as_str().ok().and_then(text),
+    };
+    decoded.map(Value::String).unwrap_or(Value::Null)
+}
+
+/// Binary `inet`: family, prefix bits, cidr flag, address length, then the address bytes.
+fn decode_inet(bytes: &[u8]) -> Option<String> {
+    let [family, bits, _, len, addr @ ..] = bytes else {
+        return None;
+    };
+    let addr = match (family, *len as usize) {
+        (2, 4) => std::net::IpAddr::from(<[u8; 4]>::try_from(addr).ok()?),
+        (3, 16) => std::net::IpAddr::from(<[u8; 16]>::try_from(addr).ok()?),
+        _ => return None,
+    };
+    Some(ash_core::format_inet(addr, *bits))
+}
+
+/// Binary pgvector: dimensions (u16), an unused u16, then big-endian f32 values.
+fn decode_vector(bytes: &[u8]) -> Option<String> {
+    let dimensions = u16::from_be_bytes([*bytes.first()?, *bytes.get(1)?]) as usize;
+    let data = bytes.get(4..)?;
+    if data.len() != dimensions * 4 {
+        return None;
+    }
+    let values: Vec<f32> = data
+        .chunks_exact(4)
+        .map(|chunk| f32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+    Some(ash_core::format_vector(&values))
+}
+
 fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) -> Value {
     match ty {
+        ash_core::AttrType::Inet => raw_column(row, col_name, decode_inet, |text| {
+            ash_core::Inet::parse(text).ok().map(|inet| inet.as_str().to_string())
+        }),
+        ash_core::AttrType::Vector { .. } => raw_column(row, col_name, decode_vector, |text| {
+            ash_core::parse_vector(text)
+                .ok()
+                .map(|values| ash_core::format_vector(&values))
+        }),
         ash_core::AttrType::Uuid => {
             if let Ok(Some(u)) = row.try_get::<Option<Uuid>, _>(col_name) {
                 Value::Uuid(u)
