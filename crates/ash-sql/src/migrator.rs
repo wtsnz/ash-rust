@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::dialect::SqlDialect;
-use ash_core::{Error, Result, utc_now_iso8601};
+use ash_core::{BoxFuture, Error, Result, utc_now_iso8601};
 
 /// Represents an on-disk migration script pair.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,6 +11,14 @@ pub struct MigrationFile {
     pub name: String,
     pub up_path: PathBuf,
     pub down_path: Option<PathBuf>,
+}
+
+/// A database-wide lock that keeps migrators in other processes waiting.
+///
+/// `release` unlocks right away. Dropping the lock without releasing it unlocks once the
+/// database notices its connection closed.
+pub trait DatabaseLock: Send {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<()>>;
 }
 
 /// Abstract executor interface for executing SQL migration statements and querying applied versions.
@@ -37,6 +45,11 @@ pub trait MigrationExecutor: Send + Sync {
     /// Creates `_ash_schema_migrations` if the executor needs it before reading versions.
     async fn ensure_tracking_table(&self) -> Result<()> {
         Ok(())
+    }
+
+    /// Locks the database against migrators in other processes. Defaults to no lock.
+    async fn lock_database(&self) -> Result<Option<Box<dyn DatabaseLock>>> {
+        Ok(None)
     }
 }
 
@@ -163,9 +176,27 @@ impl<D: SqlDialect> Migrator<D> {
         Ok(pending)
     }
 
+    /// Runs `work` while holding the process, directory, and database migration locks.
+    async fn locked<E: MigrationExecutor, T>(
+        &self,
+        executor: &E,
+        work: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        let _lock = lock_migrations(&self.migrations_dir).await?;
+        let database_lock = executor.lock_database().await?;
+        let result = work.await;
+        if let Some(database_lock) = database_lock {
+            database_lock.release().await?;
+        }
+        result
+    }
+
     /// Runs all pending migrations against the given executor, returning the list of applied versions.
     pub async fn run<E: MigrationExecutor>(&self, executor: &E) -> Result<Vec<String>> {
-        let _lock = lock_migrations(&self.migrations_dir).await?;
+        self.locked(executor, self.run_unlocked(executor)).await
+    }
+
+    async fn run_unlocked<E: MigrationExecutor>(&self, executor: &E) -> Result<Vec<String>> {
         executor.ensure_tracking_table().await?;
         let pending = self.pending_migrations(executor).await?;
         let mut applied_versions = Vec::new();
@@ -189,6 +220,13 @@ impl<D: SqlDialect> Migrator<D> {
 
     /// Rolls back the latest applied migration, returning the rolled-back version if any.
     pub async fn rollback<E: MigrationExecutor>(&self, executor: &E) -> Result<Option<String>> {
+        self.locked(executor, self.rollback_unlocked(executor)).await
+    }
+
+    async fn rollback_unlocked<E: MigrationExecutor>(
+        &self,
+        executor: &E,
+    ) -> Result<Option<String>> {
         let mut applied = executor.applied_versions().await?;
         applied.sort();
 
@@ -231,13 +269,22 @@ impl<D: SqlDialect> Migrator<D> {
         executor: &E,
         target_version: &str,
     ) -> Result<Vec<String>> {
+        self.locked(executor, self.rollback_to_unlocked(executor, target_version))
+            .await
+    }
+
+    async fn rollback_to_unlocked<E: MigrationExecutor>(
+        &self,
+        executor: &E,
+        target_version: &str,
+    ) -> Result<Vec<String>> {
         let mut rolled_back = Vec::new();
         loop {
             let mut applied = executor.applied_versions().await?;
             applied.sort();
             match applied.last() {
                 Some(latest) if latest.as_str() > target_version => {
-                    if let Some(v) = self.rollback(executor).await? {
+                    if let Some(v) = self.rollback_unlocked(executor).await? {
                         rolled_back.push(v);
                     } else {
                         break;

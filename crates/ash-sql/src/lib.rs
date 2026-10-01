@@ -21,7 +21,9 @@ pub use generator::{
     MigrationFiles, emit_sql, generate_migration, generate_migration_version, required_extensions,
     generate_migration_with_version,
 };
-pub use migrator::{MemoryMigrationExecutor, MigrationExecutor, MigrationFile, Migrator};
+pub use migrator::{
+    DatabaseLock, MemoryMigrationExecutor, MigrationExecutor, MigrationFile, Migrator,
+};
 pub use param::{SqlParam, values_to_json_array};
 pub use plan::{
     NonInteractive, RenameQuestion, RenameResolver, Resolution, SchemaPlan, plan_schema,
