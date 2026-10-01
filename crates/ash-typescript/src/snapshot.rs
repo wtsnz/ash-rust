@@ -26,20 +26,25 @@ pub fn table_to_resource_name(table: &str) -> String {
 }
 
 /// Map a SQL column type to TypeScript type, Filter type, and Zod validator.
-pub fn sql_type_to_ts_and_zod(sql_type: &str, nullable: bool) -> (&'static str, &'static str, String) {
+///
+/// The Filter type is `None` for JSON columns, which GraphQL cannot filter on.
+pub fn sql_type_to_ts_and_zod(
+    sql_type: &str,
+    nullable: bool,
+) -> (&'static str, Option<&'static str>, String) {
     let upper = sql_type.to_ascii_uppercase();
     let (ts_type, filter_type, base_zod) = if upper.contains("UUID") {
-        ("string", "UuidFilter", "z.string().uuid()")
+        ("string", Some("UuidFilter"), "z.string().uuid()")
     } else if upper.contains("INT") || upper.contains("SERIAL") {
-        ("number", "IntFilter", "z.number().int()")
+        ("number", Some("IntFilter"), "z.number().int()")
     } else if upper.contains("BOOL") {
-        ("boolean", "BooleanFilter", "z.boolean()")
+        ("boolean", Some("BooleanFilter"), "z.boolean()")
     } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("NUMERIC") || upper.contains("DECIMAL") || upper.contains("REAL") {
-        ("number", "IntFilter", "z.number()")
+        ("number", Some("IntFilter"), "z.number()")
     } else if upper.contains("JSON") {
-        ("Record<string, unknown>", "JsonFilter", "z.record(z.string(), z.unknown())")
+        ("Record<string, unknown>", None, "z.record(z.string(), z.unknown())")
     } else {
-        ("string", "StringFilter", "z.string()")
+        ("string", Some("StringFilter"), "z.string()")
     };
 
     let zod_str = if nullable {
@@ -122,7 +127,9 @@ pub fn generate_from_snapshots(
         out.push_str(&format!("export interface {name}FilterInput {{\n"));
         for col in &s.columns {
             let (_, filter_type, _) = sql_type_to_ts_and_zod(&col.sql_type, col.nullable);
-            out.push_str(&format!("  {}?: {};\n", col.name, filter_type));
+            if let Some(filter_type) = filter_type {
+                out.push_str(&format!("  {}?: {};\n", col.name, filter_type));
+            }
         }
         out.push_str(&format!("  and?: {name}FilterInput[];\n"));
         out.push_str(&format!("  or?: {name}FilterInput[];\n"));

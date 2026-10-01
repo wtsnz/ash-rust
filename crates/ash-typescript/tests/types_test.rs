@@ -164,3 +164,50 @@ fn test_has_one_typescript_interface() {
     let filter = generate_resource_filter_input(&USER_DEF_HAS_ONE);
     assert!(filter.contains("  profile?: ProfileFilterInput;"));
 }
+
+#[test]
+fn test_common_filters_use_graphql_field_names() {
+    let ts = generate_common_types();
+    assert!(ts.contains("export interface BooleanFilter {\n  eq?: boolean;\n  ne?: boolean;\n  isNil?: boolean;\n}"));
+    assert!(ts.contains("  ne?: string;"));
+    assert!(ts.contains("  isNil?: boolean;"));
+    assert!(!ts.contains("neq"));
+    assert!(!ts.contains("is_nil"));
+    assert!(!ts.contains("JsonFilter"));
+}
+
+#[test]
+fn test_filter_input_skips_json_attributes() {
+    static EVENT_ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::optional("metadata", AttrType::Map),
+        AttributeDef::optional("tags", AttrType::Array),
+    ];
+    static EVENT_DEF: ResourceDef = ResourceDef {
+        name: "Event",
+        table: "events",
+        attributes: EVENT_ATTRS,
+        relationships: &[],
+        actions: &[],
+        policies: &[],
+        field_policies: &[],
+        calculations: &[],
+        aggregates: &[],
+        extensions: &[],
+        notifiers: &[],
+        identities: &[],
+        indexes: &[],
+        checks: &[],
+        embedded: false,
+        data_layer: ash_core::DataLayerKind::Memory,
+        timestamps: None,
+        store_type_id: || std::any::TypeId::of::<()>(),
+        store_name: "memory",
+        multitenancy: None,
+    };
+
+    let filter = generate_resource_filter_input(&EVENT_DEF);
+    assert!(filter.contains("  id?: UuidFilter;"));
+    assert!(!filter.contains("metadata"));
+    assert!(!filter.contains("tags"));
+}

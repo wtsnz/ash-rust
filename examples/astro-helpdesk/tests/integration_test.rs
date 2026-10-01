@@ -273,3 +273,57 @@ async fn test_rust_resource_and_context_dsl() {
 
     assert_eq!(remaining.len(), 0);
 }
+
+#[tokio::test]
+async fn test_typescript_filters_match_graphql_filter_inputs() {
+    let app = build_app().await.expect("Failed to build Axum app");
+    let mut ts = ash_typescript::types::generate_common_types();
+    ts.push_str(&ash_typescript::types::generate_resource_filter_input(
+        &astro_helpdesk::TICKET_DEF,
+    ));
+    ts.push_str(&ash_typescript::types::generate_resource_filter_input(
+        &astro_helpdesk::REPRESENTATIVE_DEF,
+    ));
+
+    // The helpdesk has no boolean attributes, so `BooleanFilterInput` is not in its schema.
+    for (ts_name, gql_name) in [
+        ("UuidFilter", "UuidFilterInput"),
+        ("StringFilter", "StringFilterInput"),
+        ("IntFilter", "IntFilterInput"),
+        ("TicketFilterInput", "TicketFilterInput"),
+        ("RepresentativeFilterInput", "RepresentativeFilterInput"),
+    ] {
+        let body = ts
+            .split(&format!("export interface {ts_name} {{\n"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{ts_name} missing from generated TypeScript"));
+        let mut ts_fields: Vec<String> = body
+            .lines()
+            .take_while(|line| *line != "}")
+            .map(|line| line.trim().split('?').next().unwrap().to_string())
+            .collect();
+        ts_fields.sort();
+
+        let query = serde_json::json!({
+            "query": format!("{{ __type(name: \"{gql_name}\") {{ inputFields {{ name }} }} }}")
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/graphql")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&query).unwrap()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let mut gql_fields: Vec<String> = body["data"]["__type"]["inputFields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{gql_name} missing from GraphQL schema: {body:?}"))
+            .iter()
+            .map(|field| field["name"].as_str().unwrap().to_string())
+            .collect();
+        gql_fields.sort();
+
+        assert_eq!(ts_fields, gql_fields, "{ts_name} does not match {gql_name}");
+    }
+}

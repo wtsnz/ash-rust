@@ -86,3 +86,11 @@ fn test_generate_from_snapshots() {
     assert!(ts.contains("public readonly ticket: TicketClient;"));
     assert!(ts.contains("public readonly user: UserClient;"));
 }
+
+#[test]
+fn test_json_columns_have_no_filter_type() {
+    use ash_typescript::snapshot::sql_type_to_ts_and_zod;
+
+    assert_eq!(sql_type_to_ts_and_zod("UUID", false).1, Some("UuidFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("JSONB", true).1, None);
+}

@@ -23,40 +23,33 @@ export interface PaginatedResult<T> {
 
 export interface UuidFilter {
   eq?: string;
-  neq?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface StringFilter {
   eq?: string;
-  neq?: string;
-  contains?: string;
-  starts_with?: string;
-  ends_with?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface IntFilter {
   eq?: number;
-  neq?: number;
+  ne?: number;
   gt?: number;
   gte?: number;
   lt?: number;
   lte?: number;
   in?: number[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface BooleanFilter {
   eq?: boolean;
-  neq?: boolean;
-  is_nil?: boolean;
-}
-
-export interface JsonFilter {
-  is_nil?: boolean;
+  ne?: boolean;
+  isNil?: boolean;
 }
 
 // --- Section 2: Resource Types & Action Inputs ---

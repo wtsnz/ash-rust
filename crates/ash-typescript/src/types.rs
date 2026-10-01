@@ -54,14 +54,16 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
 }
 
 /// Map an Ash `AttrType` to its corresponding Filter type name.
-pub fn attr_type_to_filter_type(ty: &AttrType) -> &'static str {
+///
+/// Returns `None` for types the GraphQL filter input leaves out.
+pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
     match ty {
-        AttrType::Uuid => "UuidFilter",
-        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "StringFilter",
-        AttrType::Integer => "IntFilter",
-        AttrType::Boolean => "BooleanFilter",
-        AttrType::Atom { .. } => "StringFilter",
-        AttrType::Map | AttrType::Array => "JsonFilter",
+        AttrType::Uuid => Some("UuidFilter"),
+        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => Some("StringFilter"),
+        AttrType::Integer => Some("IntFilter"),
+        AttrType::Boolean => Some("BooleanFilter"),
+        AttrType::Atom { .. } => Some("StringFilter"),
+        AttrType::Map | AttrType::Array => None,
     }
 }
 
@@ -85,40 +87,33 @@ export interface PaginatedResult<T> {
 
 export interface UuidFilter {
   eq?: string;
-  neq?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface StringFilter {
   eq?: string;
-  neq?: string;
-  contains?: string;
-  starts_with?: string;
-  ends_with?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface IntFilter {
   eq?: number;
-  neq?: number;
+  ne?: number;
   gt?: number;
   gte?: number;
   lt?: number;
   lte?: number;
   in?: number[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface BooleanFilter {
   eq?: boolean;
-  neq?: boolean;
-  is_nil?: boolean;
-}
-
-export interface JsonFilter {
-  is_nil?: boolean;
+  ne?: boolean;
+  isNil?: boolean;
 }
 "#
     .to_string()
@@ -227,8 +222,9 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
 
     out.push_str(&format!("export interface {name}FilterInput {{\n"));
     for attr in res.attributes {
-        let filter_type = attr_type_to_filter_type(&attr.ty);
-        out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
+        if let Some(filter_type) = attr_type_to_filter_type(&attr.ty) {
+            out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
+        }
     }
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;
