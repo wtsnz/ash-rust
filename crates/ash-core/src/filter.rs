@@ -140,52 +140,92 @@ impl Filter {
     }
 
     /// Evaluates the filter against one record. Without attribute types, text
-    /// matching here is case-sensitive even for `CiString` fields.
+    /// matching here is case-sensitive even for `CiString` fields. A comparison with
+    /// a null field is unknown, as in SQL, so `NOT` over it does not match either.
     pub fn matches(&self, fields: &FieldMap) -> bool {
+        self.eval(fields) == Some(true)
+    }
+
+    /// SQL's three-valued result, with `None` for unknown.
+    fn eval(&self, fields: &FieldMap) -> Option<bool> {
+        let present = |field: &str| fields.get(field).filter(|got| !got.is_null());
         match self {
-            Self::True => true,
-            Self::False => false,
-            Self::Eq(field, value) => {
-                if value.is_null() {
-                    matches!(fields.get(field), None | Some(Value::Null))
-                } else {
-                    fields.get(field).is_some_and(|got| !got.is_null() && got == value)
-                }
-            }
-            Self::Ne(field, value) => {
-                if value.is_null() {
-                    fields.get(field).is_some_and(|got| !got.is_null())
-                } else {
-                    fields.get(field).is_some_and(|got| !got.is_null() && got != value)
-                }
-            }
+            Self::True => Some(true),
+            Self::False => Some(false),
+            Self::Eq(field, value) if value.is_null() => Some(present(field).is_none()),
+            Self::Ne(field, value) if value.is_null() => Some(present(field).is_some()),
+            Self::Eq(field, value) => present(field).map(|got| got == value),
+            Self::Ne(field, value) => present(field).map(|got| got != value),
             Self::Gt(field, value) => compare(fields.get(field), value, Ordering::Greater, false),
             Self::Gte(field, value) => compare(fields.get(field), value, Ordering::Greater, true),
             Self::Lt(field, value) => compare(fields.get(field), value, Ordering::Less, false),
             Self::Lte(field, value) => compare(fields.get(field), value, Ordering::Less, true),
-            Self::In(field, values) => fields.get(field).is_some_and(|got| values.contains(got)),
-            Self::IsNil(field) => matches!(fields.get(field), None | Some(Value::Null)),
-            Self::Contains(field, needle) => {
-                text_matches(fields.get(field), needle, false, |text, needle| text.contains(needle))
+            Self::In(_, values) if values.is_empty() => Some(false),
+            Self::In(field, values) => {
+                in_list(present(field), values, |got, value| got == value)
             }
-            Self::StartsWith(field, needle) => {
-                text_matches(fields.get(field), needle, false, |text, needle| text.starts_with(needle))
-            }
-            Self::EndsWith(field, needle) => {
-                text_matches(fields.get(field), needle, false, |text, needle| text.ends_with(needle))
-            }
-            Self::And(parts) => parts.iter().all(|part| part.matches(fields)),
-            Self::Or(parts) => parts.iter().any(|part| part.matches(fields)),
-            Self::Not(inner) => !inner.matches(fields),
-            Self::Related { relationship, filter } => match fields.get(relationship) {
+            Self::IsNil(field) => Some(present(field).is_none()),
+            Self::Contains(field, needle) => present(field)
+                .map(|got| text_matches(Some(got), needle, false, |text, needle| text.contains(needle))),
+            Self::StartsWith(field, needle) => present(field).map(|got| {
+                text_matches(Some(got), needle, false, |text, needle| text.starts_with(needle))
+            }),
+            Self::EndsWith(field, needle) => present(field)
+                .map(|got| text_matches(Some(got), needle, false, |text, needle| text.ends_with(needle))),
+            Self::And(parts) => all_of(parts.iter().map(|part| part.eval(fields))),
+            Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(fields))),
+            Self::Not(inner) => inner.eval(fields).map(|matched| !matched),
+            Self::Related { relationship, filter } => Some(match fields.get(relationship) {
                 Some(Value::Map(m)) => filter.matches(m),
                 Some(Value::Array(arr)) => arr.iter().any(|v| match v {
                     Value::Map(m) => filter.matches(m),
                     _ => false,
                 }),
                 _ => true,
-            },
+            }),
         }
+    }
+}
+
+/// SQL `AND` over three-valued results: false wins, then unknown.
+pub fn all_of(results: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let mut unknown = false;
+    for result in results {
+        match result {
+            Some(false) => return Some(false),
+            None => unknown = true,
+            Some(true) => {}
+        }
+    }
+    if unknown { None } else { Some(true) }
+}
+
+/// SQL `OR` over three-valued results: true wins, then unknown.
+pub fn any_of(results: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let mut unknown = false;
+    for result in results {
+        match result {
+            Some(true) => return Some(true),
+            None => unknown = true,
+            Some(false) => {}
+        }
+    }
+    if unknown { None } else { Some(false) }
+}
+
+/// SQL `IN`: unknown for a null value, or when nothing matched but the list holds a null.
+pub fn in_list(
+    got: Option<&Value>,
+    values: &[Value],
+    same: impl Fn(&Value, &Value) -> bool,
+) -> Option<bool> {
+    let got = got.filter(|got| !got.is_null())?;
+    if values.iter().any(|value| !value.is_null() && same(got, value)) {
+        Some(true)
+    } else if values.iter().any(Value::is_null) {
+        None
+    } else {
+        Some(false)
     }
 }
 
@@ -206,17 +246,15 @@ pub fn text_matches(
     }
 }
 
-fn compare(got: Option<&Value>, rhs: &Value, direction: Ordering, equal_ok: bool) -> bool {
-    let Some(got) = got else {
-        return false;
-    };
-    if got.is_null() || rhs.is_null() {
-        return false;
+fn compare(got: Option<&Value>, rhs: &Value, direction: Ordering, equal_ok: bool) -> Option<bool> {
+    let got = got.filter(|got| !got.is_null())?;
+    if rhs.is_null() {
+        return None;
     }
-    match got.cmp(rhs) {
+    Some(match got.cmp(rhs) {
         Ordering::Equal => equal_ok,
         order => order == direction,
-    }
+    })
 }
 
 impl std::ops::Not for Filter {

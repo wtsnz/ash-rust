@@ -101,3 +101,14 @@ fn test_json_columns_have_no_filter_type() {
     let decimal = sql_type_to_ts_and_zod("NUMERIC", false);
     assert_eq!((decimal.0, decimal.1), ("string", Some("StringFilter")));
 }
+
+#[test]
+fn test_only_ci_string_columns_get_text_filters() {
+    use ash_typescript::snapshot::sql_type_to_ts_and_zod;
+
+    assert_eq!(sql_type_to_ts_and_zod("CITEXT", false).1, Some("TextFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("TEXT COLLATE NOCASE", false).1, Some("TextFilter"));
+    // SQLite keeps dates, decimals and enums in TEXT, and Postgres enums in VARCHAR.
+    assert_eq!(sql_type_to_ts_and_zod("TEXT", false).1, Some("StringFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("VARCHAR(255)", false).1, Some("StringFilter"));
+}

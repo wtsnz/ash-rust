@@ -6,9 +6,9 @@ use std::future::ready;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash_core::{
-    apply_named_with_args, compare_typed, text_matches, AggregateFilter, AggregateKind,
-    AttrType, CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef, Result,
-    SchemaSupport, TransactionSupport, Value,
+    all_of, any_of, apply_named_with_args, compare_typed, in_list, text_matches, AggregateFilter,
+    AggregateKind, AttrType, CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef,
+    Result, SchemaSupport, TransactionSupport, Value,
 };
 use uuid::Uuid;
 
@@ -316,9 +316,7 @@ impl DataLayer for Memory {
 }
 
 fn is_ci_string(resource: &ResourceDef, field: &str) -> bool {
-    resource
-        .attribute(field)
-        .is_some_and(|attr| matches!(attr.ty, AttrType::CiString))
+    field_type(resource, field) == Some(AttrType::CiString)
 }
 
 fn row_matches_filter(
@@ -327,26 +325,33 @@ fn row_matches_filter(
     filter: &Filter,
     row: &FieldMap,
 ) -> bool {
+    eval_filter(tables, resource, filter, row) == Some(true)
+}
+
+/// Evaluates `filter` with SQL's three-valued logic: a comparison with a null field
+/// is unknown (`None`), and `NOT` of unknown stays unknown, so the row is left out.
+fn eval_filter(
+    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+    resource: &ResourceDef,
+    filter: &Filter,
+    row: &FieldMap,
+) -> Option<bool> {
+    let present = |field: &str| row.get(field).filter(|got| !got.is_null());
+    let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
+        present(field).map(|got| text_matches(Some(got), needle, is_ci_string(resource, field), test))
+    };
     match filter {
-        Filter::True => true,
-        Filter::False => false,
+        Filter::True => Some(true),
+        Filter::False => Some(false),
+        Filter::Eq(field, value) if value.is_null() => Some(present(field).is_none()),
+        Filter::Ne(field, value) if value.is_null() => Some(present(field).is_some()),
         Filter::Eq(field, value) => {
-            if value.is_null() {
-                matches!(row.get(field), None | Some(Value::Null))
-            } else {
-                let ty = field_type(resource, field);
-                row.get(field)
-                    .is_some_and(|got| !got.is_null() && same_value(ty, got, value))
-            }
+            let ty = field_type(resource, field);
+            present(field).map(|got| same_value(ty, got, value))
         }
         Filter::Ne(field, value) => {
-            if value.is_null() {
-                row.get(field).is_some_and(|got| !got.is_null())
-            } else {
-                let ty = field_type(resource, field);
-                row.get(field)
-                    .is_some_and(|got| !got.is_null() && !same_value(ty, got, value))
-            }
+            let ty = field_type(resource, field);
+            present(field).map(|got| !same_value(ty, got, value))
         }
         Filter::Gt(field, value) => {
             compare(field_type(resource, field), row.get(field), value, Ordering::Greater, false)
@@ -360,35 +365,22 @@ fn row_matches_filter(
         Filter::Lte(field, value) => {
             compare(field_type(resource, field), row.get(field), value, Ordering::Less, true)
         }
+        Filter::In(_, values) if values.is_empty() => Some(false),
         Filter::In(field, values) => {
             let ty = field_type(resource, field);
-            row.get(field).is_some_and(|got| {
-                !got.is_null() && values.iter().any(|value| same_value(ty, got, value))
-            })
+            in_list(present(field), values, |got, value| same_value(ty, got, value))
         }
-        Filter::IsNil(field) => matches!(row.get(field), None | Some(Value::Null)),
-        Filter::Contains(field, needle) => text_matches(
-            row.get(field),
-            needle,
-            is_ci_string(resource, field),
-            |text, needle| text.contains(needle),
-        ),
-        Filter::StartsWith(field, needle) => text_matches(
-            row.get(field),
-            needle,
-            is_ci_string(resource, field),
-            |text, needle| text.starts_with(needle),
-        ),
-        Filter::EndsWith(field, needle) => text_matches(
-            row.get(field),
-            needle,
-            is_ci_string(resource, field),
-            |text, needle| text.ends_with(needle),
-        ),
-        Filter::And(parts) => parts.iter().all(|part| row_matches_filter(tables, resource, part, row)),
-        Filter::Or(parts) => parts.iter().any(|part| row_matches_filter(tables, resource, part, row)),
-        Filter::Not(inner) => !row_matches_filter(tables, resource, inner, row),
-        Filter::Related { relationship, filter: rel_filter } => {
+        Filter::IsNil(field) => Some(present(field).is_none()),
+        Filter::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
+        Filter::StartsWith(field, needle) => {
+            text(field, needle, |text, needle| text.starts_with(needle))
+        }
+        Filter::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+        Filter::And(parts) => all_of(parts.iter().map(|part| eval_filter(tables, resource, part, row))),
+        Filter::Or(parts) => any_of(parts.iter().map(|part| eval_filter(tables, resource, part, row))),
+        Filter::Not(inner) => eval_filter(tables, resource, inner, row).map(|matched| !matched),
+        // `EXISTS (...)` in SQL: true or false, never unknown.
+        Filter::Related { relationship, filter: rel_filter } => Some((|| {
             let Some(rel) = resource.relationship(relationship) else {
                 return false;
             };
@@ -438,7 +430,7 @@ fn row_matches_filter(
                     })
                 }
             }
-        }
+        })()),
     }
 }
 
@@ -460,17 +452,15 @@ fn compare(
     rhs: &Value,
     direction: Ordering,
     equal_ok: bool,
-) -> bool {
-    let Some(got) = got else {
-        return false;
-    };
-    if got.is_null() || rhs.is_null() {
-        return false;
+) -> Option<bool> {
+    let got = got.filter(|got| !got.is_null())?;
+    if rhs.is_null() {
+        return None;
     }
-    match compare_typed(ty, got, rhs) {
+    Some(match compare_typed(ty, got, rhs) {
         Ordering::Equal => equal_ok,
         order => order == direction,
-    }
+    })
 }
 
 fn needed_calculations<'a>(resource: &'a ResourceDef, query: &'a CompiledQuery) -> Vec<&'a str> {

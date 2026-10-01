@@ -52,7 +52,7 @@ pub use engine::{
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
-pub use filter::{Filter, text_matches};
+pub use filter::{Filter, all_of, any_of, in_list, text_matches};
 pub use keys::{
     Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation, TextValue,
 };

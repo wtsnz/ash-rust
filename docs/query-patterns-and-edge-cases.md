@@ -109,7 +109,7 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 * **Ash-Rust Handling**:
   * `Filter::eq(col, Value::Null)` automatically renders `col IS NULL`.
   * `Filter::ne(col, Value::Null)` automatically renders `col IS NOT NULL`.
-  * In-memory filtering mirrors SQL null semantics exactly (`null_inequality_identical_in_memory_and_sqlite` test).
+  * In-memory filtering and `Filter::matches` mirror SQL null semantics, including `NOT`: `!Filter::contains("email", "x")` leaves out rows whose `email` is null, because `NOT UNKNOWN` is still `UNKNOWN` (`null_inequality_identical_in_memory_and_sqlite` and `text_filters_match_in_memory_and_sqlite` tests).
 
 ### 3. Keyset Pagination Sort Drift & Timestamp Collisions
 * **The Pitfall**: Paginating on non-unique columns like `created_at DESC`. When multiple records share the identical timestamp (e.g. in bulk operations), cursor `created_at < cursor` drops all other records sharing that exact timestamp.
@@ -146,7 +146,7 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 * **The Pitfall**: Building `WHERE title LIKE '%' || $1 || '%'` from a search box. A user typing `50%` or `a_b` gets wildcard matches instead of the literal text, and SQLite's `LIKE` ignores ASCII case while Postgres's does not.
 * **Ash-Rust Handling**:
   * `Filter::contains`, `Filter::starts_with`, and `Filter::ends_with` escape the needle, so every character matches literally.
-  * Following Ash, `String` fields match case-sensitively and `CiString` fields ignore case. SQLite compiles `String` matches to `GLOB` (case-sensitive) and `CiString` matches to `LIKE ... ESCAPE '\'`, which ignores case for ASCII letters only. Postgres compiles both to `LIKE`, and `citext` makes it case-insensitive.
+  * Following Ash, `String` fields match case-sensitively and `CiString` fields ignore case. SQLite compiles `String` matches to `GLOB` (case-sensitive) and `CiString` matches to `LIKE ... ESCAPE '\'`, which ignores case for ASCII letters only, so `É` and `é` differ there but not on Postgres or in memory. Postgres compiles both to `LIKE`, and `citext` makes it case-insensitive.
   * Text filters on non-text fields are rejected with an error instead of failing in the database.
 
 ---

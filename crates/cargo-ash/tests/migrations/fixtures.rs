@@ -744,12 +744,7 @@ pub mod searchable_notes {
             attributes {
                 id: Uuid [pk];
                 title: String;
-                email: CiString;
-            }
-            statements {
-                statement citext only postgres {
-                    up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
-                }
+                email: Option<CiString>;
             }
             actions {
                 read read { primary; }

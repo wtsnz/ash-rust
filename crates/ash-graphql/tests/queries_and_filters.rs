@@ -204,8 +204,8 @@ async fn test_list_query_with_text_filters() {
         (r#"{ title: { startsWith: "Fix" } }"#, vec!["Fix memory leak"]),
         (r#"{ title: { endsWith: "docs" } }"#, vec!["Improve docs"]),
         (
-            r#"{ not: { title: { contains: "o" } } }"#,
-            vec![],
+            r#"{ not: { title: { contains: "dark" } } }"#,
+            vec!["Fix memory leak", "Improve docs"],
         ),
     ] {
         let query = format!("query {{ listTickets(filter: {filter}) {{ title }} }}");

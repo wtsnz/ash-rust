@@ -10,7 +10,7 @@ resource! {
         attributes {
             id: Uuid [pk];
             name: String;
-            email: CiString;
+            email: Option<CiString>;
         }
 
         actions {
@@ -38,6 +38,7 @@ async fn seed<D: DataLayer>(ctx: &Context<D>) {
             .await
             .unwrap();
     }
+    Contact::create(ctx).name("No Email").await.unwrap();
 }
 
 async fn names<D: DataLayer>(ctx: &Context<D>, filter: Filter) -> Vec<String> {
@@ -71,6 +72,21 @@ async fn text_filters_match_in_memory_and_sqlite() {
         (Contact::email.contains("EXAMPLE.COM"), vec!["Ada Lovelace", "Grace 100%"]),
         (Contact::email.starts_with("ada@"), vec!["Ada Lovelace"]),
         (Contact::email.ends_with(".ORG"), vec!["Linus_T"]),
+        // A null email makes the match unknown, and NOT of unknown is still unknown.
+        (!Contact::email.contains("EXAMPLE.COM"), vec!["Linus_T"]),
+        (!Contact::email.eq(CiString::parse("ada@example.com").unwrap()), vec!["Grace 100%", "Linus_T"]),
+        (
+            !Filter::or([Contact::email.ends_with(".org"), Filter::IsNil("email".into())]),
+            vec!["Ada Lovelace", "Grace 100%"],
+        ),
+        (
+            Filter::or([!Contact::email.contains("example"), Contact::name.contains("Email")]),
+            vec!["No Email"],
+        ),
+        (
+            !Filter::In("email".into(), vec!["linus@example.org".into(), ash_core::Value::Null]),
+            vec![],
+        ),
     ];
     for (filter, expected) in cases {
         assert_eq!(names(&mem_ctx, filter.clone()).await, expected, "memory: {filter:?}");
