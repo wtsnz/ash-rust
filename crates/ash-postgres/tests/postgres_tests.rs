@@ -659,3 +659,61 @@ async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions()
         .unwrap();
     assert_eq!(rows, (1, 1));
 }
+
+static SUM_LINE_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("order_id", AttrType::Uuid),
+    AttributeDef::required("amount", AttrType::Integer),
+];
+
+static SUM_LINE_DEF: ResourceDef = ResourceDef {
+    name: "SumLine",
+    table: "sum_lines",
+    attributes: SUM_LINE_ATTRS,
+    ..NULLABLE_DEF
+};
+
+static SUM_ORDER_RELS: &[ash_core::RelationshipDef] =
+    &[ash_core::RelationshipDef::has_many("lines", || &SUM_LINE_DEF, "order_id")];
+
+static SUM_ORDER_AGGS: &[ash_core::AggregateDef] =
+    &[ash_core::AggregateDef::sum("total", "lines", "amount")];
+
+static SUM_ORDER_DEF: ResourceDef = ResourceDef {
+    name: "SumOrder",
+    table: "sum_orders",
+    attributes: &[AttributeDef::uuid_pk("id")],
+    relationships: SUM_ORDER_RELS,
+    aggregates: SUM_ORDER_AGGS,
+    ..NULLABLE_DEF
+};
+
+#[tokio::test]
+async fn test_postgres_sum_aggregates_read_as_integers() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&SUM_ORDER_DEF, &SUM_LINE_DEF]).await.unwrap();
+    let order = Uuid::new_v4();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(order));
+    pg.create(&SUM_ORDER_DEF, order, fields).await.unwrap();
+    for amount in [12, 30] {
+        let id = Uuid::new_v4();
+        let mut fields = FieldMap::new();
+        fields.insert("id".into(), Value::Uuid(id));
+        fields.insert("order_id".into(), Value::Uuid(order));
+        fields.insert("amount".into(), Value::Int(amount));
+        pg.create(&SUM_LINE_DEF, id, fields).await.unwrap();
+    }
+
+    // `SUM(bigint)` is `numeric` in Postgres.
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("id", Value::Uuid(order))),
+        aggregates: vec!["total".into()],
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    assert_eq!(rows[0].get("total"), Some(&Value::Int(42)));
+}

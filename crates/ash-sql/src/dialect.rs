@@ -62,6 +62,12 @@ pub trait SqlDialect: Send + Sync + 'static {
         placeholder.to_string()
     }
 
+    /// Cast a computed expression to the column type of `ty`, for SQL whose result type
+    /// differs from what was declared (Postgres sums `bigint` as `numeric`).
+    fn cast_expression(&self, _ty: AttrType, expression: &str) -> String {
+        expression.to_string()
+    }
+
     /// SQL literal for a standard-base64 binary value.
     fn binary_literal(&self, encoded: &str) -> String {
         let Ok(binary) = ash_core::Binary::parse(encoded) else {
@@ -232,6 +238,11 @@ impl SqlDialect for PostgresDialect {
 
     fn placeholder(&self, index: usize) -> String {
         format!("${index}")
+    }
+
+    fn cast_expression(&self, ty: AttrType, expression: &str) -> String {
+        let column = self.column_type(&AttributeDef::required("", ty));
+        format!("CAST({expression} AS {column})")
     }
 
     fn cast_param(&self, ty: AttrType, placeholder: &str) -> String {

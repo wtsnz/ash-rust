@@ -650,7 +650,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     );
                     s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
                     s.push(')');
-                    Ok(s)
+                    // SUM's result type can differ from the column's, so it is cast to the
+                    // aggregate's declared type.
+                    Ok(self.dialect.cast_expression(agg.ty, &s))
                 }
             },
             RelKind::ManyToMany => {
@@ -708,7 +710,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         );
                         s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
                         s.push(')');
-                        Ok(s)
+                        // SUM's result type can differ from the column's, so it is cast to the
+                        // aggregate's declared type.
+                        Ok(self.dialect.cast_expression(agg.ty, &s))
                     }
                 }
             }
