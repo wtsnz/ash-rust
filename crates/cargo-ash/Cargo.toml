@@ -29,4 +29,3 @@ uuid.workspace = true
 
 [dev-dependencies]
 ash-archival = { path = "../ash-archival" }
-ash-memory = { path = "../ash-memory" }

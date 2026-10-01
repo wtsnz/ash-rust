@@ -681,7 +681,6 @@ version = "0.1.0"
 dependencies = [
  "ash-archival",
  "ash-core",
- "ash-memory",
  "ash-postgres",
  "ash-sql",
  "ash-sqlite",

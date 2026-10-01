@@ -114,7 +114,7 @@ pub fn expand_probes(input: &TokenStream) -> TokenStream {
     });
     let action_probes = walked.actions.iter().map(|(resource, action)| {
         quote_spanned! { action.span() =>
-            let _ = <#resource>::#action::<::ash_memory::Memory>;
+            let _ = <#resource>::#action::<::ash_core::NoDataLayer>;
         }
     });
 

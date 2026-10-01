@@ -751,9 +751,9 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #(#outer_attrs)*
-                    pub fn #build_act_name() -> #builder_name<'static, ::ash_memory::Memory> {
-                        static DUMMY: ::std::sync::OnceLock<::ash_core::Context<::ash_memory::Memory>> = ::std::sync::OnceLock::new();
-                        let ctx = DUMMY.get_or_init(|| ::ash_core::Context::new(::ash_memory::Memory::new()));
+                    pub fn #build_act_name() -> #builder_name<'static, ::ash_core::NoDataLayer> {
+                        static DUMMY: ::std::sync::OnceLock<::ash_core::Context<::ash_core::NoDataLayer>> = ::std::sync::OnceLock::new();
+                        let ctx = DUMMY.get_or_init(|| ::ash_core::Context::new(::ash_core::NoDataLayer));
                         #builder_name::new(ctx)
                     }
                 });
@@ -1150,9 +1150,9 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #(#outer_attrs)*
-                    pub fn #build_act_name(&self) -> #builder_name<'static, ::ash_memory::Memory> {
-                        static DUMMY: ::std::sync::OnceLock<::ash_core::Context<::ash_memory::Memory>> = ::std::sync::OnceLock::new();
-                        let ctx = DUMMY.get_or_init(|| ::ash_core::Context::new(::ash_memory::Memory::new()));
+                    pub fn #build_act_name(&self) -> #builder_name<'static, ::ash_core::NoDataLayer> {
+                        static DUMMY: ::std::sync::OnceLock<::ash_core::Context<::ash_core::NoDataLayer>> = ::std::sync::OnceLock::new();
+                        let ctx = DUMMY.get_or_init(|| ::ash_core::Context::new(::ash_core::NoDataLayer));
                         #builder_name::for_existing(ctx, self.clone())
                     }
                 });

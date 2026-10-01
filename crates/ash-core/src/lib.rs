@@ -43,7 +43,9 @@ pub use changeset::{
     ManagedRelationshipSpec,
 };
 pub use context::Context;
-pub use data_layer::{CompiledQuery, DataLayer, SchemaSupport, Sort, TransactionSupport};
+pub use data_layer::{
+    CompiledQuery, DataLayer, NoDataLayer, SchemaSupport, Sort, TransactionSupport,
+};
 pub use engine::{
     KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
     get, handle_managed_relationships, insert, manual_create, query, run, update, update_dynamic,

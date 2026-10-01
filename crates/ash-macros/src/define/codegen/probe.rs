@@ -273,7 +273,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                     fn __ash_probe_run<'a, F, Fut>(_: F)
                     where
                         F: ::std::ops::FnOnce(
-                            #input_struct_name<'a, ::ash_memory::Memory>,
+                            #input_struct_name<'a, ::ash_core::NoDataLayer>,
                         ) -> Fut,
                         Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>>,
                     {
@@ -1273,7 +1273,7 @@ mod tests {
             "missing action bind: {out}"
         );
         assert!(
-            !out.contains("Context < :: ash_memory :: Memory >"),
+            !out.contains("Context < :: ash_core :: NoDataLayer >"),
             "policy action probes should not instantiate builders: {out}"
         );
     }

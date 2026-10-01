@@ -93,6 +93,52 @@ pub trait DataLayer: Send + Sync {
     }
 }
 
+/// A data layer that stores nothing; every operation fails.
+///
+/// `resource!` uses it for the context behind `Resource::build_<action>()`, which builds a
+/// record without persisting it, so a crate needs no real data layer to define resources.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoDataLayer;
+
+fn no_data_layer<T>(resource: &ResourceDef) -> std::future::Ready<Result<T>> {
+    std::future::ready(Err(Error::DataLayer(format!(
+        "{} has no data layer here; use a Context with a real data layer to persist it",
+        resource.name
+    ))))
+}
+
+impl DataLayer for NoDataLayer {
+    fn create(
+        &self,
+        resource: &ResourceDef,
+        _id: Uuid,
+        _fields: FieldMap,
+    ) -> impl Future<Output = Result<FieldMap>> + Send {
+        no_data_layer(resource)
+    }
+
+    fn update(
+        &self,
+        resource: &ResourceDef,
+        _id: Uuid,
+        _fields: FieldMap,
+    ) -> impl Future<Output = Result<FieldMap>> + Send {
+        no_data_layer(resource)
+    }
+
+    fn destroy(&self, resource: &ResourceDef, _id: Uuid) -> impl Future<Output = Result<()>> + Send {
+        no_data_layer(resource)
+    }
+
+    fn run_query(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        no_data_layer(resource)
+    }
+}
+
 pub trait SchemaSupport: Send + Sync {
     fn install_resources(
         &self,
