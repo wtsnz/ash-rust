@@ -319,22 +319,83 @@ fn is_ci_string(resource: &ResourceDef, field: &str) -> bool {
     field_type(resource, field) == Some(AttrType::CiString)
 }
 
-fn row_matches_filter(
-    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+type Tables = HashMap<String, HashMap<Uuid, FieldMap>>;
+
+fn row_matches_filter(tables: &Tables, resource: &ResourceDef, filter: &Filter, row: &FieldMap) -> bool {
+    eval_filter(tables, resource, filter, row, None) == Some(true)
+}
+
+/// Resources whose primary-read filters are being applied, innermost first. As in the
+/// SQL compiler, a read filter that leads back to its own resource is not applied again
+/// inside itself, which would recurse.
+struct Applying<'a> {
+    name: &'static str,
+    outer: Option<&'a Applying<'a>>,
+}
+
+fn is_applying(scope: Option<&Applying>, name: &str) -> bool {
+    let mut scope = scope;
+    while let Some(applying) = scope {
+        if applying.name == name {
+            return true;
+        }
+        scope = applying.outer;
+    }
+    false
+}
+
+/// Whether `row` passes `resource`'s primary-read filter, as every read through a
+/// relationship must, unless that filter is already being applied further out.
+fn passes_read_filter(
+    tables: &Tables,
+    resource: &'static ResourceDef,
+    row: &FieldMap,
+    scope: Option<&Applying>,
+) -> bool {
+    if is_applying(scope, resource.name) {
+        return true;
+    }
+    let Some(read_filter) = resource.primary_read_filter() else {
+        return true;
+    };
+    let inner = Applying {
+        name: resource.name,
+        outer: scope,
+    };
+    let row = with_calculations(resource, &read_filter, row);
+    eval_filter(tables, resource, &read_filter, &row, Some(&inner)) == Some(true)
+}
+
+/// `row` with the calculations `filter` reads. Stored rows hold none, and the SQL
+/// data layers compute them inline wherever a filter uses them.
+fn with_calculations<'r>(
     resource: &ResourceDef,
     filter: &Filter,
-    row: &FieldMap,
-) -> bool {
-    eval_filter(tables, resource, filter, row) == Some(true)
+    row: &'r FieldMap,
+) -> std::borrow::Cow<'r, FieldMap> {
+    let mut names = Vec::new();
+    filter.collect_fields(&mut names);
+    names.retain(|name| resource.calculation(name).is_some() && !row.contains_key(*name));
+    if names.is_empty() {
+        return std::borrow::Cow::Borrowed(row);
+    }
+    let mut row = row.clone();
+    let no_args = FieldMap::new();
+    for name in names {
+        // A calculation that cannot run leaves its field missing, so it compares as null.
+        let _ = apply_named_with_args(resource, &mut row, name, &no_args);
+    }
+    std::borrow::Cow::Owned(row)
 }
 
 /// Evaluates `filter` with SQL's three-valued logic: a comparison with a null field
 /// is unknown (`None`), and `NOT` of unknown stays unknown, so the row is left out.
 fn eval_filter(
-    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+    tables: &Tables,
     resource: &ResourceDef,
     filter: &Filter,
     row: &FieldMap,
+    scope: Option<&Applying>,
 ) -> Option<bool> {
     let present = |field: &str| row.get(field).filter(|got| !got.is_null());
     let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
@@ -376,9 +437,15 @@ fn eval_filter(
             text(field, needle, |text, needle| text.starts_with(needle))
         }
         Filter::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
-        Filter::And(parts) => all_of(parts.iter().map(|part| eval_filter(tables, resource, part, row))),
-        Filter::Or(parts) => any_of(parts.iter().map(|part| eval_filter(tables, resource, part, row))),
-        Filter::Not(inner) => eval_filter(tables, resource, inner, row).map(|matched| !matched),
+        Filter::And(parts) => {
+            all_of(parts.iter().map(|part| eval_filter(tables, resource, part, row, scope)))
+        }
+        Filter::Or(parts) => {
+            any_of(parts.iter().map(|part| eval_filter(tables, resource, part, row, scope)))
+        }
+        Filter::Not(inner) => {
+            eval_filter(tables, resource, inner, row, scope).map(|matched| !matched)
+        }
         // `EXISTS (...)` in SQL: true or false, never unknown.
         Filter::Related { relationship, filter: rel_filter } => Some((|| {
             let Some(rel) = resource.relationship(relationship) else {
@@ -389,13 +456,10 @@ fn eval_filter(
             let Some(dest_table) = dest_table else {
                 return false;
             };
-            let combined;
-            let rel_filter = match dest_res.primary_read_filter() {
-                Some(read_filter) => {
-                    combined = Filter::and([(**rel_filter).clone(), read_filter]);
-                    &combined
-                }
-                None => &**rel_filter,
+            let matches = |dest_row: &FieldMap| {
+                let dest_row = with_calculations(dest_res, rel_filter, dest_row);
+                eval_filter(tables, dest_res, rel_filter, &dest_row, scope) == Some(true)
+                    && passes_read_filter(tables, dest_res, &dest_row, scope)
             };
 
             match rel.kind {
@@ -406,8 +470,7 @@ fn eval_filter(
                         return false;
                     };
                     dest_table.values().any(|dest_row| {
-                        rel.destination_key(dest_row).as_ref() == Some(&key)
-                            && row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                        rel.destination_key(dest_row).as_ref() == Some(&key) && matches(dest_row)
                     })
                 }
                 ash_core::RelKind::ManyToMany => {
@@ -425,16 +488,17 @@ fn eval_filter(
                     let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
                     let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
 
+                    // An archived join row unlinks the records, as it does for loads.
                     let matching_dest_ids: Vec<&Value> = through_table
                         .values()
                         .filter(|jr| jr.get(source_on_join) == Some(source_val))
+                        .filter(|jr| passes_read_filter(tables, through_res, jr, scope))
                         .filter_map(|jr| jr.get(dest_on_join))
                         .collect();
 
                     dest_table.values().any(|dest_row| {
                         let dest_id = dest_row.get(rel.destination_attribute).unwrap_or(&Value::Null);
-                        matching_dest_ids.contains(&dest_id)
-                            && row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                        matching_dest_ids.contains(&dest_id) && matches(dest_row)
                     })
                 }
             }
@@ -530,7 +594,7 @@ fn strip_unrequested_aggregates(
 }
 
 fn apply_aggregates(
-    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+    tables: &Tables,
     resource: &ResourceDef,
     rows: &mut [FieldMap],
     needed: &[&str],
@@ -546,16 +610,11 @@ fn apply_aggregates(
             ))
         })?;
         let dest = (rel.destination)();
-        let read_filter = dest.primary_read_filter();
         let dest_rows: Vec<&FieldMap> = tables
             .get(dest.name)
             .map(|t| {
                 t.values()
-                    .filter(|dest_row| {
-                        read_filter
-                            .as_ref()
-                            .is_none_or(|f| row_matches_filter(tables, dest, f, dest_row))
-                    })
+                    .filter(|dest_row| passes_read_filter(tables, dest, dest_row, None))
                     .collect()
             })
             .unwrap_or_default();
@@ -586,7 +645,11 @@ fn apply_aggregates(
                     .unwrap_or(rel.destination_attribute);
                 let join_rows: Vec<&FieldMap> = tables
                     .get(through_def.name)
-                    .map(|t| t.values().collect())
+                    .map(|t| {
+                        t.values()
+                            .filter(|jr| passes_read_filter(tables, through_def, jr, None))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let matching_dest_ids: Vec<&Value> = join_rows
                     .iter()

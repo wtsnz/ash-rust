@@ -559,3 +559,43 @@ async fn test_postgres_stores_null_in_typed_columns() {
         .unwrap();
     assert_eq!(rows.len(), 1);
 }
+
+static BONUS_CALCS: &[ash_core::CalculationDef] = &[ash_core::CalculationDef::with_arguments(
+    "bonus",
+    AttrType::Integer,
+    ash_core::Expr::Add(
+        &ash_core::Expr::Field("score"),
+        &ash_core::Expr::Coalesce(&[&ash_core::Expr::Arg("extra"), &ash_core::Expr::LitInt(0)]),
+    ),
+    &[ash_core::ArgumentDef::new("extra", AttrType::Integer)],
+)];
+
+static BONUS_DEF: ResourceDef = ResourceDef {
+    name: "BonusSample",
+    table: "bonus_samples",
+    calculations: BONUS_CALCS,
+    ..NULLABLE_DEF
+};
+
+#[tokio::test]
+async fn test_postgres_binds_missing_calculation_arguments_with_their_type() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&BONUS_DEF]).await.unwrap();
+    let id = Uuid::new_v4();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("score".into(), Value::Int(5));
+    pg.create(&BONUS_DEF, id, fields).await.unwrap();
+
+    // Without `extra`, COALESCE needs an integer NULL; a text NULL would not match 0.
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("id", Value::Uuid(id))),
+        calculations: vec!["bonus".into()],
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&BONUS_DEF, &query).await.unwrap();
+    assert_eq!(rows[0].get("bonus"), Some(&Value::Int(5)));
+}
