@@ -6,8 +6,9 @@ use std::future::ready;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash_core::{
-    apply_named_with_args, AggregateFilter, AggregateKind, CompiledQuery, DataLayer, Error,
-    FieldMap, Filter, ResourceDef, Result, SchemaSupport, TransactionSupport, Value,
+    apply_named_with_args, compare_typed, AggregateFilter, AggregateKind, AttrType,
+    CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef, Result, SchemaSupport,
+    TransactionSupport, Value,
 };
 use uuid::Uuid;
 
@@ -51,7 +52,9 @@ fn check_identities(
                 let new_val = fields.get(*k);
                 let existing_val = row.get(*k);
                 match (new_val, existing_val) {
-                    (Some(a), Some(b)) if !a.is_null() && !b.is_null() => a == b,
+                    (Some(a), Some(b)) if !a.is_null() && !b.is_null() => {
+                        same_value(field_type(resource, k), a, b)
+                    }
                     _ => false,
                 }
             });
@@ -261,7 +264,11 @@ impl DataLayer for Memory {
                     for sort in &query.sort {
                         let left_value = left.get(&sort.field).cloned().unwrap_or(Value::Null);
                         let right_value = right.get(&sort.field).cloned().unwrap_or(Value::Null);
-                        order = left_value.cmp(&right_value);
+                        order = compare_typed(
+                            field_type(resource, &sort.field),
+                            &left_value,
+                            &right_value,
+                        );
                         if sort.descending {
                             order = order.reverse();
                         }
@@ -307,21 +314,38 @@ fn row_matches_filter(
             if value.is_null() {
                 matches!(row.get(field), None | Some(Value::Null))
             } else {
-                row.get(field).is_some_and(|got| !got.is_null() && got == value)
+                let ty = field_type(resource, field);
+                row.get(field)
+                    .is_some_and(|got| !got.is_null() && same_value(ty, got, value))
             }
         }
         Filter::Ne(field, value) => {
             if value.is_null() {
                 row.get(field).is_some_and(|got| !got.is_null())
             } else {
-                row.get(field).is_some_and(|got| !got.is_null() && got != value)
+                let ty = field_type(resource, field);
+                row.get(field)
+                    .is_some_and(|got| !got.is_null() && !same_value(ty, got, value))
             }
         }
-        Filter::Gt(field, value) => compare(row.get(field), value, Ordering::Greater, false),
-        Filter::Gte(field, value) => compare(row.get(field), value, Ordering::Greater, true),
-        Filter::Lt(field, value) => compare(row.get(field), value, Ordering::Less, false),
-        Filter::Lte(field, value) => compare(row.get(field), value, Ordering::Less, true),
-        Filter::In(field, values) => row.get(field).is_some_and(|got| values.contains(got)),
+        Filter::Gt(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Greater, false)
+        }
+        Filter::Gte(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Greater, true)
+        }
+        Filter::Lt(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Less, false)
+        }
+        Filter::Lte(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Less, true)
+        }
+        Filter::In(field, values) => {
+            let ty = field_type(resource, field);
+            row.get(field).is_some_and(|got| {
+                !got.is_null() && values.iter().any(|value| same_value(ty, got, value))
+            })
+        }
         Filter::IsNil(field) => matches!(row.get(field), None | Some(Value::Null)),
         Filter::And(parts) => parts.iter().all(|part| row_matches_filter(tables, resource, part, row)),
         Filter::Or(parts) => parts.iter().any(|part| row_matches_filter(tables, resource, part, row)),
@@ -390,14 +414,32 @@ fn row_matches_filter(
     }
 }
 
-fn compare(got: Option<&Value>, rhs: &Value, direction: Ordering, equal_ok: bool) -> bool {
+/// The attribute or calculation type of `field`, which decides how values compare.
+fn field_type(resource: &ResourceDef, field: &str) -> Option<AttrType> {
+    resource
+        .attribute(field)
+        .map(|attr| attr.ty)
+        .or_else(|| resource.calculation(field).map(|calc| calc.ty))
+}
+
+fn same_value(ty: Option<AttrType>, a: &Value, b: &Value) -> bool {
+    compare_typed(ty, a, b) == Ordering::Equal
+}
+
+fn compare(
+    ty: Option<AttrType>,
+    got: Option<&Value>,
+    rhs: &Value,
+    direction: Ordering,
+    equal_ok: bool,
+) -> bool {
     let Some(got) = got else {
         return false;
     };
     if got.is_null() || rhs.is_null() {
         return false;
     }
-    match got.cmp(rhs) {
+    match compare_typed(ty, got, rhs) {
         Ordering::Equal => equal_ok,
         order => order == direction,
     }

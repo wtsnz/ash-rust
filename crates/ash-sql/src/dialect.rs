@@ -62,6 +62,16 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Given an operand expression `op` (e.g. `"tickets"."id"`) and a bound parameter placeholder `param`,
     /// renders the dialect-specific SQL test.
     fn render_in_list(&self, op: &str, param: &str) -> String;
+
+    /// Cast a bound list parameter so its elements compare as the column type.
+    fn cast_list_param(&self, _ty: AttrType, placeholder: &str) -> String {
+        placeholder.to_string()
+    }
+
+    /// The database extension a column type needs, if any.
+    fn extension_for_type(&self, _sql_type: &str) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Dialect implementation for SQLite.
@@ -83,9 +93,10 @@ impl SqlDialect for SqliteDialect {
             AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Float => "REAL".to_string(),
             AttrType::Binary => "BLOB".to_string(),
+            // NOCASE makes =, IN, ORDER BY, and unique indexes ignore ASCII case.
+            AttrType::CiString => "TEXT COLLATE NOCASE".to_string(),
             AttrType::Uuid
             | AttrType::String
-            | AttrType::CiString
             | AttrType::Date
             | AttrType::UtcDatetime
             | AttrType::Atom { .. }
@@ -213,6 +224,27 @@ impl SqlDialect for PostgresDialect {
 
     fn render_in_list(&self, op: &str, param: &str) -> String {
         format!("{op} = ANY({param})")
+    }
+
+    fn extension_for_type(&self, sql_type: &str) -> Option<&'static str> {
+        let upper = sql_type.to_ascii_uppercase();
+        if upper.starts_with("CITEXT") {
+            Some("citext")
+        } else {
+            None
+        }
+    }
+
+    fn cast_list_param(&self, ty: AttrType, placeholder: &str) -> String {
+        match ty {
+            AttrType::Boolean => format!("{placeholder}::boolean[]"),
+            AttrType::UtcDatetime => format!("{placeholder}::timestamptz[]"),
+            AttrType::Decimal => format!("{placeholder}::numeric[]"),
+            AttrType::Float => format!("{placeholder}::float8[]"),
+            AttrType::Date => format!("{placeholder}::date[]"),
+            AttrType::CiString => format!("{placeholder}::citext[]"),
+            _ => placeholder.to_string(),
+        }
     }
 
     fn binary_literal(&self, encoded: &str) -> String {

@@ -52,6 +52,8 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     pub dialect: &'a D,
     param_counter: usize,
     pub params: Vec<SqlParam>,
+    /// A bound value that cannot be sent, reported when the filter finishes compiling.
+    invalid_param: Option<Error>,
     pub current_calc_args: Option<FieldMap>,
 }
 
@@ -61,6 +63,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             dialect,
             param_counter: 0,
             params: Vec::new(),
+            invalid_param: None,
             current_calc_args: None,
         }
     }
@@ -76,6 +79,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         self.param_counter += 1;
         let placeholder = self.dialect.placeholder(self.param_counter);
         if ty == AttrType::Binary {
+            if let Value::String(encoded) = &val
+                && let Err(err) = ash_core::Binary::parse(encoded)
+            {
+                self.invalid_param.get_or_insert(err);
+            }
             self.params.push(SqlParam::binary(val));
         } else {
             self.params.push(SqlParam::new(val));
@@ -245,6 +253,19 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         filter: &Filter,
         scope_alias: Option<&str>,
     ) -> Result<String> {
+        let sql = self.compile_filter_node(resource, filter, scope_alias)?;
+        match self.invalid_param.take() {
+            Some(err) => Err(err),
+            None => Ok(sql),
+        }
+    }
+
+    fn compile_filter_node(
+        &mut self,
+        resource: &ResourceDef,
+        filter: &Filter,
+        scope_alias: Option<&str>,
+    ) -> Result<String> {
         match filter {
             Filter::True => Ok("1=1".to_string()),
             Filter::False => Ok("0=1".to_string()),
@@ -293,7 +314,26 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
+                let ty = resource
+                    .attribute(field)
+                    .map(|attr| attr.ty)
+                    .or_else(|| resource.calculation(field).map(|calc| calc.ty));
+                if ty == Some(AttrType::Binary) {
+                    // Each value needs decoding, so compare one bound value at a time.
+                    let parts: Vec<String> = vals
+                        .iter()
+                        .map(|val| {
+                            let p = self.bind_field(resource, field, val.clone());
+                            format!("{op} = {p}")
+                        })
+                        .collect();
+                    return Ok(format!("({})", parts.join(" OR ")));
+                }
                 let param = self.push_list_param(vals.clone());
+                let param = match ty {
+                    Some(ty) => self.dialect.cast_list_param(ty, &param),
+                    None => param,
+                };
                 Ok(self.dialect.render_in_list(&op, &param))
             }
             Filter::And(parts) => {

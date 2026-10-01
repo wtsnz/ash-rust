@@ -252,12 +252,10 @@ impl AshType for Binary {
 
 /// Case-insensitive string. The Rust value keeps the original casing.
 ///
-/// Postgres columns use `citext`, so comparisons there ignore case. That needs
-/// `CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public`, which a
-/// `statements` block can install for Postgres only. Extensions are
-/// database-wide, so install it in `public` and leave out a `down` that drops
-/// it. SQLite has no citext type, so the column is `TEXT` and comparisons stay
-/// case-sensitive.
+/// Postgres columns use `citext`. Migrations and `install()` create the extension
+/// in `public` before the first citext column and never drop it, since other
+/// schemas may use it. SQLite columns are `TEXT COLLATE NOCASE`, which ignores
+/// case for ASCII letters only, and the in-memory store compares lowercased text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CiString(String);
 
@@ -358,7 +356,8 @@ fn is_calendar_date(raw: &str) -> bool {
     }) {
         return false;
     }
-    let Ok(year) = raw[..4].parse::<i32>() else {
+    // Postgres dates have no year 0, and 4 digits keep the text sortable.
+    let Ok(year @ 1..) = raw[..4].parse::<i32>() else {
         return false;
     };
     let Ok(month) = raw[5..7].parse::<u8>() else {
@@ -489,6 +488,62 @@ fn is_rfc3339(raw: &str) -> bool {
         })
 }
 
+/// Compares two decimal strings exactly, or `None` if either is not a decimal.
+pub fn compare_decimal(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+
+    fn split(raw: &str) -> Option<(bool, String, String)> {
+        if !is_decimal(raw) {
+            return None;
+        }
+        let negative = raw.starts_with('-');
+        let rest = raw.trim_start_matches(['+', '-']);
+        let (whole, fraction) = rest.split_once('.').unwrap_or((rest, ""));
+        let whole = whole.trim_start_matches('0').to_string();
+        let fraction = fraction.trim_end_matches('0').to_string();
+        let zero = whole.is_empty() && fraction.is_empty();
+        Some((negative && !zero, whole, fraction))
+    }
+
+    let (a_negative, a_whole, a_fraction) = split(a)?;
+    let (b_negative, b_whole, b_fraction) = split(b)?;
+    let magnitude = a_whole
+        .len()
+        .cmp(&b_whole.len())
+        .then_with(|| a_whole.cmp(&b_whole))
+        .then_with(|| a_fraction.cmp(&b_fraction));
+    Some(match (a_negative, b_negative) {
+        (false, true) => Ordering::Greater,
+        (true, false) => Ordering::Less,
+        (false, false) => magnitude,
+        (true, true) => magnitude.reverse(),
+    })
+}
+
+/// Compares two stored values the way their column type does in SQL: `Float` and
+/// `Decimal` numerically and `CiString` ignoring case. Other types use [`Value`]'s order.
+pub fn compare_typed(ty: Option<AttrType>, a: &Value, b: &Value) -> std::cmp::Ordering {
+    if let (Value::String(x), Value::String(y)) = (a, b) {
+        match ty {
+            Some(AttrType::Float) => {
+                if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>())
+                    && let Some(order) = x.partial_cmp(&y)
+                {
+                    return order;
+                }
+            }
+            Some(AttrType::Decimal) => {
+                if let Some(order) = compare_decimal(x, y) {
+                    return order;
+                }
+            }
+            Some(AttrType::CiString) => return x.to_lowercase().cmp(&y.to_lowercase()),
+            _ => {}
+        }
+    }
+    a.cmp(b)
+}
+
 fn is_decimal(raw: &str) -> bool {
     let rest = raw.strip_prefix(['+', '-']).unwrap_or(raw);
     if rest.is_empty() {
@@ -563,12 +618,42 @@ mod tests {
     }
 
     #[test]
+    fn typed_comparison_is_numeric_and_case_insensitive() {
+        use super::{compare_decimal, compare_typed};
+        use crate::resource::AttrType;
+        use std::cmp::Ordering;
+
+        let s = |v: &str| Value::String(v.to_string());
+        assert_eq!(compare_typed(Some(AttrType::Float), &s("10"), &s("9.5")), Ordering::Greater);
+        assert_eq!(compare_typed(None, &s("10"), &s("9.5")), Ordering::Less);
+        assert_eq!(compare_typed(Some(AttrType::Float), &s("1.50"), &s("1.5")), Ordering::Equal);
+        assert_eq!(
+            compare_typed(Some(AttrType::CiString), &s("Ada"), &s("ada")),
+            Ordering::Equal
+        );
+        for (a, b, order) in [
+            ("10", "9.99", Ordering::Greater),
+            ("-10", "-9.99", Ordering::Less),
+            ("0.10", "0.1", Ordering::Equal),
+            ("-0", "0.000", Ordering::Equal),
+            ("007.5", "7.50", Ordering::Equal),
+            ("-1", "1", Ordering::Less),
+            ("123456789012345678901234567890.1", "123456789012345678901234567890.09", Ordering::Greater),
+        ] {
+            assert_eq!(compare_decimal(a, b), Some(order), "{a} vs {b}");
+        }
+        assert_eq!(compare_decimal("x", "1"), None);
+    }
+
+    #[test]
     fn date_rejects_impossible_days() {
         assert_eq!(Date::parse("2024-02-29").unwrap().as_str(), "2024-02-29");
         assert!(Date::parse("2023-02-29").is_err());
         assert!(Date::parse("2024-04-31").is_err());
         assert!(Date::parse("2024-1-02").is_err());
         assert!(Date::parse("2024-01-02T00:00:00Z").is_err());
+        assert!(Date::parse("0000-01-01").is_err());
+        assert!(Date::parse("0001-01-01").is_ok());
     }
 
     #[test]

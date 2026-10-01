@@ -42,12 +42,6 @@ resource! {
         comment_count: Option<i64> = count(comments);
     }
 
-    statements {
-        statement citext only postgres {
-            up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
-        }
-    }
-
     actions {
         create create {
             accept [board_id, list_id, title, description, position, estimate, due_on, attachment, requester_email];

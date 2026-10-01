@@ -32,12 +32,6 @@ resource! {
             author_id: Option<Uuid>;
         }
 
-        statements {
-            statement citext only postgres {
-                up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
-            }
-        }
-
         relationships {
             belongs_to author: Representative [fk: author_id];
         }

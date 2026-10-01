@@ -1176,6 +1176,27 @@ mod tests {
     }
 
     #[test]
+    fn test_statement_dialect_must_be_known() {
+        let tokens = quote! {
+            TestResource {
+                attributes { id: Uuid [pk]; }
+                statements {
+                    statement extension only pg {
+                        up "CREATE EXTENSION IF NOT EXISTS citext";
+                    }
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("unknown dialect `pg`, expected `postgres` or `sqlite`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
     fn test_old_resource_header_is_an_error() {
         let tokens = quote! {
             resource TestResource;

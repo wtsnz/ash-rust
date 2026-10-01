@@ -42,6 +42,12 @@ fn parse_one_statement(input: ParseStream, errors: &mut Vec<Error>) -> Result<St
             return Err(Error::new_spanned(only_kw, "expected `only` or `{`"));
         }
         let dialect: Ident = input.parse()?;
+        if dialect != "postgres" && dialect != "sqlite" {
+            return Err(Error::new_spanned(
+                &dialect,
+                format!("unknown dialect `{dialect}`, expected `postgres` or `sqlite`"),
+            ));
+        }
         dialects.push(dialect.to_string());
     }
     let body;

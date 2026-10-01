@@ -6,6 +6,7 @@ pub mod compiler;
 pub mod dialect;
 pub mod diff;
 pub mod generator;
+pub mod install;
 pub mod migrator;
 pub mod param;
 pub mod plan;
@@ -15,7 +16,7 @@ pub use compiler::{CompiledSql, QueryCompiler, column, ident};
 pub use dialect::{PostgresDialect, SqlDialect, SqliteDialect};
 pub use diff::{SchemaOperation, diff_snapshots, diff_snapshots_with_renames, diff_tables};
 pub use generator::{
-    MigrationFiles, emit_sql, generate_migration, generate_migration_version,
+    MigrationFiles, emit_sql, generate_migration, generate_migration_version, required_extensions,
     generate_migration_with_version,
 };
 pub use migrator::{MemoryMigrationExecutor, MigrationExecutor, MigrationFile, Migrator};

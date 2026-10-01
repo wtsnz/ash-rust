@@ -64,7 +64,7 @@ pub fn generate_migration_with_version<D: SqlDialect>(
     let up_filename = format!("{version}_{name}.{dialect_name}.up.sql");
     let down_filename = format!("{version}_{name}.{dialect_name}.down.sql");
 
-    let mut up_stmts = Vec::new();
+    let mut up_stmts = extension_sql(dialect, operations);
     let mut down_stmts = Vec::new();
 
     for op in operations {
@@ -419,6 +419,42 @@ fn needs_sqlite_rebuild(op: &SchemaOperation) -> bool {
     )
 }
 
+/// `CREATE EXTENSION` for each extension that columns created in `operations` need.
+/// Extensions are database-wide, so they go in `public` and are never dropped.
+fn extension_sql<D: SqlDialect>(dialect: &D, operations: &[SchemaOperation]) -> Vec<String> {
+    let mut names: Vec<&'static str> = Vec::new();
+    for op in operations {
+        let types: Vec<&str> = match op {
+            SchemaOperation::CreateTable(snapshot) => {
+                snapshot.columns.iter().map(|c| c.sql_type.as_str()).collect()
+            }
+            SchemaOperation::AddColumn { column, .. } => vec![column.sql_type.as_str()],
+            SchemaOperation::AlterColumnType { new_type, .. } => vec![new_type.as_str()],
+            _ => Vec::new(),
+        };
+        for sql_type in types {
+            if let Some(name) = dialect.extension_for_type(sql_type)
+                && !names.contains(&name)
+            {
+                names.push(name);
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| format!("CREATE EXTENSION IF NOT EXISTS {name} WITH SCHEMA public;"))
+        .collect()
+}
+
+/// Extensions `resource`'s columns need, for installing without migrations.
+pub fn required_extensions<D: SqlDialect>(
+    dialect: &D,
+    resource: &ash_core::ResourceDef,
+) -> Vec<String> {
+    let snapshot = TableSnapshot::from_resource(resource, dialect);
+    extension_sql(dialect, &[SchemaOperation::CreateTable(snapshot)])
+}
+
 pub fn emit_sql<D: SqlDialect>(
     dialect: &D,
     operations: &[SchemaOperation],
@@ -436,7 +472,7 @@ pub fn emit_sql<D: SqlDialect>(
         HashSet::new()
     };
 
-    let mut stmts = Vec::new();
+    let mut stmts = extension_sql(dialect, operations);
     let mut rebuilt = HashSet::new();
 
     for op in operations {
@@ -539,6 +575,20 @@ fn emit_sqlite_rebuild<D: SqlDialect>(
     let mut indexed = new.clone();
     indexed.table = new.table.clone();
     sql.push_str(&emit_indexes(dialect, &indexed));
+    // Dropping the old table also dropped any indexes or triggers its statements made,
+    // so unchanged statements run again. Changed and new ones run as their own steps.
+    for statement in &new.statements {
+        if old
+            .statements
+            .iter()
+            .any(|kept| kept.name == statement.name && kept.up == statement.up)
+        {
+            let up = sql_command(&statement.up);
+            if !up.is_empty() {
+                sql.push_str(&format!("\n\n{up}"));
+            }
+        }
+    }
     for child in &children {
         let hold = dialect.quote_identifier(&format!("{}__ash_hold", child.table));
         let src = dialect.quote_identifier(&child.table);

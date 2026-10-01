@@ -99,36 +99,39 @@ pub fn diff_snapshots_with_renames(
 ) -> Vec<SchemaOperation> {
     match (old, new) {
         (None, None) => Vec::new(),
+        // Statements run after their table exists and are undone before it is dropped,
+        // so they can index, trigger on, or otherwise depend on the table.
         (None, Some(n)) => {
-            let mut ops = Vec::new();
+            let mut ops = vec![SchemaOperation::CreateTable(n.clone())];
             for statement in &n.statements {
                 ops.push(SchemaOperation::RunStatement {
                     table: n.table.clone(),
                     statement: statement.clone(),
                 });
             }
-            ops.push(SchemaOperation::CreateTable(n.clone()));
             ops
         }
         (Some(o), None) => {
-            let mut ops = vec![SchemaOperation::DropTable(o.table.clone())];
+            let mut ops = Vec::new();
             for statement in o.statements.iter().rev() {
                 ops.push(drop_statement(&o.table, statement));
             }
+            ops.push(SchemaOperation::DropTable(o.table.clone()));
             ops
         }
         (Some(o), Some(n)) => {
             let mut ops = Vec::new();
             let table = n.table.clone();
 
-            // Statements run before columns so CREATE EXTENSION exists first.
-            // A changed statement re-runs `up` and leaves the previous `down` alone.
-            for statement in &n.statements {
-                if !o.statements.iter().any(|old| old == statement) {
-                    ops.push(SchemaOperation::RunStatement {
-                        table: table.clone(),
-                        statement: statement.clone(),
-                    });
+            // A removed statement, or one whose `up` changed, is undone first, before
+            // columns it may depend on go away. Changing only `down` needs no SQL.
+            for statement in o.statements.iter().rev() {
+                let kept = n
+                    .statements
+                    .iter()
+                    .any(|new| new.name == statement.name && new.up == statement.up);
+                if !kept {
+                    ops.push(drop_statement(&table, statement));
                 }
             }
 
@@ -283,10 +286,18 @@ pub fn diff_snapshots_with_renames(
                 }
             }
 
-            // Down SQL runs after columns are dropped, so dependents are gone first.
-            for statement in &o.statements {
-                if !n.statements.iter().any(|new| new.name == statement.name) {
-                    ops.push(drop_statement(&table, statement));
+            // New statements, and new versions of changed ones, run after the columns
+            // they may depend on exist.
+            for statement in &n.statements {
+                let kept = o
+                    .statements
+                    .iter()
+                    .any(|old| old.name == statement.name && old.up == statement.up);
+                if !kept {
+                    ops.push(SchemaOperation::RunStatement {
+                        table: table.clone(),
+                        statement: statement.clone(),
+                    });
                 }
             }
 

@@ -147,16 +147,44 @@ impl Sqlite {
 
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
         let resources = persistable_resources(resources);
-        for resource in resources {
-            for statement in resource.statements {
-                if statement.dialects.is_empty() || statement.dialects.contains(&"sqlite") {
-                    self.execute_raw(statement.up).await?;
-                }
-            }
+        for resource in &resources {
             let ddl = sql::create_table_sql(resource)?;
             self.execute_raw(&ddl).await?;
             for index_ddl in sql::create_indexes_sql(resource)? {
                 self.execute_raw(&index_ddl).await?;
+            }
+        }
+        let has_statements = resources.iter().any(|res| {
+            res.statements
+                .iter()
+                .any(|s| s.dialects.is_empty() || s.dialects.contains(&"sqlite"))
+        });
+        if has_statements {
+            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE).await?;
+        }
+        for resource in &resources {
+            for statement in resource.statements {
+                if !statement.dialects.is_empty() && !statement.dialects.contains(&"sqlite") {
+                    continue;
+                }
+                let table = resource.table_name();
+                let (name, up) = (statement.name, statement.up);
+                let changed = self
+                    .execute_raw(&ash_sql::install::record_new_statement(table, name, up))
+                    .await?
+                    .rows_affected()
+                    + self
+                        .execute_raw(&ash_sql::install::record_changed_statement(table, name, up))
+                        .await?
+                        .rows_affected();
+                if changed > 0
+                    && let Err(err) = self.execute_raw(up).await
+                {
+                    let _ = self
+                        .execute_raw(&ash_sql::install::forget_statement(table, name))
+                        .await;
+                    return Err(err);
+                }
             }
         }
         Ok(())

@@ -36,13 +36,13 @@ export interface StringFilter {
 }
 
 export interface FloatFilter {
-  eq?: number | null;
-  ne?: number | null;
-  gt?: number | null;
-  gte?: number | null;
-  lt?: number | null;
-  lte?: number | null;
-  isNil?: boolean | null;
+  eq?: number;
+  ne?: number;
+  gt?: number;
+  gte?: number;
+  lt?: number;
+  lte?: number;
+  isNil?: boolean;
 }
 
 export interface IntFilter {

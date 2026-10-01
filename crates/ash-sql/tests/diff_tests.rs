@@ -197,10 +197,10 @@ fn custom_statements_are_dialect_filtered_and_ordered_around_the_table() {
             down: "DROP TABLE IF EXISTS users_sidecar",
         },
         StatementDef {
-            name: "citext",
+            name: "comment",
             dialects: &["postgres"],
-            up: "CREATE EXTENSION IF NOT EXISTS citext",
-            down: "DROP EXTENSION IF EXISTS citext",
+            up: "COMMENT ON TABLE users IS 'users'",
+            down: "COMMENT ON TABLE users IS NULL",
         },
     ];
     let mut resource = RES_V1;
@@ -220,65 +220,65 @@ fn custom_statements_are_dialect_filtered_and_ordered_around_the_table() {
     let postgres = TableSnapshot::from_resource(&resource, &PostgresDialect);
     assert_eq!(postgres.statements.len(), 2);
 
+    // Statements run after their table exists and are undone before it is dropped.
     let ops = diff_snapshots(None, Some(&postgres));
+    assert!(matches!(&ops[0], SchemaOperation::CreateTable(_)));
     assert!(matches!(
-        &ops[0],
+        &ops[1],
         SchemaOperation::RunStatement { statement, .. } if statement.name == "sidecar"
     ));
     assert!(matches!(
-        &ops[1],
-        SchemaOperation::RunStatement { statement, .. } if statement.name == "citext"
+        &ops[2],
+        SchemaOperation::RunStatement { statement, .. } if statement.name == "comment"
     ));
-    assert!(matches!(&ops[2], SchemaOperation::CreateTable(_)));
 
     let files = ash_sql::generate_migration(&PostgresDialect, "create_users", &ops);
-    let sidecar = files.up_sql.find("CREATE TABLE users_sidecar").unwrap();
-    let extension = files
-        .up_sql
-        .find("CREATE EXTENSION IF NOT EXISTS citext;")
-        .unwrap();
-    let table = files
-        .up_sql
-        .find("CREATE TABLE IF NOT EXISTS \"users\"")
-        .unwrap();
-    assert!(sidecar < extension && extension < table);
-    let drop_table = files
-        .down_sql
-        .find("DROP TABLE IF EXISTS \"users\"")
-        .unwrap();
-    let drop_ext = files
-        .down_sql
-        .find("DROP EXTENSION IF EXISTS citext;")
-        .unwrap();
-    let drop_side = files
-        .down_sql
-        .find("DROP TABLE IF EXISTS users_sidecar;")
-        .unwrap();
-    assert!(drop_table < drop_ext && drop_ext < drop_side);
+    let up = &files.up_sql;
+    let table = up.find("CREATE TABLE IF NOT EXISTS \"users\"").unwrap();
+    let sidecar = up.find("CREATE TABLE users_sidecar").unwrap();
+    let comment = up.find("COMMENT ON TABLE users IS 'users';").unwrap();
+    assert!(table < sidecar && sidecar < comment, "{up}");
+    let down = &files.down_sql;
+    let uncomment = down.find("COMMENT ON TABLE users IS NULL;").unwrap();
+    let drop_side = down.find("DROP TABLE IF EXISTS users_sidecar;").unwrap();
+    let drop_table = down.find("DROP TABLE IF EXISTS \"users\"").unwrap();
+    assert!(uncomment < drop_side && drop_side < drop_table, "{down}");
 
     let sqlite_files = ash_sql::generate_migration(
         &SqliteDialect,
         "create_users",
         &diff_snapshots(None, Some(&sqlite)),
     );
-    assert!(!sqlite_files.up_sql.contains("citext"));
-    assert!(!sqlite_files.down_sql.contains("citext"));
+    assert!(!sqlite_files.up_sql.contains("COMMENT"));
 
+    // A changed `up` undoes the old version first, and rollback does the reverse.
     let mut changed = postgres.clone();
     changed.statements[0].up = "CREATE TABLE users_sidecar (id TEXT)".into();
     let changed_ops = diff_snapshots(Some(&postgres), Some(&changed));
-    assert_eq!(changed_ops.len(), 1);
-    assert!(matches!(
-        &changed_ops[0],
-        SchemaOperation::RunStatement { statement, .. } if statement.up.contains("(id TEXT)")
-    ));
+    assert_eq!(changed_ops.len(), 2);
+    let files = ash_sql::generate_migration(&PostgresDialect, "change_sidecar", &changed_ops);
+    let old_down = files.up_sql.find("DROP TABLE IF EXISTS users_sidecar;").unwrap();
+    let new_up = files.up_sql.find("CREATE TABLE users_sidecar (id TEXT);").unwrap();
+    assert!(old_down < new_up, "{}", files.up_sql);
+    let new_down = files.down_sql.find("DROP TABLE IF EXISTS users_sidecar;").unwrap();
+    let old_up = files
+        .down_sql
+        .find("CREATE TABLE users_sidecar (id TEXT PRIMARY KEY);")
+        .unwrap();
+    assert!(new_down < old_up, "{}", files.down_sql);
 
+    // Changing only `down` needs no SQL.
+    let mut down_only = postgres.clone();
+    down_only.statements[0].down = "DROP TABLE users_sidecar".into();
+    assert!(diff_snapshots(Some(&postgres), Some(&down_only)).is_empty());
+
+    // A removed statement is undone first, before columns it may depend on go away.
     let mut bare = postgres.clone();
     bare.statements.clear();
     let removed = diff_snapshots(Some(&postgres), Some(&bare));
     assert!(matches!(
-        removed.last(),
-        Some(SchemaOperation::DropStatement { name, .. }) if name == "citext"
+        removed.first(),
+        Some(SchemaOperation::DropStatement { name, .. }) if name == "comment"
     ));
 
     let mut json: serde_json::Value = serde_json::to_value(&sqlite).unwrap();

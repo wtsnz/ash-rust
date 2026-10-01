@@ -206,16 +206,47 @@ impl Postgres {
         let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
-        for res in resources {
-            for statement in res.statements {
-                if statement.dialects.is_empty() || statement.dialects.contains(&"postgres") {
-                    self.execute_raw(statement.up).await?;
-                }
+        for res in &resources {
+            for extension in ash_sql::required_extensions(&dialect, res) {
+                self.execute_raw(&extension).await?;
             }
             let ddl = compiler.compile_create_table(res)?;
             self.execute_raw(&ddl).await?;
             for idx_ddl in compiler.compile_create_indexes(res)? {
                 self.execute_raw(&idx_ddl).await?;
+            }
+        }
+        let has_statements = resources.iter().any(|res| {
+            res.statements
+                .iter()
+                .any(|s| s.dialects.is_empty() || s.dialects.contains(&"postgres"))
+        });
+        if has_statements {
+            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE).await?;
+        }
+        for res in &resources {
+            for statement in res.statements {
+                if !statement.dialects.is_empty() && !statement.dialects.contains(&"postgres") {
+                    continue;
+                }
+                let table = res.table_name();
+                let (name, up) = (statement.name, statement.up);
+                let changed = self
+                    .execute_raw(&ash_sql::install::record_new_statement(table, name, up))
+                    .await?
+                    .rows_affected()
+                    + self
+                        .execute_raw(&ash_sql::install::record_changed_statement(table, name, up))
+                        .await?
+                        .rows_affected();
+                if changed > 0
+                    && let Err(err) = self.execute_raw(up).await
+                {
+                    let _ = self
+                        .execute_raw(&ash_sql::install::forget_statement(table, name))
+                        .await;
+                    return Err(err);
+                }
             }
         }
         Ok(())

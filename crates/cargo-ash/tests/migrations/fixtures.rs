@@ -585,6 +585,88 @@ pub mod gauge {
     }
 }
 
+pub mod indexed_notes_v1 {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        IndexedNote {
+            table "indexed_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+            statements {
+                statement by_title {
+                    up "CREATE INDEX IF NOT EXISTS indexed_notes_by_title ON indexed_notes (title)";
+                    down "DROP INDEX IF EXISTS indexed_notes_by_title";
+                }
+                statement by_id {
+                    up "CREATE INDEX IF NOT EXISTS indexed_notes_by_id ON indexed_notes (id)";
+                    down "DROP INDEX IF EXISTS indexed_notes_by_id";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+/// `by_title` changes, and `title` becomes optional, which rebuilds the table on SQLite.
+pub mod indexed_notes_v2 {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        IndexedNote {
+            table "indexed_notes";
+            attributes {
+                id: Uuid [pk];
+                title: Option<String>;
+            }
+            statements {
+                statement by_title {
+                    up "CREATE INDEX IF NOT EXISTS indexed_notes_by_title_id ON indexed_notes (title, id)";
+                    down "DROP INDEX IF EXISTS indexed_notes_by_title_id";
+                }
+                statement by_id {
+                    up "CREATE INDEX IF NOT EXISTS indexed_notes_by_id ON indexed_notes (id)";
+                    down "DROP INDEX IF EXISTS indexed_notes_by_id";
+                }
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+pub mod typed_values {
+    use ash_core::{Binary, CiString, Date, Decimal, Float, resource};
+    use uuid::Uuid;
+
+    resource! {
+        TypedValue {
+            table "typed_values";
+            attributes {
+                id: Uuid [pk];
+                weight: Float;
+                due_on: Date;
+                payload: Binary;
+                email: CiString;
+                amount: Decimal;
+            }
+            identities {
+                identity unique_email: [email];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod contact {
     use ash_core::{CiString, resource};
     use uuid::Uuid;
@@ -595,11 +677,6 @@ pub mod contact {
             attributes {
                 id: Uuid [pk];
                 email: CiString = "Ada@Example.com";
-            }
-            statements {
-                statement citext only postgres {
-                    up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
-                }
             }
             actions {
                 read read { primary; }
@@ -623,8 +700,14 @@ pub mod marker {
                     up "CREATE TABLE marker_sidecar (id TEXT PRIMARY KEY)";
                     down "DROP TABLE IF EXISTS marker_sidecar";
                 }
-                statement citext only postgres {
-                    up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
+                // Both need the table to exist, so they run after CREATE TABLE.
+                statement by_id {
+                    up "CREATE INDEX IF NOT EXISTS markers_by_id ON markers (id)";
+                    down "DROP INDEX IF EXISTS markers_by_id";
+                }
+                statement described only postgres {
+                    up "COMMENT ON TABLE markers IS 'markers'";
+                    down "COMMENT ON TABLE markers IS NULL";
                 }
             }
             actions {

@@ -2419,34 +2419,100 @@ async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
         migration.version
     )))
     .unwrap();
+    let table = up.find("CREATE TABLE IF NOT EXISTS \"markers\"").unwrap();
     let sidecar = up.find("CREATE TABLE marker_sidecar").unwrap();
-    let table = up
-        .find("CREATE TABLE IF NOT EXISTS \"markers\"")
-        .unwrap();
-    assert!(sidecar < table);
-    let drop_table = down.find("DROP TABLE IF EXISTS \"markers\"").unwrap();
+    let by_id = up.find("CREATE INDEX IF NOT EXISTS markers_by_id").unwrap();
+    assert!(table < sidecar && sidecar < by_id, "statements run after the table:\n{up}");
+    let drop_index = down.find("DROP INDEX IF EXISTS markers_by_id;").unwrap();
     let drop_side = down.find("DROP TABLE IF EXISTS marker_sidecar;").unwrap();
-    assert!(drop_table < drop_side);
+    let drop_table = down.find("DROP TABLE IF EXISTS \"markers\"").unwrap();
+    assert!(
+        drop_index < drop_side && drop_side < drop_table,
+        "statements are undone in reverse, before the table:\n{down}"
+    );
     if dialect == "postgres" {
-        let extension = up
-            .find("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;")
-            .unwrap();
-        assert!(extension < table);
+        assert!(up.contains("COMMENT ON TABLE markers IS 'markers';"));
     } else {
-        assert!(!up.contains("citext"));
+        assert!(!up.contains("COMMENT ON"));
     }
-    assert!(!down.contains("citext"), "rollback must not drop the extension");
 
     db.migrate(&project.migrations()).await.unwrap();
     let schema = db.schema().await;
-    assert!(schema.tables.contains_key("markers"));
     assert!(schema.tables.contains_key("marker_sidecar"));
+    assert!(
+        schema.table("markers").indexes.contains_key("markers_by_id"),
+        "the statement's index must exist"
+    );
+    if dialect == "postgres" {
+        assert_eq!(
+            db.text("SELECT obj_description('markers'::regclass)").await,
+            "markers"
+        );
+    }
 
     db.rollback(&project.migrations()).await.unwrap();
     let after = db.schema().await;
     assert!(after.tables.is_empty());
 }
 on_every_backend!(codegen_runs_custom_statements_around_the_table);
+
+async fn index_names(db: &TestDb) -> Vec<String> {
+    let mut names: Vec<String> = db
+        .schema()
+        .await
+        .table("indexed_notes")
+        .indexes
+        .keys()
+        .cloned()
+        .collect();
+    names.sort();
+    names
+}
+
+async fn changed_statements_undo_the_old_version_and_survive_rebuilds(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate(
+        "create_indexed_notes",
+        &[&fixtures::indexed_notes_v1::IndexedNote::DEF],
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec("INSERT INTO indexed_notes (id, title) VALUES ('00000000-0000-0000-0000-0000000000d1', 'kept')")
+        .await
+        .unwrap();
+    assert_eq!(
+        index_names(&db).await,
+        ["indexed_notes_by_id", "indexed_notes_by_title"]
+    );
+
+    project.generate(
+        "change_indexed_notes",
+        &[&fixtures::indexed_notes_v2::IndexedNote::DEF],
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        index_names(&db).await,
+        ["indexed_notes_by_id", "indexed_notes_by_title_id"],
+        "the old index is dropped, and SQLite's rebuild must not lose by_id"
+    );
+    assert_eq!(db.int("SELECT COUNT(*) FROM indexed_notes").await, 1);
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert_eq!(
+        index_names(&db).await,
+        ["indexed_notes_by_id", "indexed_notes_by_title"]
+    );
+}
+on_every_backend!(changed_statements_undo_the_old_version_and_survive_rebuilds);
+
+async fn install_runs_each_statement_once(db: TestDb) {
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    // marker_sidecar is created with a plain CREATE TABLE, so a second run would fail.
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("marker_sidecar"));
+    assert!(schema.table("markers").indexes.contains_key("markers_by_id"));
+}
+on_every_backend!(install_runs_each_statement_once);
 
 async fn install_runs_custom_statements(db: TestDb) {
     db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
@@ -2605,3 +2671,129 @@ async fn citext_columns_work_in_every_schema(db: TestDb) {
     );
 }
 on_every_backend!(citext_columns_work_in_every_schema);
+
+async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
+    use ash_core::{CompiledQuery, Error, Filter, Sort};
+    use fixtures::typed_values::TypedValue;
+
+    db.install(&[&TypedValue::DEF]).await.unwrap();
+    let rows = [
+        ("00000000-0000-0000-0000-0000000000a1", "9.5", "2024-01-02", "aGVsbG8=", "Ada@Example.com", "10.50"),
+        ("00000000-0000-0000-0000-0000000000a2", "10", "2024-03-04", "d29ybGQ=", "grace@example.com", "9.99"),
+        ("00000000-0000-0000-0000-0000000000a3", "100.25", "2025-12-31", "AAEC", "linus@example.org", "-3"),
+    ];
+    let insert = |id: &str, weight: &str, due_on: &str, payload: &str, email: &str, amount: &str| {
+        let mut fields = FieldMap::new();
+        fields.insert("id".into(), Value::Uuid(uuid::Uuid::parse_str(id).unwrap()));
+        for (name, value) in [
+            ("weight", weight),
+            ("due_on", due_on),
+            ("payload", payload),
+            ("email", email),
+            ("amount", amount),
+        ] {
+            fields.insert(name.into(), Value::String(value.into()));
+        }
+        fields
+    };
+    for (id, weight, due_on, payload, email, amount) in rows {
+        let fields = insert(id, weight, due_on, payload, email, amount);
+        let id = uuid::Uuid::parse_str(id).unwrap();
+        match &db.db {
+            Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, id, fields).await.unwrap(),
+            Db::Postgres(pg) => pg.create(&TypedValue::DEF, id, fields).await.unwrap(),
+        };
+    }
+
+    async fn ids(db: &TestDb, filter: Option<Filter>, sort: Vec<Sort>) -> Vec<String> {
+        let query = CompiledQuery {
+            filter,
+            sort,
+            ..Default::default()
+        };
+        let rows = match &db.db {
+            Db::Sqlite(sqlite) => sqlite.run_query(&TypedValue::DEF, &query).await.unwrap(),
+            Db::Postgres(pg) => pg.run_query(&TypedValue::DEF, &query).await.unwrap(),
+        };
+        rows.iter()
+            .map(|row| match row.get("id") {
+                Some(Value::Uuid(id)) => id.to_string()[34..].to_string(),
+                other => panic!("unexpected id {other:?}"),
+            })
+            .collect()
+    }
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let strings = |values: &[&str]| -> Vec<Value> {
+        values.iter().map(|v| Value::String(v.to_string())).collect()
+    };
+
+    assert_eq!(
+        sorted(ids(&db, Some(Filter::in_list("weight", strings(&["9.5", "100.25"]))), vec![]).await),
+        ["a1", "a3"]
+    );
+    assert_eq!(
+        ids(&db, Some(Filter::in_list("due_on", strings(&["2024-03-04"]))), vec![]).await,
+        ["a2"]
+    );
+    assert_eq!(
+        sorted(ids(&db, Some(Filter::in_list("payload", strings(&["aGVsbG8=", "AAEC"]))), vec![]).await),
+        ["a1", "a3"]
+    );
+    assert_eq!(
+        ids(&db, Some(Filter::in_list("email", strings(&["ada@example.com"]))), vec![]).await,
+        ["a1"],
+        "CiString `in` ignores case"
+    );
+    assert_eq!(
+        ids(&db, Some(Filter::eq("email", "ADA@EXAMPLE.COM")), vec![]).await,
+        ["a1"],
+        "CiString `eq` ignores case"
+    );
+    assert_eq!(
+        sorted(ids(&db, Some(Filter::gt("weight", "9.6")), vec![]).await),
+        ["a2", "a3"],
+        "Float compares numerically"
+    );
+    let by_weight = Sort {
+        field: "weight".into(),
+        descending: false,
+    };
+    assert_eq!(ids(&db, None, vec![by_weight]).await, ["a1", "a2", "a3"]);
+    assert_eq!(
+        ids(&db, Some(Filter::gt("amount", "9.995")), vec![]).await,
+        ["a1"],
+        "Decimal compares numerically"
+    );
+
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("payload", "not base64!")),
+        ..Default::default()
+    };
+    let bad = match &db.db {
+        Db::Sqlite(sqlite) => sqlite.run_query(&TypedValue::DEF, &query).await,
+        Db::Postgres(pg) => pg.run_query(&TypedValue::DEF, &query).await,
+    };
+    assert!(bad.is_err(), "invalid base64 must be an error, got {bad:?}");
+
+    let duplicate = insert(
+        "00000000-0000-0000-0000-0000000000a4",
+        "1",
+        "2024-01-01",
+        "AAEC",
+        "ADA@example.COM",
+        "0",
+    );
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000a4").unwrap();
+    let result = match &db.db {
+        Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, id, duplicate).await,
+        Db::Postgres(pg) => pg.create(&TypedValue::DEF, id, duplicate).await,
+    };
+    assert!(
+        matches!(result, Err(Error::IdentityConflict { .. })),
+        "CiString identities ignore case: {result:?}"
+    );
+}
+on_every_backend!(typed_columns_filter_sort_and_stay_unique);

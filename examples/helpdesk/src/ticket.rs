@@ -37,12 +37,6 @@ resource! {
             requester_email: Option<CiString>;
         }
 
-        statements {
-            statement citext only postgres {
-                up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
-            }
-        }
-
         relationships {
             belongs_to representative: Representative;
         }
