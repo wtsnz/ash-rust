@@ -598,8 +598,7 @@ pub mod contact {
             }
             statements {
                 statement citext only postgres {
-                    up "CREATE EXTENSION IF NOT EXISTS citext";
-                    down "DROP EXTENSION IF EXISTS citext";
+                    up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
                 }
             }
             actions {
@@ -625,8 +624,7 @@ pub mod marker {
                     down "DROP TABLE IF EXISTS marker_sidecar";
                 }
                 statement citext only postgres {
-                    up "CREATE EXTENSION IF NOT EXISTS citext";
-                    down "DROP EXTENSION IF EXISTS citext";
+                    up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
                 }
             }
             actions {

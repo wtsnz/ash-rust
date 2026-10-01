@@ -253,9 +253,11 @@ impl AshType for Binary {
 /// Case-insensitive string. The Rust value keeps the original casing.
 ///
 /// Postgres columns use `citext`, so comparisons there ignore case. That needs
-/// `CREATE EXTENSION citext`, which a `statements` block can install for
-/// Postgres only. SQLite has no citext type, so the column is `TEXT` and
-/// comparisons stay case-sensitive.
+/// `CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public`, which a
+/// `statements` block can install for Postgres only. Extensions are
+/// database-wide, so install it in `public` and leave out a `down` that drops
+/// it. SQLite has no citext type, so the column is `TEXT` and comparisons stay
+/// case-sensitive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CiString(String);
 

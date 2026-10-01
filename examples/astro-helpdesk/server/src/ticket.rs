@@ -34,8 +34,7 @@ resource! {
 
         statements {
             statement citext only postgres {
-                up "CREATE EXTENSION IF NOT EXISTS citext";
-                down "DROP EXTENSION IF EXISTS citext";
+                up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
             }
         }
 

@@ -68,7 +68,7 @@ impl TestDb {
         let separator = if base.contains('?') { '&' } else { '?' };
         Some(
             Self::connect(format!(
-                "{base}{separator}options=-c%20search_path%3D{schema}"
+                "{base}{separator}options=-c%20search_path%3D{schema}%2Cpublic"
             ))
             .await,
         )

@@ -2428,14 +2428,14 @@ async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
     let drop_side = down.find("DROP TABLE IF EXISTS marker_sidecar;").unwrap();
     assert!(drop_table < drop_side);
     if dialect == "postgres" {
-        let extension = up.find("CREATE EXTENSION IF NOT EXISTS citext;").unwrap();
+        let extension = up
+            .find("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;")
+            .unwrap();
         assert!(extension < table);
-        let drop_ext = down.find("DROP EXTENSION IF EXISTS citext;").unwrap();
-        assert!(drop_table < drop_ext && drop_ext < drop_side);
     } else {
         assert!(!up.contains("citext"));
-        assert!(!down.contains("citext"));
     }
+    assert!(!down.contains("citext"), "rollback must not drop the extension");
 
     db.migrate(&project.migrations()).await.unwrap();
     let schema = db.schema().await;
@@ -2494,7 +2494,9 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     )))
     .unwrap();
     if dialect == "postgres" {
-        let extension = up.find("CREATE EXTENSION IF NOT EXISTS citext;").unwrap();
+        let extension = up
+            .find("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;")
+            .unwrap();
         let column = up.find("\"email\" CITEXT").unwrap();
         assert!(extension < column);
         assert!(up.contains("'Ada@Example.com'"));
@@ -2549,3 +2551,57 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     assert!(db.schema().await.tables.is_empty());
 }
 on_every_backend!(codegen_creates_a_citext_column);
+
+async fn citext_columns_work_in_every_schema(db: TestDb) {
+    let Db::Postgres(pg) = &db.db else {
+        eprintln!("SQLite has no citext or schemas");
+        return;
+    };
+    let project = Project::for_db(&db);
+    project.generate("create_contacts", &[&fixtures::contact::Contact::DEF]);
+    let schema_a = format!("tenant_a_{}", uuid::Uuid::new_v4().simple());
+    let schema_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+
+    db.migrate(&project.migrations()).await.unwrap();
+    pg.migrate_schemas(&[&schema_a, &schema_b], project.migrations())
+        .await
+        .unwrap();
+
+    for schema in [&schema_a, &schema_b] {
+        assert_eq!(
+            db.int(&format!(
+                "SELECT COUNT(*) FROM pg_attribute a \
+                 JOIN pg_class c ON c.oid = a.attrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = '{schema}' AND c.relname = 'contacts' \
+                   AND a.attname = 'email' AND a.atttypid = 'public.citext'::regtype"
+            ))
+            .await,
+            1,
+            "{schema}.contacts.email must be citext"
+        );
+    }
+    db.exec(&format!(
+        "INSERT INTO \"{schema_a}\".contacts (id, email) \
+         VALUES ('00000000-0000-0000-0000-0000000000c2', 'Ada@Example.com')"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        db.int(&format!(
+            "SELECT COUNT(*) FROM \"{schema_a}\".contacts WHERE email = 'ada@example.com'"
+        ))
+        .await,
+        1,
+        "citext must compare case-insensitively"
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.int("SELECT COUNT(*) FROM pg_extension WHERE extname = 'citext'")
+            .await,
+        1,
+        "rolling back one schema must keep the extension for the others"
+    );
+}
+on_every_backend!(citext_columns_work_in_every_schema);

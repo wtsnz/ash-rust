@@ -251,9 +251,11 @@ impl Postgres {
                 .execute(pool)
                 .await
                 .map_err(map_sqlx)?;
+            // `public` keeps database-wide extension types such as `citext` visible.
+            let search_path = format!("{name},public");
             let opts = (*pool.connect_options())
                 .clone()
-                .options([("search_path", *name)]);
+                .options([("search_path", search_path.as_str())]);
             let tenant_pool = PgPoolOptions::new()
                 .max_connections(1)
                 .connect_with(opts)
