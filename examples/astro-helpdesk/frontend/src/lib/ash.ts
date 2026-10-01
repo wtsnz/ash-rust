@@ -35,6 +35,16 @@ export interface StringFilter {
   isNil?: boolean;
 }
 
+export interface TextFilter {
+  eq?: string;
+  ne?: string;
+  in?: string[];
+  isNil?: boolean;
+  contains?: string;
+  startsWith?: string;
+  endsWith?: string;
+}
+
 export interface FloatFilter {
   eq?: number;
   ne?: number;
@@ -115,14 +125,14 @@ export type TicketCloseInput = CloseTicketInput;
 
 export interface TicketFilterInput {
   id?: UuidFilter;
-  title?: StringFilter;
-  description?: StringFilter;
+  title?: TextFilter;
+  description?: TextFilter;
   status?: StringFilter;
   priority?: IntFilter;
   estimate?: FloatFilter;
   due_on?: StringFilter;
   attachment?: StringFilter;
-  requester_email?: StringFilter;
+  requester_email?: TextFilter;
   author_id?: UuidFilter;
   author?: RepresentativeFilterInput;
   and?: TicketFilterInput[];
@@ -159,9 +169,9 @@ export type RepresentativeCreateInput = CreateRepresentativeInput;
 
 export interface RepresentativeFilterInput {
   id?: UuidFilter;
-  name?: StringFilter;
-  email?: StringFilter;
-  role?: StringFilter;
+  name?: TextFilter;
+  email?: TextFilter;
+  role?: TextFilter;
   and?: RepresentativeFilterInput[];
   or?: RepresentativeFilterInput[];
   not?: RepresentativeFilterInput;

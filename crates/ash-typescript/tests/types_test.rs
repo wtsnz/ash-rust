@@ -94,7 +94,7 @@ fn test_filter_and_sort_generation() {
     let filter = generate_resource_filter_input(&TICKET_DEF);
     assert!(filter.contains("export interface TicketFilterInput {"));
     assert!(filter.contains("  id?: UuidFilter;"));
-    assert!(filter.contains("  title?: StringFilter;"));
+    assert!(filter.contains("  title?: TextFilter;"));
     assert!(filter.contains("  priority?: IntFilter;"));
     assert!(filter.contains("  author?: UserFilterInput;"));
     assert!(filter.contains("  and?: TicketFilterInput[];"));

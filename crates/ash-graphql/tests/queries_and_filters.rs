@@ -190,6 +190,40 @@ async fn test_phase2_list_query_with_filters() {
 }
 
 #[tokio::test]
+async fn test_list_query_with_text_filters() {
+    let memory = Memory::new();
+    seed_data(&memory).await;
+    let ctx = Context::new(memory);
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .finish::<Memory>()
+        .expect("Failed to build schema");
+
+    for (filter, expected) in [
+        (r#"{ title: { contains: "dark" } }"#, vec!["Add dark mode"]),
+        (r#"{ title: { contains: "DARK" } }"#, vec![]),
+        (r#"{ title: { startsWith: "Fix" } }"#, vec!["Fix memory leak"]),
+        (r#"{ title: { endsWith: "docs" } }"#, vec!["Improve docs"]),
+        (
+            r#"{ not: { title: { contains: "o" } } }"#,
+            vec![],
+        ),
+    ] {
+        let query = format!("query {{ listTickets(filter: {filter}) {{ title }} }}");
+        let res = schema.execute(Request::new(query).data(ctx.clone())).await;
+        assert!(res.errors.is_empty(), "{filter}: {:?}", res.errors);
+        let val = res.data.into_json().unwrap();
+        let mut titles: Vec<&str> = val["listTickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|ticket| ticket["title"].as_str().unwrap())
+            .collect();
+        titles.sort();
+        assert_eq!(titles, expected, "{filter}");
+    }
+}
+
+#[tokio::test]
 async fn test_phase2_list_query_with_sorting_and_pagination() {
     let memory = Memory::new();
     let (_, _, _) = seed_data(&memory).await;

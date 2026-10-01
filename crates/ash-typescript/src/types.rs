@@ -65,12 +65,10 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
 pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
     match ty {
         AttrType::Uuid => Some("UuidFilter"),
-        AttrType::String
-        | AttrType::CiString
-        | AttrType::Date
-        | AttrType::Binary
-        | AttrType::UtcDatetime
-        | AttrType::Decimal => Some("StringFilter"),
+        AttrType::String | AttrType::CiString => Some("TextFilter"),
+        AttrType::Date | AttrType::Binary | AttrType::UtcDatetime | AttrType::Decimal => {
+            Some("StringFilter")
+        }
         AttrType::Float => Some("FloatFilter"),
         AttrType::Integer => Some("IntFilter"),
         AttrType::Boolean => Some("BooleanFilter"),
@@ -109,6 +107,16 @@ export interface StringFilter {
   ne?: string;
   in?: string[];
   isNil?: boolean;
+}
+
+export interface TextFilter {
+  eq?: string;
+  ne?: string;
+  in?: string[];
+  isNil?: boolean;
+  contains?: string;
+  startsWith?: string;
+  endsWith?: string;
 }
 
 export interface FloatFilter {

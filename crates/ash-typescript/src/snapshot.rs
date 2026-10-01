@@ -48,6 +48,8 @@ pub fn sql_type_to_ts_and_zod(
         ("string", Some("StringFilter"), "z.string()")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", None, "z.record(z.string(), z.unknown())")
+    } else if upper.contains("TEXT") || upper.contains("CHAR") {
+        ("string", Some("TextFilter"), "z.string()")
     } else {
         ("string", Some("StringFilter"), "z.string()")
     };

@@ -13,6 +13,17 @@ pub fn register_primitive_filter_inputs(mut builder: SchemaBuilder) -> SchemaBui
         .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
     builder = builder.register(str_filter);
 
+    // TextFilterInput: StringFilterInput plus substring matching for text attributes
+    let text_filter = InputObject::new("TextFilterInput")
+        .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("ne", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
+        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)))
+        .field(InputValue::new("contains", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("startsWith", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("endsWith", TypeRef::named(TypeRef::STRING)));
+    builder = builder.register(text_filter);
+
     // IntFilterInput
     let int_filter = InputObject::new("IntFilterInput")
         .field(InputValue::new("eq", TypeRef::named(TypeRef::INT)))
@@ -74,12 +85,8 @@ pub fn register_resource_filter_inputs(
     for attr in resource.attributes {
         let field_filter_type = match attr.ty {
             AttrType::Uuid => "UuidFilterInput".to_string(),
-            AttrType::String
-            | AttrType::CiString
-            | AttrType::Date
-            | AttrType::Binary
-            | AttrType::UtcDatetime
-            | AttrType::Decimal => {
+            AttrType::String | AttrType::CiString => "TextFilterInput".to_string(),
+            AttrType::Date | AttrType::Binary | AttrType::UtcDatetime | AttrType::Decimal => {
                 "StringFilterInput".to_string()
             }
             AttrType::Float => "FloatFilterInput".to_string(),
@@ -178,6 +185,17 @@ pub fn parse_resource_filter(
                     vals.push(parse_scalar_value(&item, attr.ty)?);
                 }
                 filters.push(Filter::in_list(field_name, vals));
+            }
+
+            // contains / startsWith / endsWith
+            if let Some(val) = attr_obj.get("contains") {
+                filters.push(Filter::contains(field_name, val.string()?));
+            }
+            if let Some(val) = attr_obj.get("startsWith") {
+                filters.push(Filter::starts_with(field_name, val.string()?));
+            }
+            if let Some(val) = attr_obj.get("endsWith") {
+                filters.push(Filter::ends_with(field_name, val.string()?));
             }
 
             // isNil
