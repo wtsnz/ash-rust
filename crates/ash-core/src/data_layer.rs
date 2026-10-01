@@ -137,6 +137,17 @@ impl DataLayer for NoDataLayer {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         no_data_layer(resource)
     }
+
+    fn upsert(
+        &self,
+        resource: &ResourceDef,
+        _id: Uuid,
+        _fields: FieldMap,
+        _identity: &IdentityDef,
+        _update_fields: &[String],
+    ) -> impl Future<Output = Result<FieldMap>> + Send {
+        no_data_layer(resource)
+    }
 }
 
 pub trait SchemaSupport: Send + Sync {
