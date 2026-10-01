@@ -34,6 +34,6 @@ pub fn record_visible_for_read(
 ) -> bool {
     match scoped_read_filter(resource, actor, None) {
         None => true,
-        Some(filter) => filter.matches(record),
+        Some(filter) => filter.matches_on(resource, record),
     }
 }

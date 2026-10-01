@@ -49,7 +49,7 @@ pub fn build_resource_subscriptions(
                         if notif.action_kind == ActionKind::Create {
                             let mut record = notif.record_fields;
                             if let Some(f) = &filter
-                                && !f.matches(&record)
+                                && !f.matches_on(resource, &record)
                             {
                                 continue;
                             }

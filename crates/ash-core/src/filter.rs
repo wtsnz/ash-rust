@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use crate::resource::{AttrType, ResourceDef};
 use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,15 +141,32 @@ impl Filter {
     }
 
     /// Evaluates the filter against one record. Without attribute types, text
-    /// matching here is case-sensitive even for `CiString` fields. A comparison with
-    /// a null field is unknown, as in SQL, so `NOT` over it does not match either.
+    /// matching here is case-sensitive even for `CiString` fields; use
+    /// [`Filter::matches_on`] when the resource is known. A comparison with a null
+    /// field is unknown, as in SQL, so `NOT` over it does not match either.
     pub fn matches(&self, fields: &FieldMap) -> bool {
-        self.eval(fields) == Some(true)
+        self.eval(None, fields) == Some(true)
+    }
+
+    /// Evaluates the filter against one record of `resource`, so text filters on
+    /// `CiString` attributes and calculations ignore case as they do in the data layers.
+    pub fn matches_on(&self, resource: &ResourceDef, fields: &FieldMap) -> bool {
+        self.eval(Some(resource), fields) == Some(true)
     }
 
     /// SQL's three-valued result, with `None` for unknown.
-    fn eval(&self, fields: &FieldMap) -> Option<bool> {
+    fn eval(&self, resource: Option<&ResourceDef>, fields: &FieldMap) -> Option<bool> {
         let present = |field: &str| fields.get(field).filter(|got| !got.is_null());
+        let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
+            let ci = resource.is_some_and(|resource| {
+                resource
+                    .attribute(field)
+                    .map(|attr| attr.ty)
+                    .or_else(|| resource.calculation(field).map(|calc| calc.ty))
+                    == Some(AttrType::CiString)
+            });
+            present(field).map(|got| text_matches(Some(got), needle, ci, test))
+        };
         match self {
             Self::True => Some(true),
             Self::False => Some(false),
@@ -165,24 +183,28 @@ impl Filter {
                 in_list(present(field), values, |got, value| got == value)
             }
             Self::IsNil(field) => Some(present(field).is_none()),
-            Self::Contains(field, needle) => present(field)
-                .map(|got| text_matches(Some(got), needle, false, |text, needle| text.contains(needle))),
-            Self::StartsWith(field, needle) => present(field).map(|got| {
-                text_matches(Some(got), needle, false, |text, needle| text.starts_with(needle))
-            }),
-            Self::EndsWith(field, needle) => present(field)
-                .map(|got| text_matches(Some(got), needle, false, |text, needle| text.ends_with(needle))),
-            Self::And(parts) => all_of(parts.iter().map(|part| part.eval(fields))),
-            Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(fields))),
-            Self::Not(inner) => inner.eval(fields).map(|matched| !matched),
-            Self::Related { relationship, filter } => Some(match fields.get(relationship) {
-                Some(Value::Map(m)) => filter.matches(m),
-                Some(Value::Array(arr)) => arr.iter().any(|v| match v {
-                    Value::Map(m) => filter.matches(m),
-                    _ => false,
-                }),
-                _ => true,
-            }),
+            Self::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
+            Self::StartsWith(field, needle) => {
+                text(field, needle, |text, needle| text.starts_with(needle))
+            }
+            Self::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+            Self::And(parts) => all_of(parts.iter().map(|part| part.eval(resource, fields))),
+            Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(resource, fields))),
+            Self::Not(inner) => inner.eval(resource, fields).map(|matched| !matched),
+            Self::Related { relationship, filter } => {
+                let destination = resource
+                    .and_then(|resource| resource.relationship(relationship))
+                    .map(|rel| (rel.destination)());
+                let matches = |m: &FieldMap| filter.eval(destination, m) == Some(true);
+                Some(match fields.get(relationship) {
+                    Some(Value::Map(m)) => matches(m),
+                    Some(Value::Array(arr)) => arr.iter().any(|v| match v {
+                        Value::Map(m) => matches(m),
+                        _ => false,
+                    }),
+                    _ => true,
+                })
+            }
         }
     }
 }
@@ -443,6 +465,48 @@ mod tests {
         assert!(!Filter::contains("missing", "").matches(&row));
     }
 
+    #[test]
+    fn matches_on_ignores_case_for_ci_string_attributes() {
+        use crate::resource::{AttrType, AttributeDef, ResourceDef};
+
+        static ATTRS: &[AttributeDef] = &[
+            AttributeDef::uuid_pk("id"),
+            AttributeDef::required("email", AttrType::CiString),
+            AttributeDef::required("name", AttrType::String),
+        ];
+        static CONTACT: ResourceDef = ResourceDef {
+            name: "Contact",
+            table: "contacts",
+            attributes: ATTRS,
+            relationships: &[],
+            actions: &[],
+            policies: &[],
+            field_policies: &[],
+            calculations: &[],
+            aggregates: &[],
+            extensions: &[],
+            notifiers: &[],
+            identities: &[],
+            indexes: &[],
+            checks: &[],
+            statements: &[],
+            embedded: false,
+            data_layer: crate::DataLayerKind::Memory,
+            timestamps: None,
+            store_type_id: || std::any::TypeId::of::<()>(),
+            store_name: "memory",
+            multitenancy: None,
+        };
+        let row = fields! { "email" => "Ada@Example.com", "name" => "Ada" };
+
+        let email = Filter::ends_with("email", "EXAMPLE.COM");
+        assert!(!email.matches(&row));
+        assert!(email.matches_on(&CONTACT, &row));
+        assert!(!Filter::contains("name", "ADA").matches_on(&CONTACT, &row));
+        assert!((!Filter::contains("name", "ADA")).matches_on(&CONTACT, &row));
+    }
+
+   
     #[test]
     fn operator_overloading() {
         let open = Filter::eq("status", "open");
