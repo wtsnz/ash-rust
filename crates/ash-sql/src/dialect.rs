@@ -1,5 +1,49 @@
 use ash_core::{AttrType, AttributeDef, IdentityDef};
 
+/// Where a text filter looks for its needle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextMatch {
+    Contains,
+    StartsWith,
+    EndsWith,
+}
+
+/// `LIKE` pattern with `\`, `%`, and `_` in `needle` escaped by a backslash.
+pub fn like_pattern(kind: TextMatch, needle: &str) -> String {
+    let mut escaped = String::with_capacity(needle.len());
+    for ch in needle.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    wrap_pattern(kind, &escaped, "%")
+}
+
+/// SQLite `GLOB` pattern with `*`, `?`, and `[` in `needle` matched literally.
+pub fn glob_pattern(kind: TextMatch, needle: &str) -> String {
+    let mut escaped = String::with_capacity(needle.len());
+    for ch in needle.chars() {
+        match ch {
+            '*' | '?' | '[' => {
+                escaped.push('[');
+                escaped.push(ch);
+                escaped.push(']');
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    wrap_pattern(kind, &escaped, "*")
+}
+
+fn wrap_pattern(kind: TextMatch, escaped: &str, any: &str) -> String {
+    match kind {
+        TextMatch::Contains => format!("{any}{escaped}{any}"),
+        TextMatch::StartsWith => format!("{escaped}{any}"),
+        TextMatch::EndsWith => format!("{any}{escaped}"),
+    }
+}
+
 /// Defines database dialect-specific SQL syntax rules, quoting, placeholders, and types.
 pub trait SqlDialect: Send + Sync + 'static {
     /// Database identifier name (e.g. "postgres", "sqlite").
@@ -72,6 +116,14 @@ pub trait SqlDialect: Send + Sync + 'static {
     fn extension_for_type(&self, _sql_type: &str) -> Option<&'static str> {
         None
     }
+
+    /// Pattern to bind for a text filter, with wildcards in `needle` escaped.
+    fn text_pattern(&self, kind: TextMatch, needle: &str, _case_insensitive: bool) -> String {
+        like_pattern(kind, needle)
+    }
+
+    /// Render a text filter on `op`. `pattern` is the placeholder bound to [`Self::text_pattern`].
+    fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
 }
 
 /// Dialect implementation for SQLite.
@@ -147,6 +199,23 @@ impl SqlDialect for SqliteDialect {
 
     fn render_in_list(&self, op: &str, param: &str) -> String {
         format!("{op} IN (SELECT value FROM json_each({param}))")
+    }
+
+    /// `GLOB` is case-sensitive. `LIKE` ignores case, but only for ASCII letters.
+    fn text_pattern(&self, kind: TextMatch, needle: &str, case_insensitive: bool) -> String {
+        if case_insensitive {
+            like_pattern(kind, needle)
+        } else {
+            glob_pattern(kind, needle)
+        }
+    }
+
+    fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String {
+        if case_insensitive {
+            format!("{op} LIKE {pattern} ESCAPE '\\'")
+        } else {
+            format!("{op} GLOB {pattern}")
+        }
     }
 }
 
@@ -262,6 +331,11 @@ impl SqlDialect for PostgresDialect {
             AttrType::CiString => format!("{placeholder}::citext[]"),
             _ => placeholder.to_string(),
         }
+    }
+
+    /// `LIKE` on a `citext` column already ignores case, so one form covers both.
+    fn render_text_match(&self, op: &str, pattern: &str, _case_insensitive: bool) -> String {
+        format!("{op} LIKE {pattern}")
     }
 
     fn binary_literal(&self, encoded: &str) -> String {

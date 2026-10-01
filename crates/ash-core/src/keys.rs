@@ -56,6 +56,27 @@ where
     }
 }
 
+/// Attribute value types that accept text filters such as [`Attr::contains`].
+pub trait TextValue {}
+
+impl TextValue for String {}
+
+impl TextValue for crate::types::CiString {}
+
+impl<R, T: TextValue> Attr<R, T> {
+    pub fn contains(self, substring: impl Into<String>) -> Filter {
+        Filter::contains(self.name, substring)
+    }
+
+    pub fn starts_with(self, prefix: impl Into<String>) -> Filter {
+        Filter::starts_with(self.name, prefix)
+    }
+
+    pub fn ends_with(self, suffix: impl Into<String>) -> Filter {
+        Filter::ends_with(self.name, suffix)
+    }
+}
+
 /// Calculation on `R`, value type `T`.
 #[derive(Clone, Copy, Debug)]
 pub struct Calc<R, T> {

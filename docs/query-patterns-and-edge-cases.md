@@ -34,7 +34,7 @@ E-commerce catalogs, issue trackers, and customer portals allow users to filter 
     AND category_id = ANY($3)
   ```
 * **Ash-Rust Solution**:
-  * `Filter::and`, `Filter::or`, `Filter::not`, `Filter::eq`, `Filter::ne`, `Filter::gt`, `Filter::gte`, `Filter::lt`, `Filter::lte`, `Filter::in_list`, `Filter::is_nil`.
+  * `Filter::and`, `Filter::or`, `Filter::not`, `Filter::eq`, `Filter::ne`, `Filter::gt`, `Filter::gte`, `Filter::lt`, `Filter::lte`, `Filter::in_list`, `Filter::is_nil`, `Filter::contains`, `Filter::starts_with`, `Filter::ends_with`.
   * Expression operator overloading (`&`, `|`, `!`) allows composing arbitrary filter trees at runtime.
   * Trivial filters (`Filter::True` and `Filter::False`) are simplified (`1=1`, `0=1`).
 
@@ -142,6 +142,13 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
   * If a resource defines an optimistic lock attribute (`version`), `UPDATE` appends `WHERE id = $id AND version = $expected_version`.
   * If rows affected == 0, the driver verifies if the row was deleted (`Error::NotFound`) or modified by another worker (`Error::StaleRecord`).
 
+### 8. Wildcards in Text Search Input
+* **The Pitfall**: Building `WHERE title LIKE '%' || $1 || '%'` from a search box. A user typing `50%` or `a_b` gets wildcard matches instead of the literal text, and SQLite's `LIKE` ignores ASCII case while Postgres's does not.
+* **Ash-Rust Handling**:
+  * `Filter::contains`, `Filter::starts_with`, and `Filter::ends_with` escape the needle, so every character matches literally.
+  * Following Ash, `String` fields match case-sensitively and `CiString` fields ignore case. SQLite compiles `String` matches to `GLOB` (case-sensitive) and `CiString` matches to `LIKE ... ESCAPE '\'`, which ignores case for ASCII letters only. Postgres compiles both to `LIKE`, and `citext` makes it case-insensitive.
+  * Text filters on non-text fields are rejected with an error instead of failing in the database.
+
 ---
 
 ## Part 3: SQLite vs PostgreSQL Dialect Matrix
@@ -155,6 +162,7 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 | **UUID Storage** | `TEXT` (36 chars) | Native `UUID` type |
 | **JSON Storage** | `TEXT` holding plain JSON | Native `JSONB` holding plain JSON |
 | **Lateral Subqueries** | Window functions / Subqueries | Native `LEFT JOIN LATERAL (...) ON true` |
+| **Text Filters** | `GLOB` (`String`), `LIKE ... ESCAPE '\'` (`CiString`) | `LIKE` (`citext` ignores case) |
 | **Upsert Syntax** | `ON CONFLICT (...) DO UPDATE SET ...` | `ON CONFLICT (...) DO UPDATE SET ... RETURNING *` |
 | **Schema Migrations** | `_ash_schema_migrations` (TEXT) | `_ash_schema_migrations` (VARCHAR) |
 
@@ -182,3 +190,7 @@ Every pattern and edge case is tested continuously in CI:
    - `crates/ash-core/tests/null_inequality.rs` (`test_null_inequality_identical_in_memory_and_sqlite`).
 7. **Complex Expressions (CASE WHEN, Arithmetic, String Length)**:
    - `crates/ash-sql/tests/compiler_tests.rs` (`test_complex_expressions_compilation`).
+8. **Text Search Filters (Wildcards & Case)**:
+   - `crates/ash-sql/tests/compiler_tests.rs` (`test_text_filters_escape_wildcards_per_dialect`).
+   - `crates/ash-core/tests/text_filters.rs` (`text_filters_match_in_memory_and_sqlite`).
+   - `crates/cargo-ash/tests/migrations/queries.rs` (`text_filters_match_literally_and_respect_case`, SQLite and Postgres).

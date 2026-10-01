@@ -734,6 +734,33 @@ pub mod typed_values {
     }
 }
 
+pub mod searchable_notes {
+    use ash_core::{CiString, resource};
+    use uuid::Uuid;
+
+    resource! {
+        SearchableNote {
+            table "searchable_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                email: CiString;
+            }
+            statements {
+                statement citext only postgres {
+                    up "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public";
+                }
+            }
+            actions {
+                read read { primary; }
+                read titled_on_fire {
+                    prepare filter(title.contains("on fire"));
+                }
+            }
+        }
+    }
+}
+
 pub mod contact {
     use ash_core::{CiString, resource};
     use uuid::Uuid;

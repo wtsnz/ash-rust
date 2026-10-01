@@ -13,7 +13,9 @@ pub mod plan;
 pub mod snapshot;
 
 pub use compiler::{CompiledSql, QueryCompiler, column, ident};
-pub use dialect::{PostgresDialect, SqlDialect, SqliteDialect};
+pub use dialect::{
+    PostgresDialect, SqlDialect, SqliteDialect, TextMatch, glob_pattern, like_pattern,
+};
 pub use diff::{SchemaOperation, diff_snapshots, diff_snapshots_with_renames, diff_tables};
 pub use generator::{
     MigrationFiles, emit_sql, generate_migration, generate_migration_version, required_extensions,

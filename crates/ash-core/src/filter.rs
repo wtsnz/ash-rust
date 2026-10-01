@@ -14,6 +14,12 @@ pub enum Filter {
     Lte(String, Value),
     In(String, Vec<Value>),
     IsNil(String),
+    /// Text contains the substring. Case-insensitive on `CiString` attributes.
+    Contains(String, String),
+    /// Text starts with the prefix. Case-insensitive on `CiString` attributes.
+    StartsWith(String, String),
+    /// Text ends with the suffix. Case-insensitive on `CiString` attributes.
+    EndsWith(String, String),
     And(Vec<Filter>),
     Or(Vec<Filter>),
     Not(Box<Filter>),
@@ -59,6 +65,18 @@ impl Filter {
         Self::Lte(field.into(), value.into())
     }
 
+    pub fn contains(field: impl Into<String>, substring: impl Into<String>) -> Self {
+        Self::Contains(field.into(), substring.into())
+    }
+
+    pub fn starts_with(field: impl Into<String>, prefix: impl Into<String>) -> Self {
+        Self::StartsWith(field.into(), prefix.into())
+    }
+
+    pub fn ends_with(field: impl Into<String>, suffix: impl Into<String>) -> Self {
+        Self::EndsWith(field.into(), suffix.into())
+    }
+
     pub fn in_list(field: impl Into<String>, values: impl IntoIterator<Item = impl Into<Value>>) -> Self {
         Self::In(field.into(), values.into_iter().map(Into::into).collect())
     }
@@ -73,7 +91,10 @@ impl Filter {
             | Self::Lt(field, _)
             | Self::Lte(field, _)
             | Self::In(field, _)
-            | Self::IsNil(field) => out.push(field),
+            | Self::IsNil(field)
+            | Self::Contains(field, _)
+            | Self::StartsWith(field, _)
+            | Self::EndsWith(field, _) => out.push(field),
             Self::And(parts) | Self::Or(parts) => {
                 for part in parts {
                     part.collect_fields(out);
@@ -118,6 +139,8 @@ impl Filter {
         }
     }
 
+    /// Evaluates the filter against one record. Without attribute types, text
+    /// matching here is case-sensitive even for `CiString` fields.
     pub fn matches(&self, fields: &FieldMap) -> bool {
         match self {
             Self::True => true,
@@ -142,6 +165,15 @@ impl Filter {
             Self::Lte(field, value) => compare(fields.get(field), value, Ordering::Less, true),
             Self::In(field, values) => fields.get(field).is_some_and(|got| values.contains(got)),
             Self::IsNil(field) => matches!(fields.get(field), None | Some(Value::Null)),
+            Self::Contains(field, needle) => {
+                text_matches(fields.get(field), needle, false, |text, needle| text.contains(needle))
+            }
+            Self::StartsWith(field, needle) => {
+                text_matches(fields.get(field), needle, false, |text, needle| text.starts_with(needle))
+            }
+            Self::EndsWith(field, needle) => {
+                text_matches(fields.get(field), needle, false, |text, needle| text.ends_with(needle))
+            }
             Self::And(parts) => parts.iter().all(|part| part.matches(fields)),
             Self::Or(parts) => parts.iter().any(|part| part.matches(fields)),
             Self::Not(inner) => !inner.matches(fields),
@@ -154,6 +186,23 @@ impl Filter {
                 _ => true,
             },
         }
+    }
+}
+
+/// Applies a text match to a stored value. Non-string and null values never match.
+pub fn text_matches(
+    got: Option<&Value>,
+    needle: &str,
+    case_insensitive: bool,
+    test: impl Fn(&str, &str) -> bool,
+) -> bool {
+    let Some(Value::String(text)) = got else {
+        return false;
+    };
+    if case_insensitive {
+        test(&text.to_lowercase(), &needle.to_lowercase())
+    } else {
+        test(text, needle)
     }
 }
 
@@ -339,6 +388,21 @@ mod tests {
         assert!(!Filter::gt("n", 10_i64).matches(&row));
         assert!(Filter::gte("n", 10_i64).matches(&row));
         assert!(!Filter::gt("missing", 1_i64).matches(&row));
+    }
+
+    #[test]
+    fn text_matching_is_case_sensitive_and_skips_null() {
+        let row = fields! { "title" => "Printer on fire", "notes" => Value::Null };
+
+        assert!(Filter::contains("title", "on fi").matches(&row));
+        assert!(!Filter::contains("title", "ON FI").matches(&row));
+        assert!(Filter::starts_with("title", "Printer").matches(&row));
+        assert!(!Filter::starts_with("title", "fire").matches(&row));
+        assert!(Filter::ends_with("title", "fire").matches(&row));
+        assert!(!Filter::ends_with("title", "Printer").matches(&row));
+        assert!(Filter::contains("title", "").matches(&row));
+        assert!(!Filter::contains("notes", "").matches(&row));
+        assert!(!Filter::contains("missing", "").matches(&row));
     }
 
     #[test]

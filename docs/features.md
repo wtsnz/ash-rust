@@ -343,6 +343,15 @@ let active = Article::query(&ctx)
     .await?;
 ```
 
+String and `CiString` attributes also get `contains`, `starts_with`, and `ends_with`. Wildcards in the text match literally, and only `CiString` fields ignore case:
+
+```rust
+let rust_posts = Article::query(&ctx)
+    .filter(Article::title.contains("Rust"))
+    .all()
+    .await?;
+```
+
 ### 3. Typed PubSub Ergonomics
 Fluently attach `PubSub` to contexts and subscribe to typed event streams without string topic typos:
 

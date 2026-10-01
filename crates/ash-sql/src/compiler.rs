@@ -4,7 +4,7 @@ use ash_core::{
 };
 use uuid::Uuid;
 
-use crate::dialect::SqlDialect;
+use crate::dialect::{SqlDialect, TextMatch};
 use crate::param::SqlParam;
 
 /// A parameterized SQL statement and its bound parameter values.
@@ -271,6 +271,34 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    fn compile_text_match(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        kind: TextMatch,
+        needle: &str,
+        scope_alias: Option<&str>,
+    ) -> Result<String> {
+        let ty = resource
+            .attribute(field)
+            .map(|attr| attr.ty)
+            .or_else(|| resource.calculation(field).map(|calc| calc.ty));
+        let case_insensitive = match ty {
+            Some(AttrType::CiString) => true,
+            Some(AttrType::String | AttrType::Atom { .. }) | None => false,
+            Some(other) => {
+                return Err(Error::Invalid(format!(
+                    "text filters need a string field, but `{field}` on {} is {other:?}",
+                    resource.name
+                )));
+            }
+        };
+        let op = self.compile_operand_scoped(resource, field, scope_alias)?;
+        let pattern = self.dialect.text_pattern(kind, needle, case_insensitive);
+        let p = self.bind_field(resource, field, Value::String(pattern));
+        Ok(self.dialect.render_text_match(&op, &p, case_insensitive))
+    }
+
     pub fn compile_filter(&mut self, resource: &ResourceDef, filter: &Filter) -> Result<String> {
         self.compile_filter_scoped(resource, filter, None)
     }
@@ -338,6 +366,15 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Filter::IsNil(field) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NULL"))
+            }
+            Filter::Contains(field, needle) => {
+                self.compile_text_match(resource, field, TextMatch::Contains, needle, scope_alias)
+            }
+            Filter::StartsWith(field, needle) => {
+                self.compile_text_match(resource, field, TextMatch::StartsWith, needle, scope_alias)
+            }
+            Filter::EndsWith(field, needle) => {
+                self.compile_text_match(resource, field, TextMatch::EndsWith, needle, scope_alias)
             }
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {

@@ -52,8 +52,10 @@ pub use engine::{
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
-pub use filter::Filter;
-pub use keys::{Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation};
+pub use filter::{Filter, text_matches};
+pub use keys::{
+    Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation, TextValue,
+};
 pub use multi::{BoundMulti, IntoChangeset, Multi, MultiResult};
 pub use notifier::{Notification, Notifier, SyncFnNotifier};
 pub use policy::{

@@ -6,9 +6,9 @@ use std::future::ready;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash_core::{
-    apply_named_with_args, compare_typed, AggregateFilter, AggregateKind, AttrType,
-    CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef, Result, SchemaSupport,
-    TransactionSupport, Value,
+    apply_named_with_args, compare_typed, text_matches, AggregateFilter, AggregateKind,
+    AttrType, CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef, Result,
+    SchemaSupport, TransactionSupport, Value,
 };
 use uuid::Uuid;
 
@@ -315,6 +315,12 @@ impl DataLayer for Memory {
     }
 }
 
+fn is_ci_string(resource: &ResourceDef, field: &str) -> bool {
+    resource
+        .attribute(field)
+        .is_some_and(|attr| matches!(attr.ty, AttrType::CiString))
+}
+
 fn row_matches_filter(
     tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
     resource: &ResourceDef,
@@ -361,6 +367,24 @@ fn row_matches_filter(
             })
         }
         Filter::IsNil(field) => matches!(row.get(field), None | Some(Value::Null)),
+        Filter::Contains(field, needle) => text_matches(
+            row.get(field),
+            needle,
+            is_ci_string(resource, field),
+            |text, needle| text.contains(needle),
+        ),
+        Filter::StartsWith(field, needle) => text_matches(
+            row.get(field),
+            needle,
+            is_ci_string(resource, field),
+            |text, needle| text.starts_with(needle),
+        ),
+        Filter::EndsWith(field, needle) => text_matches(
+            row.get(field),
+            needle,
+            is_ci_string(resource, field),
+            |text, needle| text.ends_with(needle),
+        ),
         Filter::And(parts) => parts.iter().all(|part| row_matches_filter(tables, resource, part, row)),
         Filter::Or(parts) => parts.iter().any(|part| row_matches_filter(tables, resource, part, row)),
         Filter::Not(inner) => !row_matches_filter(tables, resource, inner, row),

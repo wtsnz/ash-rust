@@ -408,3 +408,59 @@ fn test_complex_expressions_compilation() {
         compiled_expr
     );
 }
+
+#[test]
+fn test_text_filters_escape_wildcards_per_dialect() {
+    let query = CompiledQuery {
+        filter: Some(Filter::contains("subject", r"50%_off*[x]?\")),
+        ..CompiledQuery::default()
+    };
+
+    let mut sqlite_compiler = QueryCompiler::new(&SqliteDialect);
+    let sqlite = sqlite_compiler.compile_select(&TICKET_DEF, &query).unwrap();
+    assert!(sqlite.sql.contains("\"subject\" GLOB ?"), "got: {}", sqlite.sql);
+    assert_eq!(
+        sqlite.params[0].value,
+        Value::String(r"*50%_off[*][[]x][?]\*".into())
+    );
+
+    let mut pg_compiler = QueryCompiler::new(&PostgresDialect);
+    let pg = pg_compiler.compile_select(&TICKET_DEF, &query).unwrap();
+    assert!(pg.sql.contains("\"subject\" LIKE $1"), "got: {}", pg.sql);
+    assert_eq!(
+        pg.params[0].value,
+        Value::String(r"%50\%\_off*[x]?\\%".into())
+    );
+
+    let starts = CompiledQuery {
+        filter: Some(Filter::starts_with("status", "op")),
+        ..CompiledQuery::default()
+    };
+    let mut pg_compiler = QueryCompiler::new(&PostgresDialect);
+    let pg = pg_compiler.compile_select(&TICKET_DEF, &starts).unwrap();
+    assert_eq!(pg.params[0].value, Value::String("op%".into()));
+
+    let ends = CompiledQuery {
+        filter: Some(Filter::ends_with("subject", "fire")),
+        ..CompiledQuery::default()
+    };
+    let mut sqlite_compiler = QueryCompiler::new(&SqliteDialect);
+    let sqlite = sqlite_compiler.compile_select(&TICKET_DEF, &ends).unwrap();
+    assert_eq!(sqlite.params[0].value, Value::String("*fire".into()));
+}
+
+#[test]
+fn test_text_filters_reject_non_text_fields() {
+    for field in ["priority", "subject_length"] {
+        let query = CompiledQuery {
+            filter: Some(Filter::contains(field, "1")),
+            ..CompiledQuery::default()
+        };
+        let mut compiler = QueryCompiler::new(&PostgresDialect);
+        let err = compiler.compile_select(&TICKET_DEF, &query).unwrap_err();
+        assert!(
+            err.to_string().contains("text filters need a string field"),
+            "{field}: {err}"
+        );
+    }
+}
