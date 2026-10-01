@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "table": "berths",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "port_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "code",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "clamp",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "max_mass_tonnes",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "version",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_berths_port_code",
+      "columns": [
+        "port_id",
+        "code"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [
+    {
+      "name": "ck_berths_positive_mass",
+      "expression": "max_mass_tonnes > 0"
+    },
+    {
+      "name": "ck_berths_clamp_one_of",
+      "expression": "\"clamp\" IN ('standard', 'heavy_lift', 'cryogenic')"
+    }
+  ],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_berths_port",
+      "column": "port_id",
+      "columns": [
+        "port_id"
+      ],
+      "target_table": "ports",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    }
+  ]
+}
