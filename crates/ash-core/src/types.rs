@@ -223,6 +223,18 @@ impl Binary {
     }
 }
 
+impl From<UtcDateTime> for Value {
+    fn from(value: UtcDateTime) -> Self {
+        value.to_value()
+    }
+}
+
+impl From<Decimal> for Value {
+    fn from(value: Decimal) -> Self {
+        value.to_value()
+    }
+}
+
 impl From<Binary> for Value {
     fn from(value: Binary) -> Self {
         value.to_value()
