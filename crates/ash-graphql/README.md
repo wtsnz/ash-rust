@@ -123,16 +123,31 @@ mutation {
 
 ### 5. Batched Relationship Loading (DataLoader)
 
-N+1 relationship loading problems are solved using `AshBatchLoader`:
+N+1 relationship loading problems are solved using `AshBatchLoader`, which loads every
+key of a relationship in one read. `with_dataloader()` gives each request its own loader,
+bound to the `Context<D>` that request runs as:
 ```rust,ignore
-let dataloader = AshGraphQL::create_dataloader(ctx.clone(), &[&AUTHOR_DEF, &POST_DEF]);
+let schema = AshGraphQL::from_resources(&[&AUTHOR_DEF, &POST_DEF])
+    .with_dataloader()
+    .finish::<Memory>()?;
 
-let req = Request::new(query)
-    .data(ctx)
-    .data(dataloader);
-
+// Relationships load as this actor in this tenant, batched.
+let req = Request::new(query).data(ctx.with_actor(actor));
 let res = schema.execute(req).await;
 ```
+
+A loader can also be supplied by hand with `AshGraphQL::create_dataloader(ctx)`.
+Relationship resolvers only use a loader serving the request's actor and tenant;
+otherwise they load directly.
+
+### Reads, Tenancy and Policies
+
+Every read (`get`, `list`, custom read actions, connections, relationships and
+subscriptions) runs as the request's `Context<D>`, through the same scoping as the typed
+API (`ash_core::scope_read`): the read action's preparations and argument filters, the
+actor's read policies, and the context's tenant. A record a typed read wouldn't return
+isn't reachable over GraphQL either. An `Actor` given in the request data acts for a
+context that carries none.
 
 ### 6. Realtime Subscriptions
 

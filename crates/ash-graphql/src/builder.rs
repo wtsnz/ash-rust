@@ -47,7 +47,8 @@ impl AshGraphQLBuilder {
         self
     }
 
-    /// Enables the `DataLoader` for batching relationship resolution.
+    /// Batches relationship resolution with a `DataLoader` per request, bound to the
+    /// `Context<D>` (and `Actor`) that request runs as.
     pub fn with_dataloader(mut self) -> Self {
         self.dataloader_enabled = true;
         self
@@ -118,7 +119,7 @@ impl AshGraphQLBuilder {
         let has_subscriptions = self.pubsub.is_some();
         if let Some(pubsub) = &self.pubsub {
             for res in &self.resources {
-                for sf in build_resource_subscriptions(res, pubsub.clone()) {
+                for sf in build_resource_subscriptions::<D>(res, pubsub.clone()) {
                     subscription = subscription.field(sf);
                 }
             }
@@ -192,11 +193,10 @@ impl AshGraphQLBuilder {
             builder = builder.register(subscription);
         }
 
+        if self.dataloader_enabled {
+            builder = builder.extension(crate::request::RequestDataLoader::<D>::new());
+        }
         if let Some(ctx) = default_ctx {
-            if self.dataloader_enabled {
-                let loader = crate::AshGraphQL::create_dataloader(ctx.clone(), &self.resources);
-                builder = builder.data(loader);
-            }
             builder = builder.data(ctx);
         }
 

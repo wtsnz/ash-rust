@@ -1,16 +1,13 @@
 use ash_core::eval as eval_expr;
 use ash_core::redact_fields;
-use ash_core::{
-    Actor, AttrType, CompiledQuery, Context, DataLayer, FieldMap, Filter, RelKind, ResourceDef,
-    Value,
-};
+use ash_core::{AttrType, DataLayer, FieldMap, RelKind, RelationshipDef, ResourceDef, Value};
 
-use crate::read_scope::scoped_read_filter;
 use async_graphql::Value as GqlValue;
 use async_graphql::dataloader::DataLoader;
 use async_graphql::dynamic::*;
 
-use crate::dataloader::{AshBatchLoader, BelongsToKey, HasManyKey, ManyToManyKey};
+use crate::dataloader::{AshBatchLoader, RelatedKey};
+use crate::request::{request_actor, request_context};
 use crate::types::{
     ash_value_to_graphql_value, ash_value_to_graphql_value_typed, attr_type_to_type_ref,
     enum_type_name,
@@ -36,9 +33,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let field = Field::new(attr_name, type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    let actor = ctx
-                        .data_opt::<Actor>()
-                        .or_else(|| ctx.data_opt::<Option<Actor>>().and_then(|opt| opt.as_ref()));
+                    let actor = request_actor::<D>(&ctx);
 
                     if has_field_policy {
                         let mut check_map = map.clone();
@@ -128,312 +123,41 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         obj = obj.field(field);
     }
 
-    // 4. Relationships (BelongsTo, HasMany, ManyToMany)
+    // 4. Relationships, each loaded as the request's context reads it.
     for rel in resource.relationships {
-        let dest_fn = rel.destination;
-        let dest_res = dest_fn();
-        let dest_name = dest_res.name;
+        let dest_res = (rel.destination)();
         let rel_name = rel.name;
-        let rel_kind = rel.kind;
-        let source_attr = rel.source_attribute;
-        let dest_attr = rel.destination_attribute;
-        // The dataloader batches single uuid keys; composite keys query directly.
-        let composite = rel.key_pairs().len() > 1;
-        let through_fn = rel.through;
-        let source_join = rel.source_attribute_on_join_resource;
-        let dest_join = rel.destination_attribute_on_join_resource;
-
-        let type_ref = match rel_kind {
-            RelKind::BelongsTo | RelKind::HasOne => TypeRef::named(dest_name),
-            RelKind::HasMany | RelKind::ManyToMany => TypeRef::named_nn_list_nn(dest_name),
+        let to_one = matches!(rel.kind, RelKind::BelongsTo | RelKind::HasOne);
+        let type_ref = if to_one {
+            TypeRef::named(dest_res.name)
+        } else {
+            TypeRef::named_nn_list_nn(dest_res.name)
         };
 
         let field = Field::new(rel_name, type_ref, move |ctx| {
             FieldFuture::new(async move {
-                if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    // Check if preloaded
-                    if let Some(val) = map.get(rel_name) {
-                        match val {
-                            Value::Null => return Ok(None),
-                            Value::Map(m) => {
-                                let mut item = m.clone();
-                                let _ = redact_fields(dest_res, ctx.data_opt::<Actor>(), &mut item);
-                                return Ok(Some(FieldValue::owned_any(item)));
-                            }
-                            Value::Array(arr) => {
-                                let items: Vec<FieldValue> = arr
-                                    .iter()
-                                    .filter_map(|v| match v {
-                                        Value::Map(m) => {
-                                            let mut item = m.clone();
-                                            let _ = redact_fields(
-                                                dest_res,
-                                                ctx.data_opt::<Actor>(),
-                                                &mut item,
-                                            );
-                                            Some(FieldValue::owned_any(item))
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect();
-                                return Ok(Some(FieldValue::list(items)));
-                            }
-                            _ => {}
-                        }
+                let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() else {
+                    return Ok(None);
+                };
+                let rows = match map.get(rel_name) {
+                    // Loaded along with the parent.
+                    Some(Value::Null) => Vec::new(),
+                    Some(Value::Map(m)) => vec![m.clone()],
+                    Some(Value::Array(items)) => {
+                        items.iter().filter_map(|v| v.as_map().cloned()).collect()
                     }
-
-                    // Try DataLoader
-                    if !composite
-                        && let Some(loader) = ctx.data_opt::<DataLoader<AshBatchLoader<D>>>()
-                    {
-                        match rel_kind {
-                            RelKind::BelongsTo => {
-                                if let Some(foreign_id) =
-                                    map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
-                                    let key = BelongsToKey {
-                                        dest_resource: dest_name,
-                                        dest_attr,
-                                        foreign_id,
-                                    };
-                                    if let Ok(Some(mut record)) = loader.load_one(key).await {
-                                        let _ = redact_fields(
-                                            dest_res,
-                                            ctx.data_opt::<Actor>(),
-                                            &mut record,
-                                        );
-                                        return Ok(Some(FieldValue::owned_any(record)));
-                                    }
-                                }
-                                return Ok(None);
-                            }
-                            RelKind::HasOne => {
-                                if let Some(source_id) =
-                                    map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
-                                    let key = HasManyKey {
-                                        dest_resource: dest_name,
-                                        dest_attr,
-                                        source_id,
-                                    };
-                                    if let Ok(Some(records)) = loader.load_one(key).await
-                                        && let Some(mut r) = records.into_iter().next()
-                                    {
-                                        let _ = redact_fields(
-                                            dest_res,
-                                            ctx.data_opt::<Actor>(),
-                                            &mut r,
-                                        );
-                                        return Ok(Some(FieldValue::owned_any(r)));
-                                    }
-                                }
-                                return Ok(None);
-                            }
-                            RelKind::HasMany => {
-                                if let Some(source_id) =
-                                    map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
-                                    let key = HasManyKey {
-                                        dest_resource: dest_name,
-                                        dest_attr,
-                                        source_id,
-                                    };
-                                    if let Ok(Some(records)) = loader.load_one(key).await {
-                                        let items: Vec<FieldValue> = records
-                                            .into_iter()
-                                            .map(|mut r| {
-                                                let _ = redact_fields(
-                                                    dest_res,
-                                                    ctx.data_opt::<Actor>(),
-                                                    &mut r,
-                                                );
-                                                FieldValue::owned_any(r)
-                                            })
-                                            .collect();
-                                        return Ok(Some(FieldValue::list(items)));
-                                    }
-                                }
-                                return Ok(Some(FieldValue::list(Vec::<FieldValue>::new())));
-                            }
-                            RelKind::ManyToMany => {
-                                if let Some(through) = through_fn
-                                    && let Some(src_join) = source_join
-                                    && let Some(dst_join) = dest_join
-                                    && let Some(source_id) =
-                                        map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
-                                    let key = ManyToManyKey {
-                                        join_resource: through().name,
-                                        dest_resource: dest_name,
-                                        source_attr_on_join: src_join,
-                                        dest_attr_on_join: dst_join,
-                                        source_id,
-                                    };
-                                    if let Ok(Some(records)) = loader.load_one(key).await {
-                                        let items: Vec<FieldValue> = records
-                                            .into_iter()
-                                            .map(|mut r| {
-                                                let _ = redact_fields(
-                                                    dest_res,
-                                                    ctx.data_opt::<Actor>(),
-                                                    &mut r,
-                                                );
-                                                FieldValue::owned_any(r)
-                                            })
-                                            .collect();
-                                        return Ok(Some(FieldValue::list(items)));
-                                    }
-                                }
-                                return Ok(Some(FieldValue::list(Vec::<FieldValue>::new())));
-                            }
-                        }
-                    }
-
-                    // Fallback to direct query
-                    if let Ok(ctx_ash) = ctx.data::<Context<D>>() {
-                        match rel_kind {
-                            RelKind::BelongsTo => {
-                                if let Some(link) = rel.destination_filter(map) {
-                                    let query = CompiledQuery {
-                                        filter: scoped_read_filter(
-                                            dest_res,
-                                            ctx_ash.actor.as_ref(),
-                                            Some(link),
-                                        ),
-                                        tenant: ctx_ash.tenant.clone(),
-                                        limit: Some(1),
-                                        ..CompiledQuery::default()
-                                    };
-                                    if let Ok(mut records) =
-                                        ctx_ash.data.run_query(dest_res, &query).await
-                                        && let Some(mut rec) = records.pop()
-                                    {
-                                        let _ = redact_fields(
-                                            dest_res,
-                                            ctx_ash.actor.as_ref(),
-                                            &mut rec,
-                                        );
-                                        return Ok(Some(FieldValue::owned_any(rec)));
-                                    }
-                                }
-                                return Ok(None);
-                            }
-                            RelKind::HasOne => {
-                                if let Some(link) = rel.destination_filter(map) {
-                                    let query = CompiledQuery {
-                                        filter: scoped_read_filter(
-                                            dest_res,
-                                            ctx_ash.actor.as_ref(),
-                                            Some(link),
-                                        ),
-                                        tenant: ctx_ash.tenant.clone(),
-                                        limit: Some(1),
-                                        ..CompiledQuery::default()
-                                    };
-                                    if let Ok(mut records) =
-                                        ctx_ash.data.run_query(dest_res, &query).await
-                                        && let Some(mut rec) = records.pop()
-                                    {
-                                        let _ = redact_fields(
-                                            dest_res,
-                                            ctx_ash.actor.as_ref(),
-                                            &mut rec,
-                                        );
-                                        return Ok(Some(FieldValue::owned_any(rec)));
-                                    }
-                                }
-                                return Ok(None);
-                            }
-                            RelKind::HasMany => {
-                                if let Some(link) = rel.destination_filter(map) {
-                                    let query = CompiledQuery {
-                                        filter: scoped_read_filter(
-                                            dest_res,
-                                            ctx_ash.actor.as_ref(),
-                                            Some(link),
-                                        ),
-                                        tenant: ctx_ash.tenant.clone(),
-                                        ..CompiledQuery::default()
-                                    };
-                                    if let Ok(records) =
-                                        ctx_ash.data.run_query(dest_res, &query).await
-                                    {
-                                        let items: Vec<FieldValue> = records
-                                            .into_iter()
-                                            .map(|mut r| {
-                                                let _ = redact_fields(
-                                                    dest_res,
-                                                    ctx_ash.actor.as_ref(),
-                                                    &mut r,
-                                                );
-                                                FieldValue::owned_any(r)
-                                            })
-                                            .collect();
-                                        return Ok(Some(FieldValue::list(items)));
-                                    }
-                                }
-                                return Ok(Some(FieldValue::list(Vec::<FieldValue>::new())));
-                            }
-                            RelKind::ManyToMany => {
-                                if let Some(through) = through_fn
-                                    && let Some(src_join) = source_join
-                                    && let Some(dst_join) = dest_join
-                                    && let Some(source_id) =
-                                        map.get(source_attr).and_then(|v| v.as_uuid())
-                                {
-                                    let join_query = CompiledQuery {
-                                        filter: Some(Filter::eq(src_join, Value::Uuid(source_id))),
-                                        tenant: ctx_ash.tenant.clone(),
-                                        ..CompiledQuery::default()
-                                    };
-                                    if let Ok(join_rows) =
-                                        ctx_ash.data.run_query(through(), &join_query).await
-                                    {
-                                        let dest_ids: Vec<Value> = join_rows
-                                            .into_iter()
-                                            .filter_map(|r| r.get(dst_join).cloned())
-                                            .collect();
-                                        if !dest_ids.is_empty() {
-                                            let pk = dest_res
-                                                .attributes
-                                                .iter()
-                                                .find(|a| a.primary_key)
-                                                .map(|a| a.name)
-                                                .unwrap_or("id");
-                                            let dest_query = CompiledQuery {
-                                                filter: scoped_read_filter(
-                                                    dest_res,
-                                                    ctx_ash.actor.as_ref(),
-                                                    Some(Filter::in_list(pk, dest_ids)),
-                                                ),
-                                                tenant: ctx_ash.tenant.clone(),
-                                                ..CompiledQuery::default()
-                                            };
-                                            if let Ok(records) =
-                                                ctx_ash.data.run_query(dest_res, &dest_query).await
-                                            {
-                                                let items: Vec<FieldValue> = records
-                                                    .into_iter()
-                                                    .map(|mut r| {
-                                                        let _ = redact_fields(
-                                                            dest_res,
-                                                            ctx_ash.actor.as_ref(),
-                                                            &mut r,
-                                                        );
-                                                        FieldValue::owned_any(r)
-                                                    })
-                                                    .collect();
-                                                return Ok(Some(FieldValue::list(items)));
-                                            }
-                                        }
-                                    }
-                                }
-                                return Ok(Some(FieldValue::list(Vec::<FieldValue>::new())));
-                            }
-                        }
-                    }
+                    _ => load_relationship::<D>(&ctx, resource, rel, map).await?,
+                };
+                let actor = request_actor::<D>(&ctx);
+                let mut items = rows.into_iter().map(|mut row| {
+                    let _ = redact_fields(dest_res, actor, &mut row);
+                    FieldValue::owned_any(row)
+                });
+                if to_one {
+                    Ok(items.next())
+                } else {
+                    Ok(Some(FieldValue::list(items)))
                 }
-                Ok(None)
             })
         });
 
@@ -441,6 +165,31 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
     }
 
     obj
+}
+
+/// `source`'s `rel` rows, batched through the request's dataloader when it reads as the
+/// request does.
+async fn load_relationship<D: DataLayer + Clone + 'static>(
+    ctx: &ResolverContext<'_>,
+    resource: &'static ResourceDef,
+    rel: &'static RelationshipDef,
+    source: &FieldMap,
+) -> async_graphql::Result<Vec<FieldMap>> {
+    let ash = request_context::<D>(ctx)?;
+    if let Some(loader) = ctx.data_opt::<DataLoader<AshBatchLoader<D>>>()
+        && loader.loader().serves(&ash)
+    {
+        let rows = loader
+            .load_one(RelatedKey::new(resource, rel, source))
+            .await
+            .map_err(|e| (*e).clone())?;
+        return Ok(rows.unwrap_or_default());
+    }
+    let mut related =
+        ash_core::load_related(&*ash, resource, rel.name, std::slice::from_ref(source))
+            .await
+            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    Ok(related.pop().unwrap_or_default())
 }
 
 /// Collects all [`Enum`] types needed for atom attributes on a resource.

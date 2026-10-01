@@ -1,7 +1,6 @@
-use ash_core::redact_fields;
-use ash_core::{ActionKind, Actor, ResourceDef};
+use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible, redact_fields};
 
-use crate::read_scope::record_visible_for_read;
+use crate::request::request_actor;
 use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 use uuid::Uuid;
@@ -17,7 +16,18 @@ pub fn uncapitalize(s: &str) -> String {
     }
 }
 
-pub fn build_resource_subscriptions(
+/// The subscriber's actor and tenant, as the request's other resolvers see them.
+fn subscriber<D: DataLayer + 'static>(
+    ctx: &ResolverContext<'_>,
+) -> (Option<Actor>, Option<String>) {
+    let tenant = ctx
+        .ctx
+        .data_opt::<Context<D>>()
+        .and_then(|context| context.tenant.clone());
+    (request_actor::<D>(ctx).cloned(), tenant)
+}
+
+pub fn build_resource_subscriptions<D: DataLayer + 'static>(
     resource: &'static ResourceDef,
     pubsub: PubSub,
 ) -> Vec<SubscriptionField> {
@@ -42,7 +52,7 @@ pub fn build_resource_subscriptions(
                 };
 
                 let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
-                let actor = ctx.data_opt::<Actor>().cloned();
+                let (actor, tenant) = subscriber::<D>(&ctx);
 
                 let stream = async_stream::stream! {
                     while let Ok(notif) = sub.recv().await {
@@ -53,7 +63,7 @@ pub fn build_resource_subscriptions(
                             {
                                 continue;
                             }
-                            if !record_visible_for_read(resource, actor.as_ref(), &record) {
+                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &record) {
                                 continue;
                             }
                             let _ = redact_fields(resource, actor.as_ref(), &mut record);
@@ -92,7 +102,7 @@ pub fn build_resource_subscriptions(
                 };
 
                 let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
-                let actor = ctx.data_opt::<Actor>().cloned();
+                let (actor, tenant) = subscriber::<D>(&ctx);
 
                 let stream = async_stream::stream! {
                     while let Ok(notif) = sub.recv().await {
@@ -103,7 +113,7 @@ pub fn build_resource_subscriptions(
                                 continue;
                             }
                             let mut record = notif.record_fields;
-                            if !record_visible_for_read(resource, actor.as_ref(), &record) {
+                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &record) {
                                 continue;
                             }
                             let _ = redact_fields(resource, actor.as_ref(), &mut record);
@@ -138,7 +148,7 @@ pub fn build_resource_subscriptions(
                 };
 
                 let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
-                let actor = ctx.data_opt::<Actor>().cloned();
+                let (actor, tenant) = subscriber::<D>(&ctx);
 
                 let stream = async_stream::stream! {
                     while let Ok(notif) = sub.recv().await {
@@ -148,7 +158,7 @@ pub fn build_resource_subscriptions(
                             {
                                 continue;
                             }
-                            if !record_visible_for_read(resource, actor.as_ref(), &notif.record_fields) {
+                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
                                 continue;
                             }
                             yield Ok(FieldValue::value(async_graphql::Value::String(notif.id.to_string())));

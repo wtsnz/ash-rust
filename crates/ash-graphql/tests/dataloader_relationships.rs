@@ -154,7 +154,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         }
     "#;
 
-    let dataloader1 = AshGraphQL::create_dataloader(ctx.clone(), resources);
+    let dataloader1 = AshGraphQL::create_dataloader(ctx.clone());
     let req = Request::new(query_authors).data(ctx.clone()).data(dataloader1);
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors in listAuthors: {:?}", res.errors);
@@ -184,7 +184,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         }
     "#;
 
-    let dataloader2 = AshGraphQL::create_dataloader(ctx.clone(), resources);
+    let dataloader2 = AshGraphQL::create_dataloader(ctx.clone());
     let req = Request::new(query_posts).data(ctx).data(dataloader2);
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors in listPosts: {:?}", res.errors);

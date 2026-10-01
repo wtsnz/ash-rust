@@ -1,16 +1,32 @@
 use ash_core::{
-    compile_read_filter, redact_fields, ActionDef, ActionKind, CompiledQuery, Context, DataLayer,
-    FieldMap, Filter, PreparationDef, ResourceDef, Sort, Value,
+    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, Value,
+    redact_fields, scope_read,
 };
 use async_graphql::dynamic::*;
 use uuid::Uuid;
 
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
 use crate::mutation::to_camel_case;
+use crate::request::request_context;
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
 use crate::types::{attr_type_to_type_ref, parse_input_val};
 
-static FALLBACK_READ: ActionDef = ActionDef::read("read");
+/// Runs `query` as a read through `action` in `ctx`: with the action's preparations and
+/// argument filters, the actor's read policies and the context's tenant.
+pub(crate) async fn run_read<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &ResourceDef,
+    action: &ActionDef,
+    arguments: &FieldMap,
+    query: CompiledQuery,
+) -> async_graphql::Result<Vec<FieldMap>> {
+    let query = scope_read(resource, action, ctx.actor.as_ref(), arguments, query)
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    ctx.data
+        .run_query(resource, &query)
+        .await
+        .map_err(|e| async_graphql::Error::new(e.to_string()))
+}
 
 /// Returns pluralized name for list queries (e.g. "Ticket" -> "listTickets").
 pub fn list_query_name(resource_name: &str) -> String {
@@ -58,10 +74,7 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
         .map(|a| a.name)
         .unwrap_or("id");
 
-    let read_action = resource
-        .primary_read()
-        .or_else(|| resource.actions.iter().find(|a| a.kind == ActionKind::Read))
-        .unwrap_or(&FALLBACK_READ);
+    let read_action = resource.default_read();
 
     // 1. get<Resource>(id: ID!): <Resource>
     let get_field = Field::new(
@@ -69,7 +82,7 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
         TypeRef::named(resource.name),
         move |ctx| {
             FieldFuture::new(async move {
-                let ctx_ash = ctx.data::<Context<D>>()?;
+                let ash = request_context::<D>(&ctx)?;
                 let id_arg = ctx
                     .args
                     .get("id")
@@ -78,34 +91,18 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 let id = Uuid::parse_str(id_str)
                     .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
 
-                let policy_filter = compile_read_filter(resource, read_action, ctx_ash.actor.as_ref())
-                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-
-                let user_filter = Filter::eq(pk_name, Value::Uuid(id));
-                let combined_filter = match policy_filter {
-                    Some(pf) => Filter::And(vec![pf, user_filter]),
-                    None => user_filter,
-                };
-
+                // A get sees what the primary read sees: an archived record is not found.
                 let query = CompiledQuery {
-                    filter: Some(combined_filter),
-                    sort: Vec::new(),
-                    calculations: Vec::new(),
-                    calculation_args: Default::default(),
-                    aggregates: Vec::new(),
+                    filter: Some(Filter::eq(pk_name, Value::Uuid(id))),
                     limit: Some(1),
-                    offset: None,
-                    tenant: ctx_ash.tenant.clone(),
+                    tenant: ash.tenant.clone(),
+                    ..CompiledQuery::default()
                 };
-
-                let records = ctx_ash
-                    .data
-                    .run_query(resource, &query)
-                    .await
-                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                let records =
+                    run_read(&ash, resource, read_action, &FieldMap::new(), query).await?;
 
                 if let Some(mut record) = records.into_iter().next() {
-                    let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut record);
+                    let _ = redact_fields(resource, ash.actor.as_ref(), &mut record);
                     Ok(Some(FieldValue::owned_any(record)))
                 } else {
                     Ok(None)
@@ -144,9 +141,8 @@ fn build_read_field_internal<D: DataLayer + Clone + 'static>(
         TypeRef::named_nn_list_nn(resource.name),
         move |ctx| {
             FieldFuture::new(async move {
-                let ctx_ash = ctx.data::<Context<D>>()?;
+                let ash = request_context::<D>(&ctx)?;
 
-                // 1. Extract action arguments
                 let mut action_args = FieldMap::new();
                 for arg in read_action.arguments {
                     if let Some(val) = ctx.args.get(arg.name) {
@@ -157,152 +153,56 @@ fn build_read_field_internal<D: DataLayer + Clone + 'static>(
                     }
                 }
 
-                // 2. Parse user filter if provided
-                let user_filter = if let Some(filter_arg) = ctx.args.get("filter") {
-                    if let Ok(obj) = filter_arg.object() {
-                        Some(parse_resource_filter(resource, &obj)?)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
+                let filter = match ctx.args.get("filter").map(|f| f.object()) {
+                    Some(Ok(obj)) => Some(parse_resource_filter(resource, &obj)?),
+                    _ => None,
                 };
-
-                // 3. Compile policy filter
-                let policy_filter = compile_read_filter(resource, read_action, ctx_ash.actor.as_ref())
-                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-
-                // 4. Action preparations
-                let mut prep_filter = None;
-                let mut prep_sort = Vec::new();
-                let mut prep_limit = None;
-                let mut prep_offset = None;
-
-                for prep in read_action.preparations {
-                    match *prep {
-                        PreparationDef::Filter(filter_fn) => {
-                            let pf = filter_fn();
-                            prep_filter = match prep_filter {
-                                Some(cur) => Some(Filter::and([cur, pf])),
-                                None => Some(pf),
-                            };
-                        }
-                        PreparationDef::FilterWithArgs(filter_fn) => {
-                            let pf = filter_fn(&action_args);
-                            prep_filter = match prep_filter {
-                                Some(cur) => Some(Filter::and([cur, pf])),
-                                None => Some(pf),
-                            };
-                        }
-                        PreparationDef::Sort { field, descending } => {
-                            prep_sort.push(Sort {
-                                field: field.to_string(),
-                                descending,
-                            });
-                        }
-                        PreparationDef::Limit(l) => {
-                            if prep_limit.is_none() {
-                                prep_limit = Some(l);
-                            }
-                        }
-                        PreparationDef::Offset(o) => {
-                            if prep_offset.is_none() {
-                                prep_offset = Some(o);
-                            }
-                        }
-                    }
-                }
-
-                // 5. If action arguments match resource attributes and weren't handled by preparation,
-                // add equality filters
-                let mut arg_filters = Vec::new();
-                for (name, val) in &action_args {
-                    if resource.attributes.iter().any(|a| a.name == name.as_str()) {
-                        arg_filters.push(Filter::eq(name.as_str(), val.clone()));
-                    }
-                }
-                if !arg_filters.is_empty() {
-                    let af = if arg_filters.len() == 1 {
-                        arg_filters.remove(0)
-                    } else {
-                        Filter::And(arg_filters)
-                    };
-                    prep_filter = match prep_filter {
-                        Some(cur) => Some(Filter::and([cur, af])),
-                        None => Some(af),
-                    };
-                }
-
-                // 6. Combine all filters
-                let mut all_filters = Vec::new();
-                if let Some(pf) = policy_filter {
-                    all_filters.push(pf);
-                }
-                if let Some(pf) = prep_filter {
-                    all_filters.push(pf);
-                }
-                if let Some(uf) = user_filter {
-                    all_filters.push(uf);
-                }
-                let combined_filter = match all_filters.len() {
-                    0 => None,
-                    1 => Some(all_filters.remove(0)),
-                    _ => Some(Filter::And(all_filters)),
+                let sort = match ctx.args.get("sort").map(|s| s.list()) {
+                    Some(Ok(list)) => parse_resource_sort(resource, &list)?,
+                    _ => Vec::new(),
                 };
+                let limit = ctx
+                    .args
+                    .get("limit")
+                    .and_then(|v| v.i64().ok())
+                    .map(|n| n as usize);
+                let offset = ctx
+                    .args
+                    .get("offset")
+                    .and_then(|v| v.i64().ok())
+                    .map(|n| n as usize);
 
-                // 7. Parse sort if provided
-                let sort = if let Some(sort_arg) = ctx.args.get("sort") {
-                    if let Ok(list) = sort_arg.list() {
-                        parse_resource_sort(resource, &list)?
-                    } else if !prep_sort.is_empty() {
-                        prep_sort
-                    } else {
-                        Vec::new()
-                    }
-                } else if !prep_sort.is_empty() {
-                    prep_sort
-                } else {
-                    Vec::new()
-                };
-
-                let limit = ctx.args.get("limit").and_then(|v| v.i64().ok()).map(|n| n as usize).or(prep_limit);
-                let offset = ctx.args.get("offset").and_then(|v| v.i64().ok()).map(|n| n as usize).or(prep_offset);
-
-                // 8. Match calculation arguments if any calculations accept args
-                let mut calc_args = std::collections::HashMap::new();
+                // Calculations take the action arguments named like theirs.
+                let mut calculation_args = std::collections::HashMap::new();
                 for calc in resource.calculations {
-                    if !calc.arguments.is_empty() {
-                        let mut matched = FieldMap::new();
-                        for arg_def in calc.arguments {
-                            if let Some(val) = action_args.get(arg_def.name) {
-                                matched.insert(arg_def.name.to_string(), val.clone());
-                            }
-                        }
-                        if !matched.is_empty() {
-                            calc_args.insert(calc.name.to_string(), matched);
-                        }
+                    let matched: FieldMap = calc
+                        .arguments
+                        .iter()
+                        .filter_map(|arg| {
+                            action_args
+                                .get(arg.name)
+                                .map(|val| (arg.name.to_string(), val.clone()))
+                        })
+                        .collect();
+                    if !matched.is_empty() {
+                        calculation_args.insert(calc.name.to_string(), matched);
                     }
                 }
 
                 let query = CompiledQuery {
-                    filter: combined_filter,
+                    filter,
                     sort,
-                    calculations: Vec::new(),
-                    calculation_args: calc_args,
-                    aggregates: Vec::new(),
+                    calculation_args,
                     limit,
                     offset,
-                    tenant: ctx_ash.tenant.clone(),
+                    tenant: ash.tenant.clone(),
+                    ..CompiledQuery::default()
                 };
-
-                let mut records = ctx_ash
-                    .data
-                    .run_query(resource, &query)
-                    .await
-                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                let mut records =
+                    run_read(&ash, resource, read_action, &action_args, query).await?;
 
                 for record in &mut records {
-                    let _ = redact_fields(resource, ctx_ash.actor.as_ref(), record);
+                    let _ = redact_fields(resource, ash.actor.as_ref(), record);
                 }
 
                 Ok(Some(FieldValue::list(

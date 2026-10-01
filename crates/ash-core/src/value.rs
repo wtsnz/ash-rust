@@ -180,6 +180,26 @@ impl Ord for Value {
     }
 }
 
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Null => {}
+            Self::Bool(b) => b.hash(state),
+            Self::Int(n) => n.hash(state),
+            Self::Uuid(u) => u.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Array(items) => items.hash(state),
+            // Maps compare equal whatever their iteration order, so hash them sorted.
+            Self::Map(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by_key(|(k, _)| *k);
+                entries.hash(state);
+            }
+        }
+    }
+}
+
 impl From<FieldMap> for Value {
     fn from(value: FieldMap) -> Self {
         Self::Map(value)
@@ -396,5 +416,31 @@ pub fn optional_uuid(fields: &FieldMap, key: &str) -> Result<Option<Uuid>> {
             expected: "uuid".into(),
             got: value.type_name().into(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::{BuildHasher, RandomState};
+
+    #[test]
+    fn equal_maps_hash_alike_whatever_their_order() {
+        let mut forward = FieldMap::new();
+        let mut backward = FieldMap::new();
+        for n in 0..32 {
+            forward.insert(format!("k{n}"), Value::Int(n));
+        }
+        for n in (0..32).rev() {
+            backward.insert(format!("k{n}"), Value::Int(n));
+        }
+        let (forward, backward) = (Value::Map(forward), Value::Map(backward));
+        assert_eq!(forward, backward);
+        let hasher = RandomState::new();
+        assert_eq!(hasher.hash_one(&forward), hasher.hash_one(&backward));
+        assert_ne!(
+            hasher.hash_one(Value::Int(1)),
+            hasher.hash_one(Value::Bool(true))
+        );
     }
 }
