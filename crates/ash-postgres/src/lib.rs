@@ -202,7 +202,23 @@ impl Postgres {
     }
 
     /// Installs table and index DDL for the given Ash resources.
+    ///
+    /// Runs in one transaction under the migration lock, so several processes installing
+    /// at once (for example app instances starting together) neither collide on
+    /// `CREATE TABLE IF NOT EXISTS` nor see a table before its indexes exist.
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
+        self.transaction(|tx| {
+            let tx = tx.clone();
+            async move {
+                tx.execute_raw(&format!("SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"))
+                    .await?;
+                tx.install_unlocked(resources).await
+            }
+        })
+        .await
+    }
+
+    async fn install_unlocked(&self, resources: &[&ResourceDef]) -> Result<()> {
         let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);

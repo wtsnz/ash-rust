@@ -190,3 +190,28 @@ async fn failed_steps_report_their_error_and_release_the_lock(db: TestDb) {
     assert!(applied.unwrap());
 }
 on_every_backend!(failed_steps_report_their_error_and_release_the_lock);
+
+/// App instances starting together all install the same resources. Each install must
+/// finish whole, so none sees a table before its unique indexes exist.
+async fn concurrent_installs_each_see_a_complete_schema(db: TestDb) {
+    use crate::fixtures::enum_labels::LabeledNote;
+    use ash_core::Resource;
+
+    let hosts = [
+        db.reconnect().await,
+        db.reconnect().await,
+        db.reconnect().await,
+        db.reconnect().await,
+    ];
+    let (a, b, c, d) = tokio::join!(
+        hosts[0].install(&[&LabeledNote::DEF]),
+        hosts[1].install(&[&LabeledNote::DEF]),
+        hosts[2].install(&[&LabeledNote::DEF]),
+        hosts[3].install(&[&LabeledNote::DEF]),
+    );
+    for result in [a, b, c, d] {
+        result.expect("every install succeeds");
+    }
+    assert!(db.schema().await.has_column("enum_labels", "label"));
+}
+on_every_backend!(concurrent_installs_each_see_a_complete_schema);

@@ -44,7 +44,7 @@ That writes dialect-suffixed SQL under `migrations/` and snapshots under `resour
 cargo run --bin ash-codegen -- create_schema --squash --dialect postgres
 ```
 
-Several hosts can migrate one database at once. Each migration runs in its own transaction, which on Postgres first takes `pg_advisory_xact_lock` and on SQLite starts with `BEGIN IMMEDIATE`, then skips the migration if another host already applied it. Rollbacks work the same way and only undo the latest version. The lock ends with the transaction, so it works behind transaction-pooling proxies such as PgBouncer.
+Several hosts can migrate one database at once. Each migration runs in its own transaction, which on Postgres first takes `pg_advisory_xact_lock` and on SQLite starts with `BEGIN IMMEDIATE`, then skips the migration if another host already applied it. Rollbacks work the same way and only undo the latest version. The lock ends with the transaction, so it works behind transaction-pooling proxies such as PgBouncer. `Postgres::install` takes the same lock and installs everything in one transaction, so app instances that install on startup do not collide either.
 
 ## CLI Usage
 
