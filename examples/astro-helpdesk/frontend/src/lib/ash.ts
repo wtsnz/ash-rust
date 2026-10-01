@@ -123,11 +123,18 @@ export interface CloseTicketInput {
 
 export type TicketCloseInput = CloseTicketInput;
 
+export interface TicketStatusFilter {
+  eq?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+  ne?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+  in?: ("OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED")[];
+  isNil?: boolean;
+}
+
 export interface TicketFilterInput {
   id?: UuidFilter;
   title?: TextFilter;
   description?: TextFilter;
-  status?: StringFilter;
+  status?: TicketStatusFilter;
   priority?: IntFilter;
   estimate?: FloatFilter;
   due_on?: StringFilter;

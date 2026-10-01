@@ -29,6 +29,16 @@ pub fn to_camel_case(s: &str) -> String {
     }
 }
 
+/// Atom variants as GraphQL enum values, which are upper-cased.
+pub fn enum_values(one_of: &[&str]) -> Vec<String> {
+    one_of.iter().map(|value| value.to_uppercase()).collect()
+}
+
+/// Name of the per-attribute filter for an atom, e.g. `TicketStatusFilter`.
+pub fn enum_filter_name(resource_name: &str, attr_name: &str) -> String {
+    format!("{resource_name}{}Filter", to_pascal_case(attr_name))
+}
+
 /// Map an Ash `AttrType` to its corresponding TypeScript type string.
 pub fn attr_type_to_ts(ty: &AttrType) -> String {
     match ty {
@@ -47,7 +57,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
             if one_of.is_empty() {
                 "string".to_string()
             } else {
-                one_of
+                enum_values(one_of)
                     .iter()
                     .map(|s| format!("\"{s}\""))
                     .collect::<Vec<_>>()
@@ -250,9 +260,27 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     let mut out = String::new();
     let name = res.name;
 
+    for attr in res.attributes {
+        if let AttrType::Atom { one_of } = attr.ty
+            && !one_of.is_empty()
+        {
+            let values = attr_type_to_ts(&attr.ty);
+            let filter = enum_filter_name(name, attr.name);
+            out.push_str(&format!(
+                "export interface {filter} {{\n  eq?: {values};\n  ne?: {values};\n  in?: ({values})[];\n  isNil?: boolean;\n}}\n\n"
+            ));
+        }
+    }
+
     out.push_str(&format!("export interface {name}FilterInput {{\n"));
     for attr in res.attributes {
-        if let Some(filter_type) = attr_type_to_filter_type(&attr.ty) {
+        let filter_type = match attr.ty {
+            AttrType::Atom { one_of } if !one_of.is_empty() => {
+                Some(enum_filter_name(name, attr.name))
+            }
+            _ => attr_type_to_filter_type(&attr.ty).map(str::to_string),
+        };
+        if let Some(filter_type) = filter_type {
             out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
         }
     }

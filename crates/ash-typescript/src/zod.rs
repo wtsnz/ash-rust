@@ -20,7 +20,7 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
             if one_of.is_empty() {
                 "z.string()".to_string()
             } else {
-                let options = one_of
+                let options = crate::types::enum_values(one_of)
                     .iter()
                     .map(|s| format!("\"{s}\""))
                     .collect::<Vec<_>>()
@@ -142,7 +142,7 @@ fn build_field_zod_schema(
                 if one_of.is_empty() {
                     "z.string()".to_string()
                 } else {
-                    let options = one_of
+                    let options = crate::types::enum_values(one_of)
                         .iter()
                         .map(|s| format!("\"{s}\""))
                         .collect::<Vec<_>>()

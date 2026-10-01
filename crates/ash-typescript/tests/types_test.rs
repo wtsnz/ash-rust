@@ -72,7 +72,7 @@ fn test_resource_interface_generation() {
     assert!(ts.contains("export interface Ticket {"));
     assert!(ts.contains("  id: string;"));
     assert!(ts.contains("  title: string;"));
-    assert!(ts.contains("  status: \"open\" | \"in_progress\" | \"closed\";"));
+    assert!(ts.contains("  status: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";"));
     assert!(ts.contains("  priority: number;"));
     assert!(ts.contains("  author_id?: string | null;"));
     assert!(ts.contains("  author?: User | null;"));
@@ -84,7 +84,7 @@ fn test_action_input_interface() {
     assert!(ts.contains("export interface OpenTicketInput {"));
     assert!(ts.contains("export type TicketOpenInput = OpenTicketInput;"));
     assert!(ts.contains("  title: string;"));
-    assert!(ts.contains("  status: \"open\" | \"in_progress\" | \"closed\";"));
+    assert!(ts.contains("  status: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";"));
     assert!(ts.contains("  priority: number;"));
     assert!(ts.contains("  author_id?: string | null;"));
 }
@@ -95,6 +95,10 @@ fn test_filter_and_sort_generation() {
     assert!(filter.contains("export interface TicketFilterInput {"));
     assert!(filter.contains("  id?: UuidFilter;"));
     assert!(filter.contains("  title?: TextFilter;"));
+    assert!(filter.contains(
+        "export interface TicketStatusFilter {\n  eq?: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";\n  ne?: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";\n  in?: (\"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\")[];\n  isNil?: boolean;\n}"
+    ));
+    assert!(filter.contains("  status?: TicketStatusFilter;"));
     assert!(filter.contains("  priority?: IntFilter;"));
     assert!(filter.contains("  author?: UserFilterInput;"));
     assert!(filter.contains("  and?: TicketFilterInput[];"));
