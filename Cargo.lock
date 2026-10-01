@@ -131,6 +131,7 @@ dependencies = [
 name = "ash-archival-macros"
 version = "0.1.0"
 dependencies = [
+ "ash-macro-support",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -164,6 +165,7 @@ dependencies = [
 name = "ash-authentication-macros"
 version = "0.1.0"
 dependencies = [
+ "ash-macro-support",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -206,6 +208,15 @@ dependencies = [
  "tokio",
  "tower",
  "uuid",
+]
+
+[[package]]
+name = "ash-macro-support"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -310,6 +321,7 @@ dependencies = [
 name = "ash-state-machine-macros"
 version = "0.1.0"
 dependencies = [
+ "ash-macro-support",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

@@ -215,6 +215,10 @@ resource! {
 }
 ```
 
+### Writing a transformer
+
+`ash-macro-support` parses the wrapped `resource!` for you. `ResourceTokens::from_item` keeps every section as raw tokens, and its helpers take out the transformer's own block, append to sections, check whether an attribute is declared, add an extension, and rebuild the `::ash_core::resource!` call. `Action` splits `actions` without dropping doc comments, return types, or `read name;` short forms. `#[state_machine]`, `#[authentication]`, and `#[archival]` all use it.
+
 ### What `#[state_machine]` Automates:
 1. **Attribute Injection**: Injects `status: String` into `attributes { ... }`.
 2. **Initial State Injection**: Injects default state change into the primary `create` action.
