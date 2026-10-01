@@ -50,6 +50,10 @@ pub(crate) fn filter_expr_to_tokens(expr: &syn::Expr, resource: &syn::Ident) -> 
             let inner = filter_expr_to_tokens(&p.expr, resource);
             quote_spanned! { p.span() => (#inner) }
         }
+        syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Not(_)) => {
+            let inner = filter_expr_to_tokens(&u.expr, resource);
+            quote_spanned! { u.span() => !(#inner) }
+        }
         _ => quote_spanned! { expr.span() => #expr },
     }
 }
