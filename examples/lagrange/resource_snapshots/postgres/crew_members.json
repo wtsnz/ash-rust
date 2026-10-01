@@ -1,0 +1,86 @@
+{
+  "format_version": 1,
+  "table": "crew_members",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "email",
+      "sql_type": "CITEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "name",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "role",
+      "sql_type": "VARCHAR(255)",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "hashed_password",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_crew_members_unique_email",
+      "columns": [
+        "email"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [
+    {
+      "name": "ck_crew_members_role_one_of",
+      "expression": "\"role\" IN ('dispatcher', 'captain', 'customs', 'shipper', 'port_authority')"
+    }
+  ],
+  "statements": [],
+  "references": []
+}

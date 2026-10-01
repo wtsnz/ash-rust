@@ -1,0 +1,121 @@
+{
+  "format_version": 1,
+  "table": "ports",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "planet_id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "code",
+      "sql_type": "CITEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "name",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "kind",
+      "sql_type": "VARCHAR(255)",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "relay",
+      "sql_type": "INET",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_ports_unique_code",
+      "columns": [
+        "code"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_ports_by_planet",
+      "columns": [
+        "planet_id"
+      ],
+      "predicate": null,
+      "method": null,
+      "include": [
+        "name"
+      ]
+    },
+    {
+      "name": "idx_ports_by_kind",
+      "columns": [
+        "kind"
+      ],
+      "predicate": null,
+      "method": "hash"
+    }
+  ],
+  "checks": [
+    {
+      "name": "ck_ports_kind_one_of",
+      "expression": "\"kind\" IN ('ground', 'low_orbit', 'geostationary', 'lagrange')"
+    }
+  ],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_ports_planet",
+      "column": "planet_id",
+      "columns": [
+        "planet_id"
+      ],
+      "target_table": "planets",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "RESTRICT",
+      "on_update": "NO ACTION"
+    }
+  ]
+}

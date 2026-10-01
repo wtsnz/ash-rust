@@ -1,0 +1,67 @@
+{
+  "format_version": 1,
+  "table": "shipping_lines",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "slug",
+      "sql_type": "CITEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "name",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "dispatch_email",
+      "sql_type": "CITEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_shipping_lines_unique_slug",
+      "columns": [
+        "slug"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [],
+  "statements": [],
+  "references": []
+}

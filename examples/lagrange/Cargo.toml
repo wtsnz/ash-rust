@@ -1,0 +1,38 @@
+[package]
+name = "lagrange"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Interplanetary freight and docking platform built on ash-rust"
+default-run = "lagrange"
+
+[dependencies]
+ash-archival = { path = "../../crates/ash-archival" }
+ash-authentication = { path = "../../crates/ash-authentication" }
+ash-core = { path = "../../crates/ash-core" }
+ash-graphql = { path = "../../crates/ash-graphql", features = ["axum"] }
+ash-mailer = { path = "../../crates/ash-mailer" }
+ash-memory = { path = "../../crates/ash-memory" }
+ash-postgres = { path = "../../crates/ash-postgres" }
+ash-pubsub = { path = "../../crates/ash-pubsub" }
+ash-sqlite = { path = "../../crates/ash-sqlite" }
+ash-state-machine = { path = "../../crates/ash-state-machine" }
+ash-typescript = { path = "../../crates/ash-typescript" }
+async-graphql = { version = "7", features = ["dynamic-schema"] }
+async-graphql-axum = "7"
+cargo-ash = { path = "../../crates/cargo-ash" }
+axum = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util = "0.3"
+http-body-util = "0.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
