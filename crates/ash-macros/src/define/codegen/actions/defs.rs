@@ -304,6 +304,15 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
             builder_chain = quote! { #builder_chain.manual() };
         }
 
+        if act.soft {
+            builder_chain = quote! { #builder_chain.soft() };
+        }
+
+        if !act.cascade_destroy.is_empty() {
+            let rels: Vec<String> = act.cascade_destroy.iter().map(|r| r.to_string()).collect();
+            builder_chain = quote! { #builder_chain.cascade_destroy(&[#(#rels),*]) };
+        }
+
         action_defs.push(builder_chain);
     }
 

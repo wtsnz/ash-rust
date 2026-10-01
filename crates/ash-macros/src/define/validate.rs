@@ -583,6 +583,11 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
     let names = slot_names(def);
     for action in &mut def.actions {
         validate_kind_gates(action, errors);
+        for rel in &action.cascade_destroy {
+            if def.relationships.iter().all(|r| r.ident != *rel) {
+                errors.push(slot_error(rel, "relationship", &names.rels, &names));
+            }
+        }
         if action.kind != ActionKind::Generic {
             let mut kept = Vec::new();
             for acc in std::mem::take(&mut action.accept) {

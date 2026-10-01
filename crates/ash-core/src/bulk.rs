@@ -396,6 +396,38 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
         )
         .await?;
 
+    // Soft and cascading destroys run each record's changes and cascades, so they go
+    // one record at a time instead of through a single bulk delete.
+    if action_def.soft || !action_def.cascade_destroy.is_empty() {
+        let mut result = BulkResult::default();
+        for row in rows {
+            let id = required_uuid(&row, pk)?;
+            let destroyed = crate::engine::destroy_dynamic_with(
+                ctx,
+                &R::DEF,
+                action_def,
+                id,
+                &row,
+                opts.notify,
+            )
+            .await;
+            match destroyed {
+                Ok(stored) => {
+                    if opts.return_records {
+                        result.records.push(R::from_fields(&stored)?);
+                    }
+                    result.count += 1;
+                }
+                Err(err) if opts.stop_on_error => return Err(err),
+                Err(err) => {
+                    result.errors.push(err.to_string());
+                    result.error_count += 1;
+                }
+            }
+        }
+        return Ok(result);
+    }
+
     let mut valid_to_destroy = Vec::new();
     let mut errors = Vec::new();
     let mut error_count = 0;

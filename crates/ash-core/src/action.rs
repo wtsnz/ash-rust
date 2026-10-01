@@ -244,6 +244,12 @@ pub struct ActionDef {
     pub validations: &'static [Validation],
     pub preparations: &'static [PreparationDef],
     pub persist: PersistKind,
+    /// A soft destroy stores the changed record instead of deleting it, and skips
+    /// `on_delete` cascades because the row stays.
+    pub soft: bool,
+    /// Relationships whose related records are destroyed first, with their primary
+    /// destroy action.
+    pub cascade_destroy: &'static [&'static str],
 }
 
 impl ActionDef {
@@ -258,6 +264,8 @@ impl ActionDef {
             validations: &[],
             preparations: &[],
             persist: PersistKind::DataLayer,
+            soft: false,
+            cascade_destroy: &[],
         }
     }
 
@@ -272,6 +280,8 @@ impl ActionDef {
             validations: &[],
             preparations: &[],
             persist: PersistKind::DataLayer,
+            soft: false,
+            cascade_destroy: &[],
         }
     }
 
@@ -286,6 +296,8 @@ impl ActionDef {
             validations: &[],
             preparations: &[],
             persist: PersistKind::DataLayer,
+            soft: false,
+            cascade_destroy: &[],
         }
     }
 
@@ -300,6 +312,8 @@ impl ActionDef {
             validations: &[],
             preparations: &[],
             persist: PersistKind::DataLayer,
+            soft: false,
+            cascade_destroy: &[],
         }
     }
 
@@ -314,6 +328,8 @@ impl ActionDef {
             validations: &[],
             preparations: &[],
             persist: PersistKind::DataLayer,
+            soft: false,
+            cascade_destroy: &[],
         }
     }
 
@@ -357,6 +373,16 @@ impl ActionDef {
 
     pub const fn manual(mut self) -> Self {
         self.persist = PersistKind::Manual;
+        self
+    }
+
+    pub const fn soft(mut self) -> Self {
+        self.soft = true;
+        self
+    }
+
+    pub const fn cascade_destroy(mut self, relationships: &'static [&'static str]) -> Self {
+        self.cascade_destroy = relationships;
         self
     }
 }

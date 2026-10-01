@@ -262,6 +262,8 @@ pub struct ActionSpec {
     pub returns_kw: Option<Ident>,
     pub run_kw: Option<Ident>,
     pub accept_span: Option<proc_macro2::Span>,
+    pub soft: bool,
+    pub cascade_destroy: Vec<Ident>,
 }
 
 pub struct ArgumentSpec {

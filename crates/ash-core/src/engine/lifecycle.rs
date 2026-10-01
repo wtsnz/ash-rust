@@ -16,7 +16,6 @@ use crate::policy::{authorize_field_writes, authorize_write};
 use crate::resource::{Resource, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
-use super::managed::handle_cascading_deletes;
 use super::query::query;
 
 pub async fn get<R: Resource, D: DataLayer>(ctx: &Context<D>, id: Uuid) -> Result<R> {
@@ -83,6 +82,21 @@ pub async fn destroy_dynamic<D: DataLayer>(
     id: Uuid,
     existing_fields: &FieldMap,
 ) -> Result<()> {
+    destroy_dynamic_with(ctx, resource, action, id, existing_fields, true)
+        .await
+        .map(|_| ())
+}
+
+/// [`destroy_dynamic`] that can skip the notification and returns the stored fields,
+/// which differ from `existing_fields` after a soft destroy.
+pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+    id: Uuid,
+    existing_fields: &FieldMap,
+    notify: bool,
+) -> Result<FieldMap> {
     let mut fields = existing_fields.clone();
     let mut dynamic_before_actions = Vec::new();
     let mut dynamic_after_actions = Vec::new();
@@ -117,36 +131,38 @@ pub async fn destroy_dynamic<D: DataLayer>(
     authorize_write(resource, action, ctx.actor.as_ref(), Some(existing_fields))?;
 
     let execute_destroy = || async {
-        handle_cascading_deletes(ctx, resource, id, existing_fields).await?;
-        ctx.data.destroy(resource, id).await?;
+        let mut stored =
+            super::managed::persist_destroy(ctx, resource, action, id, existing_fields, fields)
+                .await?;
 
         for hook in dynamic_after_actions {
-            let mut stored = existing_fields.clone();
             hook(&mut stored)?;
         }
 
-        let notification = crate::notifier::Notification::new(
-            resource.name,
-            action.name,
-            ActionKind::Destroy,
-            id,
-            existing_fields.clone(),
-            Some(existing_fields.clone()),
-            ctx.actor.clone(),
-            ctx.metadata.clone(),
-        )
-        .with_tenant(ctx.tenant.clone());
-        crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+        if notify {
+            let notification = crate::notifier::Notification::new(
+                resource.name,
+                action.name,
+                ActionKind::Destroy,
+                id,
+                stored.clone(),
+                Some(existing_fields.clone()),
+                ctx.actor.clone(),
+                ctx.metadata.clone(),
+            )
+            .with_tenant(ctx.tenant.clone());
+            crate::notifier::dispatch_notification(ctx, resource, notification).await?;
+        }
 
-        Ok(())
+        Ok(stored)
     };
 
     match execute_destroy().await {
-        Ok(()) => {
+        Ok(stored) => {
             for hook in dynamic_after_transactions {
-                hook(Ok(existing_fields));
+                hook(Ok(&stored));
             }
-            Ok(())
+            Ok(stored)
         }
         Err(err) => {
             for hook in dynamic_after_transactions {

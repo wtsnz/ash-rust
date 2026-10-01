@@ -9,6 +9,25 @@ use crate::policy::compile_read_filter;
 use crate::resource::{RelKind, Resource, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
+/// Filters from the primary read's `prepare filter(...)` steps, which every read of the
+/// resource sees, including relationship loads.
+pub(crate) fn primary_read_filter(resource: &ResourceDef) -> Option<Filter> {
+    let read = resource.primary_read()?;
+    let filters: Vec<Filter> = read
+        .preparations
+        .iter()
+        .filter_map(|prep| match prep {
+            crate::action::PreparationDef::Filter(build) => Some(build()),
+            _ => None,
+        })
+        .collect();
+    if filters.is_empty() {
+        None
+    } else {
+        Some(Filter::and(filters))
+    }
+}
+
 pub(crate) async fn attach_relationships<R: Resource, D: DataLayer>(
     ctx: &Context<D>,
     records: &mut [R],
@@ -130,10 +149,11 @@ pub(crate) async fn fetch_related_values<D: DataLayer>(
     let id_filter = Filter::In(field.to_string(), values);
     let read = dest.primary_read().ok_or(Error::NoPrimaryRead(dest.name))?;
     let policy_filter = compile_read_filter(dest, read, ctx.actor.as_ref())?;
-    let filter = match policy_filter {
-        Some(policy) => Filter::and([id_filter, policy]),
-        None => id_filter,
-    };
+    let filter = Filter::and(
+        [Some(id_filter), policy_filter, primary_read_filter(dest)]
+            .into_iter()
+            .flatten(),
+    );
     let mut rows = ctx
         .data
         .run_query(

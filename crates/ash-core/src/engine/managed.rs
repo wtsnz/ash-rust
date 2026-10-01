@@ -12,6 +12,92 @@ use crate::resource::{OnDelete, RelKind, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
 use super::lifecycle::{create_dynamic, destroy_dynamic, update_dynamic};
+use super::relations::primary_read_filter;
+
+/// Destroys the records related through each of `action.cascade_destroy`, using the
+/// destination's primary destroy action. Records its primary read hides are skipped.
+pub(crate) async fn cascade_destroy_related<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &crate::action::ActionDef,
+    parent_id: Uuid,
+    parent_fields: &FieldMap,
+) -> Result<()> {
+    for name in action.cascade_destroy {
+        let rel = resource.relationship(name).ok_or_else(|| {
+            Error::Invalid(format!(
+                "cascade_destroy names unknown relationship `{name}` on {}",
+                resource.name
+            ))
+        })?;
+        if !matches!(rel.kind, RelKind::HasMany | RelKind::HasOne) {
+            return Err(Error::Invalid(format!(
+                "cascade_destroy supports has_many and has_one, but `{name}` on {} is not",
+                resource.name
+            )));
+        }
+        let dest_def = (rel.destination)();
+        let destroy_act = dest_def
+            .actions
+            .iter()
+            .find(|a| a.kind == ActionKind::Destroy && a.primary)
+            .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Destroy))
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "cascade_destroy needs a destroy action on {}",
+                    dest_def.name
+                ))
+            })?;
+        let parent_val = parent_fields
+            .get(rel.source_attribute)
+            .cloned()
+            .unwrap_or_else(|| Value::from(parent_id));
+        let filter = Filter::and(
+            [
+                Some(Filter::eq(rel.destination_attribute, parent_val)),
+                primary_read_filter(dest_def),
+            ]
+            .into_iter()
+            .flatten(),
+        );
+        let rows = ctx
+            .data
+            .run_query(
+                dest_def,
+                &CompiledQuery {
+                    filter: Some(filter),
+                    tenant: ctx.tenant.clone(),
+                    ..CompiledQuery::default()
+                },
+            )
+            .await?;
+        let child_pk = pk_name(dest_def)?;
+        for child_row in rows {
+            let child_id = required_uuid(&child_row, child_pk)?;
+            Box::pin(destroy_dynamic(ctx, dest_def, destroy_act, child_id, &child_row)).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Removes one record for a destroy action after its changes ran: cascades, then a
+/// delete, or for a soft destroy an update with `fields`. Returns what was stored.
+pub(crate) async fn persist_destroy<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &crate::action::ActionDef,
+    id: Uuid,
+    existing_fields: &FieldMap,
+    fields: FieldMap,
+) -> Result<FieldMap> {
+    cascade_destroy_related(ctx, resource, action, id, existing_fields).await?;
+    if action.soft {
+        return ctx.data.update(resource, id, fields).await;
+    }
+    handle_cascading_deletes(ctx, resource, id, existing_fields).await?;
+    ctx.data.destroy(resource, id).await?;
+    Ok(existing_fields.clone())
+}
 
 /// `fields` with the primary key filled in, so a key built from it never misses `id`.
 fn with_primary_key(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Result<FieldMap> {

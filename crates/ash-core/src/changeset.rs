@@ -696,9 +696,15 @@ impl<R: Resource> Changeset<R> {
             ActionKind::Update => ctx.data.update(&R::DEF, id, fields).await?,
             ActionKind::Destroy => {
                 let existing_fields = previous_fields.as_ref().unwrap_or(&fields);
-                crate::engine::handle_cascading_deletes(ctx, &R::DEF, id, existing_fields).await?;
-                ctx.data.destroy(&R::DEF, id).await?;
-                existing_fields.clone()
+                crate::engine::persist_destroy(
+                    ctx,
+                    &R::DEF,
+                    self.action,
+                    id,
+                    existing_fields,
+                    fields.clone(),
+                )
+                .await?
             }
             kind => {
                 return Err(Error::WrongActionKind {
