@@ -39,7 +39,10 @@ pub fn sql_type_to_ts_and_zod(
         ("number", Some("IntFilter"), "z.number().int()")
     } else if upper.contains("BOOL") {
         ("boolean", Some("BooleanFilter"), "z.boolean()")
-    } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("NUMERIC") || upper.contains("DECIMAL") || upper.contains("REAL") {
+    } else if upper.contains("NUMERIC") || upper.contains("DECIMAL") {
+        // Decimals travel as strings, like GraphQL's Decimal fields.
+        ("string", Some("StringFilter"), "z.string()")
+    } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("REAL") {
         ("number", Some("IntFilter"), "z.number()")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", None, "z.record(z.string(), z.unknown())")

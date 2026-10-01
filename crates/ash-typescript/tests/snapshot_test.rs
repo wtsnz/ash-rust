@@ -93,4 +93,6 @@ fn test_json_columns_have_no_filter_type() {
 
     assert_eq!(sql_type_to_ts_and_zod("UUID", false).1, Some("UuidFilter"));
     assert_eq!(sql_type_to_ts_and_zod("JSONB", true).1, None);
+    let decimal = sql_type_to_ts_and_zod("NUMERIC", false);
+    assert_eq!((decimal.0, decimal.1), ("string", Some("StringFilter")));
 }
