@@ -7,7 +7,7 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    action_named, apply_changes_with_context, apply_tenant_scope, expect_kind, expect_persist,
+    action_named, apply_changes_with_context, expect_kind, expect_persist, visible_scope,
     generate_pk, pk_name, run_validations_with_context, split_input, validate,
 };
 use crate::policy::{authorize_field_writes, authorize_write, redact_fields};
@@ -383,7 +383,7 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
         pk.to_string(),
         ids.iter().map(|id| Value::Uuid(*id)).collect(),
     );
-    let (filter, tenant) = apply_tenant_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
+    let (filter, tenant) = visible_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
     let rows = ctx
         .data
         .run_query(
@@ -400,20 +400,16 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
     // one record at a time instead of through a single bulk delete.
     if action_def.soft || !action_def.cascade_destroy.is_empty() {
         let mut result = BulkResult::default();
+        let cascade = crate::engine::Cascade::new(opts.notify);
         for row in rows {
             let id = required_uuid(&row, pk)?;
-            let destroyed = crate::engine::destroy_dynamic_with(
-                ctx,
-                &R::DEF,
-                action_def,
-                id,
-                &row,
-                opts.notify,
-            )
-            .await;
+            let destroyed =
+                crate::engine::destroy_dynamic_with(ctx, &R::DEF, action_def, id, &row, &cascade)
+                    .await;
             match destroyed {
-                Ok(stored) => {
+                Ok(mut stored) => {
                     if opts.return_records {
+                        crate::policy::redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
                         result.records.push(R::from_fields(&stored)?);
                     }
                     result.count += 1;

@@ -179,7 +179,14 @@ fn parse_actions(tokens: TokenStream2) -> Result<Vec<Action>> {
     syn::parse::Parser::parse2(
         |input: ParseStream| {
             let mut actions = Vec::new();
-            while !input.is_empty() {
+            loop {
+                // `resource!` accepts `,` or `;` between actions.
+                while input.peek(Token![,]) || input.peek(Token![;]) {
+                    let _ = input.parse::<TokenTree>()?;
+                }
+                if input.is_empty() {
+                    break;
+                }
                 let attrs = input.call(syn::Attribute::parse_outer)?;
                 let kind: Ident = input.parse()?;
                 let name: Ident = input.parse()?;
@@ -202,9 +209,6 @@ fn parse_actions(tokens: TokenStream2) -> Result<Vec<Action>> {
                 } else {
                     TokenStream2::new()
                 };
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
                 actions.push(Action {
                     attrs,
                     kind,
@@ -220,13 +224,41 @@ fn parse_actions(tokens: TokenStream2) -> Result<Vec<Action>> {
 }
 
 fn declares_attribute(tokens: &TokenStream2, attribute: &Ident) -> bool {
+    declared_type(tokens, attribute).is_some()
+}
+
+/// The type written after `attribute:`, up to its `[...]` options or `;`.
+fn declared_type(tokens: &TokenStream2, attribute: &Ident) -> Option<Vec<TokenTree>> {
     let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
-    trees.windows(2).any(|pair| match pair {
+    let start = trees.windows(2).position(|pair| match pair {
         [TokenTree::Ident(ident), TokenTree::Punct(punct)] => {
             ident == attribute && punct.as_char() == ':'
         }
         _ => false,
-    })
+    })?;
+    Some(
+        trees[start + 2..]
+            .iter()
+            .take_while(|tree| match tree {
+                TokenTree::Punct(punct) => punct.as_char() != ';',
+                TokenTree::Group(group) => group.delimiter() != proc_macro2::Delimiter::Bracket,
+                _ => true,
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Whether a declared type is `Option<...>`, written plainly or as a path.
+fn is_option(ty: &[TokenTree]) -> bool {
+    ty.iter()
+        .take_while(|tree| !matches!(tree, TokenTree::Punct(punct) if punct.as_char() == '<'))
+        .filter_map(|tree| match tree {
+            TokenTree::Ident(ident) => Some(ident),
+            _ => None,
+        })
+        .last()
+        .is_some_and(|ident| ident == "Option")
 }
 
 /// Soft delete for `resource!`, following AshArchival.
@@ -244,14 +276,26 @@ pub fn archival(attr: TokenStream, item: TokenStream) -> TokenStream {
         .to_compile_error()
         .into();
     }
-    let item: TokenStream2 = item.into();
-    let parsed = syn::parse2::<ItemMacro>(item.clone())
-        .and_then(|item_macro| syn::parse2::<ResourceInput>(item_macro.mac.tokens))
-        .or_else(|_| syn::parse2::<ResourceInput>(item));
-    match parsed.and_then(expand) {
+    match expand_item(item.into()) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+/// Expands `resource! { ... }`, or the bare resource body, with archival added.
+fn expand_item(item: TokenStream2) -> Result<TokenStream2> {
+    // Attributes after `#[archival]` (another transformer, docs) sit on the macro item
+    // and must carry over to the `resource!` this expands to.
+    let parsed = syn::parse2::<ItemMacro>(item.clone())
+        .and_then(|item_macro| {
+            let mut input = syn::parse2::<ResourceInput>(item_macro.mac.tokens)?;
+            let mut attrs = item_macro.attrs;
+            attrs.append(&mut input.outer_attrs);
+            input.outer_attrs = attrs;
+            Ok(input)
+        })
+        .or_else(|_| syn::parse2::<ResourceInput>(item));
+    parsed.and_then(expand)
 }
 
 fn expand(mut input: ResourceInput) -> Result<TokenStream2> {
@@ -267,7 +311,18 @@ fn expand(mut input: ResourceInput) -> Result<TokenStream2> {
 
     // 1. The archive attribute.
     match input.sections.iter_mut().find(|s| s.name == "attributes") {
-        Some(section) if declares_attribute(&section.tokens, attribute) => {}
+        Some(section) if declares_attribute(&section.tokens, attribute) => {
+            let ty = declared_type(&section.tokens, attribute).unwrap_or_default();
+            if !is_option(&ty) {
+                return Err(Error::new_spanned(
+                    attribute,
+                    format!(
+                        "`{attribute}` is empty until a record is archived, so declare it as \
+                         `Option<UtcDateTime>`"
+                    ),
+                ));
+            }
+        }
         Some(section) => {
             let existing = &section.tokens;
             section.tokens = quote! {
@@ -290,16 +345,29 @@ fn expand(mut input: ResourceInput) -> Result<TokenStream2> {
         .find(|s| s.name == "actions")
         .ok_or_else(|| Error::new_spanned(&input.name, "#[archival] needs an `actions` section"))?;
     let mut actions = parse_actions(actions_section.tokens.clone())?;
-    for excluded in options
+    let excluded = options
         .exclude_read_actions
         .iter()
-        .chain(&options.exclude_destroy_actions)
-    {
-        if !actions.iter().any(|action| action.name == *excluded) {
-            return Err(Error::new_spanned(
-                excluded,
-                format!("archive excludes `{excluded}`, but there is no such action"),
-            ));
+        .map(|name| (name, "read"))
+        .chain(options.exclude_destroy_actions.iter().map(|name| (name, "destroy")));
+    for (excluded, kind) in excluded {
+        match actions.iter().find(|action| action.name == *excluded) {
+            None => {
+                return Err(Error::new_spanned(
+                    excluded,
+                    format!("archive excludes `{excluded}`, but there is no such action"),
+                ));
+            }
+            Some(action) if action.kind != kind => {
+                return Err(Error::new_spanned(
+                    excluded,
+                    format!(
+                        "exclude_{kind}_actions names `{excluded}`, which is a {} action",
+                        action.kind
+                    ),
+                ));
+            }
+            Some(_) => {}
         }
     }
     let related = &options.archive_related;
@@ -426,9 +494,14 @@ fn expand(mut input: ResourceInput) -> Result<TokenStream2> {
             quote! { #name #tokens; }
         }
     });
+    // Doc comments describe the resource, so they go to the struct `resource!` builds.
+    // Other attributes, such as another transformer or `cfg`, stay on the invocation.
+    let (docs, outer_attrs): (Vec<_>, Vec<_>) =
+        outer_attrs.into_iter().partition(|attr| attr.path().is_ident("doc"));
     Ok(quote! {
         #(#outer_attrs)*
         ::ash_core::resource! {
+            #(#docs)*
             #name {
                 #(#sections)*
             }
@@ -441,4 +514,75 @@ fn expand(mut input: ResourceInput) -> Result<TokenStream2> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expand_err(item: TokenStream2) -> String {
+        expand_item(item).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn carries_attributes_and_accepts_separators_between_actions() {
+        let out = expand_item(quote! {
+            /// A post.
+            #[state_machine]
+            resource! {
+                Post {
+                    attributes { id: Uuid [pk]; }
+                    actions {
+                        read read { primary; },
+                        destroy destroy { primary; };
+                    }
+                }
+            }
+        })
+        .unwrap()
+        .to_string();
+        let resource = out.find(":: ash_core :: resource !").unwrap();
+        let machine = out.find("# [state_machine]").unwrap();
+        let doc = out.find(r#"doc = r" A post.""#).unwrap();
+        assert!(machine < resource, "transformers stay on the invocation: {out}");
+        assert!(resource < doc, "docs go to the struct: {out}");
+        assert!(out.contains("soft ;"), "{out}");
+    }
+
+    #[test]
+    fn excluded_actions_must_have_the_right_kind() {
+        let err = expand_err(quote! {
+            Post {
+                attributes { id: Uuid [pk]; }
+                archive { exclude_read_actions [purge]; }
+                actions {
+                    read read { primary; }
+                    destroy purge;
+                }
+            }
+        });
+        assert!(
+            err.contains("exclude_read_actions names `purge`, which is a destroy action"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_archive_attribute_must_be_optional() {
+        let err = expand_err(quote! {
+            Post {
+                attributes { id: Uuid [pk]; archived_at: UtcDateTime; }
+                actions { read read { primary; } }
+            }
+        });
+        assert!(err.contains("declare it as `Option<UtcDateTime>`"), "{err}");
+
+        let declared = quote! {
+            Post {
+                attributes { id: Uuid [pk]; archived_at: ::std::option::Option<UtcDateTime>; }
+                actions { read read { primary; } }
+            }
+        };
+        assert!(expand_item(declared).is_ok());
+    }
 }

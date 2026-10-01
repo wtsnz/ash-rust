@@ -402,7 +402,7 @@ aggregates {
 - `create`: Inserts a new record. `persist manual` skips the data layer; the builder exposes `.persist(|ctx, record| async { ... })` instead of writing through the store.
 - `read`: Queries records. May use `prepare filter(...)` / `sort` / `limit` / `offset`. The primary read's filters also apply to relationship loads.
 - `update`: Mutates an existing record.
-- `destroy`: Deletes a record. `soft;` stores the action's changes as an update instead, and skips `on_delete` cascades because the row stays. `cascade_destroy [comments];` first destroys related records with their primary destroy action. Both follow Ash; `ash-archival` builds on them.
+- `destroy`: Deletes a record. `soft;` stores the action's changes as an update instead (raising the lock version and `updated_at`), and skips `on_delete` cascades because the row stays. `cascade_destroy [comments];` also destroys related records with their primary destroy action: after a soft destroy it destroys the ones the primary read shows, and before a hard delete it removes all of them with a destroy action that really deletes. Both follow Ash; `ash-archival` builds on them.
 - `generic`: Custom logic. Typed `accept { name: Type }` is allowed here only. Return type is `generic name, Type { ... }` or `returns Type;` inside the body. May omit `run` when the caller supplies `.run(...)`.
 
 ### Inputs

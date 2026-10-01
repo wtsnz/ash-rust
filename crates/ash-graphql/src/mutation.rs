@@ -250,9 +250,14 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                             .map(|a| a.name)
                             .unwrap_or("id");
 
+                        let (filter, tenant) = ash_core::visible_scope(
+                            resource,
+                            Some(Filter::eq(pk, Value::Uuid(id))),
+                            ctx_ash.tenant.clone(),
+                        )?;
                         let query = CompiledQuery {
-                            filter: Some(Filter::eq(pk, Value::Uuid(id))),
-                            tenant: ctx_ash.tenant.clone(),
+                            filter,
+                            tenant,
                             ..CompiledQuery::default()
                         };
 
@@ -323,13 +328,23 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                         .map(|a| a.name)
                         .unwrap_or("id");
 
-                    let query = CompiledQuery {
-                        filter: Some(Filter::eq(pk, Value::Uuid(id))),
-                        tenant: ctx_ash.tenant.clone(),
-                        ..CompiledQuery::default()
+                    // Look the record up as a read would, so archived or other tenants'
+                    // records are not found.
+                    let existing_records = match ash_core::visible_scope(
+                        resource,
+                        Some(Filter::eq(pk, Value::Uuid(id))),
+                        ctx_ash.tenant.clone(),
+                    ) {
+                        Ok((filter, tenant)) => {
+                            let query = CompiledQuery {
+                                filter,
+                                tenant,
+                                ..CompiledQuery::default()
+                            };
+                            ctx_ash.data.run_query(resource, &query).await
+                        }
+                        Err(err) => Err(err),
                     };
-
-                    let existing_records = ctx_ash.data.run_query(resource, &query).await;
                     let existing_field_map = match existing_records {
                         Ok(records) if !records.is_empty() => records.into_iter().next().unwrap(),
                         _ => {

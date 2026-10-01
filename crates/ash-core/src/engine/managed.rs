@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::action::{ActionKind, ManagedRelType};
+use crate::action::{ActionDef, ActionKind, ManagedRelType};
 use crate::changeset::ManagedRelationshipSpec;
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer};
@@ -11,18 +11,84 @@ use crate::pipeline::{generate_pk, pk_name};
 use crate::resource::{OnDelete, RelKind, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
-use super::lifecycle::{create_dynamic, destroy_dynamic, update_dynamic};
+use super::lifecycle::{create_dynamic, destroy_dynamic, destroy_dynamic_with, update_dynamic};
 use super::relations::primary_read_filter;
 
-/// Destroys the records related through each of `action.cascade_destroy`, using the
-/// destination's primary destroy action. Records its primary read hides are skipped.
+/// State shared by one destroy and everything it cascades into.
+pub(crate) struct Cascade {
+    /// Records being destroyed further up, so a cycle in the data ends instead of recursing.
+    visited: std::sync::Mutex<HashSet<(&'static str, Uuid)>>,
+    /// Whether cascaded destroys send notifications, as the top-level destroy does.
+    pub(crate) notify: bool,
+}
+
+impl Cascade {
+    pub(crate) fn new(notify: bool) -> Self {
+        Self {
+            visited: std::sync::Mutex::new(HashSet::new()),
+            notify,
+        }
+    }
+
+    /// Marks the record as being destroyed, returning false if it already is.
+    fn enter(&self, resource: &'static ResourceDef, id: Uuid) -> bool {
+        self.visited
+            .lock()
+            .map(|mut visited| visited.insert((resource.name, id)))
+            .unwrap_or(true)
+    }
+}
+
+/// The destroy action a cascade runs on a child. A hard delete of the parent removes the
+/// row it references, so the child must go too: its archiving primary destroy would leave
+/// it behind, pointing at nothing.
+fn child_destroy_action(dest_def: &'static ResourceDef, hard: bool) -> Option<&'static ActionDef> {
+    let destroys = || {
+        dest_def
+            .actions
+            .iter()
+            .filter(|a| a.kind == ActionKind::Destroy && !(hard && a.soft))
+    };
+    destroys().find(|a| a.primary).or_else(|| destroys().next())
+}
+
+/// Destroys one cascaded child with [`child_destroy_action`], or when a hard delete finds
+/// no hard destroy action, deletes the row the way `ON DELETE CASCADE` would.
+async fn destroy_child<D: DataLayer>(
+    ctx: &Context<D>,
+    dest_def: &'static ResourceDef,
+    hard: bool,
+    child_id: Uuid,
+    child_row: &FieldMap,
+    cascade: &Cascade,
+) -> Result<()> {
+    match child_destroy_action(dest_def, hard) {
+        Some(action) => {
+            Box::pin(destroy_dynamic_with(ctx, dest_def, action, child_id, child_row, cascade))
+                .await?;
+        }
+        None => {
+            if cascade.enter(dest_def, child_id) {
+                Box::pin(cascade_deletes(ctx, dest_def, child_id, child_row, cascade)).await?;
+                ctx.data.destroy(dest_def, child_id).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Destroys the records related through each of `action.cascade_destroy`. A soft destroy
+/// archives the children its primary read still shows; a hard one removes every child.
 pub(crate) async fn cascade_destroy_related<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    action: &crate::action::ActionDef,
+    action: &ActionDef,
     parent_id: Uuid,
     parent_fields: &FieldMap,
+    cascade: &Cascade,
 ) -> Result<()> {
+    let parent = with_primary_key(resource, parent_id, parent_fields)?;
+    let hard = !action.soft;
     for name in action.cascade_destroy {
         let rel = resource.relationship(name).ok_or_else(|| {
             Error::Invalid(format!(
@@ -37,29 +103,17 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
             )));
         }
         let dest_def = (rel.destination)();
-        let destroy_act = dest_def
-            .actions
-            .iter()
-            .find(|a| a.kind == ActionKind::Destroy && a.primary)
-            .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Destroy))
-            .ok_or_else(|| {
-                Error::Invalid(format!(
-                    "cascade_destroy needs a destroy action on {}",
-                    dest_def.name
-                ))
-            })?;
-        let parent_val = parent_fields
-            .get(rel.source_attribute)
-            .cloned()
-            .unwrap_or_else(|| Value::from(parent_id));
-        let filter = Filter::and(
-            [
-                Some(Filter::eq(rel.destination_attribute, parent_val)),
-                primary_read_filter(dest_def),
-            ]
-            .into_iter()
-            .flatten(),
-        );
+        if dest_def.actions.iter().all(|a| a.kind != ActionKind::Destroy) {
+            return Err(Error::Invalid(format!(
+                "cascade_destroy needs a destroy action on {}",
+                dest_def.name
+            )));
+        }
+        let Some(related) = rel.destination_filter(&parent) else {
+            continue;
+        };
+        let read_filter = if hard { None } else { primary_read_filter(dest_def) };
+        let filter = Filter::and([Some(related), read_filter].into_iter().flatten());
         let rows = ctx
             .data
             .run_query(
@@ -74,29 +128,66 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
         let child_pk = pk_name(dest_def)?;
         for child_row in rows {
             let child_id = required_uuid(&child_row, child_pk)?;
-            Box::pin(destroy_dynamic(ctx, dest_def, destroy_act, child_id, &child_row)).await?;
+            destroy_child(ctx, dest_def, hard, child_id, &child_row, cascade).await?;
         }
     }
     Ok(())
 }
 
-/// Removes one record for a destroy action after its changes ran: cascades, then a
-/// delete, or for a soft destroy an update with `fields`. Returns what was stored.
+/// Removes one record for a destroy action after its changes ran. A hard destroy runs its
+/// cascades and then deletes. A soft destroy updates the record first and archives its
+/// children after, as AshArchival does, so a cycle stops at rows already hidden. Returns
+/// what was stored.
 pub(crate) async fn persist_destroy<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    action: &crate::action::ActionDef,
+    action: &ActionDef,
     id: Uuid,
     existing_fields: &FieldMap,
     fields: FieldMap,
+    cascade: &Cascade,
 ) -> Result<FieldMap> {
-    cascade_destroy_related(ctx, resource, action, id, existing_fields).await?;
-    if action.soft {
-        return ctx.data.update(resource, id, fields).await;
+    if !cascade.enter(resource, id) {
+        return Ok(existing_fields.clone());
     }
-    handle_cascading_deletes(ctx, resource, id, existing_fields).await?;
+    if action.soft {
+        let changes = soft_destroy_changes(resource, existing_fields, fields);
+        let stored = ctx.data.update(resource, id, changes).await?;
+        cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
+        return Ok(stored);
+    }
+    cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
+    cascade_deletes(ctx, resource, id, existing_fields, cascade).await?;
     ctx.data.destroy(resource, id).await?;
     Ok(existing_fields.clone())
+}
+
+/// What a soft destroy writes: the fields its changes set, a raised lock version, and a
+/// new `updated_at`, like an update. Writing back the whole record would put nulls over
+/// fields the actor was not allowed to read.
+fn soft_destroy_changes(
+    resource: &ResourceDef,
+    existing_fields: &FieldMap,
+    fields: FieldMap,
+) -> FieldMap {
+    let mut changes: FieldMap = fields
+        .into_iter()
+        .filter(|(name, value)| existing_fields.get(name) != Some(value))
+        .collect();
+    if let Some(version) = resource.optimistic_lock_attribute() {
+        let current = match existing_fields.get(version) {
+            Some(Value::Int(n)) => *n,
+            _ => 1,
+        };
+        changes.insert(version.to_string(), Value::Int(current + 1));
+    }
+    if let Some((_created_at, updated_at)) = resource.timestamps {
+        changes.insert(
+            updated_at.to_string(),
+            Value::String(crate::resource::utc_now_iso8601()),
+        );
+    }
+    changes
 }
 
 /// `fields` with the primary key filled in, so a key built from it never misses `id`.
@@ -108,11 +199,26 @@ fn with_primary_key(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Resu
     Ok(fields)
 }
 
+/// Applies each relationship's `on_delete` before the record is deleted.
 pub async fn handle_cascading_deletes<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     parent_id: Uuid,
     parent_fields: &FieldMap,
+) -> Result<()> {
+    let cascade = Cascade::new(true);
+    cascade.enter(resource, parent_id);
+    cascade_deletes(ctx, resource, parent_id, parent_fields, &cascade).await
+}
+
+/// [`handle_cascading_deletes`] within a destroy that is already under way. The parent is
+/// hard-deleted, so children go with it even when their own destroy only archives.
+pub(crate) async fn cascade_deletes<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    parent_id: Uuid,
+    parent_fields: &FieldMap,
+    cascade: &Cascade,
 ) -> Result<()> {
     let parent = with_primary_key(resource, parent_id, parent_fields)?;
     for rel in resource.relationships {
@@ -161,26 +267,10 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                             )
                             .await?;
                         let child_pk = pk_name(dest_def)?;
-                        let child_destroy_action = dest_def
-                            .actions
-                            .iter()
-                            .find(|a| a.kind == ActionKind::Destroy && a.primary)
-                            .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Destroy));
-
                         for child_row in rows {
                             let child_id = required_uuid(&child_row, child_pk)?;
-                            if let Some(destroy_act) = child_destroy_action {
-                                Box::pin(destroy_dynamic(
-                                    ctx,
-                                    dest_def,
-                                    destroy_act,
-                                    child_id,
-                                    &child_row,
-                                ))
+                            destroy_child(ctx, dest_def, true, child_id, &child_row, cascade)
                                 .await?;
-                            } else {
-                                ctx.data.destroy(dest_def, child_id).await?;
-                            }
                         }
                     }
                     OnDelete::Nilify => {
@@ -255,26 +345,10 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
                                 )
                                 .await?;
                             let join_pk = pk_name(through_def)?;
-                            let join_destroy_action = through_def
-                                .actions
-                                .iter()
-                                .find(|a| a.kind == ActionKind::Destroy && a.primary)
-                                .or_else(|| through_def.actions.iter().find(|a| a.kind == ActionKind::Destroy));
-
                             for join_row in rows {
                                 let join_id = required_uuid(&join_row, join_pk)?;
-                                if let Some(destroy_act) = join_destroy_action {
-                                    Box::pin(destroy_dynamic(
-                                        ctx,
-                                        through_def,
-                                        destroy_act,
-                                        join_id,
-                                        &join_row,
-                                    ))
+                                destroy_child(ctx, through_def, true, join_id, &join_row, cascade)
                                     .await?;
-                                } else {
-                                    ctx.data.destroy(through_def, join_id).await?;
-                                }
                             }
                         }
                         OnDelete::Nilify => {}

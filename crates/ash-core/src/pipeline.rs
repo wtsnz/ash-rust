@@ -387,6 +387,20 @@ pub fn apply_tenant_scope(
     Ok((filter, tenant))
 }
 
+/// [`apply_tenant_scope`] plus the primary read's filters, so a lookup by id for a write
+/// sees the same records a read does. An archived record stays out of reach.
+pub fn visible_scope(
+    resource: &ResourceDef,
+    filter: Option<Filter>,
+    tenant: Option<String>,
+) -> Result<(Option<Filter>, Option<String>)> {
+    let (filter, tenant) = apply_tenant_scope(resource, filter, tenant)?;
+    Ok((
+        and_filters(filter, crate::engine::primary_read_filter(resource)),
+        tenant,
+    ))
+}
+
 /// Stamp or require a tenant on write fields. Attribute strategy writes `tenant` onto `fields`.
 pub fn apply_tenant_to_fields(
     resource: &ResourceDef,

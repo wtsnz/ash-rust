@@ -8,7 +8,7 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    apply_changes_with_context, apply_tenant_scope, apply_tenant_to_fields, expect_kind,
+    apply_changes_with_context, apply_tenant_to_fields, expect_kind,
     expect_persist, generate_pk, pk_name, run_validations_with_context, take_accepted_and_args,
     validate,
 };
@@ -70,9 +70,17 @@ pub async fn destroy_existing<R: Resource, D: DataLayer>(
     action: &str,
     existing: R,
 ) -> Result<()> {
-    let cs = Changeset::for_destroy(ctx, action, existing)?;
-    cs.commit(ctx).await?;
+    destroy_existing_returning(ctx, action, existing).await?;
     Ok(())
+}
+
+/// [`destroy_existing`] returning the stored record, which a soft destroy has archived.
+pub(crate) async fn destroy_existing_returning<R: Resource, D: DataLayer>(
+    ctx: &Context<D>,
+    action: &str,
+    existing: R,
+) -> Result<R> {
+    Changeset::for_destroy(ctx, action, existing)?.commit(ctx).await
 }
 
 pub async fn destroy_dynamic<D: DataLayer>(
@@ -82,21 +90,23 @@ pub async fn destroy_dynamic<D: DataLayer>(
     id: Uuid,
     existing_fields: &FieldMap,
 ) -> Result<()> {
-    destroy_dynamic_with(ctx, resource, action, id, existing_fields, true)
+    let cascade = super::managed::Cascade::new(true);
+    destroy_dynamic_with(ctx, resource, action, id, existing_fields, &cascade)
         .await
         .map(|_| ())
 }
 
-/// [`destroy_dynamic`] that can skip the notification and returns the stored fields,
-/// which differ from `existing_fields` after a soft destroy.
+/// [`destroy_dynamic`] within `cascade`, which decides whether it notifies. Returns the
+/// stored fields, which differ from `existing_fields` after a soft destroy.
 pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
     id: Uuid,
     existing_fields: &FieldMap,
-    notify: bool,
+    cascade: &super::managed::Cascade,
 ) -> Result<FieldMap> {
+    let notify = cascade.notify;
     let mut fields = existing_fields.clone();
     let mut dynamic_before_actions = Vec::new();
     let mut dynamic_after_actions = Vec::new();
@@ -132,8 +142,16 @@ pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
 
     let execute_destroy = || async {
         let mut stored =
-            super::managed::persist_destroy(ctx, resource, action, id, existing_fields, fields)
-                .await?;
+            super::managed::persist_destroy(
+                ctx,
+                resource,
+                action,
+                id,
+                existing_fields,
+                fields,
+                cascade,
+            )
+            .await?;
 
         for hook in dynamic_after_actions {
             hook(&mut stored)?;
@@ -303,7 +321,7 @@ pub async fn update_dynamic<D: DataLayer>(
     expect_persist(action, PersistKind::DataLayer)?;
 
     let pk = pk_name(resource)?;
-    let (lookup_filter, tenant) = apply_tenant_scope(
+    let (lookup_filter, tenant) = crate::pipeline::visible_scope(
         resource,
         Some(Filter::eq(pk, Value::Uuid(id))),
         ctx.tenant.clone(),

@@ -58,6 +58,7 @@ pub use keys::{
 };
 pub use multi::{BoundMulti, IntoChangeset, Multi, MultiResult};
 pub use notifier::{Notification, Notifier, SyncFnNotifier};
+pub use pipeline::visible_scope;
 pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_field_writes,
     authorize_write, check_to_filter, compile_read_filter, redact_fields,
