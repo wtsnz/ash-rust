@@ -219,6 +219,10 @@ resource! {
 
 `ash-macro-support` parses the wrapped `resource!` for you. `ResourceTokens::from_item` keeps every section as raw tokens, and its helpers take out the transformer's own block, append to sections, check whether an attribute is declared, add an extension, and rebuild the `::ash_core::resource!` call. `Action` splits `actions` without dropping doc comments, return types, or `read name;` short forms. `#[state_machine]`, `#[authentication]`, and `#[archival]` all use it.
 
+It reads the resource with `resource!`'s grammar: one-line sections such as `table "x"` or `extend tag! { ... }` may leave out their `;`, and actions may be separated by `,` or `;`. Attributes on the macro call, such as another transformer, stay on the rebuilt call, so transformers stack in any order. Doc comments and attributes inside the braces go to the struct. A braced section written twice is an error, since `resource!` would keep only the last one.
+
+`#[authentication]` adds its register action, or, when the resource already defines one with that name, adds the password arguments and hashing to it.
+
 ### What `#[state_machine]` Automates:
 1. **Attribute Injection**: Injects `status: String` into `attributes { ... }`.
 2. **Initial State Injection**: Injects default state change into the primary `create` action.

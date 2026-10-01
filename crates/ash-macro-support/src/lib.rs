@@ -52,6 +52,15 @@ impl Parse for ResourceTokens {
         while !body.is_empty() {
             let section: Ident = body.parse()?;
             if body.peek(syn::token::Brace) {
+                // `resource!` keeps only the last of these, so a transformer editing the
+                // first would change nothing.
+                let repeatable = section == "extensions" || section == "notifiers";
+                if !repeatable && sections.iter().any(|s: &Section| s.braced && s.name == section) {
+                    return Err(Error::new_spanned(
+                        &section,
+                        format!("`{section}` appears twice; merge them into one section"),
+                    ));
+                }
                 let content;
                 syn::braced!(content in body);
                 sections.push(Section {
@@ -59,22 +68,16 @@ impl Parse for ResourceTokens {
                     tokens: content.parse()?,
                     braced: true,
                 });
-                if body.peek(Token![;]) {
-                    let _: Token![;] = body.parse()?;
-                }
             } else {
-                let mut tokens = TokenStream::new();
-                while !body.is_empty() && !body.peek(Token![;]) {
-                    tokens.extend([body.parse::<TokenTree>()?]);
-                }
-                if body.peek(Token![;]) {
-                    let _: Token![;] = body.parse()?;
-                }
+                let tokens = parse_one_line(&section, &body)?;
                 sections.push(Section {
                     name: section,
                     tokens,
                     braced: false,
                 });
+            }
+            if body.peek(Token![;]) {
+                let _: Token![;] = body.parse()?;
             }
         }
         Ok(Self {
@@ -87,11 +90,102 @@ impl Parse for ResourceTokens {
     }
 }
 
+/// Section names `resource!` and the transformers understand.
+const SECTION_NAMES: &[&str] = &[
+    "table",
+    "attributes",
+    "relationships",
+    "calculations",
+    "aggregates",
+    "actions",
+    "policies",
+    "field_policies",
+    "extensions",
+    "notifiers",
+    "extend",
+    "optimistic_lock",
+    "identities",
+    "indexes",
+    "checks",
+    "statements",
+    "embedded",
+    "data_layer",
+    "store",
+    "timestamps",
+    "multitenancy",
+    "actor",
+    "archive",
+    "authentication",
+    "state_machine",
+];
+
+/// A section written on one line, read with the grammar `resource!` gives it. Its `;`
+/// is optional, so reading up to the next `;` could swallow the sections after it.
+fn parse_one_line(section: &Ident, body: ParseStream) -> Result<TokenStream> {
+    let mut tokens = TokenStream::new();
+    let take = |tokens: &mut TokenStream| -> Result<()> {
+        tokens.extend([body.parse::<TokenTree>()?]);
+        Ok(())
+    };
+    match section.to_string().as_str() {
+        "embedded" => {}
+        "extensions" | "notifiers" | "timestamps" => {
+            if body.peek(syn::token::Bracket) {
+                take(&mut tokens)?;
+            }
+        }
+        // `extend path! { ... }`
+        "extend" => {
+            while !body.is_empty() && !body.peek(syn::token::Brace) && !body.peek(Token![;]) {
+                take(&mut tokens)?;
+            }
+            if body.peek(syn::token::Brace) {
+                take(&mut tokens)?;
+            }
+        }
+        "table" | "optimistic_lock" | "data_layer" => {
+            if body.peek(Token![:]) {
+                take(&mut tokens)?;
+            }
+            take(&mut tokens)?;
+        }
+        "store" => {
+            if body.peek(Token![:]) {
+                take(&mut tokens)?;
+            }
+            let ty: syn::Type = body.parse()?;
+            tokens.extend(quote! { #ty });
+        }
+        // Unknown to us: stop at `;` or at the next section, unless that name is part of
+        // a path such as `crate::actions::X`.
+        _ => {
+            let mut after_colon = false;
+            while !body.is_empty() && !body.peek(Token![;]) {
+                let next_is_section = body
+                    .fork()
+                    .parse::<Ident>()
+                    .is_ok_and(|ident| SECTION_NAMES.iter().any(|name| ident == name));
+                if next_is_section && !after_colon {
+                    break;
+                }
+                let tree = body.parse::<TokenTree>()?;
+                after_colon = matches!(&tree, TokenTree::Punct(punct) if punct.as_char() == ':');
+                tokens.extend([tree]);
+            }
+        }
+    }
+    Ok(tokens)
+}
+
 impl ResourceTokens {
     /// Parses the item an attribute macro receives: `resource! { ... }` or the bare DSL.
     pub fn from_item(item: TokenStream) -> Result<Self> {
         match syn::parse2::<ItemMacro>(item.clone()) {
             Ok(item_macro) => {
+                let path = &item_macro.mac.path;
+                if path.segments.last().is_none_or(|segment| segment.ident != "resource") {
+                    return Err(Error::new_spanned(path, "expected `resource! { ... }`"));
+                }
                 let mut resource = syn::parse2::<Self>(item_macro.mac.tokens)?;
                 // Doc comments describe the resource, so they go to the struct; rustc
                 // would ignore them on the macro call.
@@ -146,11 +240,24 @@ impl ResourceTokens {
     pub fn declared_type(&self, name: &Ident) -> Option<Vec<TokenTree>> {
         let section = self.section("attributes")?;
         let trees: Vec<TokenTree> = section.tokens.clone().into_iter().collect();
-        let start = trees.windows(2).position(|pair| match pair {
-            [TokenTree::Ident(ident), TokenTree::Punct(punct)] => {
-                ident == name && punct.as_char() == ':'
+        // `name:` must start an attribute (after `;`, `,`, or `#[...]`), and its `:` must
+        // stand alone, so `super::name::Type` or `= name::X` do not count.
+        let starts_item = |index: usize| match index.checked_sub(1).map(|i| &trees[i]) {
+            None => true,
+            Some(TokenTree::Punct(punct)) => matches!(punct.as_char(), ';' | ','),
+            Some(TokenTree::Group(group)) => group.delimiter() == proc_macro2::Delimiter::Bracket,
+            Some(_) => false,
+        };
+        let start = (0..trees.len().saturating_sub(1)).find(|&index| {
+            match (&trees[index], &trees[index + 1]) {
+                (TokenTree::Ident(ident), TokenTree::Punct(punct)) => {
+                    ident == name
+                        && punct.as_char() == ':'
+                        && punct.spacing() == proc_macro2::Spacing::Alone
+                        && starts_item(index)
+                }
+                _ => false,
             }
-            _ => false,
         })?;
         Some(
             trees[start + 2..]
@@ -389,6 +496,89 @@ mod tests {
         });
         assert!(!parsed.declares_attribute(&format_ident!("status")));
         assert!(parsed.declares_attribute(&format_ident!("status_note")));
+
+        // A module named like the attribute, in a type or a default, is not a declaration.
+        let parsed = resource(quote! {
+            Ticket {
+                attributes {
+                    note: super::status::Note;
+                    kind: Option<status::Kind> = status::DEFAULT;
+                    /// The state.
+                    #[allow(dead_code)]
+                    state: String;
+                }
+            }
+        });
+        assert!(!parsed.declares_attribute(&format_ident!("status")));
+        let ty = parsed.declared_type(&format_ident!("state")).unwrap();
+        assert_eq!(quote! { #(#ty)* }.to_string(), "String");
+    }
+
+    #[test]
+    fn one_line_sections_do_not_need_semicolons() {
+        let parsed = resource(quote! {
+            Note {
+                table "notes"
+                store crate::stores::Main
+                extend tag! { label: "x"; }
+                timestamps
+                extensions [&A]
+                attributes { id: Uuid [pk]; }
+                actions { read read { primary; } }
+            }
+        });
+        let names: Vec<String> = parsed.sections.iter().map(|s| s.name.to_string()).collect();
+        assert_eq!(
+            names,
+            ["table", "store", "extend", "timestamps", "extensions", "attributes", "actions"]
+        );
+        assert_eq!(parsed.section("store").unwrap().tokens.to_string(), "crate :: stores :: Main");
+        assert_eq!(
+            parsed.section("extend").unwrap().tokens.to_string(),
+            "tag ! { label : \"x\" ; }"
+        );
+    }
+
+    #[test]
+    fn attributes_stay_where_they_were_written() {
+        let parsed = resource(quote! {
+            /// Docs on the call.
+            #[state_machine]
+            resource! {
+                #[derive(Default)]
+                Note { attributes { id: Uuid [pk]; } }
+            }
+        });
+        let out = parsed.to_resource_macro().to_string();
+        let call = out.find(":: ash_core :: resource !").unwrap();
+        assert!(out.find("# [state_machine]").unwrap() < call, "{out}");
+        assert!(out.find("# [derive (Default)]").unwrap() > call, "{out}");
+        assert!(out.find("Docs on the call.").unwrap() > call, "{out}");
+    }
+
+    #[test]
+    fn rejects_repeated_sections_and_other_macros() {
+        let err = ResourceTokens::from_item(quote! {
+            Note { actions { read read; } actions { destroy destroy; } }
+        })
+        .err()
+        .unwrap();
+        assert!(err.to_string().contains("`actions` appears twice"), "{err}");
+
+        let err = ResourceTokens::from_item(quote! { other! { Note {} } }).err().unwrap();
+        assert!(err.to_string().contains("expected `resource! { ... }`"), "{err}");
+    }
+
+    #[test]
+    fn actions_may_be_separated_by_commas_and_semicolons() {
+        let actions = parse_actions(quote! {
+            create create { primary; },
+            read read;;
+            destroy destroy { primary; };
+        })
+        .unwrap();
+        let names: Vec<String> = actions.iter().map(|a| a.name.to_string()).collect();
+        assert_eq!(names, ["create", "read", "destroy"]);
     }
 
     #[test]

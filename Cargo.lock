@@ -117,10 +117,12 @@ name = "ash-archival"
 version = "0.1.0"
 dependencies = [
  "ash-archival-macros",
+ "ash-authentication",
  "ash-core",
  "ash-graphql",
  "ash-memory",
  "ash-sqlite",
+ "ash-state-machine",
  "async-graphql",
  "serde_json",
  "tokio",

@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, LitInt, LitStr, Result, Token};
+use syn::{Error, Ident, LitInt, LitStr, Result, Token};
 
 struct PasswordStrategyConfig {
     identity_field: String,
@@ -301,19 +301,49 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
             quote! { None }
         };
 
-        injected_actions = quote! {
-            #injected_actions
-            create #reg_ident {
-                accept [#id_ident];
-                argument password: String;
-                #conf_arg
-                change custom(&::ash_authentication::HashPasswordChange::new(
-                    "password",
-                    #conf_str_opt,
-                    #hashed_field_str,
-                ).with_min_length(#min_len));
-            }
+        let hash = quote! {
+            change custom(&::ash_authentication::HashPasswordChange::new(
+                "password",
+                #conf_str_opt,
+                #hashed_field_str,
+            ).with_min_length(#min_len));
         };
+        let mut actions = resource.actions()?;
+        match actions.iter_mut().find(|action| action.name == reg_ident) {
+            // A register action the resource defines keeps its own body and gains the
+            // password arguments it lacks and the hashing, so passwords are never stored
+            // in the clear.
+            Some(action) if action.is("create") => {
+                let mut additions = quote! {};
+                if !declares_argument(&action.body, "password") {
+                    additions = quote! { argument password: String; };
+                }
+                if pass.require_confirmation
+                    && !declares_argument(&action.body, "password_confirmation")
+                {
+                    additions = quote! { #additions #conf_arg };
+                }
+                action.append(quote! { #additions #hash });
+                resource.set_actions(&actions);
+            }
+            Some(action) => {
+                return Err(Error::new_spanned(
+                    &action.name,
+                    "the password register action must be a create action",
+                ));
+            }
+            None => {
+                injected_actions = quote! {
+                    #injected_actions
+                    create #reg_ident {
+                        accept [#id_ident];
+                        argument password: String;
+                        #conf_arg
+                        #hash
+                    }
+                };
+            }
+        }
     }
 
     if resource.section("actions").is_none() {
@@ -404,4 +434,15 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
     };
 
     Ok(expanded)
+}
+
+/// Whether an action body declares `argument name: ...`.
+fn declares_argument(body: &TokenStream2, name: &str) -> bool {
+    let trees: Vec<proc_macro2::TokenTree> = body.clone().into_iter().collect();
+    trees.windows(2).any(|pair| match pair {
+        [proc_macro2::TokenTree::Ident(keyword), proc_macro2::TokenTree::Ident(ident)] => {
+            keyword == "argument" && ident == name
+        }
+        _ => false,
+    })
 }
