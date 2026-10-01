@@ -442,16 +442,25 @@ pub fn take_accepted_and_args(action: &ActionDef, input: FieldMap) -> Result<(Fi
     Ok((fields, arguments))
 }
 
-pub fn validate(def: &ResourceDef, fields: &FieldMap) -> Result<()> {
+/// Checks each attribute's value against its type, then rewrites values with several
+/// spellings (IP addresses, vectors, floats) to their canonical text.
+pub fn validate(def: &ResourceDef, fields: &mut FieldMap) -> Result<()> {
     for attribute in def.attributes {
-        match fields.get(attribute.name) {
+        match fields.get_mut(attribute.name) {
             None | Some(Value::Null) if attribute.allow_nil => {}
             None | Some(Value::Null) => {
                 return Err(Error::Missing {
                     field: attribute.name.to_string(),
                 });
             }
-            Some(value) => check_type(attribute, value)?,
+            Some(value) => {
+                check_type(attribute, value)?;
+                if let Value::String(raw) = value
+                    && let Some(canonical) = crate::types::canonical_text(attribute.ty, raw)
+                {
+                    *raw = canonical;
+                }
+            }
         }
     }
     Ok(())

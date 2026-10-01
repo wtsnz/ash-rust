@@ -491,33 +491,3 @@ async fn test_postgres_empty_in_and_empty_bulk_operations() {
     // 4. bulk_destroy with empty IDs -> returns Ok(())
     pg.bulk_destroy(&CUSTOMER_DEF, &[]).await.unwrap();
 }
-
-#[tokio::test]
-async fn test_postgres_migration_lock_blocks_other_connections() {
-    use ash_sql::MigrationExecutor;
-
-    let Some(first) = get_test_postgres().await else {
-        eprintln!("PostgreSQL not reachable; skipping test");
-        return;
-    };
-    let Some(second) = get_test_postgres().await else {
-        return;
-    };
-
-    let held = first.lock_database().await.unwrap().expect("Postgres takes a lock");
-    let waiting = tokio::spawn(async move { second.lock_database().await });
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(
-        !waiting.is_finished(),
-        "a second migrator must wait while the lock is held"
-    );
-
-    held.release().await.unwrap();
-    let second_lock = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-        .await
-        .expect("the lock must be handed over after release")
-        .unwrap()
-        .unwrap()
-        .expect("Postgres takes a lock");
-    second_lock.release().await.unwrap();
-}

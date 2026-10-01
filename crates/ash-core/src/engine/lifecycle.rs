@@ -219,7 +219,7 @@ pub async fn create_dynamic<D: DataLayer>(
         ctx.metadata(),
         &arguments,
     )?;
-    validate(resource, &fields)?;
+    validate(resource, &mut fields)?;
     authorize_field_writes(resource, ctx.actor.as_ref(), None, &fields)?;
     authorize_write(resource, action, ctx.actor.as_ref(), Some(&fields))?;
 
@@ -236,7 +236,7 @@ pub async fn create_dynamic<D: DataLayer>(
         ctx.metadata(),
         &arguments,
     )?;
-    validate(resource, &fields)?;
+    validate(resource, &mut fields)?;
     let id = required_uuid(&fields, pk_name(resource)?)?;
 
     let persist = async {
@@ -353,7 +353,7 @@ pub async fn update_dynamic<D: DataLayer>(
         ctx.metadata(),
         &arguments,
     )?;
-    validate(resource, &fields)?;
+    validate(resource, &mut fields)?;
     authorize_field_writes(
         resource,
         ctx.actor.as_ref(),
@@ -375,7 +375,7 @@ pub async fn update_dynamic<D: DataLayer>(
         ctx.metadata(),
         &arguments,
     )?;
-    validate(resource, &fields)?;
+    validate(resource, &mut fields)?;
 
     let persist = async {
         let mut stored = ctx.data.update(resource, id, fields).await?;

@@ -96,3 +96,63 @@ async fn memory_compares_like_the_column_type() {
         "CiString identities ignore case: {result:?}"
     );
 }
+
+mod host {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Host {
+            table "hosts";
+
+            attributes {
+                id: Uuid [pk];
+                address: ash_core::Inet;
+                embedding: ash_core::Vector<2>;
+            }
+
+            actions {
+                create create { primary; accept [address, embedding]; }
+                read read { primary; }
+            }
+        }
+    }
+}
+use host::Host;
+
+#[tokio::test]
+async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
+    use ash_core::{Changeset, Context};
+
+    let ctx = Context::new(Memory::new());
+    let mut input = FieldMap::new();
+    input.insert("address".into(), Value::String("10.0.0.1/32".into()));
+    input.insert("embedding".into(), Value::String("[1.0, 2.50]".into()));
+    let host = Changeset::<Host>::for_create(&ctx, "create", input)
+        .unwrap()
+        .commit(&ctx)
+        .await
+        .unwrap();
+    assert_eq!(host.address.as_str(), "10.0.0.1");
+    assert_eq!(ash_core::format_vector(host.embedding.as_slice()), "[1,2.5]");
+
+    let stored = ctx
+        .data
+        .run_query(&Host::DEF, &CompiledQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(stored[0].get("address"), Some(&Value::String("10.0.0.1".into())));
+    assert_eq!(stored[0].get("embedding"), Some(&Value::String("[1,2.5]".into())));
+
+    for filter in [
+        Filter::eq("address", "10.0.0.1/32"),
+        Filter::eq("embedding", "[1, 2.5]"),
+    ] {
+        let query = CompiledQuery {
+            filter: Some(filter.clone()),
+            ..Default::default()
+        };
+        let found = ctx.data.run_query(&Host::DEF, &query).await.unwrap();
+        assert_eq!(found.len(), 1, "{filter:?}");
+    }
+}

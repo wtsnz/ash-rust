@@ -258,6 +258,61 @@ fn bind_compiled<'q>(
     query
 }
 
+impl Sqlite {
+    /// Runs a migration script and its bookkeeping in one `BEGIN IMMEDIATE` transaction
+    /// with foreign keys off, if `guard` still returns a row once the write lock is ours.
+    /// `binds` go to `bookkeeping`, and the first also to `guard`.
+    async fn migration_step(
+        &self,
+        guard: &str,
+        sql: &str,
+        bookkeeping: &str,
+        binds: &[&str],
+    ) -> Result<bool> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let mut conn = pool.acquire().await.map_err(map_sqlx)?;
+        // Table rebuilds drop tables that others reference, so foreign keys stay off while
+        // the script runs. The pragma is ignored inside a transaction, so set it first.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx)?;
+        let outcome = async {
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+            let wanted = sqlx::query(guard)
+                .bind(binds[0])
+                .fetch_optional(&mut *conn)
+                .await?
+                .is_some();
+            if !wanted {
+                sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+                return Ok(false);
+            }
+            sqlx::raw_sql(sql).execute(&mut *conn).await?;
+            let mut query = sqlx::query(bookkeeping);
+            for bind in binds {
+                query = query.bind(*bind);
+            }
+            query.execute(&mut *conn).await?;
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok::<bool, sqlx::Error>(true)
+        }
+        .await;
+        if outcome.is_err() {
+            // The step's own error is the one to report, so a failed rollback is ignored.
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        }
+        let restored = sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await;
+        let wanted = outcome.map_err(map_sqlx)?;
+        restored.map_err(map_sqlx)?;
+        Ok(wanted)
+    }
+}
+
 impl MigrationExecutor for Sqlite {
     async fn execute_script(&self, sql: &str) -> Result<()> {
         let pool = self
@@ -267,54 +322,24 @@ impl MigrationExecutor for Sqlite {
         Ok(())
     }
 
-    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
-        let pool = self
-            .pool()
-            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
-        let mut conn = pool.acquire().await.map_err(map_sqlx)?;
-        sqlx::query("PRAGMA foreign_keys = OFF")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        let failed = sqlx::raw_sql(sql)
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx);
-        if let Err(error) = failed {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            let _ = sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await;
-            return Err(error);
-        }
-        let recorded = sqlx::query(
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
+        self.migration_step(
+            "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM _ash_schema_migrations WHERE version = ?)",
+            sql,
             "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            &[version, name],
         )
-        .bind(version)
-        .bind(name)
-        .execute(&mut *conn)
         .await
-        .map_err(map_sqlx);
-        if let Err(error) = recorded {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            let _ = sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await;
-            return Err(error);
-        }
-        sqlx::query("COMMIT")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(())
+    }
+
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        self.migration_step(
+            "SELECT 1 WHERE (SELECT MAX(version) FROM _ash_schema_migrations) = ?",
+            sql,
+            "DELETE FROM _ash_schema_migrations WHERE version = ?",
+            &[version],
+        )
+        .await
     }
 
     async fn applied_versions(&self) -> Result<Vec<String>> {

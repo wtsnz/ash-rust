@@ -322,6 +322,8 @@ impl SqlDialect for PostgresDialect {
         let upper = sql_type.to_ascii_uppercase();
         if upper.starts_with("CITEXT") {
             Some("citext")
+        } else if upper.starts_with("VECTOR") {
+            Some("vector")
         } else {
             None
         }

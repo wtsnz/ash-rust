@@ -76,7 +76,8 @@ pub use store::{
 };
 pub use types::{
     AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, UtcDateTime, Vector,
-    check_vector, compare_decimal, compare_typed, format_inet, format_vector, parse_vector,
+    canonical_text, check_vector, compare_decimal, compare_typed, format_inet, format_vector,
+    parse_vector,
 };
 pub use value::{
     ConstValue, FieldMap, IntoOption, Value, optional_int, optional_uuid, required_string,

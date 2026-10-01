@@ -222,7 +222,7 @@ where
                 &mut Vec::new(),
                 &mut Vec::new(),
             )?;
-            validate(&R::DEF, &fields)?;
+            validate(&R::DEF, &mut fields)?;
             run_validations_with_context(
                 &R::DEF,
                 action_def,

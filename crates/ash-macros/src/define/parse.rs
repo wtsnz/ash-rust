@@ -1196,6 +1196,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_index_include_needs_a_method_that_supports_it() {
+        let err = parse_err(quote! {
+            TestResource {
+                attributes { id: Uuid [pk]; tags: String; title: String; }
+                indexes { index by_tags: [tags], using: gin, include: [title]; }
+            }
+        });
+        assert!(
+            err.to_string()
+                .contains("`include` needs a btree, gist, or spgist index; Postgres has no INCLUDE for `gin`"),
+            "got: {err}"
+        );
+    }
+
     fn relationship_err(relationship: proc_macro2::TokenStream) -> String {
         parse_err(quote! {
             TestResource {

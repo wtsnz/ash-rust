@@ -115,6 +115,11 @@ pub enum CodegenError {
         target: String,
         columns: Vec<String>,
     },
+    UnknownIndexColumn {
+        table: String,
+        index: String,
+        column: String,
+    },
     Usage(String),
     Io(std::io::Error),
     Snapshot(serde_json::Error),
@@ -183,6 +188,14 @@ impl fmt::Display for CodegenError {
                 "relationship `{relationship}` on `{table}` references ({}) on `{target}`, \
                  which needs a unique identity without `where` on exactly those columns",
                 columns.join(", ")
+            ),
+            Self::UnknownIndexColumn {
+                table,
+                index,
+                column,
+            } => write!(
+                f,
+                "index `{index}` on `{table}` names `{column}`, which is not a column of `{table}`"
             ),
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io(error) => write!(f, "{error}"),
@@ -374,6 +387,28 @@ fn run_with<D: SqlDialect>(
         .iter()
         .map(|resource| TableSnapshot::from_resource(resource, dialect))
         .collect();
+    // Index columns are checked against the built table, which includes generated columns
+    // such as timestamps, rather than failing when the migration runs.
+    for (resource, table) in resources.iter().zip(&new) {
+        let identities = resource.identities.iter().map(|identity| (identity.name, identity.keys));
+        let indexes = resource
+            .indexes
+            .iter()
+            .map(|index| (index.name, index.keys))
+            .chain(resource.indexes.iter().map(|index| (index.name, index.include)));
+        for (name, columns) in identities.chain(indexes) {
+            if let Some(column) = columns
+                .iter()
+                .find(|column| table.columns.iter().all(|c| c.name != **column))
+            {
+                return Err(CodegenError::UnknownIndexColumn {
+                    table: table.table.clone(),
+                    index: name.to_string(),
+                    column: column.to_string(),
+                });
+            }
+        }
+    }
     // Generated checks (such as `ck_<table>_<attr>_one_of`) share a namespace with user checks.
     for table in &new {
         let mut names = std::collections::HashSet::new();

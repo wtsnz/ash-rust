@@ -14,11 +14,8 @@ use ash_core::{
     CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
-use ash_sql::{
-    CompiledSql, DatabaseLock, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler,
-    SqlParam,
-};
-use sqlx::{Connection, Row};
+use ash_sql::{CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam};
+use sqlx::Row;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -350,11 +347,22 @@ impl MigrationExecutor for Postgres {
         executor.remove_migration(version).await
     }
 
-    async fn lock_database(&self) -> Result<Option<Box<dyn DatabaseLock>>> {
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
         let pool = self
             .pool()
             .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
-        lock_database(pool).await
+        let migrator = Migrator::new(PostgresDialect, ".");
+        let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
+        executor.init().await?;
+        executor.apply_migration(sql, version, name).await
+    }
+
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let executor = PgMigrationExecutor::new(pool.clone(), "");
+        executor.revert_migration(sql, version).await
     }
 }
 
@@ -617,38 +625,19 @@ async fn set_search_path(pool: &PgPool, path: &str) -> Result<()> {
     Ok(())
 }
 
-/// `pg_advisory_lock` key held while migrations run, so migrators in other processes wait.
+/// `pg_advisory_xact_lock` key each migration step takes inside its own transaction, so
+/// migrators on other hosts apply or roll back one version at a time. The lock ends with
+/// the transaction, so it cannot outlive or be lost during the work it protects.
 pub const MIGRATION_LOCK_KEY: i64 = 0x6173_685f_6d69_6772;
 
-struct PgDatabaseLock {
-    conn: sqlx::PgConnection,
-}
-
-impl DatabaseLock for PgDatabaseLock {
-    fn release(self: Box<Self>) -> ash_core::BoxFuture<'static, Result<()>> {
-        Box::pin(async move {
-            let mut conn = self.conn;
-            sqlx::query("SELECT pg_advisory_unlock($1)")
-                .bind(MIGRATION_LOCK_KEY)
-                .execute(&mut conn)
-                .await
-                .map_err(map_sqlx)?;
-            conn.close().await.map_err(map_sqlx)
-        })
-    }
-}
-
-/// Takes the migration lock on its own connection, so a one-connection pool can still migrate.
-async fn lock_database(pool: &PgPool) -> Result<Option<Box<dyn DatabaseLock>>> {
-    let mut conn = sqlx::PgConnection::connect_with(&pool.connect_options())
-        .await
-        .map_err(map_sqlx)?;
-    sqlx::query("SELECT pg_advisory_lock($1)")
+async fn begin_locked(pool: &PgPool) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await.map_err(map_sqlx)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(MIGRATION_LOCK_KEY)
-        .execute(&mut conn)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx)?;
-    Ok(Some(Box::new(PgDatabaseLock { conn })))
+    Ok(tx)
 }
 
 struct PgMigrationExecutor {
@@ -665,11 +654,13 @@ impl PgMigrationExecutor {
     }
 
     async fn init(&self) -> Result<()> {
+        // Concurrent `CREATE TABLE IF NOT EXISTS` calls can still collide, so take the lock.
+        let mut tx = begin_locked(&self.pool).await?;
         sqlx::query(self.create_table_sql)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(map_sqlx)?;
-        Ok(())
+        tx.commit().await.map_err(map_sqlx)
     }
 }
 
@@ -686,12 +677,17 @@ impl MigrationExecutor for PgMigrationExecutor {
         self.init().await
     }
 
-    async fn lock_database(&self) -> Result<Option<Box<dyn DatabaseLock>>> {
-        lock_database(&self.pool).await
-    }
-
-    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
+        let mut tx = begin_locked(&self.pool).await?;
+        let applied = sqlx::query("SELECT 1 FROM _ash_schema_migrations WHERE version = $1")
+            .bind(version)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_sqlx)?
+            .is_some();
+        if applied {
+            return Ok(false);
+        }
         sqlx::raw_sql(sql)
             .execute(&mut *tx)
             .await
@@ -706,7 +702,32 @@ impl MigrationExecutor for PgMigrationExecutor {
         .await
         .map_err(map_sqlx)?;
         tx.commit().await.map_err(map_sqlx)?;
-        Ok(())
+        Ok(true)
+    }
+
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        let mut tx = begin_locked(&self.pool).await?;
+        let latest =
+            sqlx::query("SELECT 1 WHERE (SELECT MAX(version) FROM _ash_schema_migrations) = $1")
+                .bind(version)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_sqlx)?
+            .is_some();
+        if !latest {
+            return Ok(false);
+        }
+        sqlx::raw_sql(sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        sqlx::query("DELETE FROM _ash_schema_migrations WHERE version = $1")
+            .bind(version)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        tx.commit().await.map_err(map_sqlx)?;
+        Ok(true)
     }
 
     async fn applied_versions(&self) -> Result<Vec<String>> {

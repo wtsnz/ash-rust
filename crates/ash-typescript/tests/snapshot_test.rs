@@ -112,3 +112,12 @@ fn test_only_ci_string_columns_get_text_filters() {
     assert_eq!(sql_type_to_ts_and_zod("TEXT", false).1, Some("StringFilter"));
     assert_eq!(sql_type_to_ts_and_zod("VARCHAR(255)", false).1, Some("StringFilter"));
 }
+
+#[test]
+fn test_vector_columns_are_number_lists_without_filters() {
+    use ash_typescript::snapshot::sql_type_to_ts_and_zod;
+
+    let vector = sql_type_to_ts_and_zod("VECTOR(3)", false);
+    assert_eq!((vector.0, vector.1), ("number[]", None));
+    assert_eq!(vector.2, "z.array(z.number())");
+}

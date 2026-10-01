@@ -120,7 +120,13 @@ fn build_field_zod_schema(
     }
 
     let mut schema = if let Some(allowed) = one_of_allowed {
-        let options = allowed
+        // GraphQL takes atoms as upper-case enum values, so validate those.
+        let values: Vec<String> = if matches!(ty, AttrType::Atom { .. }) {
+            crate::types::enum_values(allowed)
+        } else {
+            allowed.iter().map(|s| s.to_string()).collect()
+        };
+        let options = values
             .iter()
             .map(|s| format!("\"{s}\""))
             .collect::<Vec<_>>()

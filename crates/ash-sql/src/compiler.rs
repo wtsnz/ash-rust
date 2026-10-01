@@ -106,6 +106,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     fn bind_typed(&mut self, ty: AttrType, val: Value) -> String {
         self.param_counter += 1;
         let placeholder = self.dialect.placeholder(self.param_counter);
+        // Stored values are canonical, so compare against the canonical spelling too.
+        let val = match &val {
+            Value::String(raw) => ash_core::canonical_text(ty, raw).map_or(val, Value::String),
+            _ => val,
+        };
         if ty == AttrType::Binary {
             if let Value::String(encoded) = &val
                 && let Err(err) = ash_core::Binary::parse(encoded)

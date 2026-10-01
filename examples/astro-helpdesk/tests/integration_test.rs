@@ -286,7 +286,7 @@ async fn test_typescript_filters_match_graphql_filter_inputs() {
     ));
 
     // The helpdesk has no boolean attributes, so `BooleanFilterInput` is not in its schema.
-    for (ts_name, gql_name) in [
+    let pairs = [
         ("UuidFilter", "UuidFilterInput"),
         ("StringFilter", "StringFilterInput"),
         ("TextFilter", "TextFilterInput"),
@@ -295,20 +295,29 @@ async fn test_typescript_filters_match_graphql_filter_inputs() {
         ("FloatFilter", "FloatFilterInput"),
         ("TicketFilterInput", "TicketFilterInput"),
         ("RepresentativeFilterInput", "RepresentativeFilterInput"),
-    ] {
+    ];
+    let named = r#"kind name enumValues { name }"#;
+    for (ts_name, gql_name) in pairs {
         let body = ts
             .split(&format!("export interface {ts_name} {{\n"))
             .nth(1)
             .unwrap_or_else(|| panic!("{ts_name} missing from generated TypeScript"));
-        let mut ts_fields: Vec<String> = body
+        // `name?: type;` lines, as (name, type).
+        let mut ts_fields: Vec<(String, String)> = body
             .lines()
             .take_while(|line| *line != "}")
-            .map(|line| line.trim().split('?').next().unwrap().to_string())
+            .map(|line| {
+                let (name, ty) = line.trim().split_once("?: ").unwrap();
+                (name.to_string(), ty.trim_end_matches(';').to_string())
+            })
             .collect();
         ts_fields.sort();
 
         let query = serde_json::json!({
-            "query": format!("{{ __type(name: \"{gql_name}\") {{ inputFields {{ name }} }} }}")
+            "query": format!(
+                "{{ __type(name: \"{gql_name}\") {{ inputFields {{ name type {{ {named} \
+                 ofType {{ {named} ofType {{ {named} ofType {{ {named} }} }} }} }} }} }} }}"
+            )
         });
         let req = Request::builder()
             .method("POST")
@@ -319,14 +328,70 @@ async fn test_typescript_filters_match_graphql_filter_inputs() {
         let res = app.clone().oneshot(req).await.unwrap();
         let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        let mut gql_fields: Vec<String> = body["data"]["__type"]["inputFields"]
+        let mut gql_fields: Vec<(String, serde_json::Value)> = body["data"]["__type"]["inputFields"]
             .as_array()
             .unwrap_or_else(|| panic!("{gql_name} missing from GraphQL schema: {body:?}"))
             .iter()
-            .map(|field| field["name"].as_str().unwrap().to_string())
+            .map(|field| (field["name"].as_str().unwrap().to_string(), field["type"].clone()))
             .collect();
-        gql_fields.sort();
+        gql_fields.sort_by(|a, b| a.0.cmp(&b.0));
 
-        assert_eq!(ts_fields, gql_fields, "{ts_name} does not match {gql_name}");
+        let ts_names: Vec<&str> = ts_fields.iter().map(|(name, _)| name.as_str()).collect();
+        let gql_names: Vec<&str> = gql_fields.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(ts_names, gql_names, "{ts_name} does not match {gql_name}");
+
+        for ((field, ts_type), (_, gql_type)) in ts_fields.iter().zip(&gql_fields) {
+            let at = format!("{ts_name}.{field}: {ts_type} vs {gql_type}");
+            // GraphQL: strip non-null, note a list, then strip non-null again.
+            let mut gql = gql_type;
+            if gql["kind"] == "NON_NULL" {
+                gql = &gql["ofType"];
+            }
+            let gql_list = gql["kind"] == "LIST";
+            if gql_list {
+                gql = &gql["ofType"];
+                if gql["kind"] == "NON_NULL" {
+                    gql = &gql["ofType"];
+                }
+            }
+            let ts_list = ts_type.ends_with("[]");
+            assert_eq!(ts_list, gql_list, "list mismatch at {at}");
+            let base = ts_type
+                .trim_end_matches("[]")
+                .trim_start_matches('(')
+                .trim_end_matches(')');
+            let gql_named = gql["name"].as_str().unwrap();
+            match base {
+                "string" => assert!(
+                    gql["kind"] == "SCALAR"
+                        && !["Int", "Float", "Boolean"].contains(&gql_named),
+                    "{at}"
+                ),
+                "number" => assert!(["Int", "Float"].contains(&gql_named), "{at}"),
+                "boolean" => assert_eq!(gql_named, "Boolean", "{at}"),
+                literals if literals.starts_with('"') => {
+                    assert_eq!(gql["kind"], "ENUM", "{at}");
+                    let mut ts_values: Vec<&str> =
+                        literals.split(" | ").map(|v| v.trim_matches('"')).collect();
+                    let mut gql_values: Vec<&str> = gql["enumValues"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v["name"].as_str().unwrap())
+                        .collect();
+                    ts_values.sort_unstable();
+                    gql_values.sort_unstable();
+                    assert_eq!(ts_values, gql_values, "{at}");
+                }
+                filter => {
+                    let expected = pairs
+                        .iter()
+                        .find(|(ts, _)| *ts == filter)
+                        .map(|(_, gql)| *gql)
+                        .unwrap_or_else(|| panic!("no GraphQL input paired with {filter} at {at}"));
+                    assert_eq!(gql_named, expected, "{at}");
+                }
+            }
+        }
     }
 }

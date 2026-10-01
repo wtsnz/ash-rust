@@ -95,14 +95,21 @@ impl TableSnapshot {
             });
         }
 
+        // SQLite has one index method and no INCLUDE, so its snapshots leave both out and
+        // changing them does not rebuild an identical index.
+        let postgres = dialect.name() == "postgres";
         let mut indexes = Vec::new();
         for index in resource.indexes {
             indexes.push(IndexSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), index.name),
                 columns: index.keys.iter().map(|k| k.to_string()).collect(),
                 predicate: index.predicate.map(str::to_string),
-                method: index.method.map(str::to_string),
-                include: index.include.iter().map(|k| k.to_string()).collect(),
+                method: index.method.filter(|_| postgres).map(str::to_string),
+                include: if postgres {
+                    index.include.iter().map(|k| k.to_string()).collect()
+                } else {
+                    Vec::new()
+                },
             });
         }
 

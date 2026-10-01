@@ -136,7 +136,8 @@ pub fn ash_value_to_graphql_value_typed(val: &AshValue, ty: AttrType) -> GqlValu
             Ok(values) => GqlValue::List(
                 values
                     .into_iter()
-                    .map(|value| float_value(value as f64))
+                    // Widen through the shortest text so 0.1f32 reads as 0.1, not 0.10000000149.
+                    .map(|value| float_value(value.to_string().parse().unwrap_or(value as f64)))
                     .collect(),
             ),
             Err(_) => GqlValue::Null,

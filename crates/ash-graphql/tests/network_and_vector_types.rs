@@ -49,7 +49,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
 
     let create = r#"
         mutation {
-            createDevice(input: { address: "10.0.0.1/32", embedding: [1, 2.5, -3] }) {
+            createDevice(input: { address: "10.0.0.1/32", embedding: [0.1, 2.5, -3] }) {
                 success
                 result { address embedding }
             }
@@ -61,7 +61,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
         res.data.into_json().unwrap()["createDevice"],
         json!({
             "success": true,
-            "result": { "address": "10.0.0.1", "embedding": [1.0, 2.5, -3.0] }
+            "result": { "address": "10.0.0.1", "embedding": [0.1, 2.5, -3.0] }
         })
     );
 
@@ -74,7 +74,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     assert_eq!(
         res.data.into_json().unwrap()["listDevices"],
-        json!([{ "address": "10.0.0.1", "embedding": [1.0, 2.5, -3.0] }])
+        json!([{ "address": "10.0.0.1", "embedding": [0.1, 2.5, -3.0] }])
     );
 
     for (input, message) in [

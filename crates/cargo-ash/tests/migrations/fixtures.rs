@@ -768,11 +768,6 @@ pub mod device {
                 address: Inet;
                 embedding: Option<Vector<3>>;
             }
-            statements {
-                statement vector only postgres {
-                    up "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public";
-                }
-            }
             actions {
                 read read { primary; }
             }
@@ -794,6 +789,51 @@ pub mod covered_notes {
             }
             indexes {
                 index by_title: [title], include: [body];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+/// `covered_notes` with a different method and no included columns.
+pub mod covered_notes_v2 {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        CoveredNote {
+            table "covered_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                body: String;
+            }
+            indexes {
+                index by_title: [title], using: hash;
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
+/// An index that names a column the table does not have.
+pub mod misindexed_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        MisindexedNote {
+            table "misindexed_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+            indexes {
+                index by_title: [title], include: [summary];
             }
             actions {
                 read read { primary; }

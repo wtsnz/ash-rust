@@ -424,10 +424,19 @@ pub fn check_vector(values: &[f32], dimensions: u32) -> Result<()> {
     Ok(())
 }
 
-/// pgvector text form of `values`, such as `[1,2.5,3]`.
+/// pgvector text form of `values`, such as `[1,2.5,3]`. Each value is the shortest text
+/// that reads back as the same `f32`, with an exponent for very large or small values.
 pub fn format_vector(values: &[f32]) -> String {
-    let parts: Vec<String> = values.iter().map(|value| value.to_string()).collect();
+    let parts: Vec<String> = values.iter().map(|value| format_f32(*value)).collect();
     format!("[{}]", parts.join(","))
+}
+
+fn format_f32(value: f32) -> String {
+    let text = format!("{value:?}");
+    match text.strip_suffix(".0") {
+        Some(whole) => whole.to_string(),
+        None => text,
+    }
 }
 
 impl<const N: usize> From<Vector<N>> for Value {
@@ -685,9 +694,25 @@ pub fn compare_decimal(a: &str, b: &str) -> Option<std::cmp::Ordering> {
 
 /// Compares two stored values the way their column type does in SQL: `Float` and
 /// `Decimal` numerically and `CiString` ignoring case. Other types use [`Value`]'s order.
+/// The canonical text of `raw` for types with more than one spelling of a value, such as
+/// `10.0.0.1/32` for `10.0.0.1` or `[1.0, 2]` for `[1,2]`. Postgres canonicalizes these
+/// itself, so storing and comparing the canonical text keeps the other stores in step.
+pub fn canonical_text(ty: AttrType, raw: &str) -> Option<String> {
+    match ty {
+        AttrType::Inet => Inet::parse(raw).ok().map(|inet| inet.as_str().to_string()),
+        AttrType::Vector { .. } => parse_vector(raw).ok().map(|values| format_vector(&values)),
+        AttrType::Float => Float::parse(raw).ok().map(|float| float.as_str().to_string()),
+        _ => None,
+    }
+}
+
 pub fn compare_typed(ty: Option<AttrType>, a: &Value, b: &Value) -> std::cmp::Ordering {
     if let (Value::String(x), Value::String(y)) = (a, b) {
         match ty {
+            Some(ty @ (AttrType::Inet | AttrType::Vector { .. })) => {
+                let canonical = |raw: &str| canonical_text(ty, raw).unwrap_or_else(|| raw.to_string());
+                return canonical(x).cmp(&canonical(y));
+            }
             Some(AttrType::Float) => {
                 if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>())
                     && let Some(order) = x.partial_cmp(&y)
@@ -768,6 +793,9 @@ mod network_and_vector_tests {
     fn vector_checks_dimensions_and_round_trips_text() {
         let v = Vector::<3>::new(vec![1.0, 2.5, -3.0]).unwrap();
         assert_eq!(super::format_vector(v.as_slice()), "[1,2.5,-3]");
+        let extremes = [3.4e38, 1e-45, 0.1, 1e20, -0.0];
+        assert_eq!(super::format_vector(&extremes), "[3.4e38,1e-45,0.1,1e20,-0]");
+        assert_eq!(super::parse_vector("[3.4e38,1e-45,0.1,1e20,-0]").unwrap(), extremes);
         assert_eq!(Vector::<3>::parse("[1, 2.5, -3]").unwrap(), v);
         assert!(Vector::<3>::new(vec![1.0, 2.0]).is_err());
         assert!(Vector::<2>::new(vec![1.0, f32::NAN]).is_err());

@@ -257,7 +257,7 @@ impl<R: Resource> Changeset<R> {
             ctx.metadata(),
             &arguments,
         )?;
-        validate(&R::DEF, &fields)?;
+        validate(&R::DEF, &mut fields)?;
         crate::policy::authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
         let managed_relationships = extract_managed_relationships::<R>(action, &arguments);
         Ok(Self {
@@ -356,7 +356,7 @@ impl<R: Resource> Changeset<R> {
             ctx.metadata(),
             &arguments,
         )?;
-        validate(&R::DEF, &fields)?;
+        validate(&R::DEF, &mut fields)?;
         crate::policy::authorize_field_writes(
             &R::DEF,
             ctx.actor.as_ref(),
@@ -418,7 +418,7 @@ impl<R: Resource> Changeset<R> {
         }
 
         apply_changes(&mut fields, action, None, &arguments)?;
-        validate(&R::DEF, &fields)?;
+        validate(&R::DEF, &mut fields)?;
         run_validations(&R::DEF, action, None, &fields, &arguments)?;
         R::from_fields(&fields)
     }
@@ -437,7 +437,7 @@ impl<R: Resource> Changeset<R> {
         }
 
         apply_changes(&mut fields, action, None, &arguments)?;
-        validate(&R::DEF, &fields)?;
+        validate(&R::DEF, &mut fields)?;
         run_validations(&R::DEF, action, Some(&existing_fields), &fields, &arguments)?;
         R::from_fields(&fields)
     }
@@ -542,7 +542,7 @@ impl<R: Resource> Changeset<R> {
             &self.arguments,
         )?;
         if self.action.kind != ActionKind::Destroy {
-            validate(&R::DEF, &self.fields)?;
+            validate(&R::DEF, &mut self.fields)?;
         }
 
         expect_persist(self.action, PersistKind::DataLayer)?;

@@ -2504,6 +2504,7 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
     if dialect == "postgres" {
         assert!(up.contains("\"address\" INET"), "{up}");
         assert!(up.contains("\"embedding\" VECTOR(3)"), "{up}");
+        assert!(up.contains("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;"), "{up}");
     } else {
         assert!(up.contains("\"address\" TEXT"), "{up}");
         assert!(up.contains("\"embedding\" TEXT"), "{up}");
@@ -2580,8 +2581,15 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
     );
     assert_eq!(rows[1].get("embedding"), Some(&Value::Null));
 
-    let matched = read(Some(ash_core::Filter::eq("address", "10.0.0.1"))).await;
-    assert_eq!(matched.len(), 1);
+    // Other spellings of the stored values match too.
+    for (field, value) in [
+        ("address", "10.0.0.1"),
+        ("address", "10.0.0.1/32"),
+        ("embedding", "[1.0, 2.50, -3]"),
+    ] {
+        let matched = read(Some(ash_core::Filter::eq(field, value))).await;
+        assert_eq!(matched.len(), 1, "{field} = {value}");
+    }
 
     db.rollback(&project.migrations()).await.unwrap();
     assert!(db.schema().await.tables.is_empty());
@@ -3219,6 +3227,44 @@ async fn codegen_emits_postgres_index_include_columns(db: TestDb) {
     assert!(db.schema().await.tables.is_empty());
 }
 on_every_backend!(codegen_emits_postgres_index_include_columns);
+
+async fn index_method_and_include_changes_only_matter_on_postgres(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate(
+        "create_covered_notes",
+        &[&fixtures::covered_notes::CoveredNote::DEF],
+    );
+    let options = project.options(Mode::Check, None);
+    let outcome = project
+        .run(
+            &options,
+            &[&fixtures::covered_notes_v2::CoveredNote::DEF],
+            &mut NonInteractive,
+        )
+        .unwrap();
+    match db.db {
+        // SQLite builds the same B-tree either way, so nothing changes.
+        Db::Sqlite(_) => assert_eq!(outcome, CodegenOutcome::NoChanges),
+        Db::Postgres(_) => match outcome {
+            CodegenOutcome::OutOfDate { up_sql } => {
+                assert!(up_sql.contains("USING hash"), "{up_sql}");
+            }
+            other => panic!("expected a rebuilt index, got {other:?}"),
+        },
+    }
+
+    match project.run(
+        &project.options(Mode::Write, Some("misindexed")),
+        &[&fixtures::misindexed_notes::MisindexedNote::DEF],
+        &mut NonInteractive,
+    ) {
+        Err(CodegenError::UnknownIndexColumn { index, column, .. }) => {
+            assert_eq!((index.as_str(), column.as_str()), ("by_title", "summary"));
+        }
+        other => panic!("expected UnknownIndexColumn, got {other:?}"),
+    }
+}
+on_every_backend!(index_method_and_include_changes_only_matter_on_postgres);
 
 async fn codegen_cascades_foreign_key_updates(db: TestDb) {
     let project = Project::for_db(&db);

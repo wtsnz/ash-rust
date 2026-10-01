@@ -94,6 +94,15 @@ fn parse_one_index(input: ParseStream, errors: &mut Vec<Error>) -> Result<IndexS
             }
         }
     }
+    // Postgres stores included columns only in these index types.
+    if let (Some(method), Some(first)) = (&method, include.first())
+        && !["btree", "gist", "spgist"].contains(&method.to_ascii_lowercase().as_str())
+    {
+        return Err(Error::new_spanned(
+            first,
+            format!("`include` needs a btree, gist, or spgist index; Postgres has no INCLUDE for `{method}`"),
+        ));
+    }
     require_semi(input, errors, "index");
     Ok(IndexSpec {
         name,

@@ -46,6 +46,9 @@ pub fn sql_type_to_ts_and_zod(
         ("number", Some("FloatFilter"), "z.number()")
     } else if upper.contains("BYTEA") || upper.contains("BLOB") {
         ("string", Some("StringFilter"), "z.string()")
+    } else if upper.starts_with("VECTOR") {
+        // GraphQL returns embeddings as float lists and has no filter for them.
+        ("number[]", None, "z.array(z.number())")
     } else if upper.contains("JSON") {
         ("Record<string, unknown>", None, "z.record(z.string(), z.unknown())")
     } else if upper.contains("CITEXT") || upper.contains("NOCASE") {
