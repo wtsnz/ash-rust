@@ -825,7 +825,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             RelType::BelongsTo | RelType::HasOne => {
                 attach_arms.push(quote! {
                     #name_str => {
-                        self.#id = ::ash_core::Rel::Loaded(match related.first() {
+                        self.#id = ::ash_core::Rel::of(match related.first() {
                             ::std::option::Option::Some(row) => ::std::option::Option::Some(<#dest as ::ash_core::Resource>::from_fields(row)?),
                             ::std::option::Option::None => ::std::option::Option::None,
                         });
@@ -836,7 +836,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             RelType::HasMany | RelType::ManyToMany => {
                 attach_arms.push(quote! {
                     #name_str => {
-                        self.#id = ::ash_core::Rel::Loaded(
+                        self.#id = ::ash_core::Rel::of(
                             related
                                 .iter()
                                 .map(<#dest as ::ash_core::Resource>::from_fields)
