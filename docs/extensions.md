@@ -170,7 +170,7 @@ The external macro receives the resource identifier (`Product`) and the raw toke
 **Best for**: Extensions that need to **mutate the resource AST** before compilation.
 Examples include:
 - **State Machines**: Auto-injects `status: String`, transitions, validations, and state changes.
-- **Soft Delete / Archival**: Auto-injects `archived_at: Option<String>` and rewrites read filters.
+- **Soft Delete / Archival** (`ash-archival`): Injects `archived_at: Option<UtcDateTime>`, filters it out of reads, and turns destroys into soft destroys.
 - **Automatic Timestamps**: Auto-injects `inserted_at` and `updated_at`.
 
 ### How it works

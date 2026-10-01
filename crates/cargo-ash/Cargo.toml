@@ -26,3 +26,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid.workspace = true
+
+[dev-dependencies]
+ash-archival = { path = "../ash-archival" }
+ash-memory = { path = "../ash-memory" }

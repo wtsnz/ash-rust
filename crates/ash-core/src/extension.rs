@@ -63,8 +63,8 @@
 //! Examples include:
 //! - State Machines (`#[ash_state_machine::state_machine]`): auto-injects the state attribute
 //!   (e.g. `status: String`), transition validations, and state changes into action definitions.
-//! - Soft Delete / Archival (`#[ash_archival::archival]`): auto-injects `archived_at: Option<String>`
-//!   and wraps default read queries with `is_nil(archived_at)`.
+//! - Soft Delete / Archival (`#[ash_archival::archival]`): injects `archived_at: Option<UtcDateTime>`,
+//!   adds `is_nil(archived_at)` to read actions, and makes destroy actions soft.
 //! - Multi-tenancy / Organization scoping.
 //!
 //! ### How it works:

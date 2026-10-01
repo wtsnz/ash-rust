@@ -842,6 +842,32 @@ pub mod misindexed_notes {
     }
 }
 
+pub mod archived_notes {
+    use ash_archival::archival;
+    use uuid::Uuid;
+
+    #[archival]
+    ash_core::resource! {
+        ArchivedNote {
+            table "archived_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+            archive {
+                exclude_read_actions [archived];
+                unarchive_action unarchive;
+            }
+            actions {
+                create create { primary; accept [title]; }
+                read read { primary; }
+                read archived { prepare filter(!archived_at.is_nil()); }
+                destroy destroy { primary; }
+            }
+        }
+    }
+}
+
 pub mod contact {
     use ash_core::{CiString, resource};
     use uuid::Uuid;

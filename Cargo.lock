@@ -113,6 +113,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71938f30533e4d95a6d17aa530939da3842c2ab6f4f84b9dae68447e4129f74a"
 
 [[package]]
+name = "ash-archival"
+version = "0.1.0"
+dependencies = [
+ "ash-archival-macros",
+ "ash-core",
+ "ash-graphql",
+ "ash-memory",
+ "ash-sqlite",
+ "async-graphql",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "ash-archival-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "ash-authentication"
 version = "0.1.0"
 dependencies = [
@@ -655,7 +679,9 @@ dependencies = [
 name = "cargo-ash"
 version = "0.1.0"
 dependencies = [
+ "ash-archival",
  "ash-core",
+ "ash-memory",
  "ash-postgres",
  "ash-sql",
  "ash-sqlite",
