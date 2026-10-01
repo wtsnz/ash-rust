@@ -585,3 +585,49 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
         })
     }
 }
+
+/// Values a new record gets before its action's changes run: a generated primary key,
+/// the first lock version, attribute defaults, and timestamps.
+pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
+    let missing =
+        |fields: &FieldMap, name: &str| matches!(fields.get(name), None | Some(Value::Null));
+    generate_pk(def, fields);
+    if let Some(version) = def.optimistic_lock_attribute()
+        && missing(fields, version)
+    {
+        fields.insert(version.to_string(), Value::Int(1));
+    }
+    for attr in def.attributes {
+        if let Some(default) = attr.default_fn
+            && missing(fields, attr.name)
+        {
+            fields.insert(attr.name.to_string(), default());
+        }
+    }
+    if let Some((created_at, updated_at)) = def.timestamps {
+        let now = crate::resource::utc_now_iso8601();
+        for name in [created_at, updated_at] {
+            if missing(fields, name) {
+                fields.insert(name.to_string(), Value::String(now.clone()));
+            }
+        }
+    }
+}
+
+/// Values an update sets before its action's changes run: the next lock version and a
+/// new `updated_at`.
+pub(crate) fn prepare_update_fields(def: &ResourceDef, existing: &FieldMap, fields: &mut FieldMap) {
+    if let Some(version) = def.optimistic_lock_attribute() {
+        let current = match existing.get(version) {
+            Some(Value::Int(n)) => *n,
+            _ => 1,
+        };
+        fields.insert(version.to_string(), Value::Int(current + 1));
+    }
+    if let Some((_created_at, updated_at)) = def.timestamps {
+        fields.insert(
+            updated_at.to_string(),
+            Value::String(crate::resource::utc_now_iso8601()),
+        );
+    }
+}

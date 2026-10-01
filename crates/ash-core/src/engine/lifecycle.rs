@@ -8,9 +8,9 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    apply_changes_with_context, apply_tenant_to_fields, expect_kind,
-    expect_persist, generate_pk, pk_name, run_validations_with_context, take_accepted_and_args,
-    validate,
+    apply_changes_with_context, apply_tenant_to_fields, expect_kind, expect_persist, pk_name,
+    prepare_create_fields, prepare_update_fields, run_validations_with_context,
+    take_accepted_and_args, validate,
 };
 use crate::policy::{authorize_field_writes, authorize_write};
 use crate::resource::{Resource, ResourceDef};
@@ -201,31 +201,7 @@ pub async fn create_dynamic<D: DataLayer>(
     expect_persist(action, PersistKind::DataLayer)?;
 
     let (mut fields, arguments) = take_accepted_and_args(action, input)?;
-    generate_pk(resource, &mut fields);
-
-    if let Some(v_attr) = resource.optimistic_lock_attribute()
-        && (!fields.contains_key(v_attr) || fields.get(v_attr) == Some(&Value::Null))
-    {
-        fields.insert(v_attr.to_string(), Value::Int(1));
-    }
-
-    if let Some((created_at, updated_at)) = resource.timestamps {
-        let now = crate::resource::utc_now_iso8601();
-        fields
-            .entry(created_at.to_string())
-            .or_insert_with(|| Value::String(now.clone()));
-        fields
-            .entry(updated_at.to_string())
-            .or_insert_with(|| Value::String(now));
-    }
-
-    for attr in resource.attributes {
-        if let Some(def_fn) = attr.default_fn
-            && (!fields.contains_key(attr.name) || fields.get(attr.name) == Some(&Value::Null))
-        {
-            fields.insert(attr.name.to_string(), def_fn());
-        }
-    }
+    prepare_create_fields(resource, &mut fields);
 
     let mut dynamic_before_actions = Vec::new();
     let mut dynamic_after_actions = Vec::new();
@@ -344,22 +320,7 @@ pub async fn update_dynamic<D: DataLayer>(
     let (accepted, arguments) = take_accepted_and_args(action, input)?;
     let mut fields = existing_fields.clone();
     fields.extend(accepted.clone());
-
-    if let Some(v_attr) = resource.optimistic_lock_attribute() {
-        let current_v = existing_fields
-            .get(v_attr)
-            .and_then(|v| match v {
-                Value::Int(n) => Some(*n),
-                _ => None,
-            })
-            .unwrap_or(1);
-        fields.insert(v_attr.to_string(), Value::Int(current_v + 1));
-    }
-
-    if let Some((_created_at, updated_at)) = resource.timestamps {
-        let now = crate::resource::utc_now_iso8601();
-        fields.insert(updated_at.to_string(), Value::String(now));
-    }
+    prepare_update_fields(resource, &existing_fields, &mut fields);
 
     let mut dynamic_before_actions = Vec::new();
     let mut dynamic_after_actions = Vec::new();

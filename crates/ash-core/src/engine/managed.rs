@@ -173,19 +173,7 @@ fn soft_destroy_changes(
         .into_iter()
         .filter(|(name, value)| existing_fields.get(name) != Some(value))
         .collect();
-    if let Some(version) = resource.optimistic_lock_attribute() {
-        let current = match existing_fields.get(version) {
-            Some(Value::Int(n)) => *n,
-            _ => 1,
-        };
-        changes.insert(version.to_string(), Value::Int(current + 1));
-    }
-    if let Some((_created_at, updated_at)) = resource.timestamps {
-        changes.insert(
-            updated_at.to_string(),
-            Value::String(crate::resource::utc_now_iso8601()),
-        );
-    }
+    crate::pipeline::prepare_update_fields(resource, existing_fields, &mut changes);
     changes
 }
 

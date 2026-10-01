@@ -7,8 +7,9 @@ use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{
-    action_named, apply_changes_with_context, expect_kind, expect_persist, visible_scope,
-    generate_pk, pk_name, run_validations_with_context, split_input, validate,
+    action_named, apply_changes_with_context, apply_tenant_to_fields, expect_kind, expect_persist,
+    pk_name, prepare_create_fields, run_validations_with_context, split_input, validate,
+    visible_scope,
 };
 use crate::policy::{authorize_field_writes, authorize_write, redact_fields};
 use crate::resource::Resource;
@@ -158,6 +159,15 @@ impl<R> BulkResult<R> {
 }
 
 /// Create multiple records in a single batch or in chunked batches.
+/// One validated row of a bulk create, with the hooks its action's changes registered.
+struct PreparedRow {
+    id: Uuid,
+    fields: FieldMap,
+    arguments: FieldMap,
+    after_actions: Vec<crate::action::DynamicAfterActionHook>,
+    after_transactions: Vec<crate::action::DynamicAfterTransactionHook>,
+}
+
 pub async fn bulk_create<R: Resource, D: DataLayer, I, F>(
     ctx: &Context<D>,
     action: &str,
@@ -174,43 +184,19 @@ where
 
     let pk = pk_name(&R::DEF)?;
 
-    let mut prepared = Vec::new();
+    let mut prepared: Vec<PreparedRow> = Vec::new();
     let mut errors = Vec::new();
     let mut error_count = 0;
 
     for input in inputs {
         let raw_fields = input.into_field_map();
-        let prep_res = (|| -> Result<(Uuid, FieldMap, FieldMap)> {
+        let prep_res = (|| -> Result<PreparedRow> {
+            // The same steps, in the same order, as a single create (`create_dynamic`).
             let (mut fields, arguments) = split_input(action_def, raw_fields)?;
-            generate_pk(&R::DEF, &mut fields);
-
-            if let Some(v_attr) = R::DEF.optimistic_lock_attribute()
-                && (!fields.contains_key(v_attr) || fields.get(v_attr) == Some(&Value::Null))
-            {
-                fields.insert(v_attr.to_string(), Value::Int(1));
-            }
-
-            for attr in R::DEF.attributes {
-                if let Some(def_fn) = attr.default_fn
-                    && (!fields.contains_key(attr.name)
-                        || fields.get(attr.name) == Some(&Value::Null))
-                {
-                    fields.insert(attr.name.to_string(), def_fn());
-                }
-            }
-
-            if let Some((created_at, updated_at)) = R::DEF.timestamps {
-                let now = crate::resource::utc_now_iso8601();
-                if !fields.contains_key(created_at) || fields.get(created_at) == Some(&Value::Null)
-                {
-                    fields.insert(created_at.to_string(), Value::String(now.clone()));
-                }
-                if !fields.contains_key(updated_at) || fields.get(updated_at) == Some(&Value::Null)
-                {
-                    fields.insert(updated_at.to_string(), Value::String(now));
-                }
-            }
-
+            prepare_create_fields(&R::DEF, &mut fields);
+            let mut before_actions = Vec::new();
+            let mut after_actions = Vec::new();
+            let mut after_transactions = Vec::new();
             apply_changes_with_context(
                 &mut fields,
                 action_def,
@@ -218,30 +204,44 @@ where
                 ctx.tenant(),
                 ctx.metadata(),
                 &arguments,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
+                &mut before_actions,
+                &mut after_actions,
+                &mut after_transactions,
             )?;
-            validate(&R::DEF, &mut fields)?;
-            run_validations_with_context(
-                &R::DEF,
-                action_def,
-                None,
-                &fields,
-                ctx.actor.as_ref(),
-                ctx.tenant(),
-                ctx.metadata(),
-                &arguments,
-            )?;
+            apply_tenant_to_fields(&R::DEF, &mut fields, ctx.tenant(), true)?;
+            let check = |fields: &mut FieldMap| -> Result<()> {
+                run_validations_with_context(
+                    &R::DEF,
+                    action_def,
+                    None,
+                    fields,
+                    ctx.actor.as_ref(),
+                    ctx.tenant(),
+                    ctx.metadata(),
+                    &arguments,
+                )?;
+                validate(&R::DEF, fields)
+            };
+            check(&mut fields)?;
             authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
             authorize_write(&R::DEF, action_def, ctx.actor.as_ref(), Some(&fields))?;
+            for hook in before_actions {
+                hook(&mut fields)?;
+            }
+            check(&mut fields)?;
 
             let id = required_uuid(&fields, pk)?;
-            Ok((id, fields, arguments))
+            Ok(PreparedRow {
+                id,
+                fields,
+                arguments,
+                after_actions,
+                after_transactions,
+            })
         })();
 
         match prep_res {
-            Ok(tuple) => prepared.push(tuple),
+            Ok(row) => prepared.push(row),
             Err(err) => {
                 if opts.stop_on_error {
                     return Err(err);
@@ -256,97 +256,119 @@ where
     let mut records = Vec::new();
     let mut count = 0;
 
-    let chunk_size = opts.batch_size.unwrap_or(if prepared.is_empty() {
-        1
-    } else {
-        prepared.len()
-    });
-    for chunk in prepared.chunks(chunk_size) {
-        if let Some((ident_name, ref u_fields)) = opts.upsert {
-            let identity = R::DEF.identity(ident_name).ok_or_else(|| {
+    let chunk_size = opts.batch_size.unwrap_or(prepared.len()).max(1);
+    let upsert_identity = match opts.upsert {
+        Some((ident_name, ref update_fields)) => Some((
+            R::DEF.identity(ident_name).ok_or_else(|| {
                 Error::Invalid(format!(
                     "unknown identity `{ident_name}` for upsert on {}",
                     R::DEF.name
                 ))
-            })?;
-
-            for (id, fields, arguments) in chunk {
-                match ctx
-                    .data
-                    .upsert(&R::DEF, *id, fields.clone(), identity, u_fields)
+            })?,
+            update_fields.clone(),
+        )),
+        None => None,
+    };
+    let mut rows = prepared.into_iter().peekable();
+    while rows.peek().is_some() {
+        // Rows are written while hooks wait, so keep the hooks apart from what is borrowed
+        // across the writes.
+        let (chunk, hooks): (Vec<_>, Vec<_>) = rows
+            .by_ref()
+            .take(chunk_size)
+            .map(|row| {
+                (
+                    (row.id, row.fields, row.arguments),
+                    (row.after_actions, row.after_transactions),
+                )
+            })
+            .unzip();
+        let stored_rows: Result<Vec<Result<FieldMap>>> = match &upsert_identity {
+            // Upserts go one row at a time, so one conflict fails only its own row.
+            Some((identity, update_fields)) => {
+                let mut stored = Vec::with_capacity(chunk.len());
+                for (id, fields, _) in &chunk {
+                    stored.push(
+                        ctx.data
+                            .upsert(&R::DEF, *id, fields.clone(), identity, update_fields)
+                            .await,
+                    );
+                }
+                Ok(stored)
+            }
+            None => {
+                let tuples: Vec<(Uuid, FieldMap)> = chunk
+                    .iter()
+                    .map(|(id, fields, _)| (*id, fields.clone()))
+                    .collect();
+                ctx.data
+                    .bulk_create(&R::DEF, tuples)
                     .await
-                {
-                    Ok(mut stored) => {
-                        if opts.notify {
-                            let mut notif_metadata = ctx.metadata.clone();
-                            notif_metadata.extend(arguments.clone());
-                            let notification = crate::notifier::Notification::new(
-                                R::DEF.name,
-                                action_def.name,
-                                action_def.kind,
-                                *id,
-                                stored.clone(),
-                                None,
-                                ctx.actor.clone(),
-                                notif_metadata,
-                            )
-                            .with_tenant(ctx.tenant.clone());
-                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification)
-                                .await?;
-                        }
-                        if opts.return_records {
-                            redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
-                            records.push(R::from_fields(&stored)?);
-                        }
-                        count += 1;
-                    }
-                    Err(err) => {
-                        if opts.stop_on_error {
-                            return Err(err);
-                        } else {
-                            errors.push(err.to_string());
-                            error_count += 1;
-                        }
+                    .map(|stored| stored.into_iter().map(Ok).collect())
+            }
+        };
+        let stored_rows = match stored_rows {
+            Ok(stored_rows) => stored_rows,
+            Err(err) => {
+                for (_, after_transactions) in hooks {
+                    for hook in after_transactions {
+                        hook(Err(&err));
                     }
                 }
+                if opts.stop_on_error {
+                    return Err(err);
+                }
+                errors.push(err.to_string());
+                error_count += chunk.len();
+                continue;
             }
-        } else {
-            let chunk_tuples: Vec<(Uuid, FieldMap)> =
-                chunk.iter().map(|(id, f, _)| (*id, f.clone())).collect();
-            match ctx.data.bulk_create(&R::DEF, chunk_tuples).await {
-                Ok(stored_rows) => {
-                    for (mut stored, (id, _, arguments)) in stored_rows.into_iter().zip(chunk) {
-                        if opts.notify {
-                            let mut notif_metadata = ctx.metadata.clone();
-                            notif_metadata.extend(arguments.clone());
-                            let notification = crate::notifier::Notification::new(
-                                R::DEF.name,
-                                action_def.name,
-                                action_def.kind,
-                                *id,
-                                stored.clone(),
-                                None,
-                                ctx.actor.clone(),
-                                notif_metadata,
-                            )
-                            .with_tenant(ctx.tenant.clone());
-                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification)
-                                .await?;
-                        }
-                        if opts.return_records {
-                            redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
-                            records.push(R::from_fields(&stored)?);
-                        }
-                        count += 1;
+        };
+
+        for ((stored, (id, _, arguments)), (after_actions, after_transactions)) in
+            stored_rows.into_iter().zip(chunk).zip(hooks)
+        {
+            let outcome = stored.and_then(|mut stored| {
+                for hook in after_actions {
+                    hook(&mut stored)?;
+                }
+                Ok(stored)
+            });
+            match outcome {
+                Ok(mut stored) => {
+                    for hook in after_transactions {
+                        hook(Ok(&stored));
                     }
+                    if opts.notify {
+                        let mut notif_metadata = ctx.metadata.clone();
+                        notif_metadata.extend(arguments);
+                        let notification = crate::notifier::Notification::new(
+                            R::DEF.name,
+                            action_def.name,
+                            action_def.kind,
+                            id,
+                            stored.clone(),
+                            None,
+                            ctx.actor.clone(),
+                            notif_metadata,
+                        )
+                        .with_tenant(ctx.tenant.clone());
+                        crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
+                    }
+                    if opts.return_records {
+                        redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
+                        records.push(R::from_fields(&stored)?);
+                    }
+                    count += 1;
                 }
                 Err(err) => {
+                    for hook in after_transactions {
+                        hook(Err(&err));
+                    }
                     if opts.stop_on_error {
                         return Err(err);
-                    } else {
-                        errors.push(err.to_string());
-                        error_count += chunk.len();
                     }
+                    errors.push(err.to_string());
+                    error_count += 1;
                 }
             }
         }

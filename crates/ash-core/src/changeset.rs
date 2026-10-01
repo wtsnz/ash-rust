@@ -13,11 +13,12 @@ use crate::context::Context;
 use crate::data_layer::DataLayer;
 use crate::error::{Error, Result};
 use crate::pipeline::{
-    action_named, apply_changes, apply_changes_with_context, expect_kind, expect_persist,
-    generate_pk, pk_name, run_validations, run_validations_with_context, split_input, validate,
+    action_named, apply_changes, apply_changes_with_context, apply_tenant_to_fields, expect_kind,
+    expect_persist, generate_pk, pk_name, prepare_create_fields, prepare_update_fields,
+    run_validations, run_validations_with_context, split_input, validate,
 };
 use crate::policy::authorize_write;
-use crate::resource::{Resource, ResourceDef};
+use crate::resource::Resource;
 use crate::value::{FieldMap, Value, required_uuid};
 
 /// Hook running before persistence with mutable access to the changeset.
@@ -202,26 +203,7 @@ impl<R: Resource> Changeset<R> {
             }));
         }
 
-        if let Some(mt) = R::DEF.multitenancy {
-            match mt.strategy {
-                crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
-                    if let Some(t) = ctx.tenant() {
-                        fields.insert(attr_name.to_string(), Value::String(t.to_string()));
-                    } else if !mt.global {
-                        return Err(Error::TenantRequired {
-                            resource: R::DEF.name,
-                        });
-                    }
-                }
-                crate::resource::MultitenancyStrategy::Context => {
-                    if ctx.tenant().is_none() && !mt.global {
-                        return Err(Error::TenantRequired {
-                            resource: R::DEF.name,
-                        });
-                    }
-                }
-            }
-        }
+        apply_tenant_to_fields(&R::DEF, &mut fields, ctx.tenant(), true)?;
 
         run_validations_with_context(
             &R::DEF,
@@ -541,8 +523,7 @@ impl<R: Resource> Changeset<R> {
                 let dest_pk = pk_name(dest_def)?;
                 if let Some(mut child_fields) = managed.inputs.pop() {
                     // The related row, so every key column can be copied from it.
-                    let related: FieldMap = if let Ok(cid) = required_uuid(&child_fields, dest_pk)
-                    {
+                    let related: FieldMap = if let Ok(cid) = required_uuid(&child_fields, dest_pk) {
                         if rel.destination_columns() == [dest_pk] {
                             child_fields
                         } else {
@@ -715,51 +696,4 @@ pub(crate) fn authorize<R: Resource, D>(changeset: &Changeset<R>, ctx: &Context<
         .map(Resource::to_fields)
         .unwrap_or_else(|| changeset.fields.clone());
     authorize_write(&R::DEF, changeset.action, ctx.actor.as_ref(), Some(&record))
-}
-
-/// Values a new record gets before its action's changes run: a generated primary key,
-/// the first lock version, attribute defaults, and timestamps.
-fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
-    let missing = |fields: &FieldMap, name: &str| {
-        matches!(fields.get(name), None | Some(Value::Null))
-    };
-    generate_pk(def, fields);
-    if let Some(version) = def.optimistic_lock_attribute()
-        && missing(fields, version)
-    {
-        fields.insert(version.to_string(), Value::Int(1));
-    }
-    for attr in def.attributes {
-        if let Some(default) = attr.default_fn
-            && missing(fields, attr.name)
-        {
-            fields.insert(attr.name.to_string(), default());
-        }
-    }
-    if let Some((created_at, updated_at)) = def.timestamps {
-        let now = crate::resource::utc_now_iso8601();
-        for name in [created_at, updated_at] {
-            if missing(fields, name) {
-                fields.insert(name.to_string(), Value::String(now.clone()));
-            }
-        }
-    }
-}
-
-/// Values an update sets before its action's changes run: the next lock version and a
-/// new `updated_at`.
-fn prepare_update_fields(def: &ResourceDef, existing: &FieldMap, fields: &mut FieldMap) {
-    if let Some(version) = def.optimistic_lock_attribute() {
-        let current = match existing.get(version) {
-            Some(Value::Int(n)) => *n,
-            _ => 1,
-        };
-        fields.insert(version.to_string(), Value::Int(current + 1));
-    }
-    if let Some((_created_at, updated_at)) = def.timestamps {
-        fields.insert(
-            updated_at.to_string(),
-            Value::String(crate::resource::utc_now_iso8601()),
-        );
-    }
 }
