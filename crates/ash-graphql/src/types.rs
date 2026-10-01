@@ -128,6 +128,10 @@ pub fn ash_value_to_graphql_value_typed(val: &AshValue, ty: AttrType) -> GqlValu
     match (val, ty) {
         (AshValue::Null, _) => GqlValue::Null,
         (AshValue::String(s), AttrType::Atom { .. }) => GqlValue::Enum(Name::new(s.to_uppercase())),
+        (AshValue::String(s), AttrType::Float) => match s.parse::<f64>() {
+            Ok(value) => float_value(value),
+            Err(_) => GqlValue::Null,
+        },
         (AshValue::String(s), AttrType::Vector { .. }) => match ash_core::parse_vector(s) {
             Ok(values) => GqlValue::List(
                 values

@@ -8,10 +8,11 @@ static DEVICE_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("address", AttrType::Inet),
     AttributeDef::optional("embedding", AttrType::Vector { dimensions: 3 }),
+    AttributeDef::optional("weight", AttrType::Float),
 ];
 
 static DEVICE_ACTIONS: &[ActionDef] = &[
-    ActionDef::create("create").accept(&["address", "embedding"]),
+    ActionDef::create("create").accept(&["address", "embedding", "weight"]),
     ActionDef::read("read").primary(),
 ];
 
@@ -85,4 +86,24 @@ async fn inet_and_vector_round_trip_through_graphql() {
         let errors = format!("{:?}", res.errors);
         assert!(errors.contains(message), "{input}: {errors}");
     }
+}
+
+#[tokio::test]
+async fn float_attributes_are_numbers_in_graphql() {
+    let ctx = Context::new(Memory::new());
+    let schema = AshGraphQL::from_resources(&[&DEVICE_DEF])
+        .finish::<Memory>()
+        .expect("Failed to build schema");
+
+    let create = r#"
+        mutation {
+            createDevice(input: { address: "10.0.0.1", weight: 2.5 }) { result { weight } }
+        }
+    "#;
+    let res = schema.execute(Request::new(create).data(ctx)).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.into_json().unwrap()["createDevice"]["result"]["weight"],
+        json!(2.5)
+    );
 }
