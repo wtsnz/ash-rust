@@ -312,8 +312,10 @@ impl<T> IntoOption<T> for Option<T> {
     }
 }
 
-impl IntoOption<String> for String {
-    fn into_option(self) -> Option<String> {
+/// Any value is a present value of its own type, so a setter for an optional field of
+/// a new type works without an impl of its own.
+impl<T> IntoOption<T> for T {
+    fn into_option(self) -> Option<T> {
         Some(self)
     }
 }
@@ -321,38 +323,6 @@ impl IntoOption<String> for String {
 impl IntoOption<String> for &str {
     fn into_option(self) -> Option<String> {
         Some(self.to_string())
-    }
-}
-
-impl IntoOption<i64> for i64 {
-    fn into_option(self) -> Option<i64> {
-        Some(self)
-    }
-}
-
-macro_rules! impl_into_option_int {
-    ($($t:ty),*) => {
-        $(
-            impl IntoOption<$t> for $t {
-                fn into_option(self) -> Option<$t> {
-                    Some(self)
-                }
-            }
-        )*
-    };
-}
-
-impl_into_option_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
-
-impl IntoOption<bool> for bool {
-    fn into_option(self) -> Option<bool> {
-        Some(self)
-    }
-}
-
-impl IntoOption<Uuid> for Uuid {
-    fn into_option(self) -> Option<Uuid> {
-        Some(self)
     }
 }
 

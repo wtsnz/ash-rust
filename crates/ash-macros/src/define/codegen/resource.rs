@@ -1315,12 +1315,6 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             #(#identity_methods)*
         }
 
-        impl ::ash_core::IntoOption<#resource> for #resource {
-            fn into_option(self) -> ::std::option::Option<#resource> {
-                ::std::option::Option::Some(self)
-            }
-        }
-
         impl ::std::convert::From<#resource> for ::ash_core::Value {
             fn from(resource: #resource) -> Self {
                 ::ash_core::Value::Map(::ash_core::Resource::to_fields(&resource))

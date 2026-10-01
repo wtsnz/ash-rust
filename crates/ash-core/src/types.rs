@@ -241,11 +241,19 @@ impl From<Binary> for Value {
     }
 }
 
-impl crate::value::IntoOption<Binary> for Binary {
-    fn into_option(self) -> Option<Binary> {
-        Some(self)
-    }
+/// The text-backed types display as their stored text, so they can be formatted and
+/// used in `concat(...)` calculations.
+macro_rules! display_as_str {
+    ($($ty:ty),*) => {$(
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    )*};
 }
+
+display_as_str!(UtcDateTime, Decimal, Float, CiString, Inet, Date);
 
 impl AshType for Binary {
     const ATTR_TYPE: AttrType = AttrType::Binary;
@@ -284,12 +292,6 @@ impl CiString {
 impl From<CiString> for Value {
     fn from(value: CiString) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<CiString> for CiString {
-    fn into_option(self) -> Option<CiString> {
-        Some(self)
     }
 }
 
@@ -355,12 +357,6 @@ pub fn format_inet(addr: std::net::IpAddr, prefix: u8) -> String {
 impl From<Inet> for Value {
     fn from(value: Inet) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<Inet> for Inet {
-    fn into_option(self) -> Option<Inet> {
-        Some(self)
     }
 }
 
@@ -457,12 +453,6 @@ impl<const N: usize> From<Vector<N>> for Value {
     }
 }
 
-impl<const N: usize> crate::value::IntoOption<Vector<N>> for Vector<N> {
-    fn into_option(self) -> Option<Vector<N>> {
-        Some(self)
-    }
-}
-
 impl<const N: usize> AshType for Vector<N> {
     const ATTR_TYPE: AttrType = AttrType::Vector {
         dimensions: N as u32,
@@ -505,12 +495,6 @@ impl Date {
 impl From<Date> for Value {
     fn from(value: Date) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<Date> for Date {
-    fn into_option(self) -> Option<Date> {
-        Some(self)
     }
 }
 
@@ -567,12 +551,6 @@ fn is_leap_year(year: i32) -> bool {
 impl From<Float> for Value {
     fn from(value: Float) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<Float> for Float {
-    fn into_option(self) -> Option<Float> {
-        Some(self)
     }
 }
 
