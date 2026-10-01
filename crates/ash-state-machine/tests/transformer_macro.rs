@@ -221,3 +221,55 @@ mod ticket_module {
         assert_eq!(closed.current_state(), "closed");
     }
 }
+
+mod ticket {
+    use super::*;
+
+    #[state_machine]
+    resource! {
+        Ticket {
+            table "tickets";
+
+            attributes {
+                id: Uuid [pk];
+                // Mentions "status" without declaring it, so `status` is still injected.
+                status_note: Option<String>;
+            }
+
+            state_machine {
+                state_attribute status;
+                initial: "open";
+                transition close, from: ["open"], to: "closed";
+            }
+
+            actions {
+                /// Opens a ticket.
+                create create { primary; }
+
+                /// Reads tickets.
+                read read { primary; }
+
+                read all;
+
+                /// Closes a ticket.
+                update close {}
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_transformer_keeps_documented_and_short_form_actions() {
+    use ticket::Ticket;
+
+    let names: Vec<&str> = Ticket::DEF.actions.iter().map(|a| a.name).collect();
+    assert_eq!(names, ["create", "read", "all", "close"]);
+    assert!(Ticket::DEF.attribute("status").is_some());
+    assert!(Ticket::DEF.attribute("status_note").is_some());
+
+    let ctx = Context::new(Memory::new());
+    let ticket = Ticket::create(&ctx).await.expect("create ticket");
+    assert_eq!(ticket.current_state(), "open");
+    let closed = Ticket::close(&ctx, ticket.id).await.expect("close ticket");
+    assert_eq!(closed.current_state(), "closed");
+}

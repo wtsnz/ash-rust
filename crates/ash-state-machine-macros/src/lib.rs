@@ -16,21 +16,57 @@ struct TransitionBlock {
     to: String,
 }
 
+/// One action, split so items can be appended to its body without losing anything.
 struct ActionBlock {
+    attrs: Vec<syn::Attribute>,
     kind: Ident,
     name: Ident,
+    returns: Option<TokenStream2>,
     body: TokenStream2,
 }
 
 impl Parse for ActionBlock {
     fn parse(input: ParseStream) -> Result<Self> {
+        let attrs = input.call(syn::Attribute::parse_outer)?;
         let kind: Ident = input.parse()?;
         let name: Ident = input.parse()?;
-        let content;
-        syn::braced!(content in input);
-        let body: TokenStream2 = content.parse()?;
-        Ok(Self { kind, name, body })
+        let mut returns = None;
+        if input.peek(Token![,]) {
+            let _: Token![,] = input.parse()?;
+            let mut ty = TokenStream2::new();
+            while !input.is_empty() && !input.peek(syn::token::Brace) && !input.peek(Token![;]) {
+                ty.extend([input.parse::<proc_macro2::TokenTree>()?]);
+            }
+            returns = Some(ty);
+        }
+        let body = if input.peek(syn::token::Brace) {
+            let content;
+            syn::braced!(content in input);
+            content.parse()?
+        } else {
+            TokenStream2::new()
+        };
+        if input.peek(Token![;]) {
+            let _: Token![;] = input.parse()?;
+        }
+        Ok(Self {
+            attrs,
+            kind,
+            name,
+            returns,
+            body,
+        })
     }
+}
+
+fn declares_attribute(tokens: &TokenStream2, attribute: &Ident) -> bool {
+    let trees: Vec<proc_macro2::TokenTree> = tokens.clone().into_iter().collect();
+    trees.windows(2).any(|pair| match pair {
+        [proc_macro2::TokenTree::Ident(ident), proc_macro2::TokenTree::Punct(punct)] => {
+            ident == attribute && punct.as_char() == ':'
+        }
+        _ => false,
+    })
 }
 
 impl Parse for StateMachineBlock {
@@ -311,8 +347,7 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
     // 1. Transform `attributes`: ensure state_attribute exists
     let attr_section_opt = dsl.sections.iter_mut().find(|s| s.name == "attributes");
     if let Some(attr_sec) = attr_section_opt {
-        let attr_tokens_str = attr_sec.tokens.to_string();
-        if !attr_tokens_str.contains(state_attr_str.as_str()) {
+        if !declares_attribute(&attr_sec.tokens, &state_attr_ident) {
             let existing_tokens = &attr_sec.tokens;
             attr_sec.tokens = quote! {
                 #existing_tokens
@@ -344,8 +379,7 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
                 Ok(list)
             },
             act_sec.tokens.clone(),
-        )
-        .unwrap_or_default(),
+        )?,
         None => Vec::new(),
     };
 
@@ -369,8 +403,10 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
     }
     if !had_create {
         actions.push(ActionBlock {
+            attrs: Vec::new(),
             kind: format_ident!("create"),
             name: format_ident!("create"),
+            returns: None,
             body: quote! {
                 primary;
                 #default_state_change
@@ -410,8 +446,10 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
             };
         } else {
             actions.push(ActionBlock {
+                attrs: Vec::new(),
                 kind: format_ident!("update"),
                 name: format_ident!("{}", t.action),
+                returns: None,
                 body: quote! {
                     #val_tokens
                     #change_tokens
@@ -421,11 +459,14 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
     }
 
     let reconstructed_actions = actions.into_iter().map(|a| {
+        let attrs = a.attrs;
         let k = a.kind;
         let n = a.name;
+        let returns = a.returns.map(|ty| quote! { , #ty });
         let b = a.body;
         quote! {
-            #k #n {
+            #(#attrs)*
+            #k #n #returns {
                 #b
             }
         }
