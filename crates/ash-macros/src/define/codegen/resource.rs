@@ -1024,12 +1024,14 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 Some(method) => quote! { ::std::option::Option::Some(#method) },
                 None => quote! { ::std::option::Option::None },
             };
+            let include_strs: Vec<String> = index.include.iter().map(|k| k.to_string()).collect();
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
                     predicate: #predicate_tokens,
                     method: #method_tokens,
+                    include: &[#(#include_strs),*],
                 }
             }
         })

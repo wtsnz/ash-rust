@@ -102,6 +102,7 @@ impl TableSnapshot {
                 columns: index.keys.iter().map(|k| k.to_string()).collect(),
                 predicate: index.predicate.map(str::to_string),
                 method: index.method.map(str::to_string),
+                include: index.include.iter().map(|k| k.to_string()).collect(),
             });
         }
 
@@ -260,6 +261,8 @@ pub struct IndexSnapshot {
     pub predicate: Option<String>,
     #[serde(default)]
     pub method: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
 }
 
 /// Represents a CHECK constraint in a schema snapshot.

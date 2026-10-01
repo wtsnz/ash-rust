@@ -256,10 +256,13 @@ resource! {
 
 `where:` makes a partial index. `using:` picks the Postgres access method: `btree` (the default), `hash`, `gin`, `gist`, `brin`, or `spgist`. SQLite ignores it and builds a B-tree. GIN and GiST need an operator class for the column type: they work on `JSONB` and arrays, but a plain text column needs an extension such as `pg_trgm`, so declare that index in a `statements` block instead.
 
+`include: [title]` stores extra columns in the index for index-only scans. Postgres supports it on `btree`, `gist`, and `spgist` indexes only; SQLite keeps a plain index.
+
 ```rust
 indexes {
     index open_by_status: [status], where: "status <> 'closed'";
     index by_title: [title], using: hash;
+    index by_owner: [owner_id], include: [title];
 }
 ```
 

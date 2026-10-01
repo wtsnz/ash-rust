@@ -475,7 +475,7 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
          JOIN pg_namespace n ON n.oid = t.relnamespace
          CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-         WHERE n.nspname = current_schema() AND ix.indisunique AND NOT ix.indisprimary
+         WHERE k.ord <= ix.indnkeyatts AND n.nspname = current_schema() AND ix.indisunique AND NOT ix.indisprimary
          GROUP BY t.relname, i.relname",
     )
     .fetch_all(pool)
@@ -498,7 +498,7 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
          JOIN pg_namespace n ON n.oid = t.relnamespace
          CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-         WHERE n.nspname = current_schema() AND NOT ix.indisunique AND NOT ix.indisprimary
+         WHERE k.ord <= ix.indnkeyatts AND n.nspname = current_schema() AND NOT ix.indisunique AND NOT ix.indisprimary
          GROUP BY t.relname, i.relname",
     )
     .fetch_all(pool)

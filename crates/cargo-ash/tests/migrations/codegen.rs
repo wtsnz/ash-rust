@@ -3174,6 +3174,52 @@ async fn codegen_emits_postgres_index_methods(db: TestDb) {
 }
 on_every_backend!(codegen_emits_postgres_index_methods);
 
+async fn codegen_emits_postgres_index_include_columns(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_covered_notes",
+        &[&fixtures::covered_notes::CoveredNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_covered_notes.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    let plain = "CREATE INDEX IF NOT EXISTS \"idx_covered_notes_by_title\" ON \"covered_notes\" (\"title\")";
+    if dialect == "postgres" {
+        assert!(up.contains(&format!("{plain} INCLUDE (\"body\");")), "{up}");
+    } else {
+        assert!(up.contains(&format!("{plain};")), "{up}");
+        assert!(!up.contains("INCLUDE"), "{up}");
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema()
+            .await
+            .table("covered_notes")
+            .indexes
+            .get("idx_covered_notes_by_title"),
+        Some(&vec!["title".to_string()])
+    );
+    if dialect == "postgres" {
+        assert_eq!(
+            db.int(
+                "SELECT COUNT(*) FROM pg_indexes \
+                 WHERE indexname = 'idx_covered_notes_by_title' \
+                   AND schemaname = current_schema() \
+                   AND indexdef LIKE '%INCLUDE (body)%'"
+            )
+            .await,
+            1
+        );
+    }
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_emits_postgres_index_include_columns);
+
 async fn codegen_cascades_foreign_key_updates(db: TestDb) {
     let project = Project::for_db(&db);
     let migration = project.generate(

@@ -1035,6 +1035,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 self.dialect.name(),
                 identity.nils_distinct,
                 None,
+                "",
             ));
         }
 
@@ -1047,6 +1048,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for key in index.keys {
                 key_cols.push(ident(self.dialect, key)?);
             }
+            let mut include_cols = Vec::new();
+            for column in index.include {
+                include_cols.push(ident(self.dialect, column)?);
+            }
             stmts.push(crate::generator::format_create_index(
                 false,
                 !if_not_exists.is_empty(),
@@ -1057,6 +1062,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 self.dialect.name(),
                 true,
                 index.method,
+                &include_cols.join(", "),
             ));
         }
 

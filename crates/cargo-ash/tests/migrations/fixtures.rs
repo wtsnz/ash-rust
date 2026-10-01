@@ -780,6 +780,28 @@ pub mod device {
     }
 }
 
+pub mod covered_notes {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        CoveredNote {
+            table "covered_notes";
+            attributes {
+                id: Uuid [pk];
+                title: String;
+                body: String;
+            }
+            indexes {
+                index by_title: [title], include: [body];
+            }
+            actions {
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod contact {
     use ash_core::{CiString, resource};
     use uuid::Uuid;

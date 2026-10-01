@@ -113,6 +113,8 @@ pub struct IndexDef {
     pub predicate: Option<&'static str>,
     /// Index access method. `None` and `btree` stay the default and are omitted from SQL. Other methods are emitted as `USING` on Postgres only.
     pub method: Option<&'static str>,
+    /// Extra columns stored in the index for index-only scans (`INCLUDE (...)`), Postgres only.
+    pub include: &'static [&'static str],
 }
 
 impl IndexDef {
@@ -122,6 +124,7 @@ impl IndexDef {
             keys,
             predicate: None,
             method: None,
+            include: &[],
         }
     }
 
@@ -132,6 +135,11 @@ impl IndexDef {
 
     pub const fn with_method(mut self, method: &'static str) -> Self {
         self.method = Some(method);
+        self
+    }
+
+    pub const fn with_include(mut self, include: &'static [&'static str]) -> Self {
+        self.include = include;
         self
     }
 }

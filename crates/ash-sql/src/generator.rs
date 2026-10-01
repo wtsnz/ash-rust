@@ -281,6 +281,7 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                     dialect.name(),
                     identity.nils_distinct,
                     None,
+                    "",
                 )
             );
             let down = format!("DROP INDEX IF EXISTS {id_name};");
@@ -313,6 +314,7 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                     dialect.name(),
                     true,
                     index.method.as_deref(),
+                    &quote_columns(dialect, &index.include),
                 )
             );
             let down = format!("DROP INDEX IF EXISTS {idx_name};");
@@ -437,6 +439,7 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             dialect.name(),
             identity.nils_distinct,
             None,
+            "",
         ));
         sql.push(';');
     }
@@ -459,10 +462,19 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             dialect.name(),
             true,
             index.method.as_deref(),
+            &quote_columns(dialect, &index.include),
         ));
         sql.push(';');
     }
     sql
+}
+
+fn quote_columns<D: SqlDialect>(dialect: &D, columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -476,6 +488,7 @@ pub(crate) fn format_create_index(
     dialect: &str,
     nils_distinct: bool,
     method: Option<&str>,
+    include: &str,
 ) -> String {
     let unique_sql = if unique { "UNIQUE " } else { "" };
     let exists_sql = if if_not_exists { "IF NOT EXISTS " } else { "" };
@@ -484,6 +497,11 @@ pub(crate) fn format_create_index(
             format!(" USING {method}")
         }
         _ => String::new(),
+    };
+    let include_sql = if dialect == "postgres" && !include.is_empty() {
+        format!(" INCLUDE ({include})")
+    } else {
+        String::new()
     };
     let nulls_sql = if unique && !nils_distinct && dialect == "postgres" {
         " NULLS NOT DISTINCT"
@@ -495,7 +513,7 @@ pub(crate) fn format_create_index(
         .map(|predicate| format!(" WHERE {predicate}"))
         .unwrap_or_default();
     format!(
-        "CREATE {unique_sql}INDEX {exists_sql}{name} ON {table}{using_sql} ({columns}){nulls_sql}{where_sql}"
+        "CREATE {unique_sql}INDEX {exists_sql}{name} ON {table}{using_sql} ({columns}){include_sql}{nulls_sql}{where_sql}"
     )
 }
 

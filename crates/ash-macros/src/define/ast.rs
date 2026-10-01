@@ -87,6 +87,7 @@ pub struct IndexSpec {
     pub keys: Vec<Ident>,
     pub predicate: Option<String>,
     pub method: Option<String>,
+    pub include: Vec<Ident>,
 }
 
 pub struct CheckSpec {

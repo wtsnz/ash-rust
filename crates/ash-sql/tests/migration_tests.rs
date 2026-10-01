@@ -380,3 +380,51 @@ async fn test_migrator_run_and_rollback_lifecycle() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn index_include_is_emitted_for_postgres_only() {
+    static INDEXES: &[IndexDef] =
+        &[IndexDef::new("by_username", &["username"]).with_include(&["id"])];
+    let mut resource = RES_V1;
+    resource.identities = &[];
+    resource.indexes = INDEXES;
+    let migration = |dialect_sql: &dyn Fn() -> String| dialect_sql();
+    let postgres = migration(&|| {
+        generate_migration_with_version(
+            &PostgresDialect,
+            "20260903000004",
+            "create_accounts",
+            &diff_snapshots(
+                None,
+                Some(&TableSnapshot::from_resource(&resource, &PostgresDialect)),
+            ),
+        )
+        .up_sql
+    });
+    assert!(postgres.contains(
+        "CREATE INDEX IF NOT EXISTS \"idx_accounts_by_username\" ON \"accounts\" (\"username\") INCLUDE (\"id\");"
+    ), "{postgres}");
+    let sqlite = generate_migration_with_version(
+        &SqliteDialect,
+        "20260903000004",
+        "create_accounts",
+        &diff_snapshots(
+            None,
+            Some(&TableSnapshot::from_resource(&resource, &SqliteDialect)),
+        ),
+    )
+    .up_sql;
+    assert!(sqlite.contains(
+        "CREATE INDEX IF NOT EXISTS \"idx_accounts_by_username\" ON \"accounts\" (\"username\");"
+    ), "{sqlite}");
+    assert!(!sqlite.contains("INCLUDE"));
+
+    let mut without = resource;
+    static PLAIN: &[IndexDef] = &[IndexDef::new("by_username", &["username"])];
+    without.indexes = PLAIN;
+    let changes = diff_snapshots(
+        Some(&TableSnapshot::from_resource(&without, &PostgresDialect)),
+        Some(&TableSnapshot::from_resource(&resource, &PostgresDialect)),
+    );
+    assert!(!changes.is_empty(), "adding INCLUDE columns must change the index");
+}
