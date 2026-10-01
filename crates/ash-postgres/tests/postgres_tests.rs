@@ -599,3 +599,63 @@ async fn test_postgres_binds_missing_calculation_arguments_with_their_type() {
     let rows = pg.run_query(&BONUS_DEF, &query).await.unwrap();
     assert_eq!(rows[0].get("bonus"), Some(&Value::Int(5)));
 }
+
+static TENANT_NOTE_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("org", AttrType::String),
+    AttributeDef::required("body", AttrType::String),
+];
+
+static TENANT_NOTE_DEF: ResourceDef = ResourceDef {
+    name: "TenantNote",
+    table: "tenant_notes",
+    attributes: TENANT_NOTE_ATTRS,
+    multitenancy: Some(ash_core::MultitenancyDef::attribute("org")),
+    ..NULLABLE_DEF
+};
+
+#[tokio::test]
+async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions() {
+    let Some(admin) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    // The app's tables live outside `public`, as they do with one schema per deployment.
+    let schema = format!("app_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+        .execute(admin.pool().unwrap())
+        .await
+        .unwrap();
+    let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
+        .await
+        .unwrap();
+    pg.install(&[&TENANT_NOTE_DEF]).await.unwrap();
+
+    let id = Uuid::new_v4();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("org".into(), Value::String("acme".into()));
+    fields.insert("body".into(), Value::String("hello".into()));
+    pg.create(&TENANT_NOTE_DEF, id, fields).await.unwrap();
+
+    // A tenant names a row filter here, not a schema, so it must not move the search_path.
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("org", "acme")),
+        tenant: Some("acme".into()),
+        ..CompiledQuery::default()
+    };
+    let rows = pg
+        .transaction(|tx| {
+            let tx = tx.clone();
+            async move {
+                let first = tx.run_query(&TENANT_NOTE_DEF, &query).await?;
+                let second = tx.run_query(&TENANT_NOTE_DEF, &query).await?;
+                Ok((first.len(), second.len()))
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows, (1, 1));
+}

@@ -458,8 +458,16 @@ impl DataLayer for Postgres {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
-        // Schema multitenancy: if tenant is specified, apply search_path
-        if let Some(tenant) = &query.tenant {
+        // Schema multitenancy: a `strategy: context` resource lives in the tenant's
+        // schema. Attribute tenancy filters rows instead, so its search_path must stay;
+        // switching it inside a transaction would hide tables outside `public`.
+        let schema_tenant = match resource.multitenancy {
+            Some(mt) if matches!(mt.strategy, ash_core::MultitenancyStrategy::Context) => {
+                query.tenant.as_ref()
+            }
+            _ => None,
+        };
+        if let Some(tenant) = schema_tenant {
             let set_search_path = format!(
                 "SET LOCAL search_path TO \"{}\", \"public\"",
                 tenant.replace('"', "\"\"")
