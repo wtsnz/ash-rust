@@ -21,6 +21,11 @@ pub mod post_mod {
                 has_many comments: super::comment_mod::Comment [fk: post_id];
             }
 
+            aggregates {
+                comment_count: Option<i64> = count(comments);
+                has_comments: Option<bool> = exists(comments);
+            }
+
             archive {
                 exclude_read_actions [archived];
                 exclude_destroy_actions [purge];
@@ -134,6 +139,54 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
         .await
         .unwrap();
     assert_eq!(loaded.comments.loaded().unwrap().len(), 1);
+
+    // Aggregates and filters through a relationship use the primary read too, so
+    // archived comments are neither counted nor matched.
+    let mut counted: Vec<(String, Option<i64>, Option<bool>)> = Post::query(&ctx)
+        .action("archived")
+        .load_aggregate(Post::comment_count)
+        .load_aggregate(Post::has_comments)
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .chain(
+            Post::query(&ctx)
+                .load_aggregate(Post::comment_count)
+                .load_aggregate(Post::has_comments)
+                .all()
+                .await
+                .unwrap(),
+        )
+        .map(|post| (post.title, post.comment_count, post.has_comments))
+        .collect();
+    counted.sort();
+    assert_eq!(
+        counted,
+        [
+            ("Archived".to_string(), Some(0), Some(false)),
+            ("Kept".to_string(), Some(1), Some(true)),
+        ]
+    );
+    let matched = Post::query(&ctx)
+        .action("archived")
+        .filter(ash_core::Filter::related(
+            "comments",
+            ash_core::Filter::eq("body", "goes"),
+        ))
+        .count()
+        .await
+        .unwrap();
+    assert_eq!(matched, 0, "archived comments must not match a related filter");
+    let matched = Post::query(&ctx)
+        .filter(ash_core::Filter::related(
+            "comments",
+            ash_core::Filter::eq("body", "stays"),
+        ))
+        .count()
+        .await
+        .unwrap();
+    assert_eq!(matched, 1);
 
     // Unarchive restores the post. Its comments stay archived, as in AshArchival.
     let restored = unarchive::<Post, D>(&ctx, archived.id).await.unwrap();

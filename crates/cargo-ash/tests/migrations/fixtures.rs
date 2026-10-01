@@ -842,7 +842,33 @@ pub mod misindexed_notes {
     }
 }
 
+pub mod note_folders {
+    use super::archived_notes::ArchivedNote;
+    use uuid::Uuid;
+
+    ash_core::resource! {
+        NoteFolder {
+            table "note_folders";
+            attributes {
+                id: Uuid [pk];
+                name: String;
+            }
+            relationships {
+                has_many notes: ArchivedNote [fk: folder_id];
+            }
+            aggregates {
+                note_count: Option<i64> = count(notes);
+            }
+            actions {
+                create create { primary; accept [name]; }
+                read read { primary; }
+            }
+        }
+    }
+}
+
 pub mod archived_notes {
+    use super::note_folders::NoteFolder;
     use ash_archival::archival;
     use uuid::Uuid;
 
@@ -853,13 +879,17 @@ pub mod archived_notes {
             attributes {
                 id: Uuid [pk];
                 title: String;
+                folder_id: Option<Uuid>;
+            }
+            relationships {
+                belongs_to folder: NoteFolder [fk: folder_id];
             }
             archive {
                 exclude_read_actions [archived];
                 unarchive_action unarchive;
             }
             actions {
-                create create { primary; accept [title]; }
+                create create { primary; accept [title, folder_id]; }
                 read read { primary; }
                 read archived { prepare filter(!archived_at.is_nil()); }
                 destroy destroy { primary; }

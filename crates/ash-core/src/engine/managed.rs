@@ -12,7 +12,6 @@ use crate::resource::{OnDelete, RelKind, ResourceDef};
 use crate::value::{FieldMap, Value, required_uuid};
 
 use super::lifecycle::{create_dynamic, destroy_dynamic, destroy_dynamic_with, update_dynamic};
-use super::relations::primary_read_filter;
 
 /// State shared by one destroy and everything it cascades into.
 pub(crate) struct Cascade {
@@ -112,7 +111,7 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
         let Some(related) = rel.destination_filter(&parent) else {
             continue;
         };
-        let read_filter = if hard { None } else { primary_read_filter(dest_def) };
+        let read_filter = if hard { None } else { dest_def.primary_read_filter() };
         let filter = Filter::and([Some(related), read_filter].into_iter().flatten());
         let rows = ctx
             .data

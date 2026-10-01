@@ -396,7 +396,7 @@ pub fn visible_scope(
 ) -> Result<(Option<Filter>, Option<String>)> {
     let (filter, tenant) = apply_tenant_scope(resource, filter, tenant)?;
     Ok((
-        and_filters(filter, crate::engine::primary_read_filter(resource)),
+        and_filters(filter, resource.primary_read_filter()),
         tenant,
     ))
 }

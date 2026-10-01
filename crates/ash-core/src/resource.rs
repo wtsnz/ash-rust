@@ -309,6 +309,26 @@ impl ResourceDef {
             .find(|attribute| attribute.primary_key)
     }
 
+    /// Filters from the primary read's `prepare filter(...)` steps. Following Ash, every
+    /// read of the resource sees them: relationship loads, aggregates, and filters that
+    /// reach it through a relationship.
+    pub fn primary_read_filter(&self) -> Option<crate::filter::Filter> {
+        let read = self.primary_read()?;
+        let filters: Vec<crate::filter::Filter> = read
+            .preparations
+            .iter()
+            .filter_map(|prep| match prep {
+                crate::action::PreparationDef::Filter(build) => Some(build()),
+                _ => None,
+            })
+            .collect();
+        if filters.is_empty() {
+            None
+        } else {
+            Some(crate::filter::Filter::and(filters))
+        }
+    }
+
     pub fn primary_read(&self) -> Option<&ActionDef> {
         self.actions
             .iter()

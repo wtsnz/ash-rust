@@ -39,7 +39,7 @@
 //! 1. Adds `archived_at: Option<UtcDateTime>` unless the resource declares it.
 //! 2. Adds `prepare filter(archived_at.is_nil())` to every read action except
 //!    `exclude_read_actions`. Relationship loads use the primary read, so they skip
-//!    archived records too. Aggregates do not.
+//!    archived records too, as do aggregates and filters through a relationship.
 //! 3. Makes every destroy action except `exclude_destroy_actions` a soft destroy that sets
 //!    `archived_at`. `archive_related` relationships are destroyed first with their own
 //!    primary destroy action, which archives them when they are archival as well.

@@ -453,7 +453,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     resource,
                     rel,
                 )?;
-                let inner_sql = self.compile_filter_scoped(dest_res, filter, Some(&dest_alias))?;
+                let inner_filter = match dest_res.primary_read_filter() {
+                    Some(read_filter) => Filter::and([(**filter).clone(), read_filter]),
+                    None => (**filter).clone(),
+                };
+                let inner_sql =
+                    self.compile_filter_scoped(dest_res, &inner_filter, Some(&dest_alias))?;
 
                 match rel.kind {
                     RelKind::ManyToMany => {
@@ -517,6 +522,22 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// The aggregate's own filter plus the destination's primary-read filters, each
+    /// prefixed with ` AND `.
+    fn aggregate_conditions(
+        &mut self,
+        dest: &ResourceDef,
+        dest_alias: &str,
+        agg: &AggregateDef,
+    ) -> Result<String> {
+        let mut sql = self.compile_aggregate_filter(dest_alias, &agg.filter)?;
+        if let Some(read_filter) = dest.primary_read_filter() {
+            let compiled = self.compile_filter_scoped(dest, &read_filter, Some(dest_alias))?;
+            sql.push_str(&format!(" AND {compiled}"));
+        }
+        Ok(sql)
+    }
+
     pub fn compile_aggregate(
         &mut self,
         resource: &ResourceDef,
@@ -546,7 +567,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     let mut s = format!(
                         "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                     s.push(')');
                     Ok(s)
                 }
@@ -554,7 +575,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     let mut s = format!(
                         "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                     s.push_str("))");
                     Ok(s)
                 }
@@ -563,7 +584,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     let mut s = format!(
                         "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                     s.push_str(" LIMIT 1)");
                     Ok(s)
                 }
@@ -572,7 +593,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     let mut s = format!(
                         "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                     s.push(')');
                     Ok(s)
                 }
@@ -603,7 +624,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                         s.push(')');
                         Ok(s)
                     }
@@ -611,7 +632,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                         s.push_str("))");
                         Ok(s)
                     }
@@ -620,7 +641,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                         s.push_str(" LIMIT 1)");
                         Ok(s)
                     }
@@ -629,7 +650,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg)?);
                         s.push(')');
                         Ok(s)
                     }

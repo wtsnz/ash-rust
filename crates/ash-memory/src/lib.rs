@@ -389,6 +389,14 @@ fn eval_filter(
             let Some(dest_table) = dest_table else {
                 return false;
             };
+            let combined;
+            let rel_filter = match dest_res.primary_read_filter() {
+                Some(read_filter) => {
+                    combined = Filter::and([(**rel_filter).clone(), read_filter]);
+                    &combined
+                }
+                None => &**rel_filter,
+            };
 
             match rel.kind {
                 ash_core::RelKind::BelongsTo
@@ -538,9 +546,18 @@ fn apply_aggregates(
             ))
         })?;
         let dest = (rel.destination)();
+        let read_filter = dest.primary_read_filter();
         let dest_rows: Vec<&FieldMap> = tables
             .get(dest.name)
-            .map(|t| t.values().collect())
+            .map(|t| {
+                t.values()
+                    .filter(|dest_row| {
+                        read_filter
+                            .as_ref()
+                            .is_none_or(|f| row_matches_filter(tables, dest, f, dest_row))
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         for row in rows.iter_mut() {

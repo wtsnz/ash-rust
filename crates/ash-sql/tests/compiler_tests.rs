@@ -464,3 +464,102 @@ fn test_text_filters_reject_non_text_fields() {
         );
     }
 }
+
+fn live_folders() -> Filter {
+    Filter::and([
+        Filter::is_nil("archived_at"),
+        Filter::ne("name", "hidden"),
+    ])
+}
+
+static FOLDER_PREPS: &[ash_core::PreparationDef] = &[ash_core::PreparationDef::Filter(live_folders)];
+
+static FOLDER_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required("name", AttrType::String),
+    AttributeDef::optional("parent_id", AttrType::Uuid),
+    AttributeDef::optional("archived_at", AttrType::UtcDatetime),
+];
+
+static FOLDER_RELS: &[ash_core::RelationshipDef] = &[ash_core::RelationshipDef::has_many(
+    "children",
+    || &FOLDER_DEF,
+    "parent_id",
+)];
+
+static FOLDER_AGGS: &[ash_core::AggregateDef] =
+    &[ash_core::AggregateDef::count("child_count", "children")];
+
+static FOLDER_DEF: ResourceDef = ResourceDef {
+    name: "Folder",
+    table: "folders",
+    attributes: FOLDER_ATTRS,
+    relationships: FOLDER_RELS,
+    actions: &[ActionDef::read("read").primary().preparations(FOLDER_PREPS)],
+    policies: &[],
+    field_policies: &[],
+    calculations: &[],
+    aggregates: FOLDER_AGGS,
+    extensions: &[],
+    notifiers: &[],
+    identities: &[],
+    indexes: &[],
+    checks: &[],
+    statements: &[],
+    embedded: false,
+    data_layer: ash_core::DataLayerKind::Sqlite,
+    timestamps: None,
+    store_type_id: ash_core::default_store_type_id,
+    store_name: "default",
+    multitenancy: None,
+};
+
+#[test]
+fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
+    let query = CompiledQuery {
+        filter: Some(Filter::and([
+            Filter::eq("name", "root"),
+            Filter::related("children", Filter::eq("name", "docs")),
+        ])),
+        aggregates: vec!["child_count".into()],
+        ..CompiledQuery::default()
+    };
+    for (dialect, sql, params) in [
+        {
+            let mut compiler = QueryCompiler::new(&PostgresDialect);
+            let compiled = compiler.compile_select(&FOLDER_DEF, &query).unwrap();
+            ("postgres", compiled.sql, compiled.params)
+        },
+        {
+            let mut compiler = QueryCompiler::new(&SqliteDialect);
+            let compiled = compiler.compile_select(&FOLDER_DEF, &query).unwrap();
+            ("sqlite", compiled.sql, compiled.params)
+        },
+    ] {
+        let sub = "\"_ash_sub_child_count\"";
+        assert!(
+            sql.contains(&format!("{sub}.\"archived_at\" IS NULL AND {sub}.\"name\" <>")),
+            "{dialect} aggregate must apply the read filter: {sql}"
+        );
+        assert!(
+            sql.contains("rel_folders_1.\"name\" = ") && sql.contains("rel_folders_1.\"archived_at\" IS NULL"),
+            "{dialect} related filter must apply the read filter: {sql}"
+        );
+        let values: Vec<&Value> = params.iter().map(|p| &p.value).collect();
+        assert_eq!(
+            values,
+            [
+                &Value::String("hidden".into()),
+                &Value::String("root".into()),
+                &Value::String("docs".into()),
+                &Value::String("hidden".into()),
+            ]
+        );
+        if dialect == "postgres" {
+            for n in 1..=4 {
+                assert!(sql.contains(&format!("${n}")), "missing ${n}: {sql}");
+            }
+            assert!(!sql.contains("$5"), "placeholders must be consecutive: {sql}");
+        }
+    }
+}
