@@ -60,6 +60,18 @@ impl TestDb {
         let admin = ash_postgres::Postgres::connect(&base)
             .await
             .expect("DATABASE_URL is set but Postgres is unreachable");
+        // Tests run in parallel, and concurrent `CREATE EXTENSION` calls race on a fresh
+        // database. Install citext once under a lock so migrations find it already there.
+        let mut tx = admin.pool().unwrap().begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(7303013)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
         let schema = format!("codegen_{}", Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
             .execute(admin.pool().unwrap())
