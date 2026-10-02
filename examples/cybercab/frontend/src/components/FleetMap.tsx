@@ -3,6 +3,7 @@ import maplibregl, { type GeoJSONSource, type Map as MapLibre } from "maplibre-g
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import type { Cab, Depot, FleetAlert, ServiceZone, TelemetrySample, Trip } from "../lib/client";
+import { CabLayer, type CabMark } from "../lib/cabLayer";
 import { CAB_STATUS, cabStatus } from "../lib/model";
 import { circle, progressAlong, route, type LngLat } from "../lib/geo";
 
@@ -11,32 +12,11 @@ const LABEL_FONT = ["Montserrat Medium", "Open Sans Bold", "Noto Sans Regular"];
 const AUSTIN: LngLat = [-97.728, 30.282];
 /** Reported positions to keep per cab for its light trail. */
 const TRAIL_LENGTH = 26;
+/** How often trails, zones, hubs, alerts and the journey are redrawn, at most. */
+const SLOW_MS = 250;
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
 const collection = (features: Feature[]): GeoJSON.FeatureCollection => ({ type: "FeatureCollection", features });
-
-/** A chevron pointing north, drawn once and tinted per cab (an SDF icon). */
-function chevron(): ImageData {
-  const size = 64;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const g = canvas.getContext("2d")!;
-  g.fillStyle = "#fff";
-  g.beginPath();
-  g.moveTo(32, 6);
-  g.lineTo(52, 54);
-  g.lineTo(32, 43);
-  g.lineTo(12, 54);
-  g.closePath();
-  g.fill();
-  return g.getImageData(0, 0, size, size);
-}
-
-interface Glide {
-  from: LngLat;
-  to: LngLat;
-  started: number;
-}
 
 export interface FleetMapProps {
   cabs: Cab[];
@@ -56,6 +36,10 @@ export interface FleetMapProps {
  * The city at night with the fleet on it. Cabs glide between their once-a-second
  * reports, leave light trails, and the selected cab's journey is drawn in full: the
  * trail it left, the approach to the pickup, and the ride to the drop-off.
+ *
+ * Live updates arrive hundreds of times a second at fleet scale, so they only mark what
+ * changed. Each animation frame hands the cabs to a WebGL layer, which glides them on the
+ * GPU, and the slower layers are redrawn a few times a second.
  */
 export function FleetMap(props: FleetMapProps) {
   const container = useRef<HTMLDivElement>(null);
@@ -63,8 +47,7 @@ export function FleetMap(props: FleetMapProps) {
   const ready = useRef(false);
   const latest = useRef(props);
   latest.current = props;
-  const glides = useRef(new Map<string, Glide>());
-  const trails = useRef(new Map<string, LngLat[]>());
+  const changed = useRef({ cabs: true, slow: true });
   const flying = useRef(false);
 
   // The map, once.
@@ -82,31 +65,72 @@ export function FleetMap(props: FleetMapProps) {
     instance.setPadding({ top: 0, bottom: 0, left: 0, right: props.wall ? 500 : 420 });
     map.current = instance;
     instance.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
+    const cabs = new CabLayer(AUSTIN, props.wall ? 1.35 : 1);
+    const callout = document.createElement("div");
+    callout.className = "cab-callout";
+    const label = new maplibregl.Marker({ element: callout, anchor: "top", offset: [0, 14] });
+    const trails = new Map<string, LngLat[]>();
+
     instance.on("load", () => {
       retint(instance);
-      instance.addImage("cab", chevron(), { sdf: true, pixelRatio: 2 });
-      for (const id of ["zones", "depots", "trails", "journey", "stops", "alerts", "cabs"]) {
+      for (const id of ["zones", "depots", "trails", "journey", "stops", "alerts"]) {
         instance.addSource(id, { type: "geojson", data: collection([]) });
       }
-      addLayers(instance, !!props.wall);
-      instance.on("click", "cab-icons", (event) => {
-        const id = event.features?.[0]?.properties?.id as string | undefined;
-        latest.current.onSelectCab(id);
+      addLayers(instance);
+      instance.addLayer(cabs);
+      instance.on("click", (event) => latest.current.onSelectCab(cabs.pick(event.point)));
+      let hovering = 0;
+      instance.on("mousemove", (event) => {
+        cancelAnimationFrame(hovering);
+        hovering = requestAnimationFrame(() => {
+          instance.getCanvas().style.cursor = cabs.pick(event.point) ? "pointer" : "";
+        });
       });
-      instance.on("click", (event) => {
-        const hits = instance.queryRenderedFeatures(event.point, { layers: ["cab-icons"] });
-        if (hits.length === 0) latest.current.onSelectCab(undefined);
-      });
-      instance.on("mouseenter", "cab-icons", () => (instance.getCanvas().style.cursor = "pointer"));
-      instance.on("mouseleave", "cab-icons", () => (instance.getCanvas().style.cursor = ""));
       ready.current = true;
-      drawStatic(instance, latest.current);
     });
-    // Cabs glide between reports; alerts breathe.
+
+    // Each frame: hand the cabs over if they changed, keep the selected cab's label and
+    // the camera with it, and now and then redraw the slower layers.
     let frame = 0;
+    let lastSlow = -Infinity;
+    let following: LngLat | undefined;
     const animate = (now: number) => {
-      if (ready.current) drawCabs(instance, latest.current, glides.current, now);
       frame = requestAnimationFrame(animate);
+      if (!ready.current) return;
+      const current = latest.current;
+      if (changed.current.cabs) {
+        changed.current.cabs = false;
+        cabs.setMarks(marks(current));
+      }
+      if (now - lastSlow >= SLOW_MS) {
+        lastSlow = now;
+        extendTrails(trails, current.cabs);
+        drawTrails(instance, current.cabs, trails);
+        if (changed.current.slow) {
+          changed.current.slow = false;
+          drawStatic(instance, current);
+        }
+      }
+      const selected = current.cabs.find((cab) => cab.id === current.selectedCabId);
+      const at = selected && cabs.positionOf(selected.id, now);
+      if (selected && at) {
+        callout.textContent = selected.call_sign;
+        label.setLngLat(at).addTo(instance);
+        const target: LngLat = [selected.lng, selected.lat];
+        if (current.follow && !flying.current && (following?.[0] !== target[0] || following?.[1] !== target[1])) {
+          following = target;
+          instance.easeTo({ center: target, duration: 1000, easing: (t) => t });
+        }
+      } else {
+        label.remove();
+        following = undefined;
+      }
+      // Alert rings breathe.
+      if (instance.getLayer("alert-rings")) {
+        const phase = (now % 1800) / 1800;
+        instance.setPaintProperty("alert-rings", "circle-radius", 10 + phase * 16);
+        instance.setPaintProperty("alert-rings", "circle-stroke-opacity", 0.9 * (1 - phase));
+      }
     };
     frame = requestAnimationFrame(animate);
     return () => {
@@ -116,30 +140,15 @@ export function FleetMap(props: FleetMapProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // New reports: start a glide from wherever each cab is drawn, and extend its trail.
+  // Updates only mark what changed; the next frame draws it.
   useEffect(() => {
-    const now = performance.now();
-    for (const cab of props.cabs) {
-      const to: LngLat = [cab.lng, cab.lat];
-      const glide = glides.current.get(cab.id);
-      if (!glide) {
-        glides.current.set(cab.id, { from: to, to, started: now });
-      } else if (glide.to[0] !== to[0] || glide.to[1] !== to[1]) {
-        glides.current.set(cab.id, { from: position(glide, now), to, started: now });
-        const trail = trails.current.get(cab.id) ?? [];
-        trail.push(to);
-        if (trail.length > TRAIL_LENGTH) trail.shift();
-        trails.current.set(cab.id, trail);
-      }
-    }
-    if (ready.current && map.current) drawTrails(map.current, props.cabs, trails.current);
-  }, [props.cabs]);
-
+    changed.current.cabs = true;
+  }, [props.cabs, props.selectedCabId]);
   useEffect(() => {
-    if (ready.current && map.current) drawStatic(map.current, props);
+    changed.current.slow = true;
   }, [props.zones, props.alerts, props.trips, props.trail, props.selectedCabId, props.depots, props.cabs]);
 
-  // Fly to a newly selected cab.
+  // Fly to a newly selected cab; the frame loop follows it from there.
   useEffect(() => {
     const cab = props.cabs.find((c) => c.id === props.selectedCabId);
     if (!cab || !map.current) return;
@@ -155,15 +164,6 @@ export function FleetMap(props: FleetMapProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.selectedCabId]);
 
-  // Follow it while it drives, once the flight to it has landed.
-  useEffect(() => {
-    if (!props.follow || !map.current) return;
-    const cab = props.cabs.find((c) => c.id === props.selectedCabId);
-    if (cab && !flying.current) {
-      map.current.easeTo({ center: [cab.lng, cab.lat], duration: 1000, easing: (t) => t });
-    }
-  }, [props.cabs, props.follow, props.selectedCabId]);
-
   // MapLibre makes its container `position: relative`, so it lives inside the stage-filling box.
   return (
     <div className="fleet-map">
@@ -172,9 +172,34 @@ export function FleetMap(props: FleetMapProps) {
   );
 }
 
-function position(glide: Glide, now: number): LngLat {
-  const t = Math.min(1, (now - glide.started) / 1000);
-  return [glide.from[0] + (glide.to[0] - glide.from[0]) * t, glide.from[1] + (glide.to[1] - glide.from[1]) * t];
+/** What the cab layer draws for each cab. */
+function marks(props: FleetMapProps): CabMark[] {
+  return props.cabs.map((cab) => {
+    const status = cabStatus(cab);
+    const selected = cab.id === props.selectedCabId;
+    return {
+      id: cab.id,
+      at: [cab.lng, cab.lat],
+      heading: cab.heading_deg,
+      color: cab.halted ? "#f0a84a" : CAB_STATUS[status].color,
+      halo: selected || status === "on_trip",
+      selected,
+      dim: !!props.selectedCabId && !selected,
+    };
+  });
+}
+
+/** Adds each cab's newest reported position to its trail. */
+function extendTrails(trails: Map<string, LngLat[]>, cabs: Cab[]) {
+  for (const cab of cabs) {
+    const trail = trails.get(cab.id) ?? [];
+    const last = trail[trail.length - 1];
+    if (!last || last[0] !== cab.lng || last[1] !== cab.lat) {
+      trail.push([cab.lng, cab.lat]);
+      if (trail.length > TRAIL_LENGTH) trail.shift();
+      trails.set(cab.id, trail);
+    }
+  }
 }
 
 /** Takes the basemap down into the room's asphalt. */
@@ -201,8 +226,7 @@ function retint(map: MapLibre) {
   }
 }
 
-function addLayers(map: MapLibre, wall: boolean) {
-  const iconScale = wall ? 1.35 : 1;
+function addLayers(map: MapLibre) {
   map.addLayer({
     id: "zone-fill",
     type: "fill",
@@ -312,86 +336,6 @@ function addLayers(map: MapLibre, wall: boolean) {
       "circle-stroke-opacity": 0.8,
     },
   });
-  map.addLayer({
-    id: "cab-halo",
-    type: "circle",
-    source: "cabs",
-    filter: ["any", ["get", "selected"], ["==", ["get", "status"], "on_trip"]],
-    paint: {
-      "circle-radius": ["case", ["get", "selected"], 20, 11],
-      "circle-color": ["get", "color"],
-      "circle-opacity": ["case", ["get", "selected"], 0.28, 0.14],
-      "circle-blur": 0.9,
-    },
-  });
-  map.addLayer({
-    id: "cab-icons",
-    type: "symbol",
-    source: "cabs",
-    layout: {
-      "icon-image": "cab",
-      "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.42 * iconScale, 13, 0.62 * iconScale, 16, 0.85 * iconScale],
-      "icon-rotate": ["get", "heading"],
-      "icon-rotation-alignment": "map",
-      "icon-pitch-alignment": "map",
-      "icon-allow-overlap": true,
-      "icon-ignore-placement": true,
-      "symbol-sort-key": ["get", "rank"],
-    },
-    paint: {
-      "icon-color": ["get", "color"],
-      "icon-opacity": ["case", ["get", "dim"], 0.45, 1],
-      "icon-halo-color": "#06090e",
-      "icon-halo-width": 1,
-    },
-  });
-  map.addLayer({
-    id: "cab-label",
-    type: "symbol",
-    source: "cabs",
-    filter: ["get", "selected"],
-    layout: {
-      "text-field": ["get", "call_sign"],
-      "text-font": LABEL_FONT,
-      "text-size": 12,
-      "text-offset": [0, 1.6],
-      "text-anchor": "top",
-      "text-letter-spacing": 0.08,
-    },
-    paint: { "text-color": "#e9eef5", "text-halo-color": "#06090e", "text-halo-width": 2 },
-  });
-}
-
-function drawCabs(map: MapLibre, props: FleetMapProps, glides: Map<string, Glide>, now: number) {
-  const source = map.getSource("cabs") as GeoJSONSource | undefined;
-  if (!source) return;
-  const features: Feature[] = props.cabs.map((cab) => {
-    const status = cabStatus(cab);
-    const glide = glides.get(cab.id);
-    const at = glide ? position(glide, now) : ([cab.lng, cab.lat] as LngLat);
-    const selected = cab.id === props.selectedCabId;
-    return {
-      type: "Feature",
-      geometry: { type: "Point", coordinates: at },
-      properties: {
-        id: cab.id,
-        call_sign: cab.call_sign,
-        status,
-        color: cab.halted ? "#f0a84a" : CAB_STATUS[status].color,
-        heading: cab.heading_deg,
-        selected,
-        dim: !!props.selectedCabId && !selected,
-        rank: selected ? 10 : status === "on_trip" ? 5 : 1,
-      },
-    };
-  });
-  source.setData(collection(features));
-  // Alert rings breathe.
-  if (map.getLayer("alert-rings")) {
-    const phase = (now % 1800) / 1800;
-    map.setPaintProperty("alert-rings", "circle-radius", 10 + phase * 16);
-    map.setPaintProperty("alert-rings", "circle-stroke-opacity", 0.9 * (1 - phase));
-  }
 }
 
 function drawTrails(map: MapLibre, cabs: Cab[], trails: Map<string, LngLat[]>) {

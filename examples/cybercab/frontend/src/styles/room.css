@@ -1156,3 +1156,26 @@ button.icon {
     display: none;
   }
 }
+
+/* The selected cab's call sign, riding under it. */
+.cab-callout {
+  font: 600 12px/1 var(--font-label);
+  letter-spacing: 0.08em;
+  color: #e9eef5;
+  text-shadow: 0 0 4px #06090e, 0 0 2px #06090e;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.room--wall .cab-callout {
+  font-size: calc(12px * var(--scale));
+}
+
+/* Past the rows the feed shows: how many more there are. */
+.feed__more {
+  color: var(--ink-3);
+  font: 500 12px/1 var(--font-label);
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding: var(--space-4);
+  margin: 0;
+}

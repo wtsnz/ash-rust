@@ -297,6 +297,41 @@ steady 60 fps. At 4,000 the browser is the limit, and it isn't the map: wall mod
 - **Filtered lists re-read in full.** A filtered, sorted or limited live query re-reads
   itself after changes. At 4,000 cabs that's 13 MB/s in wall mode.
 
+## After fix 5: the browser at 4,000 cabs
+
+A CPU profile of the console (`frontend/scripts/profile-browser.mjs`) put the time
+somewhere other than expected. React was a few percent. **46% of the main thread was
+MapLibre's `findMatches`**, matching symbols across tiles during placement. Every
+animation frame, the map rebuilt the GeoJSON for all 4,000 cabs so they would glide
+between reports, and MapLibre re-tiled and re-placed every one of them, 60 times a
+second.
+
+- **The fleet is a WebGL layer** (`frontend/src/lib/cabLayer.ts`). Each cab's previous and
+  new positions go to the GPU once, when a report arrives, and the shader glides it
+  between them. A frame is a draw call: no GeoJSON, tiling or symbol placement.
+  - Clicks and hovers pick the nearest cab on screen.
+  - The selected cab's call sign is a DOM marker.
+  - Updates only mark what changed. The frame loop hands cabs over at most once a frame,
+    and redraws trails, zones, hubs, alerts and the journey at most four times a second.
+- **The trip feed shows 60 trips** and counts the rest, instead of rendering every trip on
+  the road (2,224 rows).
+- **Live queries notify once a frame and place changes themselves** (`ash-typescript`):
+  - However fast changes arrive, a listener hears its list at most once an animation
+    frame, and records are found through an index rather than a search.
+  - When the client can evaluate a query's filter and sort exactly as the server does, a
+    change goes straight into, out of or along the list, with no re-read.
+
+| 4,000 cabs | FPS | Frame p95 | Main thread blocked | Heap | Re-read traffic |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Console, before | 4 | 383 ms | 707 ms/s | 393 MB | 3.2 MB/s |
+| Console, after | **59** | **16.8 ms** | **0** | **77 MB** | **0.7 MB/s** |
+| Wall, before | 55 | 33 ms | 0 | 204 MB | 13 MB/s |
+| Wall, after | **59** | **16.8 ms** | 0 | 136 MB | **0.9 MB/s** |
+
+Both take 700 or so live messages a second with no missed events. The re-reads that
+remain are the small paged lists (the 50 most recent trips, the pulse history), which
+only the server can fill when a record leaves them.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a

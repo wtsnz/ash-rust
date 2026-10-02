@@ -8,6 +8,9 @@ import { JourneyRibbon } from "./JourneyRibbon";
 
 const TIER_MARK: Record<string, string> = { FOUNDER: "Founder", PLUS: "Plus", STANDARD: "" };
 
+/** Trips the feed shows at once. A big fleet has thousands on the road; nobody reads past these. */
+const FEED_ROWS = 60;
+
 /** One trip in the feed: route, rider, cab, and its journey ribbon. */
 export function TripRow({
   trip,
@@ -86,7 +89,7 @@ export function TripFeed({
       </div>
       <div className="feed__list">
         {shown.length === 0 && <p className="empty">No riders on the road right now.</p>}
-        {shown.map((trip) => (
+        {shown.slice(0, FEED_ROWS).map((trip) => (
           <TripRow
             key={trip.id}
             trip={trip}
@@ -96,6 +99,11 @@ export function TripFeed({
             onSelect={() => trip.cab_id && onSelectCab(trip.cab_id)}
           />
         ))}
+        {shown.length > FEED_ROWS && (
+          <p className="feed__more">
+            and {(shown.length - FEED_ROWS).toLocaleString()} more {filter === "live" ? "on the road" : "recent"}
+          </p>
+        )}
       </div>
     </section>
   );
