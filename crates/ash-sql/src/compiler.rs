@@ -1303,11 +1303,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
     /// `query` run once for each of `keys`, in one statement, as AshPostgres loads a
     /// relationship with a lateral join: each key's rows filtered, sorted, limited and
-    /// offset on their own. Each row carries its key as `"__ash_key"`, and the rows come
-    /// back key by key, in the order of `keys`, each key's in the read's order.
+    /// offset on their own. Each row carries its key's place in `keys`, from 1, as
+    /// `"__ash_ord"`, and the rows come back key by key, each key's in the read's order.
     ///
     /// ```sql
-    /// SELECT "__ash_k"."key" AS "__ash_key", "__ash_d".*
+    /// SELECT "__ash_k"."ord" AS "__ash_ord", "__ash_d".*
     /// FROM unnest($1) WITH ORDINALITY AS "__ash_k"("key", "ord")
     /// CROSS JOIN LATERAL (SELECT …, row_number() OVER (ORDER BY …) AS "__ash_row" FROM trips
     ///                     WHERE … AND "cab_id" = "__ash_k"."key" ORDER BY … LIMIT 3) AS "__ash_d"
@@ -1331,6 +1331,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             None => param,
         };
         let key = "\"__ash_k\".\"key\"";
+        // A binary key is bound as base64 text, as a binary value is, and decoded to compare.
+        let key = match key_ty {
+            Some(ty @ AttrType::Binary) => self.dialect.cast_param(ty, key),
+            _ => key.to_string(),
+        };
         let condition = match by {
             ash_core::PerKey::Attribute(field) => format!("{} = {key}", column(self.dialect, resource, field)?),
             ash_core::PerKey::Through { resource: through, filter, source, destination, attribute } => {
@@ -1352,7 +1357,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         self.per_key = None;
         let inner = inner?.sql;
         let sql = format!(
-            "SELECT {key} AS \"__ash_key\", \"__ash_d\".* FROM unnest({param}) WITH ORDINALITY AS \"__ash_k\"(\"key\", \"ord\") \
+            "SELECT \"__ash_k\".\"ord\" AS \"__ash_ord\", \"__ash_d\".* FROM unnest({param}) WITH ORDINALITY AS \"__ash_k\"(\"key\", \"ord\") \
              CROSS JOIN LATERAL ({inner}) AS \"__ash_d\" ORDER BY \"__ash_k\".\"ord\", \"__ash_d\".\"__ash_row\""
         );
         if let Some(err) = self.invalid_param.take() {

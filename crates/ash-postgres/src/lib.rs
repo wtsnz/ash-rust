@@ -543,7 +543,7 @@ impl DataLayer for Postgres {
             .collect()
     }
 
-    fn can_join_laterally(&self, _resource: &ResourceDef) -> bool {
+    fn can_run_query_per_key(&self, _resource: &ResourceDef, _by: &ash_core::PerKey<'_>) -> bool {
         true
     }
 
@@ -560,17 +560,12 @@ impl DataLayer for Postgres {
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_select_per_key(resource, query, by, keys.to_vec())?;
         let rows = self.fetch_all(&compiled).await?;
-        let key_ty = match by {
-            ash_core::PerKey::Attribute(field) => resource.attribute(field).map(|attr| attr.ty),
-            ash_core::PerKey::Through { resource: through, source, .. } => through.attribute(source).map(|attr| attr.ty),
-        }
-        .unwrap_or(ash_core::AttrType::Uuid);
-        let index: std::collections::BTreeMap<&Value, usize> = keys.iter().enumerate().map(|(i, key)| (key, i)).collect();
+        // Each row's key, by its place in `keys`, so a key given twice gets its rows twice.
         let mut per_key = vec![Vec::new(); keys.len()];
         for row in &rows {
-            let key = extract_column_value(row, "__ash_key", &key_ty);
-            if let Some(&i) = index.get(&key) {
-                per_key[i].push(read_row(row, resource, query, &query.calculations, &query.aggregates)?);
+            let ord: i64 = row.try_get("__ash_ord").map_err(map_sqlx)?;
+            if let Some(rows) = usize::try_from(ord - 1).ok().and_then(|i| per_key.get_mut(i)) {
+                rows.push(read_row(row, resource, query, &query.calculations, &query.aggregates)?);
             }
         }
         Ok(per_key)

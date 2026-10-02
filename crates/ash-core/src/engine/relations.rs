@@ -106,10 +106,15 @@ pub async fn load_related_query<D: DataLayer>(
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            // No source has a key: nothing to read, nor to scope a read for.
+            if first_values.is_empty() {
+                return Ok(vec![Vec::new(); sources.len()]);
+            }
             let read = related_read(ctx, dest, None, &query.reading(&columns))?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
-            if columns.len() == 1 && paged(&read) && ctx.data.can_join_laterally(dest) {
-                let per_key = read_per_key(ctx, dest, &read, &PerKey::Attribute(columns[0]), &first_values).await?;
+            let by = PerKey::Attribute(columns[0]);
+            if columns.len() == 1 && paged(&read) && ctx.data.can_run_query_per_key(dest, &by) {
+                let per_key = read_per_key(ctx, dest, &read, &by, &first_values).await?;
                 for (value, rows) in first_values.into_iter().zip(per_key) {
                     groups.insert(vec![value], rows);
                 }
@@ -142,25 +147,27 @@ pub async fn load_related_query<D: DataLayer>(
             })?();
             let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
             let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
+            if source_ids.is_empty() {
+                return Ok(vec![Vec::new(); sources.len()]);
+            }
             let read = related_read(ctx, dest, None, &query.reading(&[rel.destination_attribute]))?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
-            if paged(&read) && ctx.data.can_join_laterally(dest) {
-                // The join rows as the actor reads them, linking each source to its rows.
-                let joins = related_read(ctx, through, None, &RelatedQuery::default())?;
-                let by = PerKey::Through {
-                    resource: through,
-                    filter: joins.filter.as_ref(),
-                    source: source_on_join,
-                    destination: dest_on_join,
-                    attribute: rel.destination_attribute,
-                };
+            // The join rows as the actor reads them, linking each source to its rows.
+            let joins = related_read(ctx, through, None, &RelatedQuery::default())?;
+            let by = PerKey::Through {
+                resource: through,
+                filter: joins.filter.as_ref(),
+                source: source_on_join,
+                destination: dest_on_join,
+                attribute: rel.destination_attribute,
+            };
+            if paged(&read) && ctx.data.can_run_query_per_key(dest, &by) {
                 let per_key = read_per_key(ctx, dest, &read, &by, &source_ids).await?;
                 for (value, rows) in source_ids.into_iter().zip(per_key) {
                     groups.insert(vec![value], rows);
                 }
             } else {
-                let join_read = related_read(ctx, through, None, &RelatedQuery::default())?;
-                let join_rows = read_batch(ctx, through, source_on_join, source_ids, join_read).await?;
+                let join_rows = read_batch(ctx, through, source_on_join, source_ids, joins.clone()).await?;
                 let mut source_to_dest: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
                 let mut all_dest_ids: BTreeSet<Value> = BTreeSet::new();
                 for j_row in &join_rows.rows {

@@ -152,18 +152,19 @@ pub trait DataLayer: Send + Sync {
         ))))
     }
 
-    /// Whether this data layer runs a read once for each of many keys in one statement, as
-    /// AshPostgres loads a relationship with a lateral join. One that can't has a
-    /// relationship's limit and offset applied to each source's rows in memory, as Ash
-    /// does for a data layer without lateral joins.
-    fn can_join_laterally(&self, _resource: &ResourceDef) -> bool {
+    /// Whether this data layer runs a read of `resource` once for each of many keys in one
+    /// statement, as AshPostgres loads a relationship with a lateral join, its rows related
+    /// to the keys `by` says how: a join resource must be in the same store. One that
+    /// can't has a relationship's limit and offset applied to each source's rows in
+    /// memory, as Ash does for a data layer without lateral joins.
+    fn can_run_query_per_key(&self, _resource: &ResourceDef, _by: &PerKey<'_>) -> bool {
         false
     }
 
     /// The rows of `resource` related to each of `keys`, read by `query` once per key:
     /// its filter and sort, and its limit and offset applying to each key's rows, as a
     /// lateral join applies them. `by` says how a row relates to a key. Returns each key's
-    /// rows, in the order of `keys`.
+    /// rows, in the order of `keys`, a key given twice getting its rows twice.
     fn run_query_per_key(
         &self,
         resource: &ResourceDef,
