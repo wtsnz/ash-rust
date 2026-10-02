@@ -28,9 +28,13 @@ static USER_DEST: ResourceDef = ResourceDef {
 static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("title", AttrType::String),
-    AttributeDef::required("status", AttrType::Atom { one_of: &["open", "in_progress", "closed"], name: None }),
+    AttributeDef::required(
+        "status",
+        AttrType::Atom { one_of: &["open", "in_progress", "closed"], name: Some("TicketStatus") },
+    ),
     AttributeDef::required("priority", AttrType::Integer),
     AttributeDef::optional("author_id", AttrType::Uuid),
+    AttributeDef::optional("channel", AttrType::Atom { one_of: &["email", "web_form"], name: None }),
 ];
 
 static TICKET_RELS: &[RelationshipDef] = &[
@@ -40,6 +44,7 @@ static TICKET_RELS: &[RelationshipDef] = &[
 static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open")
         .accept(&["title", "status", "priority", "author_id"]),
+    ActionDef::update("reprioritize").accept(&["priority"]),
 ];
 
 static TICKET_DEF: ResourceDef = ResourceDef {
@@ -74,7 +79,9 @@ fn test_resource_interface_generation() {
     assert!(ts.contains("  title: string;"));
     assert!(ts.contains("  status: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";"));
     assert!(ts.contains("  priority: number;"));
-    assert!(ts.contains("  author_id?: string | null;"));
+    assert!(ts.contains("  authorId?: string | null;"));
+    // An atom with no enum type crosses the wire as the string it's stored as.
+    assert!(ts.contains("  channel?: \"email\" | \"web_form\" | null;"));
     assert!(ts.contains("  author?: User | null;"));
 }
 
@@ -86,25 +93,31 @@ fn test_action_input_interface() {
     assert!(ts.contains("  title: string;"));
     assert!(ts.contains("  status: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";"));
     assert!(ts.contains("  priority: number;"));
-    assert!(ts.contains("  author_id?: string | null;"));
+    assert!(ts.contains("  authorId?: string | null;"));
+    assert!(!ts.contains("  id"), "a create's input has no id");
+
+    // An update requires none of what it accepts.
+    let ts = generate_action_input_interface(&TICKET_DEF, "reprioritize").unwrap();
+    assert!(ts.contains("export interface ReprioritizeTicketInput {\n  priority?: number | null;\n}"));
 }
 
 #[test]
 fn test_filter_and_sort_generation() {
     let filter = generate_resource_filter_input(&TICKET_DEF);
     assert!(filter.contains("export interface TicketFilterInput {"));
-    assert!(filter.contains("  id?: UuidFilter;"));
-    assert!(filter.contains("  title?: TextFilter;"));
-    assert!(filter.contains(
-        "export interface TicketStatusFilter {\n  eq?: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";\n  ne?: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";\n  in?: (\"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\")[];\n  isNil?: boolean;\n}"
-    ));
-    assert!(filter.contains("  status?: TicketStatusFilter;"));
-    assert!(filter.contains("  priority?: IntFilter;"));
+    assert!(filter.contains("  id?: AshFilter<string>;"));
+    assert!(filter.contains("  title?: AshTextFilter;"));
+    assert!(filter.contains("  status?: AshFilter<\"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\">;"));
+    assert!(filter.contains("  priority?: AshFilter<number>;"));
+    assert!(filter.contains("  authorId?: AshFilter<string>;"));
     assert!(filter.contains("  author?: UserFilterInput;"));
     assert!(filter.contains("  and?: TicketFilterInput[];"));
+    assert!(filter.contains("  not?: TicketFilterInput[];"));
 
     let sort = generate_resource_sort_input(&TICKET_DEF);
-    assert!(sort.contains("export type TicketSortField = \"id\" | \"title\" | \"status\" | \"priority\" | \"author_id\";"));
+    assert!(sort.contains(
+        "export type TicketSortField = \"id\" | \"title\" | \"status\" | \"priority\" | \"authorId\" | \"channel\";"
+    ));
     assert!(sort.contains("export interface TicketSortInput {"));
 }
 
@@ -176,10 +189,22 @@ fn test_has_one_typescript_interface() {
 #[test]
 fn test_common_filters_use_graphql_field_names() {
     let ts = generate_common_types();
-    assert!(ts.contains("export interface BooleanFilter {\n  eq?: boolean;\n  ne?: boolean;\n  isNil?: boolean;\n}"));
-    assert!(ts.contains("  ne?: string;"));
-    assert!(ts.contains("  isNil?: boolean;"));
-    assert!(!ts.contains("neq"));
+    for op in [
+        "isNil?: boolean;",
+        "eq?: T | null;",
+        "notEq?: T | null;",
+        "in?: (T | null)[];",
+        "lessThan?: T;",
+        "greaterThanOrEqual?: T;",
+        "isDistinctFrom?: T | null;",
+        "isNotDistinctFrom?: T | null;",
+    ] {
+        assert!(ts.contains(op), "AshFilter lacks `{op}`");
+    }
+    for op in ["contains?: string;", "stringStartsWith?: string;", "ilike?: string;"] {
+        assert!(ts.contains(op), "AshTextFilter lacks `{op}`");
+    }
+    assert!(!ts.contains("ne?:"));
     assert!(!ts.contains("is_nil"));
     assert!(!ts.contains("JsonFilter"));
 }
@@ -216,7 +241,7 @@ fn test_filter_input_skips_json_attributes() {
     };
 
     let filter = generate_resource_filter_input(&EVENT_DEF);
-    assert!(filter.contains("  id?: UuidFilter;"));
+    assert!(filter.contains("  id?: AshFilter<string>;"));
     assert!(!filter.contains("metadata"));
     assert!(!filter.contains("tags"));
 }

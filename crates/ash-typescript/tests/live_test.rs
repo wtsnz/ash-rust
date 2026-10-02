@@ -173,7 +173,7 @@ async function main() {
   let urgent: Ticket[] = [];
   const triage = client.ticket
     .query()
-    .filter({ priority: { gte: 5 } })
+    .filter({ priority: { greaterThanOrEqual: 5 } })
     .sort("priority", "desc")
     .live((items) => (urgent = items), { syncDelayMs: 50, onError });
 
@@ -220,6 +220,18 @@ async function main() {
   await until("the burst", () => burst, (items) => items.length === 41);
   if (heard - before > 20) throw new Error(`heard ${heard - before} notifications for 40 creates`);
   counted.stop();
+
+  // Keyset pages walk the list in order, and say how many records there are.
+  const pages = client.ticket.query().sort("title", "asc");
+  const first = await pages.page(30);
+  const rest = await pages.page(30, first.endKeyset ?? undefined);
+  if (first.count !== 41 || first.results.length !== 30 || rest.results.length !== 11) {
+    throw new Error(`paged ${first.results.length} + ${rest.results.length} of ${first.count}`);
+  }
+  const back = await pages.page(30, undefined, rest.startKeyset ?? undefined);
+  if (back.results.map((t) => t.id).join() !== first.results.map((t) => t.id).join()) {
+    throw new Error("paging back didn't return the first page");
+  }
 
   everything.stop();
   triage.stop();

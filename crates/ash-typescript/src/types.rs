@@ -1,6 +1,6 @@
 //! TypeScript type definitions generator for Ash resources.
 
-use ash_core::{ActionKind, AttrType, RelKind, ResourceDef};
+use ash_core::{ActionDef, ActionKind, AttrType, RelKind, ResourceDef};
 
 /// Convert a snake_case identifier to PascalCase (e.g. `open_ticket` -> `OpenTicket`).
 pub fn to_pascal_case(s: &str) -> String {
@@ -34,12 +34,24 @@ pub fn enum_values(one_of: &[&str]) -> Vec<String> {
     one_of.iter().map(|value| value.to_uppercase()).collect()
 }
 
-/// Name of the per-attribute filter for an atom, e.g. `TicketStatusFilter`.
-pub fn enum_filter_name(resource_name: &str, attr_name: &str) -> String {
-    format!("{resource_name}{}Filter", to_pascal_case(attr_name))
+/// An atom's values as they cross the wire: a named enum type's as GraphQL enum values,
+/// an unnamed atom's, which GraphQL takes as a string, as they're stored.
+pub fn atom_values(one_of: &[&str], name: Option<&str>) -> Vec<String> {
+    if name.is_some() {
+        enum_values(one_of)
+    } else {
+        one_of.iter().map(|value| value.to_string()).collect()
+    }
 }
 
-/// Map an Ash `AttrType` to its corresponding TypeScript type string.
+
+/// `call_sign` → `CALL_SIGN`, as GraphQL names sort fields.
+pub fn to_upper_snake(s: &str) -> String {
+    s.to_ascii_uppercase()
+}
+
+/// Map an Ash `AttrType` to its corresponding TypeScript type string: an enum type's
+/// values as GraphQL spells them (upper-cased), an unnamed atom's as stored.
 pub fn attr_type_to_ts(ty: &AttrType) -> String {
     match ty {
         AttrType::Uuid
@@ -55,15 +67,12 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         AttrType::Float | AttrType::Integer => "number".to_string(),
         AttrType::Vector { .. } => "number[]".to_string(),
         AttrType::Boolean => "boolean".to_string(),
-        AttrType::Atom { one_of, .. } => {
+        AttrType::Atom { one_of, name } => {
             if one_of.is_empty() {
                 "string".to_string()
             } else {
-                enum_values(one_of)
-                    .iter()
-                    .map(|s| format!("\"{s}\""))
-                    .collect::<Vec<_>>()
-                    .join(" | ")
+                atom_values(one_of, *name)
+                    .iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(" | ")
             }
         }
         AttrType::Map => "Record<string, unknown>".to_string(),
@@ -71,93 +80,51 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
     }
 }
 
-/// Map an Ash `AttrType` to its corresponding Filter type name.
-///
-/// Returns `None` for types the GraphQL filter input leaves out.
-pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
+/// The filter a field of this type takes, or `None` for types GraphQL doesn't filter on:
+/// AshGraphql's operators for the value type, and the text operators on text.
+pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<String> {
     match ty {
-        AttrType::Uuid => Some("UuidFilter"),
-        AttrType::String | AttrType::CiString => Some("TextFilter"),
-        AttrType::Date
-        | AttrType::Binary
-        | AttrType::UtcDatetime { .. }
-        | AttrType::Decimal
-        | AttrType::Inet => Some("StringFilter"),
-        AttrType::Float => Some("FloatFilter"),
-        AttrType::Integer => Some("IntFilter"),
-        AttrType::Boolean => Some("BooleanFilter"),
-        AttrType::Atom { .. } => Some("StringFilter"),
-        AttrType::Map | AttrType::Array | AttrType::Vector { .. } => None,
+        AttrType::String | AttrType::CiString => Some("AshTextFilter".to_string()),
+        AttrType::Map | AttrType::Array | AttrType::Vector { .. } | AttrType::Binary => None,
+        other => Some(format!("AshFilter<{}>", attr_type_to_ts(other))),
     }
 }
 
-/// Generate common shared TypeScript types (Pagination, Filters, SortOrder).
+/// Generate common shared TypeScript types: sort order, keyset pages and filters.
 pub fn generate_common_types() -> String {
     r#"// Common Ash TypeScript Types
 export type SortOrder = "asc" | "desc";
 
-export interface PageInfo {
-  hasNextPage: boolean;
-  hasPreviousPage: boolean;
-  startCursor?: string | null;
-  endCursor?: string | null;
-}
-
+/** A keyset page of records, as AshGraphql returns a paginated read. */
 export interface PaginatedResult<T> {
   results: T[];
-  totalCount?: number;
-  pageInfo?: PageInfo;
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  startKeyset?: string | null;
+  endKeyset?: string | null;
 }
 
-export interface UuidFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
+/** The operators AshGraphql filters a field by. */
+export interface AshFilter<T> {
   isNil?: boolean;
+  eq?: T | null;
+  notEq?: T | null;
+  in?: (T | null)[];
+  lessThan?: T;
+  greaterThan?: T;
+  lessThanOrEqual?: T;
+  greaterThanOrEqual?: T;
+  isDistinctFrom?: T | null;
+  isNotDistinctFrom?: T | null;
 }
 
-export interface StringFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
-}
-
-export interface TextFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
+/** A text field's filter: AshFilter's operators and AshGraphql's text operators. */
+export interface AshTextFilter extends AshFilter<string> {
   contains?: string;
-  startsWith?: string;
-  endsWith?: string;
-}
-
-export interface FloatFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  isNil?: boolean;
-}
-
-export interface IntFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  in?: number[];
-  isNil?: boolean;
-}
-
-export interface BooleanFilter {
-  eq?: boolean;
-  ne?: boolean;
-  isNil?: boolean;
+  stringStartsWith?: string;
+  stringEndsWith?: string;
+  like?: string;
+  ilike?: string;
 }
 "#
     .to_string()
@@ -174,9 +141,9 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
     for attr in res.attributes {
         let ts_type = attr_type_to_ts(&attr.ty);
         if attr.allow_nil {
-            out.push_str(&format!("  {}?: {} | null;\n", attr.name, ts_type));
+            out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(attr.name), ts_type));
         } else {
-            out.push_str(&format!("  {}: {};\n", attr.name, ts_type));
+            out.push_str(&format!("  {}: {};\n", to_camel_case(attr.name), ts_type));
         }
     }
 
@@ -185,10 +152,10 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
         let dest_name = (rel.destination)().name;
         match rel.kind {
             RelKind::BelongsTo | RelKind::HasOne => {
-                out.push_str(&format!("  {}?: {} | null;\n", rel.name, dest_name));
+                out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(rel.name), dest_name));
             }
             RelKind::HasMany | RelKind::ManyToMany => {
-                out.push_str(&format!("  {}?: {}[];\n", rel.name, dest_name));
+                out.push_str(&format!("  {}?: {}[];\n", to_camel_case(rel.name), dest_name));
             }
         }
     }
@@ -196,17 +163,44 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
     // Calculations
     for calc in res.calculations {
         let ts_type = attr_type_to_ts(&calc.ty);
-        out.push_str(&format!("  {}?: {} | null;\n", calc.name, ts_type));
+        out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(calc.name), ts_type));
     }
 
     // Aggregates
     for agg in res.aggregates {
         let ts_type = attr_type_to_ts(&agg.ty);
-        out.push_str(&format!("  {}?: {} | null;\n", agg.name, ts_type));
+        out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(agg.name), ts_type));
     }
 
     out.push_str("}\n\n");
     out
+}
+
+/// What a mutation's input holds, as ash-graphql builds it: the attributes the action
+/// accepts and its arguments, each with whether it's required. A create requires an
+/// accepted attribute that can't be nil and has no default; an update requires none.
+pub fn input_fields(res: &ResourceDef, action: &ActionDef) -> Vec<(&'static str, AttrType, bool)> {
+    let mut fields = Vec::new();
+    if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
+        for attr in res.attributes {
+            if action.accept.contains(&attr.name) {
+                let required = action.kind == ActionKind::Create
+                    && !attr.allow_nil
+                    && attr.default_fn.is_none()
+                    && !attr.generated;
+                fields.push((attr.name, attr.ty, required));
+            }
+        }
+    }
+    for arg in action.arguments {
+        fields.push((arg.name, arg.ty, !arg.allow_nil));
+    }
+    if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
+        && let Some(version) = res.optimistic_lock_attribute()
+    {
+        fields.push((version, AttrType::Integer, false));
+    }
+    fields
 }
 
 /// Generate TypeScript action input interface (e.g. `OpenTicketInput`).
@@ -222,36 +216,14 @@ pub fn generate_action_input_interface(res: &ResourceDef, action_name: &str) -> 
     let mut out = String::new();
     out.push_str(&format!("export interface {input_name} {{\n"));
 
-    if action.kind == ActionKind::Destroy {
-        out.push_str("  id: string;\n");
-    } else {
-        if action.kind == ActionKind::Update {
-            out.push_str("  id?: string;\n");
-        }
-        // Accepted attributes
-        for attr_name in action.accept {
-            if let Some(attr) = res.attribute(attr_name) {
-                let ts_type = attr_type_to_ts(&attr.ty);
-                let is_optional = attr.allow_nil || action.kind == ActionKind::Update;
-                if is_optional {
-                    out.push_str(&format!("  {}?: {} | null;\n", attr.name, ts_type));
-                } else {
-                    out.push_str(&format!("  {}: {};\n", attr.name, ts_type));
-                }
-            }
-        }
-
-        // Action arguments
-        for arg in action.arguments {
-            let ts_type = attr_type_to_ts(&arg.ty);
-            if arg.allow_nil {
-                out.push_str(&format!("  {}?: {} | null;\n", arg.name, ts_type));
-            } else {
-                out.push_str(&format!("  {}: {};\n", arg.name, ts_type));
-            }
+    for (field, ty, required) in input_fields(res, action) {
+        let ts_type = attr_type_to_ts(&ty);
+        if required {
+            out.push_str(&format!("  {}: {};\n", to_camel_case(field), ts_type));
+        } else {
+            out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(field), ts_type));
         }
     }
-
     out.push_str("}\n\n");
     if input_name != alias_name {
         out.push_str(&format!("export type {alias_name} = {input_name};\n\n"));
@@ -259,64 +231,57 @@ pub fn generate_action_input_interface(res: &ResourceDef, action_name: &str) -> 
     Some(out)
 }
 
-/// Generate Resource Filter Input (e.g. `TicketFilterInput`).
+/// Generate Resource Filter Input (e.g. `TicketFilterInput`), as AshGraphql's: each
+/// attribute, aggregate and calculation, each relationship's filter, and `and` / `or` /
+/// `not` lists.
 pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
-    let mut out = String::new();
     let name = res.name;
-
-    for attr in res.attributes {
-        if let AttrType::Atom { one_of, .. } = attr.ty
-            && !one_of.is_empty()
-        {
-            let values = attr_type_to_ts(&attr.ty);
-            let filter = enum_filter_name(name, attr.name);
-            out.push_str(&format!(
-                "export interface {filter} {{\n  eq?: {values};\n  ne?: {values};\n  in?: ({values})[];\n  isNil?: boolean;\n}}\n\n"
-            ));
-        }
-    }
-
-    out.push_str(&format!("export interface {name}FilterInput {{\n"));
-    for attr in res.attributes {
-        let filter_type = match attr.ty {
-            AttrType::Atom { one_of, .. } if !one_of.is_empty() => {
-                Some(enum_filter_name(name, attr.name))
-            }
-            _ => attr_type_to_filter_type(&attr.ty).map(str::to_string),
-        };
-        if let Some(filter_type) = filter_type {
-            out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
+    let mut out = format!("export interface {name}FilterInput {{\n");
+    let fields = res
+        .attributes
+        .iter()
+        .map(|attr| (attr.name, attr.ty))
+        .chain(res.aggregates.iter().map(|agg| (agg.name, agg.ty)))
+        .chain(res.calculations.iter().map(|calc| (calc.name, calc.ty)));
+    for (field, ty) in fields {
+        if let Some(filter_type) = attr_type_to_filter_type(&ty) {
+            out.push_str(&format!("  {}?: {filter_type};\n", to_camel_case(field)));
         }
     }
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;
-        out.push_str(&format!("  {}?: {dest_name}FilterInput;\n", rel.name));
+        out.push_str(&format!("  {}?: {dest_name}FilterInput;\n", to_camel_case(rel.name)));
     }
     out.push_str(&format!("  and?: {name}FilterInput[];\n"));
     out.push_str(&format!("  or?: {name}FilterInput[];\n"));
-    out.push_str(&format!("  not?: {name}FilterInput;\n"));
+    out.push_str(&format!("  not?: {name}FilterInput[];\n"));
     out.push_str("}\n\n");
     out
 }
 
-/// Generate Resource Sort Input (e.g. `TicketSortInput`).
-pub fn generate_resource_sort_input(res: &ResourceDef) -> String {
-    let mut out = String::new();
-    let name = res.name;
-
-    let fields = res
-        .attributes
+/// The fields a resource sorts by, as ash-graphql's sort enum has them: attributes,
+/// aggregates, and calculations that take no arguments.
+pub fn sort_fields(res: &ResourceDef) -> Vec<&'static str> {
+    res.attributes
         .iter()
-        .map(|a| format!("\"{}\"", a.name))
+        .map(|a| a.name)
+        .chain(res.aggregates.iter().map(|a| a.name))
+        .chain(res.calculations.iter().filter(|c| c.arguments.is_empty()).map(|c| c.name))
+        .collect()
+}
+
+/// Generate Resource Sort Input (e.g. `TicketSortInput`): fields in camelCase, which the
+/// client turns into the schema's `TICKET_FIELD` enum values.
+pub fn generate_resource_sort_input(res: &ResourceDef) -> String {
+    let name = res.name;
+    let fields = sort_fields(res)
+        .into_iter()
+        .map(|field| format!("\"{}\"", to_camel_case(field)))
         .collect::<Vec<_>>()
         .join(" | ");
-
-    out.push_str(&format!("export type {name}SortField = {fields};\n\n"));
-    out.push_str(&format!("export interface {name}SortInput {{\n"));
-    out.push_str(&format!("  field: {name}SortField;\n"));
-    out.push_str("  order?: SortOrder;\n");
-    out.push_str("}\n\n");
-    out
+    format!(
+        "export type {name}SortField = {fields};\n\nexport interface {name}SortInput {{\n  field: {name}SortField;\n  order?: SortOrder;\n}}\n\n"
+    )
 }
 
 /// Generate Resource Include Input (e.g. `TicketInclude`).
@@ -327,7 +292,7 @@ pub fn generate_resource_include_input(res: &ResourceDef) -> String {
     out.push_str(&format!("export interface {name}Include {{\n"));
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;
-        out.push_str(&format!("  {}?: boolean | {dest_name}Include;\n", rel.name));
+        out.push_str(&format!("  {}?: boolean | {dest_name}Include;\n", to_camel_case(rel.name)));
     }
     out.push_str("}\n\n");
     out

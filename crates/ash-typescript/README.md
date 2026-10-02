@@ -13,6 +13,8 @@ It bridges the gap between your Rust backend and any modern TypeScript frontend�
 - 🌐 **Isomorphic Zero-Dependency Client**: Standard `fetch` transport compatible with Node.js 18+, Bun, Deno, Next.js Server Components, Cloudflare Workers, and all modern browsers.
 - 🚀 **Next.js & SSR Ready**: Dynamic per-request headers and cookies for Server Components and Server Actions without leaking auth state between requests.
 - ⚛️ **TanStack Query (React Query) Integration**: First-class `queryOptions()` support for seamless prefetching on the server and hydration on the client.
+- 🔁 **AshGraphql-shaped**: The client speaks the schema `ash-graphql` serves, which follows
+  AshGraphql's conventions, so the same SDK works against an Elixir Ash app's AshGraphql API.
 - 🛠️ **CLI Integration**: Run `cargo ash codegen ts --out ./frontend/src/ash.ts` to keep frontend and backend in lockstep.
 
 ---
@@ -60,26 +62,35 @@ cargo ash ts -o ./frontend/src/ash.ts
 
 ### 1. Type Definitions & Filter Inputs
 
+Fields are camelCase, as the schema has them. An `AshEnum`'s values are upper-cased, as
+GraphQL enum values; an atom with no enum type is a string, as stored.
+
 ```typescript
 export interface Ticket {
   id: string;
   title: string;
-  status: "open" | "in_progress" | "closed";
+  status: "OPEN" | "IN_PROGRESS" | "CLOSED";
   priority: number;
-  author_id?: string | null;
+  authorId?: string | null;
   author?: User | null;
 }
 
 export interface TicketFilterInput {
-  id?: UuidFilter;
-  title?: StringFilter;
-  status?: StringFilter;
-  priority?: IntFilter;
+  id?: AshFilter<string>;
+  title?: AshTextFilter;
+  status?: AshFilter<"OPEN" | "IN_PROGRESS" | "CLOSED">;
+  priority?: AshFilter<number>;
+  authorId?: AshFilter<string>;
+  author?: UserFilterInput;
   and?: TicketFilterInput[];
   or?: TicketFilterInput[];
-  not?: TicketFilterInput;
+  not?: TicketFilterInput[];
 }
 ```
+
+`AshFilter<T>` has AshGraphql's operators (`eq`, `notEq`, `in`, `lessThan`, `greaterThan`,
+`lessThanOrEqual`, `greaterThanOrEqual`, `isNil`, `isDistinctFrom`, `isNotDistinctFrom`);
+`AshTextFilter` adds `contains`, `stringStartsWith`, `stringEndsWith`, `like` and `ilike`.
 
 ### 2. Zod Validation Schemas
 
@@ -90,9 +101,9 @@ import { z } from "zod";
 
 export const TicketOpenInputSchema = z.object({
   title: z.string().min(5).max(255),
-  status: z.enum(["open", "in_progress", "closed"]),
+  status: z.enum(["OPEN", "IN_PROGRESS", "CLOSED"]),
   priority: z.number().int().min(1).max(5),
-  author_id: z.string().uuid().nullable().optional(),
+  authorId: z.string().uuid().nullable().optional(),
 });
 
 export type TicketOpenInput = z.infer<typeof TicketOpenInputSchema>;
@@ -159,7 +170,7 @@ import { getServerAshClient } from "@/lib/ash.server";
 export default async function TicketsPage() {
   const ash = await getServerAshClient();
   const tickets = await ash.ticket.query()
-    .filter({ status: { eq: "open" } })
+    .filter({ status: { eq: "OPEN" } })
     .sort("priority", "desc")
     .include({ author: true })
     .all();
@@ -216,7 +227,7 @@ import { ash } from "@/lib/ash.client";
 export function TicketList() {
   const { data: tickets, isLoading } = useQuery(
     ash.ticket.query()
-      .filter({ status: { eq: "open" } })
+      .filter({ status: { eq: "OPEN" } })
       .sort("priority", "desc")
       .include({ author: true })
       .queryOptions()
@@ -252,7 +263,7 @@ const stop = client.ticket.onUpdated((ticket) => console.log("updated", ticket.i
 // arrive, and filtered, sorted or paged lists re-read themselves to stay exact.
 const urgent = client.ticket
   .query()
-  .filter({ priority: { gte: 4 } })
+  .filter({ priority: { greaterThanOrEqual: 4 } })
   .sort("priority", "desc")
   .live((tickets) => render(tickets));
 urgent.stop();
@@ -263,7 +274,7 @@ the server again when it can:
 - **Placed on the client.** When the client can evaluate the query's filter and sort
   exactly as the server does, each change goes straight into, out of or along the list.
   That means comparisons on UUIDs, text, numbers and booleans, ordering by numbers, UUIDs
-  and datetimes, and no limit or offset.
+  and datetimes, and no limit.
 - **Re-read otherwise.** Relationship filters, text search, enums, text ordering, and
   pages need the server, so the list patches the records it holds and re-reads itself
   shortly after.
@@ -294,18 +305,36 @@ client.cab.onUpdated(moveMarker, {
 });
 ```
 
-## Relay Keyset Pagination
+## Mutations
 
-Ash provides built-in keyset pagination matching Relay specifications:
+Each create, update and destroy is a method calling its mutation: a create takes the
+input, an update or destroy the record's id and then its input. A failure the mutation
+reports throws an `AshClientError`, whose `errors` hold each `message`, Ash's `code`
+(`invalid_attribute`, `required`, `not_found`, `forbidden`, `stale_record`, ...) and the
+input `fields` it's about:
 
 ```typescript
-const page = await ash.ticket.query()
-  .filter({ status: { eq: "open" } })
-  .page(20, endCursor);
+try {
+  await ash.ticket.close(ticket.id, { resolution: "Rebooted" });
+} catch (error) {
+  if (error instanceof AshClientError) console.log(error.errors[0]?.code);
+}
+```
 
-console.log(page.results);
-console.log(page.pageInfo.hasNextPage);
-console.log(page.pageInfo.endCursor);
+## Keyset Pagination
+
+`all()` reads every matching record (or the first `limit(n)`). `page()` reads a keyset
+page, as AshGraphql pages a read:
+
+```typescript
+const query = ash.ticket.query()
+  .filter({ status: { eq: "OPEN" } })
+  .sort("priority", "desc");
+const page = await query.page(20);
+const next = await query.page(20, page.endKeyset ?? undefined);
+const previous = await query.page(20, undefined, next.startKeyset ?? undefined);
+
+console.log(page.results, page.count);
 ```
 
 ---

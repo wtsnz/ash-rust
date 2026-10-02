@@ -1,7 +1,7 @@
 //! Isomorphic TypeScript client SDK generator for Ash resources.
 
 use ash_core::{ActionDef, ActionKind, DomainDef, ResourceDef};
-use crate::types::{to_camel_case, to_pascal_case};
+use crate::types::{input_fields, sort_fields, to_camel_case, to_pascal_case, to_upper_snake};
 
 /// Returns plural suffix helper matching ash-graphql list and connection conventions.
 pub fn plural_suffix(name: &str) -> &'static str {
@@ -20,12 +20,6 @@ pub fn plural_suffix(name: &str) -> &'static str {
 /// Pluralized name for list query (e.g. "Ticket" -> "listTickets").
 pub fn list_query_name(name: &str) -> String {
     format!("list{}{}", name, plural_suffix(name))
-}
-
-/// Pluralized name for connection query (e.g. "Ticket" -> "ticketsConnection").
-pub fn connection_query_name(name: &str) -> String {
-    let lower_first = to_camel_case(name);
-    format!("{}{suffix}Connection", lower_first, suffix = plural_suffix(&lower_first))
 }
 
 /// Getter query name (e.g. "Ticket" -> "getTicket").
@@ -65,9 +59,15 @@ export interface AshClientConfig {{
   headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);{live_config}
 }}
 
+/** An error a mutation reports, as AshGraphql's `MutationError`, or a GraphQL error. */
 export interface AshUserError {{
-  field?: string;
   message: string;
+  shortMessage?: string | null;
+  /** Ash's error code, e.g. `invalid_attribute`, `required`, `not_found`, `forbidden`. */
+  code?: string | null;
+  /** The input fields it's about. */
+  fields?: string[];
+  path?: (string | number)[];
 }}
 
 export class AshClientError extends Error {{
@@ -118,13 +118,13 @@ export class AshTransport {{
 
     const json = (await res.json()) as {{
       data?: T;
-      errors?: Array<{{ message: string; path?: string[] }}>;
+      errors?: Array<{{ message: string; path?: (string | number)[] }}>;
     }};
 
     if (json.errors && json.errors.length > 0) {{
       const userErrors: AshUserError[] = json.errors.map((e) => ({{
-        field: e.path ? e.path.join(".") : undefined,
         message: e.message,
+        path: e.path,
       }}));
       throw new AshClientError(userErrors[0].message || "GraphQL execution error", userErrors);
     }}
@@ -148,7 +148,7 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let base_attrs = res
         .attributes
         .iter()
-        .map(|a| a.name)
+        .map(|a| to_camel_case(a.name))
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -156,7 +156,7 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     out.push_str(&format!("  let fields = \"{base_attrs}\";\n"));
 
     for rel in res.relationships {
-        let rel_name = rel.name;
+        let rel_name = to_camel_case(rel.name);
         let dest_name = (rel.destination)().name;
         out.push_str(&format!("  if (include?.{rel_name}) {{\n"));
         out.push_str(&format!("    const subInclude = typeof include.{rel_name} === \"object\" ? include.{rel_name} : undefined;\n"));
@@ -169,26 +169,44 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     out
 }
 
+/// The sort fields' names in the schema's `<Resource>SortField` enum, by the camelCase
+/// name the client takes (e.g. `{ callSign: "CALL_SIGN" }`).
+fn sort_field_names(res: &ResourceDef) -> String {
+    let fields: Vec<String> = sort_fields(res)
+        .into_iter()
+        .map(|field| format!("{}: \"{}\"", to_camel_case(field), to_upper_snake(field)))
+        .collect();
+    format!("{{ {} }}", fields.join(", "))
+}
+
 /// Generate resource query builder class (e.g. `TicketQueryBuilder`). With `live`, it
 /// also has `live()`.
 pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String {
-    let mut out = String::new();
-    let name = res.name;
-    let list_q = list_query_name(name);
-    let conn_q = connection_query_name(name);
     let (constructor_params, _) = client_constructor(live);
     let live_method = if live {
         crate::live::generate_query_builder_live(res)
     } else {
         String::new()
     };
+    query_builder_class(res.name, &sort_field_names(res), constructor_params, &live_method)
+}
 
-    out.push_str(&format!(
-        r#"export class {name}QueryBuilder {{
+/// A query builder class over the `list<Resource>s` keyset read. `sort_names` maps each
+/// sort field the client takes to the schema's enum value for it.
+pub(crate) fn query_builder_class(
+    name: &str,
+    sort_names: &str,
+    constructor_params: &str,
+    live_method: &str,
+) -> String {
+    let list_q = list_query_name(name);
+    format!(
+        r#"const {name}SortFieldNames: Record<{name}SortField, string> = {sort_names};
+
+export class {name}QueryBuilder {{
   private _filter?: {name}FilterInput;
   private _sort: {name}SortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: {name}Include;
 
   constructor({constructor_params}) {{}}
@@ -203,13 +221,9 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
     return this;
   }}
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {{
     this._limit = limit;
-    return this;
-  }}
-
-  public offset(offset: number): this {{
-    this._offset = offset;
     return this;
   }}
 
@@ -218,69 +232,58 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
     return this;
   }}
 
-  public async all(): Promise<{name}[]> {{
+  /** The sort as the schema takes it: `[{{ field: "CALL_SIGN", order: "DESC" }}]`. */
+  private sortInput() {{
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({{ field, order }}) => ({{
+      field: {name}SortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }}));
+  }}
+
+  private async read(
+    paging: {{ first?: number; after?: string; last?: number; before?: string }},
+    count: boolean,
+  ): Promise<PaginatedResult<{name}>> {{
     const fields = build{name}SelectionSet(this._include);
-    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput!], $limit: Int, $offset: Int) {{
-      {list_q}(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {{
-        ${{fields}}
+    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput], $first: Int, $after: String, $last: Int, $before: String) {{
+      {list_q}(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {{
+        results {{
+          ${{fields}}
+        }}
+        startKeyset
+        endKeyset${{count ? "\n        count" : ""}}
       }}
     }}`;
 
-    const data = await this.transport.request<{{ {list_q}: {name}[] }}>(query, {{
+    const data = await this.transport.request<{{ {list_q}: PaginatedResult<{name}> }}>(query, {{
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     }});
-
     return data.{list_q};
   }}
 
-  public async first(): Promise<{name} | null> {{
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<{name}[]> {{
+    const page = await this.read({{ first: this._limit }}, false);
+    return page.results;
   }}
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<{name}>> {{
-    const fields = build{name}SelectionSet(this._include);
-    const query = `query Conn{name}($filter: {name}FilterInput, $sort: [{name}SortInput!], $first: Int, $after: String) {{
-      {conn_q}(filter: $filter, sort: $sort, first: $first, after: $after) {{
-        edges {{
-          node {{
-            ${{fields}}
-          }}
-          cursor
-        }}
-        pageInfo {{
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }}
-        totalCount
-      }}
-    }}`;
+  public async first(): Promise<{name} | null> {{
+    const page = await this.read({{ first: 1 }}, false);
+    return page.results[0] ?? null;
+  }}
 
-    const data = await this.transport.request<{{
-      {conn_q}: {{
-        edges: Array<{{ node: {name}; cursor: string }}>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      }};
-    }}>(query, {{
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    }});
-
-    const conn = data.{conn_q};
-    return {{
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    }};
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<{name}>> {{
+    return before !== undefined
+      ? this.read({{ last: first, before }}, true)
+      : this.read({{ first, after }}, true);
   }}
 
   public queryOptions() {{
@@ -292,7 +295,6 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         }},
       ],
@@ -300,7 +302,7 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
     }};
   }}
 
-  public pageQueryOptions(first: number = 20, after?: string) {{
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {{
     return {{
       queryKey: [
         "{name}",
@@ -310,18 +312,17 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         }},
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     }};
   }}
 {live_method}}}
 
 "#
-    ));
-
-    out
+    )
 }
 
 /// Generate individual resource client (e.g. `TicketClient`). With `live`, it also has
@@ -361,154 +362,9 @@ pub fn generate_resource_client(res: &ResourceDef, live: bool) -> String {
 "#
     ));
 
-    // Actions
     for action in res.actions {
-        let m_name = mutation_name(action, res);
-        let action_method_name = to_camel_case(action.name);
-        let action_pascal = to_pascal_case(action.name);
-        let input_type = format!("{action_pascal}{name}Input");
-
-        match action.kind {
-            ActionKind::Create => {
-                out.push_str(&format!(
-                    r#"
-  public async {action_method_name}(input: {input_type}, include?: {name}Include): Promise<{name}> {{
-    const fields = build{name}SelectionSet(include);
-    const query = `mutation Mutate{name}($input: {input_type}!) {{
-      {m_name}(input: $input) {{
-        result {{
-          ${{fields}}
-        }}
-        errors {{
-          field
-          message
-        }}
-        success
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{
-      {m_name}: {{
-        result?: {name};
-        errors: AshUserError[];
-        success: boolean;
-      }};
-    }}>(query, {{ input }});
-
-    const payload = data.{m_name};
-    if (!payload.success || !payload.result) {{
-      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
-    }}
-
-    return payload.result;
-  }}
-"#
-                ));
-            }
-            ActionKind::Update => {
-                out.push_str(&format!(
-                    r#"
-  public async {action_method_name}(id: string, input: {input_type}, include?: {name}Include): Promise<{name}> {{
-    const fields = build{name}SelectionSet(include);
-    const query = `mutation Mutate{name}($input: {input_type}!) {{
-      {m_name}(input: $input) {{
-        result {{
-          ${{fields}}
-        }}
-        errors {{
-          field
-          message
-        }}
-        success
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{
-      {m_name}: {{
-        result?: {name};
-        errors: AshUserError[];
-        success: boolean;
-      }};
-    }}>(query, {{ input: {{ id, ...input }} }});
-
-    const payload = data.{m_name};
-    if (!payload.success || !payload.result) {{
-      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
-    }}
-
-    return payload.result;
-  }}
-"#
-                ));
-            }
-            ActionKind::Destroy => {
-                out.push_str(&format!(
-                    r#"
-  public async {action_method_name}(id: string): Promise<boolean> {{
-    const query = `mutation Mutate{name}($input: {input_type}!) {{
-      {m_name}(input: $input) {{
-        errors {{
-          field
-          message
-        }}
-        success
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{
-      {m_name}: {{
-        errors: AshUserError[];
-        success: boolean;
-      }};
-    }}>(query, {{ input: {{ id }} }});
-
-    const payload = data.{m_name};
-    if (!payload.success) {{
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
-    }}
-
-    return true;
-  }}
-"#
-                ));
-            }
-            ActionKind::Read => {
-                // Reads are handled by query() and get()
-            }
-            ActionKind::Generic => {
-                // Generic action
-                out.push_str(&format!(
-                    r#"
-  public async {action_method_name}(input?: Record<string, unknown>): Promise<unknown> {{
-    const query = `mutation Mutate{name}($input: GenericInput) {{
-      {m_name}(input: $input) {{
-        result
-        errors {{
-          field
-          message
-        }}
-        success
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{
-      {m_name}: {{
-        result?: unknown;
-        errors: AshUserError[];
-        success: boolean;
-      }};
-    }}>(query, {{ input: input ?? {{}} }});
-
-    const payload = data.{m_name};
-    if (!payload.success) {{
-      throw new AshClientError(payload.errors[0]?.message || "Action failed", payload.errors);
-    }}
-
-    return payload.result;
-  }}
-"#
-                ));
-            }
+        if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+            out.push_str(&generate_action_method(res, action));
         }
     }
 
@@ -517,6 +373,110 @@ pub fn generate_resource_client(res: &ResourceDef, live: bool) -> String {
     }
     out.push_str("}\n\n");
     out
+}
+
+/// A client method for a create, update or destroy, calling its mutation as ash-graphql
+/// serves it: `<action><Resource>(id: ID!, input: <Action><Resource>Input)`, with no `id`
+/// for a create and no `input` for an action that takes none. Every method takes an
+/// input, optional unless the action requires some of it, so each kind of action is
+/// called alike. A failure the mutation reports in `errors` throws an `AshClientError`
+/// holding them.
+fn generate_action_method(res: &ResourceDef, action: &ActionDef) -> String {
+    let name = res.name;
+    let m_name = mutation_name(action, res);
+    let method = to_camel_case(action.name);
+    let input_type = format!("{}{name}Input", to_pascal_case(action.name));
+    let fields = input_fields(res, action);
+    let has_id = action.kind != ActionKind::Create;
+    let destroy = action.kind == ActionKind::Destroy;
+
+    let mut params = Vec::new();
+    let mut variables = Vec::new();
+    let mut arguments = Vec::new();
+    let mut values = Vec::new();
+    if has_id {
+        params.push("id: string".to_string());
+        variables.push("$id: ID!".to_string());
+        arguments.push("id: $id".to_string());
+        values.push("id".to_string());
+    }
+    let required = fields.iter().any(|(_, _, required)| *required);
+    params.push(if required {
+        format!("input: {input_type}")
+    } else if fields.is_empty() {
+        // Nothing to send; taken so this method is called like the others.
+        format!("_input: {input_type} = {{}}")
+    } else {
+        format!("input: {input_type} = {{}}")
+    });
+    if !fields.is_empty() {
+        variables.push(format!("$input: {input_type}{}", if required { "!" } else { "" }));
+        arguments.push("input: $input".to_string());
+        values.push("input".to_string());
+    }
+    if !destroy {
+        params.push(format!("include?: {name}Include"));
+    }
+    let params = params.join(", ");
+    let variables = if variables.is_empty() {
+        String::new()
+    } else {
+        format!("({})", variables.join(", "))
+    };
+    let arguments = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("({})", arguments.join(", "))
+    };
+    let values = values.join(", ");
+
+    let (returns, result_selection, check, value) = if destroy {
+        ("boolean", "", "payload.errors.length > 0", "true")
+    } else {
+        (
+            name,
+            "\n        result {\n          ${fields}\n        }",
+            "payload.errors.length > 0 || !payload.result",
+            "payload.result",
+        )
+    };
+    let fields_line = if destroy {
+        ""
+    } else {
+        "\n    const fields = build{name}SelectionSet(include);"
+    }
+    .replace("{name}", name);
+
+    format!(
+        r#"
+  public async {method}({params}): Promise<{returns}> {{{fields_line}
+    const query = `mutation Mutate{name}{variables} {{
+      {m_name}{arguments} {{{result_selection}
+        errors {{
+          message
+          shortMessage
+          code
+          fields
+        }}
+      }}
+    }}`;
+
+    const data = await this.transport.request<{{
+      {m_name}: {{
+        result?: {name} | null;
+        errors: AshUserError[];
+      }};
+    }}>(query, {{ {values} }});
+
+    const payload = data.{m_name};
+    if ({check}) {{
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
+    }}
+
+    return {value};
+  }}
+"#
+    )
 }
 
 /// Constructor parameters for a resource client or query builder, and the arguments that

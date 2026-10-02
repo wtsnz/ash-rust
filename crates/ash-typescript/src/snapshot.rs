@@ -34,18 +34,18 @@ pub fn sql_type_to_ts_and_zod(
 ) -> (&'static str, Option<&'static str>, String) {
     let upper = sql_type.to_ascii_uppercase();
     let (ts_type, filter_type, base_zod) = if upper.contains("UUID") {
-        ("string", Some("UuidFilter"), "z.string().uuid()")
+        ("string", Some("AshFilter<string>"), "z.string().uuid()")
     } else if upper.contains("INT") || upper.contains("SERIAL") {
-        ("number", Some("IntFilter"), "z.number().int()")
+        ("number", Some("AshFilter<number>"), "z.number().int()")
     } else if upper.contains("BOOL") {
-        ("boolean", Some("BooleanFilter"), "z.boolean()")
+        ("boolean", Some("AshFilter<boolean>"), "z.boolean()")
     } else if upper.contains("NUMERIC") || upper.contains("DECIMAL") {
         // Decimals travel as strings, like GraphQL's Decimal fields.
-        ("string", Some("StringFilter"), "z.string()")
+        ("string", Some("AshFilter<string>"), "z.string()")
     } else if upper.contains("FLOAT") || upper.contains("DOUBLE") || upper.contains("REAL") {
-        ("number", Some("FloatFilter"), "z.number()")
+        ("number", Some("AshFilter<number>"), "z.number()")
     } else if upper.contains("BYTEA") || upper.contains("BLOB") {
-        ("string", Some("StringFilter"), "z.string()")
+        ("string", Some("AshFilter<string>"), "z.string()")
     } else if upper.starts_with("VECTOR") {
         // GraphQL returns embeddings as float lists and has no filter for them.
         ("number[]", None, "z.array(z.number())")
@@ -54,9 +54,9 @@ pub fn sql_type_to_ts_and_zod(
     } else if upper.contains("CITEXT") || upper.contains("NOCASE") {
         // Only CiString columns are certainly text: SQLite also stores dates, decimals
         // and enums as TEXT, and GraphQL gives those no text filters.
-        ("string", Some("TextFilter"), "z.string()")
+        ("string", Some("AshTextFilter"), "z.string()")
     } else {
-        ("string", Some("StringFilter"), "z.string()")
+        ("string", Some("AshFilter<string>"), "z.string()")
     };
 
     let zod_str = if nullable {
@@ -107,15 +107,15 @@ pub fn generate_from_snapshots(
         for col in &s.columns {
             let (ts_type, _, _) = sql_type_to_ts_and_zod(&col.sql_type, col.nullable);
             if col.nullable {
-                out.push_str(&format!("  {}?: {} | null;\n", col.name, ts_type));
+                out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(&col.name), ts_type));
             } else {
-                out.push_str(&format!("  {}: {};\n", col.name, ts_type));
+                out.push_str(&format!("  {}: {};\n", to_camel_case(&col.name), ts_type));
             }
         }
         for r in &s.references {
             if let Some(target_res) = table_to_res.get(r.target_table.as_str()) {
                 let rel_name = r.column.strip_suffix("_id").unwrap_or(&r.column);
-                out.push_str(&format!("  {}?: {} | null;\n", rel_name, target_res));
+                out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(rel_name), target_res));
             }
         }
         out.push_str("}\n\n");
@@ -128,9 +128,9 @@ pub fn generate_from_snapshots(
             }
             let (ts_type, _, _) = sql_type_to_ts_and_zod(&col.sql_type, col.nullable);
             if col.nullable {
-                out.push_str(&format!("  {}?: {} | null;\n", col.name, ts_type));
+                out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(&col.name), ts_type));
             } else {
-                out.push_str(&format!("  {}: {};\n", col.name, ts_type));
+                out.push_str(&format!("  {}: {};\n", to_camel_case(&col.name), ts_type));
             }
         }
         out.push_str("}\n\n");
@@ -140,19 +140,19 @@ pub fn generate_from_snapshots(
         for col in &s.columns {
             let (_, filter_type, _) = sql_type_to_ts_and_zod(&col.sql_type, col.nullable);
             if let Some(filter_type) = filter_type {
-                out.push_str(&format!("  {}?: {};\n", col.name, filter_type));
+                out.push_str(&format!("  {}?: {};\n", to_camel_case(&col.name), filter_type));
             }
         }
         out.push_str(&format!("  and?: {name}FilterInput[];\n"));
         out.push_str(&format!("  or?: {name}FilterInput[];\n"));
-        out.push_str(&format!("  not?: {name}FilterInput;\n"));
+        out.push_str(&format!("  not?: {name}FilterInput[];\n"));
         out.push_str("}\n\n");
 
         // Sort Input
         let sort_fields = s
             .columns
             .iter()
-            .map(|c| format!("\"{}\"", c.name))
+            .map(|c| format!("\"{}\"", to_camel_case(&c.name)))
             .collect::<Vec<_>>()
             .join(" | ");
         out.push_str(&format!("export type {name}SortField = {sort_fields};\n\n"));
@@ -166,7 +166,7 @@ pub fn generate_from_snapshots(
         for r in &s.references {
             if let Some(target_res) = table_to_res.get(r.target_table.as_str()) {
                 let rel_name = r.column.strip_suffix("_id").unwrap_or(&r.column);
-                out.push_str(&format!("  {}?: boolean | {target_res}Include;\n", rel_name));
+                out.push_str(&format!("  {}?: boolean | {target_res}Include;\n", to_camel_case(rel_name)));
             }
         }
         out.push_str("}\n\n");
@@ -180,7 +180,7 @@ pub fn generate_from_snapshots(
             out.push_str(&format!("export const {name}Schema = z.object({{\n"));
             for col in &s.columns {
                 let (_, _, zod_str) = sql_type_to_ts_and_zod(&col.sql_type, col.nullable);
-                out.push_str(&format!("  {}: {},\n", col.name, zod_str));
+                out.push_str(&format!("  {}: {},\n", to_camel_case(&col.name), zod_str));
             }
             out.push_str("});\n\n");
 
@@ -190,7 +190,7 @@ pub fn generate_from_snapshots(
                     continue;
                 }
                 let (_, _, zod_str) = sql_type_to_ts_and_zod(&col.sql_type, col.nullable);
-                out.push_str(&format!("  {}: {},\n", col.name, zod_str));
+                out.push_str(&format!("  {}: {},\n", to_camel_case(&col.name), zod_str));
             }
             out.push_str("});\n\n");
         }
@@ -207,7 +207,7 @@ pub fn generate_from_snapshots(
             let base_attrs = s
                 .columns
                 .iter()
-                .map(|c| c.name.as_str())
+                .map(|c| to_camel_case(&c.name))
                 .collect::<Vec<_>>()
                 .join(" ");
 
@@ -215,7 +215,7 @@ pub fn generate_from_snapshots(
             out.push_str(&format!("  let fields = \"{base_attrs}\";\n"));
             for r in &s.references {
                 if let Some(target_res) = table_to_res.get(r.target_table.as_str()) {
-                    let rel_name = r.column.strip_suffix("_id").unwrap_or(&r.column);
+                    let rel_name = to_camel_case(r.column.strip_suffix("_id").unwrap_or(&r.column));
                     out.push_str(&format!("  if (include?.{rel_name}) {{\n"));
                     out.push_str(&format!("    const subInclude = typeof include.{rel_name} === \"object\" ? include.{rel_name} : undefined;\n"));
                     out.push_str(&format!("    fields += ` {rel_name} {{ ${{build{target_res}SelectionSet(subInclude)}} }}`;\n"));
@@ -226,127 +226,17 @@ pub fn generate_from_snapshots(
             out.push_str("}\n\n");
 
             // Query Builder
-            let list_q = crate::client::list_query_name(name);
-            let conn_q = crate::client::connection_query_name(name);
-            out.push_str(&format!(
-                r#"export class {name}QueryBuilder {{
-  private _filter?: {name}FilterInput;
-  private _sort: {name}SortInput[] = [];
-  private _limit?: number;
-  private _offset?: number;
-  private _include?: {name}Include;
-
-  constructor(private readonly transport: AshTransport) {{}}
-
-  public filter(filter?: {name}FilterInput): this {{
-    this._filter = filter;
-    return this;
-  }}
-
-  public sort(field: {name}SortField, order: SortOrder = "asc"): this {{
-    this._sort.push({{ field, order }});
-    return this;
-  }}
-
-  public limit(limit: number): this {{
-    this._limit = limit;
-    return this;
-  }}
-
-  public offset(offset: number): this {{
-    this._offset = offset;
-    return this;
-  }}
-
-  public include(include: {name}Include): this {{
-    this._include = {{ ...this._include, ...include }};
-    return this;
-  }}
-
-  public async all(): Promise<{name}[]> {{
-    const fields = build{name}SelectionSet(this._include);
-    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput!], $limit: Int, $offset: Int) {{
-      {list_q}(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {{
-        ${{fields}}
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{ {list_q}: {name}[] }}>(query, {{
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
-    }});
-
-    return data.{list_q};
-  }}
-
-  public async first(): Promise<{name} | null> {{
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
-  }}
-
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<{name}>> {{
-    const fields = build{name}SelectionSet(this._include);
-    const query = `query Conn{name}($filter: {name}FilterInput, $sort: [{name}SortInput!], $first: Int, $after: String) {{
-      {conn_q}(filter: $filter, sort: $sort, first: $first, after: $after) {{
-        edges {{
-          node {{
-            ${{fields}}
-          }}
-          cursor
-        }}
-        pageInfo {{
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }}
-        totalCount
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{
-      {conn_q}: {{
-        edges: Array<{{ node: {name}; cursor: string }}>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      }};
-    }}>(query, {{
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    }});
-
-    const conn = data.{conn_q};
-    return {{
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    }};
-  }}
-
-  public queryOptions() {{
-    return {{
-      queryKey: [
-        "{name}",
-        "query",
-        {{
-          filter: this._filter,
-          sort: this._sort,
-          limit: this._limit,
-          offset: this._offset,
-          include: this._include,
-        }},
-      ],
-      queryFn: () => this.all(),
-    }};
-  }}
-}}
-
-"#
+            let sort_names = s
+                .columns
+                .iter()
+                .map(|c| format!("{}: \"{}\"", to_camel_case(&c.name), c.name.to_ascii_uppercase()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&crate::client::query_builder_class(
+                name,
+                &format!("{{ {sort_names} }}"),
+                "private readonly transport: AshTransport",
+                "",
             ));
 
             // Client class
@@ -382,23 +272,23 @@ pub fn generate_from_snapshots(
           ${{fields}}
         }}
         errors {{
-          field
           message
+          shortMessage
+          code
+          fields
         }}
-        success
       }}
     }}`;
 
     const data = await this.transport.request<{{
       {create_m}: {{
-        result?: {name};
+        result?: {name} | null;
         errors: AshUserError[];
-        success: boolean;
       }};
     }}>(query, {{ input }});
 
     const payload = data.{create_m};
-    if (!payload.success || !payload.result) {{
+    if (payload.errors.length > 0 || !payload.result) {{
       throw new AshClientError(payload.errors[0]?.message || "Create failed", payload.errors);
     }}
 
@@ -413,23 +303,23 @@ pub fn generate_from_snapshots(
           ${{fields}}
         }}
         errors {{
-          field
           message
+          shortMessage
+          code
+          fields
         }}
-        success
       }}
     }}`;
 
     const data = await this.transport.request<{{
       {update_m}: {{
-        result?: {name};
+        result?: {name} | null;
         errors: AshUserError[];
-        success: boolean;
       }};
     }}>(query, {{ id, input }});
 
     const payload = data.{update_m};
-    if (!payload.success || !payload.result) {{
+    if (payload.errors.length > 0 || !payload.result) {{
       throw new AshClientError(payload.errors[0]?.message || "Update failed", payload.errors);
     }}
 
@@ -440,22 +330,22 @@ pub fn generate_from_snapshots(
     const query = `mutation Mutate{name}($id: ID!) {{
       {destroy_m}(id: $id) {{
         errors {{
-          field
           message
+          shortMessage
+          code
+          fields
         }}
-        success
       }}
     }}`;
 
     const data = await this.transport.request<{{
       {destroy_m}: {{
         errors: AshUserError[];
-        success: boolean;
       }};
     }}>(query, {{ id }});
 
     const payload = data.{destroy_m};
-    if (!payload.success) {{
+    if (payload.errors.length > 0) {{
       throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
     }}
 

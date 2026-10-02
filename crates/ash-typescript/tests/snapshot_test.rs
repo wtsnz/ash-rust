@@ -96,21 +96,21 @@ fn test_generate_from_snapshots() {
 fn test_json_columns_have_no_filter_type() {
     use ash_typescript::snapshot::sql_type_to_ts_and_zod;
 
-    assert_eq!(sql_type_to_ts_and_zod("UUID", false).1, Some("UuidFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("UUID", false).1, Some("AshFilter<string>"));
     assert_eq!(sql_type_to_ts_and_zod("JSONB", true).1, None);
     let decimal = sql_type_to_ts_and_zod("NUMERIC", false);
-    assert_eq!((decimal.0, decimal.1), ("string", Some("StringFilter")));
+    assert_eq!((decimal.0, decimal.1), ("string", Some("AshFilter<string>")));
 }
 
 #[test]
 fn test_only_ci_string_columns_get_text_filters() {
     use ash_typescript::snapshot::sql_type_to_ts_and_zod;
 
-    assert_eq!(sql_type_to_ts_and_zod("CITEXT", false).1, Some("TextFilter"));
-    assert_eq!(sql_type_to_ts_and_zod("TEXT COLLATE NOCASE", false).1, Some("TextFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("CITEXT", false).1, Some("AshTextFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("TEXT COLLATE NOCASE", false).1, Some("AshTextFilter"));
     // SQLite keeps dates, decimals and enums in TEXT, and Postgres enums in VARCHAR.
-    assert_eq!(sql_type_to_ts_and_zod("TEXT", false).1, Some("StringFilter"));
-    assert_eq!(sql_type_to_ts_and_zod("VARCHAR(255)", false).1, Some("StringFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("TEXT", false).1, Some("AshFilter<string>"));
+    assert_eq!(sql_type_to_ts_and_zod("VARCHAR(255)", false).1, Some("AshFilter<string>"));
 }
 
 #[test]

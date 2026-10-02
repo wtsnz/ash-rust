@@ -106,8 +106,8 @@ fn test_consolidated_code_generation() {
     assert!(ts.contains("import { z } from \"zod\";"));
 
     // Check common types
-    assert!(ts.contains("export interface PageInfo {"));
-    assert!(ts.contains("export interface UuidFilter {"));
+    assert!(ts.contains("export interface PaginatedResult<T> {"));
+    assert!(ts.contains("export interface AshFilter<T> {"));
 
     // Check resource interfaces
     assert!(ts.contains("export interface Ticket {"));
@@ -131,15 +131,33 @@ fn test_consolidated_code_generation() {
     assert!(ts.contains("export class TicketQueryBuilder {"));
     assert!(ts.contains("public async all(): Promise<Ticket[]> {"));
     assert!(ts.contains("public async first(): Promise<Ticket | null> {"));
-    assert!(ts.contains("public async page(first: number = 20, after?: string): Promise<PaginatedResult<Ticket>> {"));
+    assert!(ts.contains(
+        "public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Ticket>> {"
+    ));
+    // Lists are AshGraphql's keyset reads, sorted by the schema's enum values.
+    assert!(ts.contains("listTickets(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {"));
+    assert!(ts.contains("results {"));
+    assert!(ts.contains("authorId: \"AUTHOR_ID\""));
+    assert!(ts.contains("order: order === \"desc\" ? \"DESC\" : \"ASC\","));
+    assert!(ts.contains("let fields = \"id title status priority authorId\";"));
     assert!(ts.contains("public queryOptions() {"));
 
     // Check Resource Client
     assert!(ts.contains("export class TicketClient {"));
     assert!(ts.contains("public async get(id: string, include?: TicketInclude): Promise<Ticket | null> {"));
     assert!(ts.contains("public async open(input: OpenTicketInput, include?: TicketInclude): Promise<Ticket> {"));
-    assert!(ts.contains("public async close(id: string, input: CloseTicketInput, include?: TicketInclude): Promise<Ticket> {"));
-    assert!(ts.contains("public async destroy(id: string): Promise<boolean> {"));
+    assert!(ts.contains("public async close(id: string, input: CloseTicketInput = {}, include?: TicketInclude): Promise<Ticket> {"));
+    assert!(ts.contains("public async destroy(id: string, _input: DestroyTicketInput = {}): Promise<boolean> {"));
+
+    // Mutations take the record's id and an input, as AshGraphql's do, and report errors
+    // rather than success.
+    assert!(ts.contains("mutation MutateTicket($input: OpenTicketInput!) {\n      openTicket(input: $input) {"));
+    assert!(ts.contains(
+        "mutation MutateTicket($id: ID!, $input: CloseTicketInput) {\n      closeTicket(id: $id, input: $input) {"
+    ));
+    assert!(ts.contains("mutation MutateTicket($id: ID!) {\n      destroyTicket(id: $id) {"));
+    assert!(ts.contains("errors {\n          message\n          shortMessage\n          code\n          fields\n        }"));
+    assert!(!ts.contains("success"));
 
     // Check Domain & Root Client
     assert!(ts.contains("export class HelpdeskDomainClient {"));

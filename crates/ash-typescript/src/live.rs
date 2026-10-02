@@ -335,6 +335,14 @@ function ashFieldVerdict(kind: AshFieldKind | undefined, ops: Record<string, unk
     }}
     // Datetimes compare only by presence: a filter's value may be spelled another way.
     if (kind === "datetime") return undefined;
+    // Null-safe equality: nulls are equal to each other and to nothing else.
+    if (op === "isDistinctFrom" || op === "isNotDistinctFrom") {{
+      const same = missing || operand === null ? missing && operand === null : norm(value) === norm(operand);
+      verdicts.push(op === "isNotDistinctFrom" ? same : !same);
+      continue;
+    }}
+    // A comparison with a null operand is the server's to judge.
+    if (operand === null) return undefined;
     if (missing) {{
       verdicts.push(null);
       continue;
@@ -344,18 +352,29 @@ function ashFieldVerdict(kind: AshFieldKind | undefined, ops: Record<string, unk
       case "eq":
         verdicts.push(v === norm(operand));
         break;
-      case "ne":
+      case "notEq":
         verdicts.push(v !== norm(operand));
         break;
-      case "in":
-        verdicts.push(Array.isArray(operand) && operand.map(norm).includes(v));
+      case "in": {{
+        if (!Array.isArray(operand)) return undefined;
+        const values = operand.map(norm);
+        verdicts.push(values.includes(v) ? true : values.includes(null) ? null : false);
         break;
-      case "gt":
-      case "gte":
-      case "lt":
-      case "lte": {{
+      }}
+      case "lessThan":
+      case "greaterThan":
+      case "lessThanOrEqual":
+      case "greaterThanOrEqual": {{
         if (kind !== "number" || typeof operand !== "number" || typeof v !== "number") return undefined;
-        verdicts.push(op === "gt" ? v > operand : op === "gte" ? v >= operand : op === "lt" ? v < operand : v <= operand);
+        verdicts.push(
+          op === "greaterThan"
+            ? v > operand
+            : op === "greaterThanOrEqual"
+              ? v >= operand
+              : op === "lessThan"
+                ? v < operand
+                : v <= operand,
+        );
         break;
       }}
       default:
@@ -377,7 +396,9 @@ function ashFilterVerdict(
       const parts = (condition as Record<string, unknown>[]).map((part) => ashFilterVerdict(part, record, kinds));
       verdicts.push(key === "and" ? ashAll(parts) : ashAny(parts));
     }} else if (key === "not") {{
-      const inner = ashFilterVerdict(condition as Record<string, unknown>, record, kinds);
+      // `not: [a, b]` excludes records matching all of them.
+      const parts = (condition as Record<string, unknown>[]).map((part) => ashFilterVerdict(part, record, kinds));
+      const inner = ashAll(parts);
       // NOT over SQL's NULL is NULL in Postgres; leave it to the server.
       verdicts.push(inner === true ? false : inner === false ? true : undefined);
     }} else {{
@@ -433,7 +454,7 @@ export interface AshLiveSpec<T> {{
   matches?: (record: T) => boolean | undefined;
   /** The list's order: `undefined` when the client can't tell. Absent for an unsorted list, whose new records go last. */
   compare?: (a: T, b: T) => number | undefined;
-  /** A page (limit or offset): a record leaving it is replaced by one only the server knows. */
+  /** A page (a limit): a record leaving it is replaced by one only the server knows. */
   paged: boolean;
   subscriptions: AshSubscriptionClient;
   onCreated: (handler: (record: T) => void, options: AshSubscribeOptions) => () => void;
@@ -448,8 +469,8 @@ export interface AshLiveSpec<T> {{
  * Changes apply as they arrive. A change the client can place exactly, because it can
  * evaluate the list's filter and sort as the server would, goes straight where the server
  * would put it: in, out, or to its place in the order. Any other change patches the records
- * the list holds and the list re-reads itself shortly after, as does a page (limit or
- * offset), since what enters it when a record leaves only the server knows.
+ * the list holds and the list re-reads itself shortly after, as does a page (a limit),
+ * since what enters it when a record leaves only the server knows.
  * If it misses events, because it fell behind the server, it re-reads straight away.
  * However fast changes arrive, the listener hears the list at most once an animation
  * frame.
@@ -643,9 +664,13 @@ fn primary_key(res: &ResourceDef) -> &'static str {
         .unwrap_or("id")
 }
 
-/// `onCreated`, `onUpdated` and `onDestroyed` for a resource client.
+/// `onCreated`, `onUpdated` and `onDestroyed` for a resource client, over the
+/// subscriptions ash-graphql serves as AshGraphql does: each takes a `filter`, and its
+/// result holds the record (or, for a destroy, its id) under `created`, `updated` or
+/// `destroyed`.
 pub fn generate_resource_subscription_methods(res: &ResourceDef) -> String {
     let name = res.name;
+    let pk = to_camel_case(primary_key(res));
     let (created, updated, destroyed) = subscription_names(res);
     format!(
         r#"
@@ -657,32 +682,54 @@ pub fn generate_resource_subscription_methods(res: &ResourceDef) -> String {
     const fields = build{name}SelectionSet(options?.include);
     const query = `subscription {name}Created($filter: {name}FilterInput) {{
       {created}(filter: $filter) {{
-        ${{fields}}
+        created {{
+          ${{fields}}
+        }}
       }}
     }}`;
-    return this.subscriptions.subscribe<{{ {created}: {name} }}>(query, {{ filter: options?.filter }}, {{
-      next: (data) => handler(data.{created}),
-      error: options?.onError,
-      missed: options?.onMissed,
-    }});
+    return this.subscriptions.subscribe<{{ {created}: {{ created: {name} | null }} }}>(
+      query,
+      {{ filter: options?.filter }},
+      {{
+        next: (data) => {{
+          const record = data.{created}?.created;
+          if (record) handler(record);
+        }},
+        error: options?.onError,
+        missed: options?.onMissed,
+      }},
+    );
   }}
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: {name}) => void,
-    options?: AshSubscribeOptions & {{ id?: string; include?: {name}Include }},
+    options?: AshSubscribeOptions & {{ id?: string; filter?: {name}FilterInput; include?: {name}Include }},
   ): () => void {{
     const fields = build{name}SelectionSet(options?.include);
-    const query = `subscription {name}Updated($id: ID) {{
-      {updated}(id: $id) {{
-        ${{fields}}
+    const query = `subscription {name}Updated($filter: {name}FilterInput) {{
+      {updated}(filter: $filter) {{
+        updated {{
+          ${{fields}}
+        }}
       }}
     }}`;
-    return this.subscriptions.subscribe<{{ {updated}: {name} }}>(query, {{ id: options?.id }}, {{
-      next: (data) => handler(data.{updated}),
-      error: options?.onError,
-      missed: options?.onMissed,
-    }});
+    const filter = options?.id !== undefined ? {{ ...options?.filter, {pk}: {{ eq: options.id }} }} : options?.filter;
+    return this.subscriptions.subscribe<{{ {updated}: {{ updated: {name} | null }} }}>(
+      query,
+      {{ filter }},
+      {{
+        next: (data) => {{
+          const record = data.{updated}?.updated;
+          if (record) handler(record);
+        }},
+        error: options?.onError,
+        missed: options?.onMissed,
+      }},
+    );
   }}
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -690,14 +737,24 @@ pub fn generate_resource_subscription_methods(res: &ResourceDef) -> String {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & {{ id?: string }},
   ): () => void {{
-    const query = `subscription {name}Destroyed($id: ID) {{
-      {destroyed}(id: $id)
+    const query = `subscription {name}Destroyed($filter: {name}FilterInput) {{
+      {destroyed}(filter: $filter) {{
+        destroyed
+      }}
     }}`;
-    return this.subscriptions.subscribe<{{ {destroyed}: string }}>(query, {{ id: options?.id }}, {{
-      next: (data) => handler(data.{destroyed}),
-      error: options?.onError,
-      missed: options?.onMissed,
-    }});
+    const filter = options?.id !== undefined ? {{ {pk}: {{ eq: options.id }} }} : undefined;
+    return this.subscriptions.subscribe<{{ {destroyed}: {{ destroyed: string | null }} }}>(
+      query,
+      {{ filter }},
+      {{
+        next: (data) => {{
+          const id = data.{destroyed}?.destroyed;
+          if (id) handler(id);
+        }},
+        error: options?.onError,
+        missed: options?.onMissed,
+      }},
+    );
   }}
 "#
     )
@@ -718,7 +775,7 @@ fn field_kinds(res: &ResourceDef) -> String {
                 AttrType::UtcDatetime { .. } => "datetime",
                 _ => return None,
             };
-            Some(format!("{}: \"{kind}\"", attr.name))
+            Some(format!("{}: \"{kind}\"", to_camel_case(attr.name)))
         })
         .collect();
     format!("{{ {} }}", fields.join(", "))
@@ -727,7 +784,7 @@ fn field_kinds(res: &ResourceDef) -> String {
 /// `live()` for a resource's query builder.
 pub fn generate_query_builder_live(res: &ResourceDef) -> String {
     let name = res.name;
-    let pk = primary_key(res);
+    let pk = to_camel_case(primary_key(res));
     let kinds = field_kinds(res);
     format!(
         r#"
@@ -745,7 +802,7 @@ pub fn generate_query_builder_live(res: &ResourceDef) -> String {
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, {{ ...opts, filter: this._filter, include }}),
         onUpdated: (handler, opts) => client.onUpdated(handler, {{ ...opts, include }}),
@@ -768,7 +825,6 @@ pub fn generate_resource_live_hook(res: &ResourceDef, client_name: &str) -> Stri
   filter?: {name}FilterInput;
   sort?: {name}SortInput[];
   limit?: number;
-  offset?: number;
   include?: {name}Include;
 }}
 
@@ -791,7 +847,6 @@ export function use{name}Live(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({{ data, loading: false }}), {{
       syncDelayMs,
