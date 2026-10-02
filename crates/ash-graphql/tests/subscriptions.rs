@@ -534,3 +534,159 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
     let event = later.await.unwrap().unwrap();
     assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["title"], "Later");
 }
+
+#[cfg(feature = "axum")]
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Serves `schema` on a socket, with the hub its shared subscriptions run in.
+#[cfg(feature = "axum")]
+async fn serve_shared(
+    schema: async_graphql::dynamic::Schema,
+) -> (std::net::SocketAddr, Arc<ash_graphql::axum::SubscriptionHub>) {
+    let hub = Arc::new(ash_graphql::axum::SubscriptionHub::default());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = ash_graphql::axum::graphql_router_with_hub(schema, hub.clone());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (addr, hub)
+}
+
+/// Connects with `protocol` and, for `graphql-transport-ws`, completes the handshake.
+#[cfg(feature = "axum")]
+async fn connect(addr: std::net::SocketAddr, protocol: &str) -> Socket {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    let mut request = format!("ws://{addr}/graphql/ws").into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", protocol.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket
+        .send(Message::Text(serde_json::json!({ "type": "connection_init" }).to_string().into()))
+        .await
+        .unwrap();
+    assert_eq!(read_message(&mut socket).await["type"], "connection_ack");
+    socket
+}
+
+#[cfg(feature = "axum")]
+async fn send_json(socket: &mut Socket, value: serde_json::Value) {
+    use futures_util::SinkExt;
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(value.to_string().into()))
+        .await
+        .unwrap();
+}
+
+/// Waits until the hub runs `expected` shared streams.
+#[cfg(feature = "axum")]
+async fn streams(hub: &ash_graphql::axum::SubscriptionHub, expected: usize) {
+    let started = std::time::Instant::now();
+    while hub.streams() != expected {
+        assert!(started.elapsed() < Duration::from_secs(5), "{} streams, not {expected}", hub.streams());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Subscribers to the same subscription share one execution, as Absinthe deduplicates
+/// AshGraphql's: each event is resolved once and every subscriber gets the same frame.
+/// A different subscription runs on its own, and a shared one stops with its last
+/// subscriber.
+#[cfg(feature = "axum")]
+#[tokio::test(flavor = "multi_thread")]
+async fn subscribers_to_the_same_subscription_share_one_execution() {
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub)
+        .finish_with_context(ctx.clone())
+        .unwrap();
+    let (addr, hub) = serve_shared(schema).await;
+
+    let created = "subscription { ticketCreated { title } }";
+    let mut sockets = Vec::new();
+    for i in 0..20 {
+        let mut socket = connect(addr, "graphql-transport-ws").await;
+        let id = format!("watch-{i}");
+        send_json(&mut socket, serde_json::json!({ "id": id, "type": "subscribe", "payload": { "query": created } })).await;
+        sockets.push(socket);
+    }
+    let mut other = connect(addr, "graphql-transport-ws").await;
+    send_json(
+        &mut other,
+        serde_json::json!({ "id": "statuses", "type": "subscribe", "payload": { "query": "subscription { ticketCreated { status } }" } }),
+    )
+    .await;
+    streams(&hub, 2).await;
+
+    let mut input = ash_core::FieldMap::new();
+    input.insert("title".into(), ash_core::Value::String("Shared".into()));
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    for (i, socket) in sockets.iter_mut().enumerate() {
+        let next = read_message(socket).await;
+        assert_eq!(next["id"], format!("watch-{i}"));
+        assert_eq!(next["payload"]["data"]["ticketCreated"]["title"], "Shared", "{next}");
+    }
+    assert_eq!(read_message(&mut other).await["payload"]["data"]["ticketCreated"]["status"], serde_json::Value::Null);
+
+    // Completing one subscriber leaves the stream to the rest; the last one stops it.
+    let mut last = sockets.pop().unwrap();
+    for (i, socket) in sockets.iter_mut().enumerate() {
+        send_json(socket, serde_json::json!({ "id": format!("watch-{i}"), "type": "complete" })).await;
+    }
+    streams(&hub, 2).await;
+    drop(last.close(None).await);
+    streams(&hub, 1).await;
+}
+
+/// The older `graphql-ws` protocol is still served.
+#[cfg(feature = "axum")]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_older_graphql_ws_protocol_still_works() {
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub)
+        .finish_with_context(ctx.clone())
+        .unwrap();
+    let (addr, hub) = serve_shared(schema).await;
+    let mut socket = connect(addr, "graphql-ws").await;
+    send_json(&mut socket, serde_json::json!({ "id": "1", "type": "start", "payload": { "query": "subscription { ticketCreated { title } }" } })).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(hub.streams(), 0, "graphql-ws isn't shared");
+
+    let mut input = ash_core::FieldMap::new();
+    input.insert("title".into(), ash_core::Value::String("Legacy".into()));
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    let data = read_message(&mut socket).await;
+    assert_eq!(data["type"], "data", "{data}");
+    assert_eq!(data["payload"]["data"]["ticketCreated"]["title"], "Legacy");
+}
+
+/// A mutation sent over the socket runs for each sender: only subscriptions are shared.
+#[cfg(feature = "axum")]
+#[tokio::test(flavor = "multi_thread")]
+async fn mutations_over_the_socket_are_not_shared() {
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub)
+        .finish_with_context(ctx.clone())
+        .unwrap();
+    let (addr, _) = serve_shared(schema).await;
+    let mutation = r#"mutation { createTicket(input: { title: "Twice" }) { success } }"#;
+    for _ in 0..2 {
+        let mut socket = connect(addr, "graphql-transport-ws").await;
+        send_json(&mut socket, serde_json::json!({ "id": "m", "type": "subscribe", "payload": { "query": mutation } })).await;
+        let next = read_message(&mut socket).await;
+        assert_eq!(next["payload"]["data"]["createTicket"]["success"], true, "{next}");
+        assert_eq!(read_message(&mut socket).await["type"], "complete");
+    }
+    use ash_core::DataLayer;
+    let stored = ctx
+        .data
+        .run_query(&TICKET_DEF, &ash_core::CompiledQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 2);
+}

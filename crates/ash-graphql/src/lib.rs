@@ -13,6 +13,8 @@ pub mod types;
 
 #[cfg(feature = "axum")]
 pub mod axum;
+#[cfg(feature = "axum")]
+mod ws;
 
 pub use builder::AshGraphQLBuilder;
 pub use dataloader::{AshBatchLoader, RelatedKey};

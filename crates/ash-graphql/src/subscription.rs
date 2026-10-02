@@ -28,7 +28,7 @@ pub fn uncapitalize(s: &str) -> String {
 /// it, as the generated TypeScript client does.
 async fn next_event(
     sub: &mut ash_pubsub::Subscription,
-) -> Option<Result<ash_core::Notification, async_graphql::Error>> {
+) -> Option<Result<std::sync::Arc<ash_core::Notification>, async_graphql::Error>> {
     match sub.recv().await {
         Ok(notification) => Some(Ok(notification)),
         Err(RecvError::Lagged(missed)) => Some(Err(async_graphql::Error::new(format!(
@@ -91,15 +91,16 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                             }
                         };
                         if notif.action_kind == ActionKind::Create {
-                            let mut record = notif.record_fields;
                             if let Some(f) = &filter
-                                && !f.matches_on(resource, &record)
+                                && !f.matches_on(resource, &notif.record_fields)
                             {
                                 continue;
                             }
-                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &record) {
+                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
                                 continue;
                             }
+                            // Shared with every other subscriber: copy only what this one sends.
+                            let mut record = notif.record_fields.clone();
                             let _ = redact_fields(resource, actor.as_ref(), &mut record);
                             yield Ok(FieldValue::owned_any(record));
                         }
@@ -153,10 +154,11 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                             {
                                 continue;
                             }
-                            let mut record = notif.record_fields;
-                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &record) {
+                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
                                 continue;
                             }
+                            // Shared with every other subscriber: copy only what this one sends.
+                            let mut record = notif.record_fields.clone();
                             let _ = redact_fields(resource, actor.as_ref(), &mut record);
                             yield Ok(FieldValue::owned_any(record));
                         }
