@@ -13,7 +13,7 @@ use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
-use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record};
+use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort};
 use super::read::scope_read;
 use super::relations::attach_relationships;
 
@@ -308,19 +308,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         before: Option<&str>,
     ) -> Result<Page<R>> {
         let pk = pk_name(&R::DEF)?.to_string();
-
-        if self.sort.is_empty() {
-            self.sort.push(Sort {
-                field: pk.clone(),
-                descending: false,
-            });
-        } else if !self.sort.iter().any(|s| s.field == pk) {
-            let last_desc = self.sort.last().map(|s| s.descending).unwrap_or(false);
-            self.sort.push(Sort {
-                field: pk.clone(),
-                descending: last_desc,
-            });
-        }
+        self.sort = keyset_sort(&R::DEF, std::mem::take(&mut self.sort));
 
         let is_before = before.is_some() && after.is_none();
         let target_cursor_str = if is_before { before } else { after };

@@ -73,21 +73,25 @@ pub fn register_action_payload(
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
-    let payload = |ctx: &ResolverContext<'_>| ctx.parent_value.downcast_ref::<MutationPayload>().cloned();
+    fn payload<'a>(ctx: &ResolverContext<'a>) -> Option<&'a MutationPayload> {
+        ctx.parent_value.downcast_ref::<MutationPayload>()
+    }
     builder.register(
         Object::new(mutation_payload_name(action.name, resource.name))
-            .field(Field::new("result", TypeRef::named(resource.name), move |ctx| {
+            .field(Field::new("result", TypeRef::named(resource.name), |ctx| {
                 FieldFuture::new(async move {
-                    Ok(payload(&ctx).and_then(|p| p.result).map(FieldValue::owned_any))
+                    Ok(payload(&ctx)
+                        .and_then(|p| p.result.as_ref())
+                        .map(|record| FieldValue::borrowed_any(record)))
                 })
             }))
             .field(Field::new(
                 "errors",
                 TypeRef::named_nn_list_nn(MUTATION_ERROR),
-                move |ctx| {
+                |ctx| {
                     FieldFuture::new(async move {
-                        let errors = payload(&ctx).map(|p| p.errors).unwrap_or_default();
-                        Ok(Some(FieldValue::list(errors.into_iter().map(FieldValue::owned_any))))
+                        let errors = payload(&ctx).map(|p| p.errors.as_slice()).unwrap_or_default();
+                        Ok(Some(FieldValue::list(errors.iter().map(|e| FieldValue::borrowed_any(e)))))
                     })
                 },
             )),

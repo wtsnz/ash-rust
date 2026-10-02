@@ -94,3 +94,27 @@ async fn list_queries_page_by_keyset() {
     // A page holds at most 250 records, as Ash's default `max_page_size`.
     assert_eq!(priorities(&run(", first: 1000".into()).await).len(), 5);
 }
+
+/// A list given no paging arguments doesn't page, as Ash doesn't: it reads every record
+/// in the order asked for, with no keysets.
+#[tokio::test]
+async fn an_unpaged_list_has_no_keysets() {
+    let memory = Memory::new();
+    seed_tickets(&memory).await;
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .finish::<Memory>()
+        .expect("Failed to build schema");
+    let query = "{ listTickets(sort: [{ field: PRIORITY, order: DESC }]) { count startKeyset endKeyset results { priority } } }";
+    let res = schema.execute(Request::new(query).data(Context::new(memory))).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let page = &res.data.into_json().unwrap()["listTickets"];
+    assert_eq!(page["count"], 5);
+    assert!(page["startKeyset"].is_null() && page["endKeyset"].is_null(), "{page}");
+    let priorities: Vec<i64> = page["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["priority"].as_i64().unwrap())
+        .collect();
+    assert_eq!(priorities, [5, 4, 3, 2, 1]);
+}

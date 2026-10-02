@@ -3,7 +3,7 @@
 
 use ash_core::{
     ActionDef, CompiledQuery, DataLayer, FieldMap, Filter, KeysetCursor, ResourceDef, Sort, Value,
-    redact_fields, scope_read,
+    build_keyset_filter, keyset_sort, redact_fields, scope_read,
 };
 use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::*;
@@ -31,33 +31,34 @@ pub fn keyset_page_type_name(resource_name: &str) -> String {
     format!("KeysetPageOf{resource_name}")
 }
 
-/// Registers `KeysetPageOf<Resource>`.
+/// Registers `KeysetPageOf<Resource>`. Its fields borrow the page, so a page of records
+/// is never copied to resolve it.
 pub fn register_keyset_page(builder: SchemaBuilder, resource: &'static ResourceDef) -> SchemaBuilder {
-    let page = |ctx: &ResolverContext<'_>| ctx.parent_value.downcast_ref::<KeysetPage>().cloned();
-    let text = |value: Option<String>| value.map(|v| FieldValue::value(GqlValue::String(v)));
+    fn page<'a>(ctx: &ResolverContext<'a>) -> Option<&'a KeysetPage> {
+        ctx.parent_value.downcast_ref::<KeysetPage>()
+    }
+    fn keyset(value: &Option<String>) -> Option<FieldValue<'static>> {
+        value.as_ref().map(|v| FieldValue::value(GqlValue::String(v.clone())))
+    }
     builder.register(
         Object::new(keyset_page_type_name(resource.name))
-            .field(Field::new("count", TypeRef::named(TypeRef::INT), move |ctx| {
+            .field(Field::new("count", TypeRef::named(TypeRef::INT), |ctx| {
                 FieldFuture::new(async move {
                     Ok(page(&ctx)
                         .and_then(|p| p.count)
                         .map(|n| FieldValue::value(GqlValue::Number((n as i64).into()))))
                 })
             }))
-            .field(Field::new(
-                "results",
-                TypeRef::named_nn_list(resource.name),
-                move |ctx| {
-                    FieldFuture::new(async move {
-                        Ok(page(&ctx).map(|p| FieldValue::list(p.results.into_iter().map(FieldValue::owned_any))))
-                    })
-                },
-            ))
-            .field(Field::new("startKeyset", TypeRef::named(TypeRef::STRING), move |ctx| {
-                FieldFuture::new(async move { Ok(text(page(&ctx).and_then(|p| p.start_keyset))) })
+            .field(Field::new("results", TypeRef::named_nn_list(resource.name), |ctx| {
+                FieldFuture::new(async move {
+                    Ok(page(&ctx).map(|p| FieldValue::list(p.results.iter().map(|r| FieldValue::borrowed_any(r)))))
+                })
             }))
-            .field(Field::new("endKeyset", TypeRef::named(TypeRef::STRING), move |ctx| {
-                FieldFuture::new(async move { Ok(text(page(&ctx).and_then(|p| p.end_keyset))) })
+            .field(Field::new("startKeyset", TypeRef::named(TypeRef::STRING), |ctx| {
+                FieldFuture::new(async move { Ok(page(&ctx).and_then(|p| keyset(&p.start_keyset))) })
+            }))
+            .field(Field::new("endKeyset", TypeRef::named(TypeRef::STRING), |ctx| {
+                FieldFuture::new(async move { Ok(page(&ctx).and_then(|p| keyset(&p.end_keyset))) })
             })),
     )
 }
@@ -123,8 +124,9 @@ pub(crate) fn read_field_arguments(
 }
 
 /// A keyset-paginated read through `action`: `<name>(sort, filter, first, before, after,
-/// last, <arguments>): KeysetPageOf<Resource>`. Without `first` or `last` the page holds
-/// every record, as an Ash read whose pagination isn't required does.
+/// last, <arguments>): KeysetPageOf<Resource>`. Given none of `first`, `last`, `after` or
+/// `before` it doesn't page, as Ash doesn't: the page holds every record in the order
+/// asked for, and has no keysets.
 pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
     name: String,
     resource: &'static ResourceDef,
@@ -158,6 +160,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             let keyset = |name: &str| ctx.args.get(name).and_then(|v| v.string().ok().map(str::to_string));
             let (first, last) = (number("first"), number("last"));
             let (after, before) = (keyset("after"), keyset("before"));
+            let paged = first.is_some() || last.is_some() || after.is_some() || before.is_some();
             let backward = before.is_some() && after.is_none() || (last.is_some() && first.is_none());
             let limit = if backward { last.or(first) } else { first.or(last) };
 
@@ -176,15 +179,12 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             )
             .map_err(|e| async_graphql::Error::new(e.to_string()))?;
 
-            // The primary key breaks ties, so every record has its own keyset.
-            let mut sort = scoped.sort.clone();
-            if !sort.iter().any(|s| s.field == pk_name) {
-                let descending = sort.last().is_some_and(|s| s.descending);
-                sort.push(Sort {
-                    field: pk_name.to_string(),
-                    descending,
-                });
-            }
+            // A page sorts stably, so every record has its own keyset.
+            let sort = if paged {
+                keyset_sort(resource, scoped.sort.clone())
+            } else {
+                scoped.sort.clone()
+            };
 
             let count = if ctx.look_ahead().field("count").exists() {
                 let query = CompiledQuery {
@@ -220,7 +220,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                         (s.field.clone(), value, s.descending)
                     })
                     .collect();
-                if let Some(keyset_filter) = keyset_filter(&tuples, !backward) {
+                if let Some(keyset_filter) = build_keyset_filter(&tuples, !backward) {
                     page_filter = Some(match page_filter {
                         Some(f) => Filter::And(vec![f, keyset_filter]),
                         None => keyset_filter,
@@ -253,9 +253,10 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             for record in &mut records {
                 let _ = redact_fields(resource, ash.actor.as_ref(), record);
             }
+            let keyset = |record: Option<&FieldMap>| record.filter(|_| paged).map(|r| keyset_of(r, &sort, pk_name));
             Ok(Some(FieldValue::owned_any(KeysetPage {
-                start_keyset: records.first().map(|r| keyset_of(r, &sort, pk_name)),
-                end_keyset: records.last().map(|r| keyset_of(r, &sort, pk_name)),
+                start_keyset: keyset(records.first()),
+                end_keyset: keyset(records.last()),
                 results: records,
                 count,
             })))
@@ -276,20 +277,4 @@ fn keyset_of(record: &FieldMap, sort: &[Sort], pk_name: &str) -> String {
         .map(|s| (s.field.clone(), record.get(&s.field).cloned().unwrap_or(Value::Null)))
         .collect();
     KeysetCursor { id, values }.encode()
-}
-
-fn keyset_filter(sorts: &[(String, Value, bool)], after: bool) -> Option<Filter> {
-    let ((field, value, descending), rest) = sorts.split_first()?;
-    let beyond = if after != *descending {
-        Filter::Gt(field.clone(), value.clone())
-    } else {
-        Filter::Lt(field.clone(), value.clone())
-    };
-    match keyset_filter(rest, after) {
-        None => Some(beyond),
-        Some(rest) => Some(Filter::Or(vec![
-            beyond,
-            Filter::And(vec![Filter::Eq(field.clone(), value.clone()), rest]),
-        ])),
-    }
 }

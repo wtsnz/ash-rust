@@ -50,9 +50,9 @@ pub use data_layer::{
     CompiledQuery, DataLayer, NoDataLayer, SchemaSupport, Sort, TransactionSupport,
 };
 pub use engine::{
-    KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
+    KeysetCursor, Page, Query, build_keyset_filter, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
     get, handle_managed_relationships, insert, load_related, manual_create, query, record_visible,
-    run, scope_read, update, update_dynamic, update_existing,
+    keyset_sort, run, scope_read, update, update_dynamic, update_existing,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};

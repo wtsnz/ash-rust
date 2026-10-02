@@ -95,7 +95,8 @@ pub fn register_subscription_results(
             |ctx| {
                 FieldFuture::new(async move {
                     Ok(match ctx.parent_value.downcast_ref::<Event>() {
-                        Some(Event::Record(record)) => Some(FieldValue::owned_any(record.clone())),
+                        // Borrowed: the event lives as long as its resolution.
+                        Some(Event::Record(record)) => Some(FieldValue::borrowed_any(record)),
                         Some(Event::Id(id)) => Some(FieldValue::value(async_graphql::Value::String(id.clone()))),
                         None => None,
                     })

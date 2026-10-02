@@ -267,6 +267,16 @@ fn bench_graphql_queries(c: &mut Criterion) {
         });
     });
 
+    // 2b. Every record, unpaged (no sort, no keysets), as a client's `all()` reads
+    let query_all = r#"query { listTickets { results { id title status priority } } }"#;
+    assert_ok(&rt, &schema, query_all);
+    group.bench_function("all_100_records_unpaged", |b| {
+        b.to_async(&rt).iter(|| async {
+            let res = schema.execute(Request::new(query_all)).await;
+            black_box(res);
+        });
+    });
+
     // 3. Filtered & Sorted Query
     let query_filter_sort = r#"
         query {
