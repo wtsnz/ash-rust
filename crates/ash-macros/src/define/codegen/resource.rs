@@ -1225,8 +1225,10 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         )
     };
 
+    // `PartialEq` but not `Eq`: a float attribute, or a relationship to a resource with
+    // one, can't be `Eq`, and the macro can't see into related resources.
     Ok(quote! {
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, Debug, PartialEq)]
         #(#outer_attrs)*
         pub struct #resource {
             #(#struct_fields,)*

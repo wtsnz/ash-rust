@@ -252,6 +252,44 @@ impl Float {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The number, as an `f64`.
+    pub fn value(&self) -> f64 {
+        // `parse` only admits finite numbers, so the text always reads back.
+        self.0.parse().unwrap_or_default()
+    }
+}
+
+impl TryFrom<f64> for Float {
+    type Error = Error;
+
+    fn try_from(value: f64) -> Result<Self> {
+        Self::parse(&value.to_string())
+    }
+}
+
+/// A plain `f64` is a float attribute, as Ash's `:float` is an Elixir float. It's stored
+/// as `Float`'s canonical text; a non-finite value fails validation when written.
+impl AshType for f64 {
+    const ATTR_TYPE: AttrType = AttrType::Float;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Float::parse(s).map(|float| float.value()),
+            Value::Int(n) => Ok(*n as f64),
+            _ => Err(Error::Invalid("expected float".into())),
+        }
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        value.to_value()
+    }
 }
 
 /// Opaque bytes stored as standard base64.
