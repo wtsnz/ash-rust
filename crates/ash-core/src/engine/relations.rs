@@ -84,19 +84,30 @@ pub async fn load_related_query<D: DataLayer>(
                 .filter_map(|key| key.first().cloned())
                 .collect();
             let first_column = rel.destination_columns()[0];
-            let related =
+            let mut related =
                 fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect(), query)
                     .await?;
+            // Each row moves into its key's group, and each group is paged once.
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
-            for row in &related.rows {
-                if let Some(key) = rel.destination_key(row) {
-                    groups.entry(key).or_default().push(row.clone());
+            for row in std::mem::take(&mut related.rows) {
+                if let Some(key) = rel.destination_key(&row) {
+                    groups.entry(key).or_default().push(row);
                 }
             }
+            for rows in groups.values_mut() {
+                *rows = related.page(std::mem::take(rows));
+            }
+            // Sources sharing a key (posts by one author) each get its rows: copies for
+            // all but the last, which takes them.
+            let mut seen = BTreeSet::new();
+            let last: Vec<bool> = keys.iter().rev().map(|key| key.as_ref().is_some_and(|key| seen.insert(key))).collect();
             Ok(keys
-                .into_iter()
-                .map(|key| {
-                    related.page(key.and_then(|key| groups.get(&key).cloned()).unwrap_or_default())
+                .iter()
+                .zip(last.into_iter().rev())
+                .map(|(key, last)| match key {
+                    Some(key) if last => groups.remove(key).unwrap_or_default(),
+                    Some(key) => groups.get(key).cloned().unwrap_or_default(),
+                    None => Vec::new(),
                 })
                 .collect())
         }
@@ -170,6 +181,9 @@ pub(crate) struct Related {
 impl Related {
     /// One source's rows, paged as its read pages them.
     fn page(&self, rows: Vec<FieldMap>) -> Vec<FieldMap> {
+        if self.offset == 0 && self.limit.is_none_or(|limit| rows.len() <= limit) {
+            return rows;
+        }
         rows.into_iter()
             .skip(self.offset)
             .take(self.limit.unwrap_or(usize::MAX))
