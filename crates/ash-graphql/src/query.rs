@@ -109,11 +109,11 @@ pub fn build_read_action_query<D: DataLayer + Clone + 'static>(
                 let ash = request_context::<D>(&ctx)?;
                 let arguments = read_arguments(&ctx, action)?;
                 let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
-                    Some(filter) => Some(parse_resource_filter(resource, &filter.object()?)?),
+                    Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?),
                     None => None,
                 };
                 let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
-                    Some(sort) => parse_resource_sort(resource, &sort.list()?)?,
+                    Some(sort) => parse_resource_sort(resource, sort.as_value())?,
                     None => Vec::new(),
                 };
                 let query = CompiledQuery {

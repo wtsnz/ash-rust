@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::context::Context;
-use crate::data_layer::{CompiledQuery, DataLayer};
+use crate::data_layer::{CompiledQuery, DataLayer, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{RelKind, Resource, ResourceDef};
@@ -41,6 +41,30 @@ pub async fn load_related<D: DataLayer>(
     relationship: &str,
     sources: &[FieldMap],
 ) -> Result<Vec<Vec<FieldMap>>> {
+    load_related_query(ctx, resource, relationship, sources, &RelatedQuery::default()).await
+}
+
+/// How a relationship's rows are read, as a query given to `Ash.Query.load` shapes
+/// them: a filter and a sort on the destination, and a limit and offset that page each
+/// source's rows. What it leaves out, the destination's default read decides.
+#[derive(Clone, Debug, Default)]
+pub struct RelatedQuery {
+    pub filter: Option<Filter>,
+    pub sort: Vec<Sort>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+/// [`load_related`], shaped by `query`: still one read of the destination for every
+/// source, as Ash loads a relationship without a lateral join, each source's rows then
+/// paged by the limit and offset.
+pub async fn load_related_query<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &ResourceDef,
+    relationship: &str,
+    sources: &[FieldMap],
+    query: &RelatedQuery,
+) -> Result<Vec<Vec<FieldMap>>> {
     let rel = resource.relationship(relationship).ok_or_else(|| {
         Error::Invalid(format!(
             "unknown relationship `{relationship}` on {}",
@@ -61,7 +85,7 @@ pub async fn load_related<D: DataLayer>(
                 .collect();
             let first_column = rel.destination_columns()[0];
             let related =
-                fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect())
+                fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect(), query)
                     .await?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
             for row in &related.rows {
@@ -96,7 +120,7 @@ pub async fn load_related<D: DataLayer>(
                 .unwrap_or(rel.destination_attribute);
 
             let ids: HashSet<Uuid> = source_ids.iter().flatten().copied().collect();
-            let join_rows = fetch_related(ctx, through_def, source_on_join, &ids).await?;
+            let join_rows = fetch_related(ctx, through_def, source_on_join, &ids, &RelatedQuery::default()).await?;
             let mut source_to_dest: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
             let mut all_dest_ids: HashSet<Uuid> = HashSet::new();
             for j_row in &join_rows.rows {
@@ -111,7 +135,7 @@ pub async fn load_related<D: DataLayer>(
 
             // Each source's rows keep the destination read's order.
             let related =
-                fetch_related(ctx, dest, rel.destination_attribute, &all_dest_ids).await?;
+                fetch_related(ctx, dest, rel.destination_attribute, &all_dest_ids, query).await?;
             Ok(source_ids
                 .into_iter()
                 .map(|source_id| {
@@ -158,17 +182,20 @@ pub(crate) async fn fetch_related<D: DataLayer>(
     dest: &ResourceDef,
     id_field: &str,
     ids: &HashSet<Uuid>,
+    shape: &RelatedQuery,
 ) -> Result<Related> {
     let values: Vec<Value> = ids.iter().copied().map(Value::Uuid).collect();
-    fetch_related_values(ctx, dest, id_field, values).await
+    fetch_related_values(ctx, dest, id_field, values, shape).await
 }
 
-/// Rows of `dest` whose `field` is one of `values`, as its default read sees them.
+/// Rows of `dest` whose `field` is one of `values`, as its default read sees them,
+/// shaped by `shape`.
 pub(crate) async fn fetch_related_values<D: DataLayer>(
     ctx: &Context<D>,
     dest: &ResourceDef,
     field: &str,
     values: Vec<Value>,
+    shape: &RelatedQuery,
 ) -> Result<Related> {
     let mut related = Related {
         rows: Vec::new(),
@@ -186,7 +213,10 @@ pub(crate) async fn fetch_related_values<D: DataLayer>(
         ctx.actor.as_ref(),
         &FieldMap::new(),
         CompiledQuery {
-            filter: Some(Filter::In(field.to_string(), values)),
+            filter: Some(Filter::and([Some(Filter::In(field.to_string(), values)), shape.filter.clone()].into_iter().flatten())),
+            sort: shape.sort.clone(),
+            limit: shape.limit,
+            offset: shape.offset,
             tenant: ctx.tenant.clone(),
             ..CompiledQuery::default()
         },

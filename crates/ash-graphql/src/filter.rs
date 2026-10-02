@@ -3,10 +3,11 @@
 //! calculation, and the related resource's filter input for each relationship.
 
 use ash_core::{AttrType, Filter, ResourceDef, Value};
+use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::*;
 
 use crate::names::{camel, pascal};
-use crate::types::{graphql_type_name, parse_input_val};
+use crate::types::{graphql_type_name, parse_input_value};
 
 /// `Trip` → `TripFilterInput`.
 pub fn resource_filter_input_name(resource_name: &str) -> String {
@@ -112,11 +113,14 @@ fn field_type(resource: &ResourceDef, field: &str) -> Option<AttrType> {
         .or_else(|| resource.calculation(field).map(|calc| calc.ty))
 }
 
-/// Parses a `<Resource>FilterInput` into a [`Filter`].
+/// Parses a `<Resource>FilterInput` into a [`Filter`]. It reads the value as given
+/// (an argument's, or one a selection holds), so a relationship selected with a filter
+/// can be loaded ahead of its field.
 pub fn parse_resource_filter(
     resource: &'static ResourceDef,
-    obj: &ObjectAccessor<'_>,
+    value: &GqlValue,
 ) -> Result<Filter, async_graphql::Error> {
+    let obj = object(value)?;
     let mut filters = Vec::new();
 
     let fields = resource
@@ -126,22 +130,22 @@ pub fn parse_resource_filter(
         .chain(resource.aggregates.iter().map(|agg| agg.name))
         .chain(resource.calculations.iter().map(|calc| calc.name));
     for field in fields {
-        let Some(ops) = obj.get(&camel(field)) else {
+        let Some(ops) = obj.get(camel(field).as_str()) else {
             continue;
         };
-        if ops.is_null() {
+        if matches!(ops, GqlValue::Null) {
             continue;
         }
         let ty = field_type(resource, field).expect("a field of the resource");
-        filters.extend(parse_field_filter(field, ty, &ops.object()?)?);
+        filters.extend(parse_field_filter(field, ty, object(ops)?)?);
     }
 
     for rel in resource.relationships {
-        if let Some(nested) = obj.get(&camel(rel.name))
-            && !nested.is_null()
+        if let Some(nested) = obj.get(camel(rel.name).as_str())
+            && !matches!(nested, GqlValue::Null)
         {
             let destination = (rel.destination)();
-            let inner = parse_resource_filter(destination, &nested.object()?)?;
+            let inner = parse_resource_filter(destination, nested)?;
             if inner != Filter::True {
                 filters.push(Filter::related(rel.name, inner));
             }
@@ -151,10 +155,10 @@ pub fn parse_resource_filter(
     let list = |key: &str| -> Result<Vec<Filter>, async_graphql::Error> {
         let mut parts = Vec::new();
         if let Some(value) = obj.get(key)
-            && !value.is_null()
+            && !matches!(value, GqlValue::Null)
         {
-            for item in value.list()?.iter() {
-                parts.push(parse_resource_filter(resource, &item.object()?)?);
+            for item in list(value) {
+                parts.push(parse_resource_filter(resource, item)?);
             }
         }
         Ok(parts)
@@ -180,52 +184,76 @@ pub fn parse_resource_filter(
     })
 }
 
+/// The input object `value` holds.
+fn object(value: &GqlValue) -> Result<&async_graphql::indexmap::IndexMap<async_graphql::Name, GqlValue>, async_graphql::Error> {
+    match value {
+        GqlValue::Object(obj) => Ok(obj),
+        _ => Err(async_graphql::Error::new("internal: not an object")),
+    }
+}
+
+/// The items of a list input, or the one value given in its place, as GraphQL coerces it.
+pub(crate) fn list(value: &GqlValue) -> &[GqlValue] {
+    match value {
+        GqlValue::List(items) => items,
+        single => std::slice::from_ref(single),
+    }
+}
+
 fn parse_field_filter(
     field: &str,
     ty: AttrType,
-    ops: &ObjectAccessor<'_>,
+    ops: &async_graphql::indexmap::IndexMap<async_graphql::Name, GqlValue>,
 ) -> Result<Vec<Filter>, async_graphql::Error> {
     let mut filters = Vec::new();
-    for (op, value) in ops.iter() {
+    for (op, value) in ops {
         let op = op.as_str();
-        if value.is_null() && !matches!(op, "eq" | "isDistinctFrom" | "isNotDistinctFrom") {
+        if matches!(value, GqlValue::Null) && !matches!(op, "eq" | "isDistinctFrom" | "isNotDistinctFrom") {
             continue;
         }
-        let parse = |value: &ValueAccessor<'_>| -> Result<Value, async_graphql::Error> {
-            if value.is_null() {
+        let parse = |value: &GqlValue| -> Result<Value, async_graphql::Error> {
+            if matches!(value, GqlValue::Null) {
                 Ok(Value::Null)
             } else {
-                parse_input_val(value, ty)
+                parse_input_value(value, ty)
             }
         };
-        let text = || -> Result<String, async_graphql::Error> { Ok(value.string()?.to_string()) };
+        let text = || -> Result<String, async_graphql::Error> {
+            match value {
+                GqlValue::String(text) => Ok(text.clone()),
+                _ => Err(async_graphql::Error::new("internal: not a string")),
+            }
+        };
         filters.push(match op {
             "isNil" => {
-                if value.boolean()? {
+                let GqlValue::Boolean(is_nil) = value else {
+                    return Err(async_graphql::Error::new("internal: not a boolean"));
+                };
+                if *is_nil {
                     Filter::is_nil(field)
                 } else {
                     !Filter::is_nil(field)
                 }
             }
-            "eq" => Filter::eq(field, parse(&value)?),
-            "notEq" => Filter::ne(field, parse(&value)?),
-            "lessThan" => Filter::lt(field, parse(&value)?),
-            "greaterThan" => Filter::gt(field, parse(&value)?),
-            "lessThanOrEqual" => Filter::lte(field, parse(&value)?),
-            "greaterThanOrEqual" => Filter::gte(field, parse(&value)?),
+            "eq" => Filter::eq(field, parse(value)?),
+            "notEq" => Filter::ne(field, parse(value)?),
+            "lessThan" => Filter::lt(field, parse(value)?),
+            "greaterThan" => Filter::gt(field, parse(value)?),
+            "lessThanOrEqual" => Filter::lte(field, parse(value)?),
+            "greaterThanOrEqual" => Filter::gte(field, parse(value)?),
             "in" => {
                 let mut values = Vec::new();
-                for item in value.list()?.iter() {
-                    values.push(parse(&item)?);
+                for item in list(value) {
+                    values.push(parse(item)?);
                 }
                 Filter::in_list(field, values)
             }
             // Null-safe equality: nulls are equal to each other and to nothing else.
-            "isDistinctFrom" => match parse(&value)? {
+            "isDistinctFrom" => match parse(value)? {
                 Value::Null => !Filter::is_nil(field),
                 v => Filter::or([Filter::is_nil(field), Filter::ne(field, v)]),
             },
-            "isNotDistinctFrom" => match parse(&value)? {
+            "isNotDistinctFrom" => match parse(value)? {
                 Value::Null => Filter::is_nil(field),
                 v => Filter::eq(field, v),
             },

@@ -5,25 +5,60 @@
 //!
 //! This is what a request needs, known up front, so no batch waits on a timer to gather
 //! keys, and relationships beside each other load at the same time. A relationship
-//! selected with arguments (`sort`, `filter`, `limit`, `offset`) is left to its field.
+//! selected with arguments (`sort`, `filter`, `limit`, `offset`) loads shaped by them,
+//! as AshGraphql loads it with the related query they build: still one read, each
+//! record's rows then limited and offset.
 
-use ash_core::{Context, DataLayer, FieldMap, RelKind, RelationshipDef, ResourceDef, Value, load_related};
-use async_graphql::SelectionField;
+use ash_core::{
+    Context, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value, load_related_query,
+};
+use async_graphql::{SelectionField, Value as GqlValue};
 use futures_util::future::{BoxFuture, try_join_all};
 
+use crate::filter::parse_resource_filter;
 use crate::names::camel;
 use crate::redact::{redact_record, relationship_source};
+use crate::sort::parse_resource_sort;
 
-/// The key a relationship's rows, selected as `response_key`, are preloaded under in its
-/// record: a relationship selected twice under two aliases keeps both.
-pub(crate) fn preloaded_key(relationship: &str, response_key: &str) -> String {
-    format!("__graphql_preloaded:{relationship}:{response_key}")
+/// The key a relationship's rows, selected as `field`, are preloaded under in its record:
+/// by response key, so a relationship selected under two aliases keeps both, and by the
+/// arguments that shape them, so a relationship selected under the same key with others
+/// (under two aliases of the records' own field) keeps both too.
+pub(crate) fn preloaded_key(relationship: &str, field: &SelectionField<'_>) -> async_graphql::Result<String> {
+    let mut key = format!("__graphql_preloaded:{relationship}:{}", field.alias().unwrap_or(field.name()));
+    for (name, value) in field.arguments()? {
+        if !matches!(value, GqlValue::Null) {
+            key.push_str(&format!(":{name}={value}"));
+        }
+    }
+    Ok(key)
 }
 
-/// Whether a selected field has arguments given: such a relationship is shaped by them
-/// when its field resolves, not preloaded.
-pub(crate) fn has_arguments(field: &SelectionField<'_>) -> async_graphql::Result<bool> {
-    Ok(field.arguments()?.iter().any(|(_, value)| *value != async_graphql::Value::Null))
+/// The related query a to-many relationship field's arguments build, as AshGraphql's:
+/// `filter` and `sort` on the destination, and `limit` and `offset` paging each
+/// record's rows. Arguments not given (or null) leave the destination's read to decide.
+pub(crate) fn related_query<'v>(
+    destination: &'static ResourceDef,
+    arguments: impl IntoIterator<Item = (&'v str, &'v GqlValue)>,
+) -> async_graphql::Result<RelatedQuery> {
+    let mut query = RelatedQuery::default();
+    let number = |value: &GqlValue| match value {
+        GqlValue::Number(n) => n.as_i64().map(|n| n.max(0) as usize),
+        _ => None,
+    };
+    for (name, value) in arguments {
+        if matches!(value, GqlValue::Null) {
+            continue;
+        }
+        match name {
+            "filter" => query.filter = Some(parse_resource_filter(destination, value)?),
+            "sort" => query.sort = parse_resource_sort(destination, value)?,
+            "limit" => query.limit = number(value),
+            "offset" => query.offset = number(value),
+            _ => {}
+        }
+    }
+    Ok(query)
 }
 
 /// The fields selected under `field`, or under its `child` fields (a page's `results`, a
@@ -44,6 +79,8 @@ pub(crate) fn selected<'a>(field: SelectionField<'a>, child: Option<&str>) -> Ve
 struct Wanted<'a> {
     rel: &'static RelationshipDef,
     key: String,
+    /// The related query its arguments build, which its key holds.
+    query: RelatedQuery,
     children: Vec<SelectionField<'a>>,
 }
 
@@ -65,14 +102,18 @@ pub(crate) fn preload<'a, D: DataLayer>(
             let Some(rel) = resource.relationships.iter().find(|rel| camel(rel.name) == field.name()) else {
                 continue;
             };
-            if has_arguments(&field)? {
-                continue;
-            }
-            let key = preloaded_key(rel.name, field.alias().unwrap_or(field.name()));
+            let key = preloaded_key(rel.name, &field)?;
             let children: Vec<SelectionField<'a>> = field.selection_set().collect();
             match wanted.iter_mut().find(|w| w.key == key) {
                 Some(same) => same.children.extend(children),
-                None => wanted.push(Wanted { rel, key, children }),
+                None => {
+                    let arguments = field.arguments()?;
+                    let query = related_query(
+                        (rel.destination)(),
+                        arguments.iter().map(|(name, value)| (name.as_str(), value)),
+                    )?;
+                    wanted.push(Wanted { rel, key, query, children });
+                }
             }
         }
         if wanted.is_empty() {
@@ -80,10 +121,10 @@ pub(crate) fn preload<'a, D: DataLayer>(
         }
 
         let records_ref: &[FieldMap] = records;
-        let loaded = try_join_all(wanted.into_iter().map(|Wanted { rel, key, children }| async move {
+        let loaded = try_join_all(wanted.into_iter().map(|Wanted { rel, key, query, children }| async move {
             let destination = (rel.destination)();
             let sources: Vec<FieldMap> = records_ref.iter().map(|record| relationship_source(rel, record)).collect();
-            let related = load_related(ash, resource, rel.name, &sources)
+            let related = load_related_query(ash, resource, rel.name, &sources, &query)
                 .await
                 .map_err(|e| async_graphql::Error::new(e.to_string()))?;
             // Every related row once, as the requester may see it, so what's selected

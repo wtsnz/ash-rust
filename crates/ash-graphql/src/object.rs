@@ -1,18 +1,18 @@
 use ash_core::eval as eval_expr;
 use ash_core::redact_fields;
-use ash_core::{AttrType, DataLayer, FieldMap, RelKind, RelationshipDef, ResourceDef, Value};
+use ash_core::{AttrType, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value};
 
 use async_graphql::Value as GqlValue;
 use async_graphql::dataloader::DataLoader;
 use async_graphql::dynamic::*;
 
 use crate::dataloader::{AshBatchLoader, RelatedKey};
-use crate::filter::{parse_resource_filter, resource_filter_input_name};
+use crate::filter::resource_filter_input_name;
 use crate::names::camel;
-use crate::preload::{has_arguments, preloaded_key};
-use crate::redact::{key_value, redact_record, relationship_source};
+use crate::preload::{preloaded_key, related_query};
+use crate::redact::{redact_record, relationship_source};
 use crate::request::{request_actor, request_context};
-use crate::sort::{parse_resource_sort, resource_sort_input_name};
+use crate::sort::resource_sort_input_name;
 use crate::types::{
     ash_value_to_graphql_value, ash_value_to_graphql_value_typed, attr_type_to_type_ref,
     enum_type_name,
@@ -164,12 +164,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                 };
                 // Loaded ahead with its record, and already as the requester may see it.
                 let field = ctx.ctx.field();
-                let preloaded = if has_arguments(&field)? {
-                    None
-                } else {
-                    map.get(&preloaded_key(rel_name, field.alias().unwrap_or(field.name())))
-                };
-                if let Some(preloaded) = preloaded {
+                if let Some(preloaded) = map.get(&preloaded_key(rel_name, &field)?) {
                     return Ok(match preloaded {
                         Value::Map(row) => Some(FieldValue::borrowed_any(row)),
                         Value::Array(rows) => Some(FieldValue::list(
@@ -179,12 +174,17 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                         _ => Some(FieldValue::list(std::iter::empty::<FieldValue>())),
                     });
                 }
-                let shaped = !to_one
-                    && ["sort", "filter", "limit", "offset"]
-                        .iter()
-                        .any(|arg| ctx.args.get(arg).is_some_and(|value| !value.is_null()));
+                let query = if to_one {
+                    RelatedQuery::default()
+                } else {
+                    related_query(dest_res, ctx.args.iter().map(|(name, value)| (name.as_str(), value.as_value())))?
+                };
+                let shaped = query.filter.is_some()
+                    || !query.sort.is_empty()
+                    || query.limit.is_some()
+                    || query.offset.is_some();
                 let rows = match map.get(rel_name) {
-                    _ if shaped => load_shaped::<D>(&ctx, resource, rel, map).await?,
+                    _ if shaped => load_shaped::<D>(&ctx, resource, rel, map, &query).await?,
                     // Loaded along with the parent.
                     Some(Value::Null) => Vec::new(),
                     Some(Value::Map(m)) => vec![m.clone()],
@@ -226,81 +226,20 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
 }
 
 /// `source`'s related rows for a to-many relationship read with a sort, filter, limit or
-/// offset: the related resource's primary read, with the user's filter and the
-/// relationship's key, so the data layer does the work.
+/// offset, where they weren't loaded ahead with it: its related query on its own.
 async fn load_shaped<D: DataLayer + Clone + 'static>(
     ctx: &ResolverContext<'_>,
     resource: &'static ResourceDef,
     rel: &'static RelationshipDef,
     source: &FieldMap,
+    query: &RelatedQuery,
 ) -> async_graphql::Result<Vec<FieldMap>> {
-    let destination = (rel.destination)();
-    let mut filters = Vec::new();
-    if let Some(filter) = ctx.args.get("filter").filter(|value| !value.is_null()) {
-        filters.push(parse_resource_filter(destination, &filter.object()?)?);
-    }
-    let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
-        Some(sort) => parse_resource_sort(destination, &sort.list()?)?,
-        None => Vec::new(),
-    };
-    let number = |name: &str| {
-        ctx.args
-            .get(name)
-            .and_then(|value| value.i64().ok())
-            .map(|n| n.max(0) as usize)
-    };
-    let (limit, offset) = (number("limit"), number("offset"));
-
-    if rel.kind == RelKind::HasMany && rel.through.is_none() {
-        for (source_key, destination_key) in rel.key_pairs() {
-            filters.push(ash_core::Filter::eq(
-                destination_key,
-                key_value(source, source_key),
-            ));
-        }
-        let ash = request_context::<D>(ctx)?;
-        let query = ash_core::CompiledQuery {
-            filter: Some(ash_core::Filter::And(filters)),
-            sort,
-            limit,
-            offset,
-            tenant: ash.tenant.clone(),
-            ..ash_core::CompiledQuery::default()
-        };
-        return crate::query::run_read(
-            &ash,
-            destination,
-            destination.default_read(),
-            &FieldMap::new(),
-            query,
-        )
-        .await;
-    }
-
-    // Through a join resource: shape the loaded rows here.
-    let mut rows = load_relationship::<D>(ctx, resource, rel, source).await?;
-    let filter = ash_core::Filter::And(filters);
-    rows.retain(|row| filter.matches_on(destination, row));
-    rows.sort_by(|a, b| {
-        for s in &sort {
-            let ty = destination.attribute(&s.field).map(|attr| attr.ty);
-            let order = ash_core::compare_typed(
-                ty,
-                a.get(&s.field).unwrap_or(&Value::Null),
-                b.get(&s.field).unwrap_or(&Value::Null),
-            );
-            let order = if s.descending { order.reverse() } else { order };
-            if order != std::cmp::Ordering::Equal {
-                return order;
-            }
-        }
-        std::cmp::Ordering::Equal
-    });
-    Ok(rows
-        .into_iter()
-        .skip(offset.unwrap_or(0))
-        .take(limit.unwrap_or(usize::MAX))
-        .collect())
+    let ash = request_context::<D>(ctx)?;
+    let mut related =
+        ash_core::load_related_query(&*ash, resource, rel.name, &[relationship_source(rel, source)], query)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    Ok(related.pop().unwrap_or_default())
 }
 
 /// `source`'s `rel` rows, batched through the request's dataloader when it reads as the

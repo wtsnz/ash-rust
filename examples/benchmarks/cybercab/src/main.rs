@@ -58,7 +58,7 @@ enum Command {
         #[arg(long)]
         full: bool,
         /// Only these reads (cab_by_id, fleet, trips_with_riders, aggregates, keyset_page,
-        /// counted_page).
+        /// counted_page, recent_trips).
         #[arg(long, value_delimiter = ',')]
         queries: Vec<String>,
     },

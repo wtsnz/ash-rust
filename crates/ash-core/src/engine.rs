@@ -18,4 +18,4 @@ pub use managed::{handle_cascading_deletes, handle_managed_relationships};
 pub use pagination::{KeysetCursor, Page, build_keyset_filter, keyset_sort};
 pub use query::{Query, query};
 pub use read::{record_visible, scope_read};
-pub use relations::load_related;
+pub use relations::{RelatedQuery, load_related, load_related_query};

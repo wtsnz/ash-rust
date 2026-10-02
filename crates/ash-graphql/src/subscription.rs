@@ -127,7 +127,7 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                     SubscriptionFieldFuture::new(async move {
                         // An argument given as `null`, as an unset variable is, means none.
                         let filter = match ctx.args.get("filter").filter(|arg| !arg.is_null()) {
-                            Some(filter) => Some(parse_resource_filter(resource, &filter.object()?)?),
+                            Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?),
                             None => None,
                         };
                         let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));

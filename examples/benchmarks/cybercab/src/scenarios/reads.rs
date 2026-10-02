@@ -54,6 +54,14 @@ const KEYSET_PAGE: &str = "query Page($after: String) {
   }
 }";
 
+/// Each cab with its latest trips: a relationship selected with arguments, which both
+/// servers load for every cab at once.
+pub const RECENT_TRIPS_QUERY: &str = "{
+  listCabs(sort: [{ field: CALL_SIGN }], first: 100) {
+    results { callSign trips(sort: [{ field: REQUESTED_AT, order: DESC }], limit: 3) { code status } }
+  }
+}";
+
 /// A page as the SDK's `page()` reads it: with the count of every matching record.
 const COUNTED_PAGE: &str = "{
   listTrips(sort: [{ field: REQUESTED_AT, order: DESC }], first: 25) {
@@ -62,8 +70,8 @@ const COUNTED_PAGE: &str = "{
 }";
 
 /// The reads, by name, as the report shows them.
-pub const QUERIES: [&str; 6] =
-    ["cab_by_id", "fleet", "trips_with_riders", "aggregates", "keyset_page", "counted_page"];
+pub const QUERIES: [&str; 7] =
+    ["cab_by_id", "fleet", "trips_with_riders", "aggregates", "keyset_page", "counted_page", "recent_trips"];
 
 pub async fn run(plan: &Plan, server: &Running, fleet: usize, rep: usize) -> Vec<Record> {
     let api = server.api.clone();
@@ -98,6 +106,7 @@ pub async fn run(plan: &Plan, server: &Running, fleet: usize, rep: usize) -> Vec
                         "trips_with_riders" => api.request(TRIPS_QUERY, json!({})).await,
                         "aggregates" => api.request(AGGREGATES_QUERY, json!({})).await,
                         "counted_page" => api.request(COUNTED_PAGE, json!({})).await,
+                        "recent_trips" => api.request(RECENT_TRIPS_QUERY, json!({})).await,
                         _ => api.request(KEYSET_PAGE, json!({ "after": after })).await,
                     }
                 }

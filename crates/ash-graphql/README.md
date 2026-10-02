@@ -152,7 +152,17 @@ mutation {
 
 ### 5. Batched Relationship Loading (DataLoader)
 
-N+1 relationship loading problems are solved using `AshBatchLoader`, which loads every
+As AshGraphql does, queries and mutations load the relationships their selection asks
+for ahead of the fields: one read per selected relationship, whatever the number of
+records, nested selections in turn. A to-many relationship selected with `filter`,
+`sort`, `limit` or `offset` loads the same way, with the related query they build: one
+read filtered and sorted, each record's rows then limited and offset:
+```graphql
+{ listAuthors { results { name latest: posts(sort: [{ field: TITLE, order: DESC }], limit: 1) { title } } } }
+```
+
+Where a relationship wasn't loaded ahead (a subscription's record, say), its field loads
+it. N+1 relationship loading problems there are solved using `AshBatchLoader`, which loads every
 key of a relationship in one read. `with_dataloader()` gives each request its own loader,
 bound to the `Context<D>` that request runs as:
 ```rust,ignore

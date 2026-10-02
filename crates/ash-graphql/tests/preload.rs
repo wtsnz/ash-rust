@@ -403,3 +403,52 @@ async fn a_destroy_is_one_atomic_statement() {
     assert_eq!(page["destroyPost"]["result"], Json::Null);
     assert_eq!(data.take(), ["atomic destroy"]);
 }
+
+/// As AshGraphql loads a relationship with the related query its arguments build: one
+/// read for every author, each author's rows then limited.
+#[tokio::test]
+async fn a_relationship_selected_with_arguments_is_one_read_too() {
+    let (data, _) = seeded().await;
+    let page = run(
+        &data,
+        r#"{ listAuthors(sort: [{ field: NAME }]) { results { name
+             latest: posts(sort: [{ field: TITLE, order: DESC }], limit: 1) { title comments(sort: [{ field: BODY }], offset: 1) { body } }
+             earliest: posts(sort: [{ field: TITLE }], limit: 1) { title }
+             named: posts(filter: { title: { eq: "A1P0" } }) { title } } } }"#,
+        Some(Actor::new(Uuid::new_v4())),
+    )
+    .await;
+    // The authors; their posts under each alias; the latest posts' comments.
+    assert_eq!(data.take(), ["Author", "Comment", "Post", "Post", "Post"]);
+
+    for author in page["listAuthors"]["results"].as_array().unwrap() {
+        let name = author["name"].as_str().unwrap();
+        assert_eq!(author["latest"], json!([{ "title": format!("{name}P1"), "comments": [{ "body": format!("{name}P1C1") }] }]));
+        assert_eq!(author["earliest"], json!([{ "title": format!("{name}P0") }]));
+        let named = if name == "A1" { json!([{ "title": "A1P0" }]) } else { json!([]) };
+        assert_eq!(author["named"], named, "{author}");
+    }
+}
+
+/// Arguments given through variables shape the load as written ones do.
+#[tokio::test]
+async fn relationship_arguments_may_be_variables() {
+    let (data, _) = seeded().await;
+    let schema = AshGraphQL::from_resources(&[&AUTHOR_DEF, &POST_DEF, &COMMENT_DEF])
+        .finish::<Counting>()
+        .unwrap();
+    let request = Request::new(
+        "query($limit: Int, $sort: [PostSortInput]) { listAuthors { results { posts(limit: $limit, sort: $sort) { title } } } }",
+    )
+    .variables(async_graphql::Variables::from_json(json!({ "limit": 1, "sort": [{ "field": "TITLE", "order": "DESC" }] })))
+    .data(Context::new(data.clone()).with_actor(Actor::new(Uuid::new_v4())));
+    let res = schema.execute(request).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(data.take(), ["Author", "Post"]);
+    let page = res.data.into_json().unwrap();
+    for author in page["listAuthors"]["results"].as_array().unwrap() {
+        let posts = author["posts"].as_array().unwrap();
+        assert_eq!(posts.len(), 1, "{author}");
+        assert!(posts[0]["title"].as_str().unwrap().ends_with("P1"), "{author}");
+    }
+}
