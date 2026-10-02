@@ -217,6 +217,31 @@ behind, because each round takes 583 ms to publish.
   Batching a tick's position reports into one bulk update would turn about 3,300 round
   trips and commits into a handful. That's fix 3.
 
+## After fix 3: a tick's telemetry written together
+
+Each tick, the simulation now sends every cab's position report in one `bulk_update`,
+and every telemetry sample in one `bulk_create`. That used to be one action and one
+commit per cab. On Postgres, the reports become one `UPDATE … FROM (VALUES …)` per set of
+changed columns, and the samples one multi-row `INSERT`.
+
+Tick p50 / p95 in milliseconds, before and after:
+
+| Fleet | Postgres, durable commits | Postgres, asynchronous commit | Memory |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 306 / 1,115 → **81 / 169** | 72 / 248 → **36 / 91** | 97 / 194 → 96 / 175 |
+| 2,500 | 753 / 2,388 → **216 / 579** | 187 / 627 → **104 / 221** | 279 / 451 → 303 / 448 |
+| 5,000 | skipped → **398 / 627** | 362 / 1,201 → **175 / 411** | 700 / 1,108 → 632 / 975 |
+| 10,000 | skipped → **640 / 1,124** | 694 / 2,437 → **552 / 1,059** | 2,222 / 3,106 → 2,215 / 3,003 |
+
+**On Postgres, 10,000 cabs now run in real time at p50, even with a durable commit for
+every write on Docker's slow disk.** Memory barely changes, because its writes were
+already cheap: its ticks are spent in the whole-table copies of an ETS-style store.
+
+Fan-out on Postgres at 1,000 cabs and 100 subscribers stays complete (all 500,000
+deliveries, 3.6 ms p99 with durable commits). In memory, where a round publishes in
+30 ms, 93 of the 100 subscribers fall behind (all told, none silently). That's the next
+limit: fix 4.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a

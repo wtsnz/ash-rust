@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ash_core::{
-    BulkDestroyOptions, Context, DataLayer, Error, Filter, Resource, Result, UtcDateTimeUsec,
+    BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, DataLayer, Error,
+    FieldMap, Filter, Resource, Result, UtcDateTimeUsec, Value,
 };
 use uuid::Uuid;
 
@@ -103,6 +104,10 @@ pub struct Simulation<D: DataLayer> {
     next_trip_code: u64,
     /// Seconds from request to pickup over the most recent pickups.
     recent_waits: VecDeque<i64>,
+    /// This tick's position reports, written together once every cab has moved.
+    reports: Vec<(Cab, FieldMap)>,
+    /// This tick's telemetry samples, recorded together likewise.
+    samples: Vec<FieldMap>,
 }
 
 impl<D: DataLayer> Simulation<D> {
@@ -157,6 +162,8 @@ impl<D: DataLayer> Simulation<D> {
             fleet_scale,
             next_trip_code,
             recent_waits: VecDeque::new(),
+            reports: Vec::new(),
+            samples: Vec::new(),
         })
     }
 
@@ -190,6 +197,7 @@ impl<D: DataLayer> Simulation<D> {
                 eprintln!("simulation: {} {err}", cab.call_sign);
             }
         }
+        self.send_reports().await?;
         if self.tick.is_multiple_of(5) {
             self.measure_zones(&active).await?;
             self.take_pulse().await?;
@@ -511,31 +519,33 @@ impl<D: DataLayer> Simulation<D> {
             // The tick's copy will do: an update writes only what it changes, so this
             // doesn't undo anything done to the cab since the tick began.
             let at = position_of(&self.city, motion);
-            cab.clone()
-                .report_on(&self.ctx)
-                .lng(at[0])
-                .lat(at[1])
-                .heading_deg(heading)
-                .speed_kph(speed_kph)
-                .battery_pct(battery)
-                .range_km((battery as f64 * 4.6).round() as i64)
-                .odometer_km((odometer * 10.0).round() / 10.0)
-                .cabin_temp_c(21.5 + self.rng.between(-0.6, 0.6))
-                .last_seen_at(self.now())
-                .await?;
+            let mut report = FieldMap::new();
+            report.insert("lng".into(), Value::from(at[0]));
+            report.insert("lat".into(), Value::from(at[1]));
+            report.insert("heading_deg".into(), Value::from(heading));
+            report.insert("speed_kph".into(), Value::from(speed_kph));
+            report.insert("battery_pct".into(), Value::from(battery));
+            let range = (battery as f64 * 4.6).round() as i64;
+            report.insert("range_km".into(), Value::from(range));
+            let odometer = (odometer * 10.0).round() / 10.0;
+            report.insert("odometer_km".into(), Value::from(odometer));
+            let cabin = 21.5 + self.rng.between(-0.6, 0.6);
+            report.insert("cabin_temp_c".into(), Value::from(cabin));
+            report.insert("last_seen_at".into(), Value::from(self.now()));
+            self.reports.push((cab.clone(), report));
             motion.ticks_since_report = 0;
         }
         motion.ticks_since_sample += 1;
         if moved && motion.ticks_since_sample >= 3 {
             let at = position_of(&self.city, motion);
-            TelemetrySample::record(&self.ctx)
-                .cab_id(cab.id)
-                .recorded_at(self.now())
-                .lng(at[0])
-                .lat(at[1])
-                .speed_kph(speed_kph)
-                .battery_pct(battery)
-                .await?;
+            let mut sample = FieldMap::new();
+            sample.insert("cab_id".into(), Value::Uuid(cab.id));
+            sample.insert("recorded_at".into(), Value::from(self.now()));
+            sample.insert("lng".into(), Value::from(at[0]));
+            sample.insert("lat".into(), Value::from(at[1]));
+            sample.insert("speed_kph".into(), Value::from(speed_kph));
+            sample.insert("battery_pct".into(), Value::from(battery));
+            self.samples.push(sample);
             motion.ticks_since_sample = 0;
         }
         if battery < 20 && !motion.low_battery_alerted {
@@ -549,6 +559,34 @@ impl<D: DataLayer> Simulation<D> {
                 &format!("Battery at {battery}%"),
             )
             .await?;
+        }
+        Ok(())
+    }
+
+    /// Writes this tick's position reports and telemetry samples together: a bulk update
+    /// and a bulk create, which Postgres runs as a few statements rather than a round trip
+    /// and a commit for every cab.
+    async fn send_reports(&mut self) -> Result<()> {
+        let reports = std::mem::take(&mut self.reports);
+        if !reports.is_empty() {
+            let opts = BulkUpdateOptions::new()
+                .return_records(false)
+                .stop_on_error(false);
+            let result = Cab::bulk_update_with_opts(&self.ctx, "report", reports, opts).await?;
+            for error in result.errors {
+                eprintln!("simulation: report {error}");
+            }
+        }
+        let samples = std::mem::take(&mut self.samples);
+        if !samples.is_empty() {
+            let opts = BulkCreateOptions::new()
+                .return_records(false)
+                .stop_on_error(false);
+            let result =
+                TelemetrySample::bulk_create_with_opts(&self.ctx, "record", samples, opts).await?;
+            for error in result.errors {
+                eprintln!("simulation: sample {error}");
+            }
         }
         Ok(())
     }
