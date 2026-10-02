@@ -16,6 +16,12 @@ use tokio::sync::broadcast;
 use ash_core::{Notification, Notifier, Result};
 use uuid::Uuid;
 
+/// Events buffered per topic by [`PubSub::new`] for subscribers that haven't taken them
+/// yet. Notifications are shared, so a slot holds a reference, not a copy of a record:
+/// the buffer can be deep enough to absorb a burst, such as a whole fleet reporting in at
+/// once, while still bounding what a stalled subscriber holds on to.
+pub const DEFAULT_CAPACITY: usize = 8192;
+
 /// In-memory, pattern-based PubSub event broker for Ash resources.
 #[derive(Clone, Debug)]
 pub struct PubSub {
@@ -24,7 +30,10 @@ pub struct PubSub {
 
 #[derive(Debug)]
 struct PubSubInner {
-    channels: HashMap<String, broadcast::Sender<Notification>>,
+    /// Notifications are shared, not copied: every subscriber to a topic receives the same
+    /// one, so delivering to many costs a reference count each rather than a copy of the
+    /// record.
+    channels: HashMap<String, broadcast::Sender<Arc<Notification>>>,
     capacity: usize,
 }
 
@@ -35,9 +44,9 @@ impl Default for PubSub {
 }
 
 impl PubSub {
-    /// Create a new PubSub broker with default buffer capacity of 256.
+    /// Create a new PubSub broker that buffers [`DEFAULT_CAPACITY`] events per topic.
     pub fn new() -> Self {
-        Self::with_capacity(256)
+        Self::with_capacity(DEFAULT_CAPACITY)
     }
 
     /// Create a new PubSub broker with a custom buffer capacity per topic channel.
@@ -69,12 +78,13 @@ impl PubSub {
     /// Publish a notification to multiple topics simultaneously, ensuring each matching
     /// subscriber receives the notification exactly once per event.
     pub fn publish_topics(&self, topics: &[impl AsRef<str>], notification: Notification) -> usize {
+        let notification = Arc::new(notification);
         let inner = self.inner.read().unwrap();
         let mut delivered = 0;
 
         for (pattern, sender) in &inner.channels {
             let matched = topics.iter().any(|t| topic_matches(pattern, t.as_ref()));
-            if matched && sender.send(notification.clone()).is_ok() {
+            if matched && sender.send(Arc::clone(&notification)).is_ok() {
                 delivered += 1;
             }
         }
@@ -119,7 +129,7 @@ impl PubSub {
 /// Active subscription stream receiving notifications matching a pattern.
 pub struct Subscription {
     pattern: String,
-    receiver: broadcast::Receiver<Notification>,
+    receiver: broadcast::Receiver<Arc<Notification>>,
 }
 
 impl Debug for Subscription {
@@ -137,7 +147,10 @@ impl Subscription {
     }
 
     /// Asynchronously wait for the next notification matching this subscription's pattern.
-    pub async fn recv(&mut self) -> std::result::Result<Notification, broadcast::error::RecvError> {
+    /// It's shared with every other subscriber that hears it.
+    pub async fn recv(
+        &mut self,
+    ) -> std::result::Result<Arc<Notification>, broadcast::error::RecvError> {
         self.receiver.recv().await
     }
 }

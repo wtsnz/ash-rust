@@ -160,3 +160,19 @@ async fn test_pubsub_custom_topic_formatting() {
         .expect("received notification");
     assert_eq!(notif.id, order.id);
 }
+
+/// Every subscriber to a topic receives the same notification, not a copy of it, so
+/// delivering to many doesn't copy the record for each.
+#[tokio::test]
+async fn subscribers_share_one_notification() {
+    let pubsub = Arc::new(PubSub::new());
+    let ctx = Context::new(Memory::new()).with_notifier(Arc::new(PubSubNotifier::new(pubsub.clone())));
+    let mut first = pubsub.subscribe("order:*");
+    let mut second = pubsub.subscribe("order:*");
+
+    Order::create(&ctx).customer("Ada".to_string()).amount(42).await.unwrap();
+
+    let (a, b) = (first.recv().await.unwrap(), second.recv().await.unwrap());
+    assert!(Arc::ptr_eq(&a, &b));
+    assert_eq!(a.action_kind, ActionKind::Create);
+}
