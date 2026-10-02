@@ -114,6 +114,24 @@ at 2,500 cabs), and the subscriptions that did carry load were ended (14 cabs mo
 the console at 1,000, against 206 in wall mode). These need re-measuring once the server
 keeps up.
 
+## After fix 1: nothing drops silently
+
+A subscriber that falls behind now gets a `MISSED_EVENTS` error with the count, and the
+generated client resubscribes and re-reads.
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| 1,000 cabs × 100 subscribers: subscriptions ended | 16 | 14 |
+| …of which ended without being told | 16 | **0** |
+| Browser console at 1,000 cabs: WebSocket messages/s | 26 | **181** |
+| Browser console at 1,000 cabs: moving cabs on screen | 14 (frozen) | **136** |
+
+The next limit shows up clearly now. At 1,000 cabs, the browser's subscriptions fall
+behind about 30 times a minute (27 to 36 across runs). Each time they catch up with a
+re-read, so the screen is correct, but they spend part of their time re-reading rather
+than streaming, and the message rate swings between runs (29 to 181/s) depending on
+where they are in that cycle. Fixes 3 and 4 below are aimed at it.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a
