@@ -148,8 +148,17 @@ async fn a_cancelled_pickup_stands_the_cab_down() {
         .await
         .unwrap();
     run(&mut sim, 2).await;
+    // Stood down: free again, or already sent on to the next rider, in the same tick.
     let cab = Cab::get(&ctx, cab_id).await.unwrap();
-    assert_eq!((cab.status.as_str(), cab.trip_id), ("available", None));
+    assert_ne!(cab.trip_id, Some(assigned.id));
+    match (cab.status.as_str(), cab.trip_id) {
+        ("available", None) => {}
+        ("dispatched", Some(next)) => {
+            let next = Trip::get(&ctx, next).await.unwrap();
+            assert!(["assigned", "arrived"].contains(&next.status.as_str()), "{next:?}");
+        }
+        other => panic!("the cab should be stood down, not {other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
