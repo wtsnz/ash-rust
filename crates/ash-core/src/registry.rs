@@ -9,7 +9,7 @@ use crate::data_layer::{CompiledQuery, DataLayer, SchemaSupport, TransactionSupp
 use crate::error::{Error, Result};
 use crate::resource::{DataLayerKind, IdentityDef, Resource, ResourceDef};
 use crate::store::{HasStore, StoreTag};
-use crate::value::FieldMap;
+use crate::value::{FieldMap, Value};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -60,6 +60,16 @@ pub trait DynDataLayer: Send + Sync {
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
     fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn can_join_laterally_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn run_query_per_key_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        by: &'a crate::data_layer::PerKey<'a>,
+        keys: &'a [Value],
+    ) -> BoxFuture<'a, Result<Vec<Vec<FieldMap>>>>;
 
     fn destroy_atomic_dyn<'a>(
         &'a self,
@@ -161,6 +171,20 @@ impl<T: DataLayer> DynDataLayer for T {
 
     fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool {
         self.can_destroy_atomically(resource)
+    }
+
+    fn can_join_laterally_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_join_laterally(resource)
+    }
+
+    fn run_query_per_key_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        by: &'a crate::data_layer::PerKey<'a>,
+        keys: &'a [Value],
+    ) -> BoxFuture<'a, Result<Vec<Vec<FieldMap>>>> {
+        Box::pin(self.run_query_per_key(resource, query, by, keys))
     }
 
     fn destroy_atomic_dyn<'a>(
@@ -406,6 +430,21 @@ impl DataLayer for StoreRegistry {
 
     fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
         self.get_layer(resource).is_ok_and(|layer| layer.can_destroy_atomically_dyn(resource))
+    }
+
+    fn can_join_laterally(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_join_laterally_dyn(resource))
+    }
+
+    async fn run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        by: &crate::data_layer::PerKey<'_>,
+        keys: &[Value],
+    ) -> Result<Vec<Vec<FieldMap>>> {
+        let layer = self.get_layer(resource)?;
+        layer.run_query_per_key_dyn(resource, query, by, keys).await
     }
 
     async fn destroy_atomic(

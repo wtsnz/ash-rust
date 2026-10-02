@@ -543,6 +543,39 @@ impl DataLayer for Postgres {
             .collect()
     }
 
+    fn can_join_laterally(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The read once per key, in one statement with a lateral join (see
+    /// [`QueryCompiler::compile_select_per_key`]), as AshPostgres loads a relationship.
+    async fn run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        by: &ash_core::PerKey<'_>,
+        keys: &[Value],
+    ) -> Result<Vec<Vec<FieldMap>>> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_select_per_key(resource, query, by, keys.to_vec())?;
+        let rows = self.fetch_all(&compiled).await?;
+        let key_ty = match by {
+            ash_core::PerKey::Attribute(field) => resource.attribute(field).map(|attr| attr.ty),
+            ash_core::PerKey::Through { resource: through, source, .. } => through.attribute(source).map(|attr| attr.ty),
+        }
+        .unwrap_or(ash_core::AttrType::Uuid);
+        let index: std::collections::BTreeMap<&Value, usize> = keys.iter().enumerate().map(|(i, key)| (key, i)).collect();
+        let mut per_key = vec![Vec::new(); keys.len()];
+        for row in &rows {
+            let key = extract_column_value(row, "__ash_key", &key_ty);
+            if let Some(&i) = index.get(&key) {
+                per_key[i].push(read_row(row, resource, query, &query.calculations, &query.aggregates)?);
+            }
+        }
+        Ok(per_key)
+    }
+
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);

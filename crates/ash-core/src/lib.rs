@@ -49,7 +49,7 @@ pub use changeset::{
 };
 pub use context::Context;
 pub use data_layer::{
-    CompiledQuery, DataLayer, NoDataLayer, SchemaSupport, Sort, TransactionSupport,
+    CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
 pub use engine::{
     KeysetCursor, Page, Query, build_keyset_filter, create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_existing,

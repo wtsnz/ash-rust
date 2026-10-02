@@ -29,6 +29,23 @@ pub struct CompiledQuery {
     pub tenant: Option<String>,
 }
 
+/// How a row of a relationship's destination relates to the key it's read for.
+#[derive(Clone, Copy, Debug)]
+pub enum PerKey<'a> {
+    /// The row's own attribute holds the key: has_many, has_one, belongs_to.
+    Attribute(&'a str),
+    /// A join resource links the key to the row: many_to_many. The join rows are those
+    /// `filter` selects (the join resource's read, as the actor sees it), each holding the
+    /// key in `source` and the row's `attribute` in `destination`.
+    Through {
+        resource: &'a ResourceDef,
+        filter: Option<&'a Filter>,
+        source: &'a str,
+        destination: &'a str,
+        attribute: &'a str,
+    },
+}
+
 impl CompiledQuery {
     /// Whether the query reads `attribute` of `resource`: it's selected, or the primary
     /// key, or the query selects everything, or it asks for a calculation only Rust can
@@ -131,6 +148,31 @@ pub trait DataLayer: Send + Sync {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         std::future::ready(Err(Error::Invalid(format!(
             "this data layer can't destroy {} atomically",
+            resource.name
+        ))))
+    }
+
+    /// Whether this data layer runs a read once for each of many keys in one statement, as
+    /// AshPostgres loads a relationship with a lateral join. One that can't has a
+    /// relationship's limit and offset applied to each source's rows in memory, as Ash
+    /// does for a data layer without lateral joins.
+    fn can_join_laterally(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// The rows of `resource` related to each of `keys`, read by `query` once per key:
+    /// its filter and sort, and its limit and offset applying to each key's rows, as a
+    /// lateral join applies them. `by` says how a row relates to a key. Returns each key's
+    /// rows, in the order of `keys`.
+    fn run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+        _by: &PerKey<'_>,
+        _keys: &[crate::value::Value],
+    ) -> impl Future<Output = Result<Vec<Vec<FieldMap>>>> + Send {
+        std::future::ready(Err(Error::Invalid(format!(
+            "this data layer can't read {} once per key",
             resource.name
         ))))
     }

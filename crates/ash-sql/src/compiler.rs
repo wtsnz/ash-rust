@@ -101,6 +101,9 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     /// The alias a calculation's fields are qualified with, inside a subquery that names
     /// its table so.
     expr_scope: Option<String>,
+    /// Ties a read to the key it's run for, inside a lateral join (see
+    /// [`compile_select_per_key`](Self::compile_select_per_key)).
+    per_key: Option<String>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -118,6 +121,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             tenant: None,
             actor: None,
             expr_scope: None,
+            per_key: None,
         }
     }
 
@@ -1012,6 +1016,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             select_items.push(format!("{agg_sql} AS {alias}"));
         }
 
+        if self.per_key.is_some() {
+            // Each key's rows in the read's order, through the lateral join.
+            let order = self.compile_sort(resource, &query.sort)?;
+            select_items.push(format!("row_number() OVER ({}) AS \"__ash_row\"", order.trim()));
+        }
+
         sql.push_str(&select_items.join(", "));
         sql.push_str(" FROM ");
         sql.push_str(&self.table(resource)?);
@@ -1024,6 +1034,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         if let Some(c) = cursor {
             where_clauses.push(self.compile_keyset_cursor(resource, c, &query.sort)?);
+        }
+
+        if let Some(per_key) = self.per_key.take() {
+            where_clauses.push(per_key);
         }
 
         if !where_clauses.is_empty() {
@@ -1125,6 +1139,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if let Some(c) = cursor {
             where_clauses.push(self.compile_keyset_cursor(resource, c, &query.sort)?);
         }
+        let per_key = self.per_key.take();
+        if let Some(per_key) = &per_key {
+            where_clauses.push(per_key.clone());
+        }
         if !where_clauses.is_empty() {
             inner.push_str(" WHERE ");
             inner.push_str(&where_clauses.join(" AND "));
@@ -1144,6 +1162,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         // Each relationship's aggregates, joined.
         let mut columns = vec![format!("{source}.*")];
+        if per_key.is_some() {
+            let by: Vec<String> = order.iter().map(|(alias, dir)| format!("{source}.{alias} {dir}")).collect();
+            let over = if by.is_empty() { String::new() } else { format!("ORDER BY {}", by.join(", ")) };
+            columns.push(format!("row_number() OVER ({over}) AS \"__ash_row\""));
+        }
         let mut joins = Vec::new();
         for (rel, aggs) in groups {
             let (join, values) = self.compile_aggregate_group(rel, aggs, &source)?;
@@ -1276,6 +1299,66 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             values.push(format!("{value} AS {name}"));
         }
         Ok((join, values))
+    }
+
+    /// `query` run once for each of `keys`, in one statement, as AshPostgres loads a
+    /// relationship with a lateral join: each key's rows filtered, sorted, limited and
+    /// offset on their own. Each row carries its key as `"__ash_key"`, and the rows come
+    /// back key by key, in the order of `keys`, each key's in the read's order.
+    ///
+    /// ```sql
+    /// SELECT "__ash_k"."key" AS "__ash_key", "__ash_d".*
+    /// FROM unnest($1) WITH ORDINALITY AS "__ash_k"("key", "ord")
+    /// CROSS JOIN LATERAL (SELECT …, row_number() OVER (ORDER BY …) AS "__ash_row" FROM trips
+    ///                     WHERE … AND "cab_id" = "__ash_k"."key" ORDER BY … LIMIT 3) AS "__ash_d"
+    /// ORDER BY "__ash_k"."ord", "__ash_d"."__ash_row"
+    /// ```
+    pub fn compile_select_per_key(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        by: &ash_core::PerKey<'_>,
+        keys: Vec<Value>,
+    ) -> Result<CompiledSql> {
+        self.tenant = query.tenant.clone();
+        let key_ty = match by {
+            ash_core::PerKey::Attribute(field) => resource.attribute(field).map(|attr| attr.ty),
+            ash_core::PerKey::Through { resource: through, source, .. } => through.attribute(source).map(|attr| attr.ty),
+        };
+        let param = self.push_list_param(keys);
+        let param = match key_ty {
+            Some(ty) => self.dialect.cast_list_param(ty, &param),
+            None => param,
+        };
+        let key = "\"__ash_k\".\"key\"";
+        let condition = match by {
+            ash_core::PerKey::Attribute(field) => format!("{} = {key}", column(self.dialect, resource, field)?),
+            ash_core::PerKey::Through { resource: through, filter, source, destination, attribute } => {
+                let join = ident(self.dialect, "__ash_j")?;
+                let mut links = format!(
+                    "SELECT {join}.{} FROM {} AS {join} WHERE {join}.{} = {key}",
+                    column(self.dialect, through, destination)?,
+                    self.table(through)?,
+                    column(self.dialect, through, source)?,
+                );
+                if let Some(filter) = filter {
+                    links.push_str(&format!(" AND {}", self.compile_filter_scoped(through, filter, Some(&join))?));
+                }
+                format!("{} IN ({links})", column(self.dialect, resource, attribute)?)
+            }
+        };
+        self.per_key = Some(condition);
+        let inner = self.compile_select_internal(resource, query, None);
+        self.per_key = None;
+        let inner = inner?.sql;
+        let sql = format!(
+            "SELECT {key} AS \"__ash_key\", \"__ash_d\".* FROM unnest({param}) WITH ORDINALITY AS \"__ash_k\"(\"key\", \"ord\") \
+             CROSS JOIN LATERAL ({inner}) AS \"__ash_d\" ORDER BY \"__ash_k\".\"ord\", \"__ash_d\".\"__ash_row\""
+        );
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
     /// `SELECT COUNT(*)` of the records `query` would return: its filter, and its limit

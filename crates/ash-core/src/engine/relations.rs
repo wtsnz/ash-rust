@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::context::Context;
-use crate::data_layer::{CompiledQuery, DataLayer, Sort};
+use crate::data_layer::{CompiledQuery, DataLayer, PerKey, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{RelKind, Resource, ResourceDef};
@@ -76,9 +76,10 @@ impl RelatedQuery {
     }
 }
 
-/// [`load_related`], shaped by `query`: still one read of the destination for every
-/// source, as Ash loads a relationship without a lateral join, each source's rows then
-/// paged by the limit and offset.
+/// [`load_related`], shaped by `query`: one read of the destination for every source.
+/// A limit or offset pages each source's rows: in the read itself, once per source, where
+/// the data layer can join laterally, as AshPostgres loads a relationship; else in memory,
+/// as Ash does for a data layer that can't.
 pub async fn load_related_query<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ResourceDef,
@@ -93,104 +94,137 @@ pub async fn load_related_query<D: DataLayer>(
         ))
     })?;
     let dest = (rel.destination)();
-    match rel.kind {
+    // Each source's key, and each key's rows.
+    let (keys, groups) = match rel.kind {
         RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
-            let keys: Vec<Option<Vec<Value>>> = sources
-                .iter()
-                .map(|source| rel.source_key(source))
-                .collect();
-            let first_values: BTreeSet<Value> = keys
+            let keys: Vec<Option<Vec<Value>>> = sources.iter().map(|source| rel.source_key(source)).collect();
+            let columns = rel.destination_columns();
+            let first_values: Vec<Value> = keys
                 .iter()
                 .flatten()
                 .filter_map(|key| key.first().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect();
-            let first_column = rel.destination_columns()[0];
-            let query = query.reading(&rel.destination_columns());
-            let mut related =
-                fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect(), &query)
-                    .await?;
-            // Each row moves into its key's group, and each group is paged once.
+            let read = related_read(ctx, dest, None, &query.reading(&columns))?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
-            for row in std::mem::take(&mut related.rows) {
-                if let Some(key) = rel.destination_key(&row) {
-                    groups.entry(key).or_default().push(row);
+            if columns.len() == 1 && paged(&read) && ctx.data.can_join_laterally(dest) {
+                let per_key = read_per_key(ctx, dest, &read, &PerKey::Attribute(columns[0]), &first_values).await?;
+                for (value, rows) in first_values.into_iter().zip(per_key) {
+                    groups.insert(vec![value], rows);
+                }
+            } else {
+                let mut related = read_batch(ctx, dest, columns[0], first_values, read).await?;
+                // Each row moves into its key's group, and each group is paged once.
+                for row in std::mem::take(&mut related.rows) {
+                    if let Some(key) = rel.destination_key(&row) {
+                        groups.entry(key).or_default().push(row);
+                    }
+                }
+                for rows in groups.values_mut() {
+                    *rows = related.page(std::mem::take(rows));
                 }
             }
-            for rows in groups.values_mut() {
-                *rows = related.page(std::mem::take(rows));
-            }
-            // Sources sharing a key (posts by one author) each get its rows: copies for
-            // all but the last, which takes them.
-            let mut seen = BTreeSet::new();
-            let last: Vec<bool> = keys.iter().rev().map(|key| key.as_ref().is_some_and(|key| seen.insert(key))).collect();
-            Ok(keys
-                .iter()
-                .zip(last.into_iter().rev())
-                .map(|(key, last)| match key {
-                    Some(key) if last => groups.remove(key).unwrap_or_default(),
-                    Some(key) => groups.get(key).cloned().unwrap_or_default(),
-                    None => Vec::new(),
-                })
-                .collect())
+            (keys, groups)
         }
         RelKind::ManyToMany => {
-            let source_ids: Vec<Option<Uuid>> = sources
+            let keys: Vec<Option<Vec<Value>>> = sources
                 .iter()
-                .map(|source| required_uuid(source, rel.source_attribute).ok())
+                .map(|source| required_uuid(source, rel.source_attribute).ok().map(|id| vec![Value::Uuid(id)]))
                 .collect();
-            let through_fn = rel.through.ok_or_else(|| {
+            let source_ids: Vec<Value> =
+                keys.iter().flatten().flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+            let through = rel.through.ok_or_else(|| {
                 Error::Invalid(format!(
                     "many_to_many relationship `{}` on `{}` requires through join resource",
                     rel.name, resource.name
                 ))
-            })?;
-            let through_def = through_fn();
-            let source_on_join = rel
-                .source_attribute_on_join_resource
-                .unwrap_or(rel.source_attribute);
-            let dest_on_join = rel
-                .destination_attribute_on_join_resource
-                .unwrap_or(rel.destination_attribute);
-
-            let ids: HashSet<Uuid> = source_ids.iter().flatten().copied().collect();
-            let join_rows = fetch_related(ctx, through_def, source_on_join, &ids, &RelatedQuery::default()).await?;
-            let mut source_to_dest: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
-            let mut all_dest_ids: HashSet<Uuid> = HashSet::new();
-            for j_row in &join_rows.rows {
-                if let (Ok(s_id), Ok(d_id)) = (
-                    required_uuid(j_row, source_on_join),
-                    required_uuid(j_row, dest_on_join),
-                ) {
-                    source_to_dest.entry(s_id).or_default().insert(d_id);
-                    all_dest_ids.insert(d_id);
+            })?();
+            let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
+            let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
+            let read = related_read(ctx, dest, None, &query.reading(&[rel.destination_attribute]))?;
+            let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
+            if paged(&read) && ctx.data.can_join_laterally(dest) {
+                // The join rows as the actor reads them, linking each source to its rows.
+                let joins = related_read(ctx, through, None, &RelatedQuery::default())?;
+                let by = PerKey::Through {
+                    resource: through,
+                    filter: joins.filter.as_ref(),
+                    source: source_on_join,
+                    destination: dest_on_join,
+                    attribute: rel.destination_attribute,
+                };
+                let per_key = read_per_key(ctx, dest, &read, &by, &source_ids).await?;
+                for (value, rows) in source_ids.into_iter().zip(per_key) {
+                    groups.insert(vec![value], rows);
+                }
+            } else {
+                let join_read = related_read(ctx, through, None, &RelatedQuery::default())?;
+                let join_rows = read_batch(ctx, through, source_on_join, source_ids, join_read).await?;
+                let mut source_to_dest: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+                let mut all_dest_ids: BTreeSet<Value> = BTreeSet::new();
+                for j_row in &join_rows.rows {
+                    if let (Ok(s_id), Ok(d_id)) = (required_uuid(j_row, source_on_join), required_uuid(j_row, dest_on_join)) {
+                        source_to_dest.entry(s_id).or_default().insert(d_id);
+                        all_dest_ids.insert(Value::Uuid(d_id));
+                    }
+                }
+                // Each source's rows keep the destination read's order.
+                let related =
+                    read_batch(ctx, dest, rel.destination_attribute, all_dest_ids.into_iter().collect(), read).await?;
+                for (source_id, linked) in source_to_dest {
+                    let rows = related
+                        .rows
+                        .iter()
+                        .filter(|row| required_uuid(row, rel.destination_attribute).is_ok_and(|id| linked.contains(&id)))
+                        .cloned()
+                        .collect();
+                    groups.insert(vec![Value::Uuid(source_id)], related.page(rows));
                 }
             }
-
-            // Each source's rows keep the destination read's order.
-            let related =
-                fetch_related(ctx, dest, rel.destination_attribute, &all_dest_ids, &query.reading(&[rel.destination_attribute]))
-                    .await?;
-            Ok(source_ids
-                .into_iter()
-                .map(|source_id| {
-                    let Some(linked) = source_id.and_then(|id| source_to_dest.get(&id)) else {
-                        return Vec::new();
-                    };
-                    related.page(
-                        related
-                            .rows
-                            .iter()
-                            .filter(|row| {
-                                required_uuid(row, rel.destination_attribute)
-                                    .is_ok_and(|id| linked.contains(&id))
-                            })
-                            .cloned()
-                            .collect(),
-                    )
-                })
-                .collect())
+            (keys, groups)
         }
+    };
+    Ok(distribute(keys, groups))
+}
+
+/// Each source's rows, by its key. Sources sharing a key (posts by one author) each get
+/// its rows: copies for all but the last, which takes them.
+fn distribute(keys: Vec<Option<Vec<Value>>>, mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>>) -> Vec<Vec<FieldMap>> {
+    let mut seen = BTreeSet::new();
+    let last: Vec<bool> = keys.iter().rev().map(|key| key.as_ref().is_some_and(|key| seen.insert(key))).collect();
+    keys.iter()
+        .zip(last.into_iter().rev())
+        .map(|(key, last)| match key {
+            Some(key) if last => groups.remove(key).unwrap_or_default(),
+            Some(key) => groups.get(key).cloned().unwrap_or_default(),
+            None => Vec::new(),
+        })
+        .collect()
+}
+
+/// Whether a read pages its rows.
+fn paged(read: &CompiledQuery) -> bool {
+    read.limit.is_some() || read.offset.is_some_and(|offset| offset > 0)
+}
+
+/// `read` once for each of `keys`, as the data layer joins it laterally, its rows as the
+/// actor may see them.
+async fn read_per_key<D: DataLayer>(
+    ctx: &Context<D>,
+    dest: &ResourceDef,
+    read: &CompiledQuery,
+    by: &PerKey<'_>,
+    keys: &[Value],
+) -> Result<Vec<Vec<FieldMap>>> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
     }
+    let mut per_key = ctx.data.run_query_per_key(dest, read, by, keys).await?;
+    for row in per_key.iter_mut().flatten() {
+        crate::policy::redact_fields(dest, ctx.actor.as_ref(), row)?;
+    }
+    Ok(per_key)
 }
 
 /// Rows read for many sources at once, and the paging their read applies to each
@@ -214,43 +248,24 @@ impl Related {
     }
 }
 
-pub(crate) async fn fetch_related<D: DataLayer>(
+/// The read of `dest` a relationship load runs: as its default read sees it in the
+/// context's tenant, shaped by `shape`, and filtered by `filter` too.
+fn related_read<D>(
     ctx: &Context<D>,
     dest: &ResourceDef,
-    id_field: &str,
-    ids: &HashSet<Uuid>,
+    filter: Option<Filter>,
     shape: &RelatedQuery,
-) -> Result<Related> {
-    let values: Vec<Value> = ids.iter().copied().map(Value::Uuid).collect();
-    fetch_related_values(ctx, dest, id_field, values, shape).await
-}
-
-/// Rows of `dest` whose `field` is one of `values`, as its default read sees them,
-/// shaped by `shape`.
-pub(crate) async fn fetch_related_values<D: DataLayer>(
-    ctx: &Context<D>,
-    dest: &ResourceDef,
-    field: &str,
-    values: Vec<Value>,
-    shape: &RelatedQuery,
-) -> Result<Related> {
-    let mut related = Related {
-        rows: Vec::new(),
-        offset: 0,
-        limit: None,
-    };
-    if values.is_empty() {
-        return Ok(related);
-    }
-    let read = dest.default_read();
-    // A load reads the destination as its default read would, in the context's tenant.
-    let mut query = super::read::scope_read(
+) -> Result<CompiledQuery> {
+    super::read::scope_read(
         dest,
-        read,
+        dest.default_read(),
         ctx.actor.as_ref(),
         &FieldMap::new(),
         CompiledQuery {
-            filter: Some(Filter::and([Some(Filter::In(field.to_string(), values)), shape.filter.clone()].into_iter().flatten())),
+            filter: match Filter::and([filter, shape.filter.clone()].into_iter().flatten()) {
+                Filter::True => None,
+                filter => Some(filter),
+            },
             sort: shape.sort.clone(),
             limit: shape.limit,
             offset: shape.offset,
@@ -260,12 +275,32 @@ pub(crate) async fn fetch_related_values<D: DataLayer>(
             tenant: ctx.tenant.clone(),
             ..CompiledQuery::default()
         },
-    )?;
-    // The batch serves many sources, so the read's paging is applied to each source's
-    // rows rather than to the batch.
-    related.offset = query.offset.take().unwrap_or(0);
-    related.limit = query.limit.take();
-    related.rows = ctx.data.run_query(dest, &query).await?;
+    )
+}
+
+/// `read` of the rows whose `field` is one of `values`, all at once. The batch serves
+/// many sources, so the read's paging is taken out, for each source's rows.
+async fn read_batch<D: DataLayer>(
+    ctx: &Context<D>,
+    dest: &ResourceDef,
+    field: &str,
+    values: Vec<Value>,
+    mut read: CompiledQuery,
+) -> Result<Related> {
+    let mut related = Related {
+        rows: Vec::new(),
+        offset: read.offset.take().unwrap_or(0),
+        limit: read.limit.take(),
+    };
+    if values.is_empty() {
+        return Ok(related);
+    }
+    let by_key = Filter::In(field.to_string(), values);
+    read.filter = Some(match read.filter.take() {
+        Some(filter) => Filter::and([by_key, filter]),
+        None => by_key,
+    });
+    related.rows = ctx.data.run_query(dest, &read).await?;
     for row in &mut related.rows {
         crate::policy::redact_fields(dest, ctx.actor.as_ref(), row)?;
     }
