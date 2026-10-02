@@ -717,3 +717,80 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
     let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
     assert_eq!(rows[0].get("total"), Some(&Value::Int(42)));
 }
+
+mod pg_shift {
+    use ash_core::{UtcDateTime, UtcDateTimeUsec, resource};
+    use uuid::Uuid;
+
+    resource! {
+        PgShift {
+            table "pg_shifts";
+
+            attributes {
+                id: Uuid [pk];
+                label: String;
+                starts_at: UtcDateTime;
+                logged_at: Option<UtcDateTimeUsec>;
+            }
+
+            actions {
+                create create { primary; accept [label, starts_at, logged_at]; }
+                read read { primary; }
+            }
+        }
+    }
+}
+
+/// Postgres returns datetimes in the same UTC form, at the same precision, as memory
+/// and SQLite store them, and compares filter values the same way.
+#[tokio::test]
+async fn test_postgres_datetimes_round_trip_in_utc_at_their_precision() {
+    use ash_core::{Context, Resource, UtcDateTime, UtcDateTimeUsec};
+    use pg_shift::PgShift;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgShift::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().to_string();
+    let at = |raw: &str| UtcDateTime::parse(raw).unwrap();
+    PgShift::create(&ctx)
+        .label(format!("{run}-late"))
+        .starts_at(at("2187-02-12T01:30:00+02:00"))
+        .logged_at(UtcDateTimeUsec::parse("2187-02-12T08:00:00.5+00:00").unwrap())
+        .await
+        .unwrap();
+    PgShift::create(&ctx)
+        .label(format!("{run}-early"))
+        .starts_at(at("2187-02-11T23:45:00.900Z"))
+        .await
+        .unwrap();
+
+    let ours = Filter::starts_with("label", run.clone());
+    let shifts = PgShift::query(&ctx)
+        .filter(ours.clone())
+        .sort(PgShift::starts_at)
+        .all()
+        .await
+        .unwrap();
+    assert_eq!(shifts[0].label, format!("{run}-late"));
+    assert_eq!(shifts[0].starts_at.as_str(), "2187-02-11T23:30:00Z");
+    assert_eq!(shifts[1].starts_at.as_str(), "2187-02-11T23:45:00Z");
+    assert_eq!(
+        shifts[0].logged_at.as_ref().map(UtcDateTimeUsec::as_str),
+        Some("2187-02-12T08:00:00.500000Z")
+    );
+
+    // A fraction below the attribute's precision is dropped from the filter value too.
+    let early = PgShift::query(&ctx)
+        .filter(Filter::and([
+            ours,
+            Filter::eq("starts_at", Value::String("2187-02-11T23:45:00.900Z".into())),
+        ]))
+        .all()
+        .await
+        .unwrap();
+    assert_eq!(early.len(), 1);
+}

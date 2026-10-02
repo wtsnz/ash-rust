@@ -460,7 +460,7 @@ pub enum AttrType {
     Atom { one_of: &'static [&'static str] },
     Map,
     Array,
-    UtcDatetime,
+    UtcDatetime { precision: crate::types::TimePrecision },
     Decimal,
     Float,
     Date,
@@ -471,6 +471,15 @@ pub enum AttrType {
 }
 
 impl AttrType {
+    /// A UTC datetime to the second, as Ash's `:utc_datetime`.
+    pub const UTC_DATETIME: Self = Self::UtcDatetime {
+        precision: crate::types::TimePrecision::Second,
+    };
+    /// A UTC datetime to the microsecond, as Ash's `:utc_datetime_usec`.
+    pub const UTC_DATETIME_USEC: Self = Self::UtcDatetime {
+        precision: crate::types::TimePrecision::Microsecond,
+    };
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::Uuid => "uuid",
@@ -480,7 +489,12 @@ impl AttrType {
             Self::Atom { .. } => "atom",
             Self::Map => "map",
             Self::Array => "array",
-            Self::UtcDatetime => "utc_datetime",
+            Self::UtcDatetime {
+                precision: crate::types::TimePrecision::Second,
+            } => "utc_datetime",
+            Self::UtcDatetime {
+                precision: crate::types::TimePrecision::Microsecond,
+            } => "utc_datetime_usec",
             Self::Decimal => "decimal",
             Self::Float => "float",
             Self::Date => "date",

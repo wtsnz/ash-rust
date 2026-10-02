@@ -111,7 +111,7 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
         | AttrType::Date
         | AttrType::Inet
         | AttrType::Vector { .. }
-        | AttrType::UtcDatetime => {
+        | AttrType::UtcDatetime { .. } => {
             match optional_text(row, col)? {
                 None => Ok(Value::Null),
                 Some(text) => Ok(Value::String(text)),
@@ -165,7 +165,7 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
         | AttrType::Date
         | AttrType::Inet
         | AttrType::Vector { .. }
-        | AttrType::UtcDatetime => {
+        | AttrType::UtcDatetime { .. } => {
             match optional_text(row, agg.name)? {
                 None => Ok(Value::Null),
                 Some(text) => Ok(Value::String(text)),

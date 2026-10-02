@@ -156,7 +156,7 @@ impl SqlDialect for SqliteDialect {
             AttrType::Uuid
             | AttrType::String
             | AttrType::Date
-            | AttrType::UtcDatetime
+            | AttrType::UtcDatetime { .. }
             | AttrType::Inet
             | AttrType::Vector { .. }
             | AttrType::Atom { .. }
@@ -247,7 +247,7 @@ impl SqlDialect for PostgresDialect {
 
     fn cast_param(&self, ty: AttrType, placeholder: &str) -> String {
         match ty {
-            AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
+            AttrType::UtcDatetime { .. } => format!("{placeholder}::timestamptz"),
             AttrType::Decimal => format!("{placeholder}::numeric"),
             AttrType::Float => format!("{placeholder}::float8"),
             AttrType::Date => format!("{placeholder}::date"),
@@ -266,7 +266,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Atom { .. } => "VARCHAR(255)".to_string(),
             AttrType::Integer => "BIGINT".to_string(),
             AttrType::Boolean => "BOOLEAN".to_string(),
-            AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
+            AttrType::UtcDatetime { .. } => "TIMESTAMPTZ".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Float => "DOUBLE PRECISION".to_string(),
             AttrType::Date => "DATE".to_string(),
@@ -343,7 +343,7 @@ impl SqlDialect for PostgresDialect {
     fn cast_list_param(&self, ty: AttrType, placeholder: &str) -> String {
         match ty {
             AttrType::Boolean => format!("{placeholder}::boolean[]"),
-            AttrType::UtcDatetime => format!("{placeholder}::timestamptz[]"),
+            AttrType::UtcDatetime { .. } => format!("{placeholder}::timestamptz[]"),
             AttrType::Decimal => format!("{placeholder}::numeric[]"),
             AttrType::Float => format!("{placeholder}::float8[]"),
             AttrType::Date => format!("{placeholder}::date[]"),

@@ -47,7 +47,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         | AttrType::CiString
         | AttrType::Date
         | AttrType::Binary
-        | AttrType::UtcDatetime
+        | AttrType::UtcDatetime { .. }
         | AttrType::Inet
         | AttrType::Decimal => {
             "string".to_string()
@@ -80,7 +80,7 @@ pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
         AttrType::String | AttrType::CiString => Some("TextFilter"),
         AttrType::Date
         | AttrType::Binary
-        | AttrType::UtcDatetime
+        | AttrType::UtcDatetime { .. }
         | AttrType::Decimal
         | AttrType::Inet => Some("StringFilter"),
         AttrType::Float => Some("FloatFilter"),

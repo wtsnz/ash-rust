@@ -478,7 +478,7 @@ static FOLDER_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("name", AttrType::String),
     AttributeDef::optional("parent_id", AttrType::Uuid),
-    AttributeDef::optional("archived_at", AttrType::UtcDatetime),
+    AttributeDef::optional("archived_at", AttrType::UTC_DATETIME_USEC),
 ];
 
 static FOLDER_RELS: &[ash_core::RelationshipDef] = &[ash_core::RelationshipDef::has_many(

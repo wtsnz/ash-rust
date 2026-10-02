@@ -983,12 +983,12 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
-        ash_core::AttrType::UtcDatetime => {
+        ash_core::AttrType::UtcDatetime { precision } => {
             if let Ok(Some(dt)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(col_name)
             {
-                Value::String(format_utc(dt))
+                Value::String(precision.format(dt))
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(s)
+                Value::String(precision.normalize(&s).unwrap_or(s))
             } else {
                 Value::Null
             }
@@ -1066,15 +1066,6 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
             }
         }
     }
-}
-
-fn format_utc(dt: chrono::DateTime<chrono::Utc>) -> String {
-    let format = if dt.timestamp_subsec_nanos() == 0 {
-        chrono::SecondsFormat::Secs
-    } else {
-        chrono::SecondsFormat::AutoSi
-    };
-    dt.to_rfc3339_opts(format, true)
 }
 
 fn map_sqlx(err: sqlx::Error) -> Error {
