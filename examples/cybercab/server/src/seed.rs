@@ -56,6 +56,7 @@ const NICKNAMES: &[&str] = &[
     "Mayfield",
 ];
 
+/// The fleet the command center starts with.
 pub const FLEET_SIZE: usize = 34;
 
 fn ago(minutes: f64) -> UtcDateTimeUsec {
@@ -65,7 +66,23 @@ fn ago(minutes: f64) -> UtcDateTimeUsec {
 
 /// Fills `ctx` with Austin as the shift finds it.
 pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> Result<()> {
+    austin_with_fleet(ctx, city, seed, FLEET_SIZE).await
+}
+
+/// Austin with a fleet of `fleet` cabs. Riders, charging and grounded cabs, and the trip
+/// history scale with it, so a bigger fleet looks like a busier city rather than an
+/// emptier one.
+pub async fn austin_with_fleet<D: DataLayer>(
+    ctx: &Context<D>,
+    city: &City,
+    seed: u64,
+    fleet: usize,
+) -> Result<()> {
+    assert!(fleet >= FLEET_SIZE, "a fleet of at least {FLEET_SIZE} cabs");
     let mut rng = Rng::seeded(seed);
+    let scale = fleet as f64 / FLEET_SIZE as f64;
+    let charging = (fleet * 5).div_ceil(FLEET_SIZE);
+    let grounded = (fleet * 2).div_ceil(FLEET_SIZE);
 
     let mut zones = Vec::new();
     for spec in &city.zones {
@@ -95,7 +112,7 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
     }
 
     let mut riders = Vec::new();
-    for i in 0..96 {
+    for i in 0..96 * fleet / FLEET_SIZE {
         let name = FIRST_NAMES[i % FIRST_NAMES.len()];
         let initial = LAST_INITIALS.as_bytes()[rng.below(LAST_INITIALS.len())] as char;
         let tier = match rng.unit() {
@@ -114,8 +131,9 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
     }
 
     let mut cabs = Vec::new();
-    for (i, nickname) in NICKNAMES.iter().enumerate().take(FLEET_SIZE) {
-        let (stop, depot) = if !(5..FLEET_SIZE - 2).contains(&i) {
+    for i in 0..fleet {
+        let nickname = NICKNAMES[i % NICKNAMES.len()];
+        let (stop, depot) = if !(charging..fleet - grounded).contains(&i) {
             // Charging, or in the shop: at a hub.
             let (code, depot) = &depots[i % depots.len()];
             (city.stop(code), depot)
@@ -131,7 +149,7 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
                 .1;
             (place, depot)
         };
-        let battery = if i < 5 {
+        let battery = if i < charging {
             30 + rng.below(30) as i64
         } else {
             45 + rng.below(54) as i64
@@ -158,9 +176,9 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
             .odometer_km((rng.between(2_000.0, 31_000.0) * 10.0).round() / 10.0)
             .cabin_temp_c(21.5)
             .await?;
-        let cab = if i < 5 {
+        let cab = if i < charging {
             cab.recall_on(ctx).await?.plug_in_on(ctx).await?
-        } else if i >= FLEET_SIZE - 2 {
+        } else if i >= fleet - grounded {
             cab.ground_on(ctx).await?
         } else {
             cab
@@ -172,7 +190,7 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
     let mut code = 48_210u64;
     let weights: Vec<f64> = city.zones.iter().map(|z| z.base_demand).collect();
     let mut history = Vec::new();
-    for _ in 0..132 {
+    for _ in 0..(132 * fleet / FLEET_SIZE).min(4_000) {
         let zone_index = rng.weighted(&weights);
         let zone = &zones[zone_index];
         let pickups: Vec<_> = city.places_in(&city.zones[zone_index].code).collect();
@@ -195,7 +213,7 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
     for (minutes_ago, zone, pickup, dropoff, route, surge) in history {
         code += 1;
         let rider = rng.pick(&riders);
-        let cab = &cabs[5 + rng.below(FLEET_SIZE - 7)];
+        let cab = &cabs[charging + rng.below(fleet - charging - grounded)];
         let trip = Trip::request(ctx)
             .code(format!("R-{code}"))
             .rider_id(rider.id)
@@ -249,17 +267,17 @@ pub async fn austin<D: DataLayer>(ctx: &Context<D>, city: &City, seed: u64) -> R
     let mut busy = 14.0;
     for i in (1..=60).rev() {
         busy = (busy + rng.between(-1.5, 1.5)).clamp(8.0, 22.0);
-        let on_trip = (busy * 0.62).round() as i64;
-        let dispatched = busy.round() as i64 - on_trip;
+        let on_trip = (busy * scale * 0.62).round() as i64;
+        let dispatched = (busy * scale).round() as i64 - on_trip;
         PulseSample::record(ctx)
             .recorded_at(ago(i as f64 * 5.0 / 60.0))
-            .available(FLEET_SIZE as i64 - 7 - busy.round() as i64)
+            .available(fleet as i64 - (charging + grounded) as i64 - on_trip - dispatched)
             .dispatched(dispatched)
             .on_trip(on_trip)
             .returning(rng.below(2) as i64)
-            .charging(5)
-            .maintenance(2)
-            .waiting(rng.below(4) as i64)
+            .charging(charging as i64)
+            .maintenance(grounded as i64)
+            .waiting((rng.below(4) as f64 * scale) as i64)
             .completed_today(completed.len() as i64 - (i as i64) / 12)
             .revenue_cents_today(revenue - (i as i64) * 180)
             .avg_wait_s(240 + rng.below(120) as i64)

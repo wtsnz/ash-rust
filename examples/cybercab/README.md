@@ -85,6 +85,7 @@ the ODbL.
 | `DEMAND`    | `1`     | Multiplies how often riders hail a cab                   |
 | `SEED`      | `51893` | Seeds the fleet, the riders and the simulation's random choices |
 | `PORT`      | `4000`  | The API's port                                           |
+| `FLEET`     | `34`    | Cabs in the fleet. Riders, hubs' load and demand scale with it |
 
 ## Live data
 
@@ -164,6 +165,13 @@ frontend/src/
   components/         the map, pulse strip, rail, cab panel, journey ribbon
 tests/                the simulation, the API over HTTP and WebSocket, and the SDK
 ```
+
+## Benchmarks
+
+`cargo bench -p cybercab --bench scale` measures how far the command center scales: the
+store's reads and writes, simulation ticks against the one-second budget, and fan-out to
+many subscribers. `frontend/scripts/bench-browser.mjs` measures the browser.
+[BENCHMARKS.md](BENCHMARKS.md) has the baseline and what limits it.
 
 ## Tests
 

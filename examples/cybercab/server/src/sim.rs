@@ -98,6 +98,8 @@ pub struct Simulation<D: DataLayer> {
     plans: HashMap<Uuid, TripPlan>,
     riders: Vec<(Uuid, bool)>,
     tick: u64,
+    /// The fleet's size against the standard 34 cabs: a bigger fleet serves a busier city.
+    fleet_scale: f64,
     next_trip_code: u64,
     /// Seconds from request to pickup over the most recent pickups.
     recent_waits: VecDeque<i64>,
@@ -141,6 +143,7 @@ impl<D: DataLayer> Simulation<D> {
                 },
             );
         }
+        let fleet_scale = (motion.len() as f64 / crate::seed::FLEET_SIZE as f64).max(1.0);
         let next_trip_code = 48_210 + Trip::query(&ctx).count().await? as u64;
         Ok(Self {
             ctx,
@@ -151,6 +154,7 @@ impl<D: DataLayer> Simulation<D> {
             plans: HashMap::new(),
             riders,
             tick: 0,
+            fleet_scale,
             next_trip_code,
             recent_waits: VecDeque::new(),
         })
@@ -270,7 +274,16 @@ impl<D: DataLayer> Simulation<D> {
             // Requests a simulated minute, spread over this tick's simulated seconds.
             let per_tick =
                 zone.base_demand * 0.27 * boost * self.config.demand * self.config.speedup / 60.0;
-            if !self.rng.chance(per_tick.min(0.9)) {
+            // A standard fleet sees at most one request a zone a tick; a bigger one sees
+            // proportionally more.
+            let expected = if self.fleet_scale > 1.0 {
+                per_tick * self.fleet_scale
+            } else {
+                per_tick.min(0.9)
+            };
+            let requests =
+                expected.floor() as usize + usize::from(self.rng.chance(expected.fract()));
+            if requests == 0 {
                 continue;
             }
             let pickups: Vec<String> = self
@@ -281,9 +294,11 @@ impl<D: DataLayer> Simulation<D> {
             if pickups.is_empty() {
                 continue;
             }
-            let pickup = self.rng.pick(&pickups).clone();
-            let dropoff = self.pick_destination(&pickup);
-            self.request(&zone, &pickup, &dropoff).await?;
+            for _ in 0..requests {
+                let pickup = self.rng.pick(&pickups).clone();
+                let dropoff = self.pick_destination(&pickup);
+                self.request(&zone, &pickup, &dropoff).await?;
+            }
         }
         Ok(())
     }

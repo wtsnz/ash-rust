@@ -4,6 +4,7 @@
 //! cargo run -p cybercab                   # API on :4000, fleet simulated at 8x
 //! cargo run -p cybercab -- --codegen-only # write frontend/src/lib/ash.ts and exit
 //! SIM_SPEED=4 DEMAND=1.5 PORT=4100 cargo run -p cybercab
+//! FLEET=5000 cargo run -p cybercab --release  # a bigger fleet, and a busier city
 //! ```
 
 use std::path::Path;
@@ -40,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pubsub = PubSub::new();
     let ctx = context(Memory::new(), &pubsub);
     let city = City::austin();
-    cybercab::seed::austin(&ctx, &city, config.seed).await?;
+    let fleet = env("FLEET", cybercab::seed::FLEET_SIZE);
+    cybercab::seed::austin_with_fleet(&ctx, &city, config.seed, fleet).await?;
     let simulation = Simulation::new(ctx.clone(), city, config.clone()).await?;
     tokio::spawn(simulation.run());
 
@@ -48,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("127.0.0.1:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!(
-        "\n  Cybercab Command Center API · Austin · fleet at {}x",
+        "\n  Cybercab Command Center API · Austin · {fleet} cabs at {}x",
         config.speedup
     );
     println!("  GraphQL      http://{addr}/graphql");
