@@ -10,7 +10,10 @@
 //! cargo bench -p cybercab --bench scale
 //! cargo bench -p cybercab --bench scale -- --fleets 34,1000,10000 --subscribers 1,10,100
 //! cargo bench -p cybercab --bench scale -- --json before.json
+//! cargo bench -p cybercab --bench scale -- --postgres postgres://localhost/cybercab
 //! ```
+//!
+//! With `--postgres`, every run starts from emptied tables in that database.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -18,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ash_core::{Context, Filter, Notification, Notifier, Result, UtcDateTimeUsec};
+use ash_core::{Context, DataLayer, Filter, Notification, Notifier, Result, UtcDateTimeUsec};
 use ash_memory::Memory;
 use ash_pubsub::PubSub;
 use cybercab::city::City;
@@ -40,6 +43,8 @@ struct Args {
     /// Fleet sizes projected to take longer than this to seed and simulate are skipped.
     budget: Duration,
     json: Option<String>,
+    /// Runs on Postgres at this URL instead of in memory.
+    postgres: Option<String>,
 }
 
 fn args() -> Args {
@@ -52,6 +57,7 @@ fn args() -> Args {
         rounds: 5,
         budget: Duration::from_secs(300),
         json: None,
+        postgres: None,
     };
     let list = |v: String| {
         v.split(',')
@@ -70,6 +76,7 @@ fn args() -> Args {
             "--rounds" => args.rounds = value().parse().expect("a number"),
             "--budget" => args.budget = Duration::from_secs(value().parse().expect("seconds")),
             "--json" => args.json = Some(value()),
+            "--postgres" => args.postgres = Some(value()),
             // `cargo bench` passes `--bench`; anything else is cargo's too.
             _ => {}
         }
@@ -80,6 +87,7 @@ fn args() -> Args {
 #[derive(Serialize, Default)]
 struct Report {
     machine: String,
+    store: String,
     fleets: Vec<FleetReport>,
     fanout: Vec<FanoutReport>,
 }
@@ -169,8 +177,16 @@ fn median(values: Vec<f64>) -> f64 {
     Spread::of(values).p50
 }
 
-async fn seeded(fleet: usize, pubsub: &PubSub) -> (Context<Memory>, Arc<City>, Duration) {
-    let ctx = context(Memory::new(), pubsub);
+/// A data layer for one run: memory, or emptied tables in Postgres.
+trait Store: DataLayer + Clone + Send + Sync + 'static {}
+impl<D: DataLayer + Clone + Send + Sync + 'static> Store for D {}
+
+async fn seeded<D: Store>(
+    data: D,
+    fleet: usize,
+    pubsub: &PubSub,
+) -> (Context<D>, Arc<City>, Duration) {
+    let ctx = context(data, pubsub);
     let city = City::austin();
     let started = Instant::now();
     cybercab::seed::austin_with_fleet(&ctx, &city, 7, fleet)
@@ -179,9 +195,9 @@ async fn seeded(fleet: usize, pubsub: &PubSub) -> (Context<Memory>, Arc<City>, D
     (ctx, city, started.elapsed())
 }
 
-async fn fleet(fleet: usize, warmup: usize, ticks: usize) -> FleetReport {
+async fn fleet<D: Store>(data: D, fleet: usize, warmup: usize, ticks: usize) -> FleetReport {
     let pubsub = PubSub::new();
-    let (ctx, city, seed) = seeded(fleet, &pubsub).await;
+    let (ctx, city, seed) = seeded(data, fleet, &pubsub).await;
     let cabs = Cab::query(&ctx).all().await.expect("reads");
 
     let samples = 200.min(fleet * 4);
@@ -351,9 +367,14 @@ async fn watch(addr: String, watcher: Arc<Watcher>, ready: Arc<AtomicUsize>) {
     watcher.ended.store(true, Ordering::SeqCst);
 }
 
-async fn fanout(fleet: usize, subscribers: usize, rounds: usize) -> FanoutReport {
+async fn fanout<D: Store>(
+    data: D,
+    fleet: usize,
+    subscribers: usize,
+    rounds: usize,
+) -> FanoutReport {
     let pubsub = PubSub::new();
-    let (ctx, _, _) = seeded(fleet, &pubsub).await;
+    let (ctx, _, _) = seeded(data, fleet, &pubsub).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("binds");
@@ -489,6 +510,10 @@ fn print_fanout(r: &FanoutReport) {
     );
 }
 
+async fn postgres(url: &str) -> ash_postgres::Postgres {
+    cybercab::server::postgres(url).await.expect("Postgres")
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = args();
@@ -501,7 +526,16 @@ async fn main() {
         ),
         ..Report::default()
     };
-    println!("\nCybercab scale · {}\n", report.machine);
+    report.store = if args.postgres.is_some() {
+        "postgres"
+    } else {
+        "memory"
+    }
+    .to_string();
+    println!(
+        "\nCybercab scale · {} · on {}\n",
+        report.machine, report.store
+    );
 
     println!(
         "Simulation: one tick is one second of a live fleet, so it must stay under 1000 ms.\n"
@@ -526,7 +560,10 @@ async fn main() {
             }
         }
         let started = Instant::now();
-        let r = fleet(size, args.warmup, args.ticks).await;
+        let r = match &args.postgres {
+            Some(url) => fleet(postgres(url).await, size, args.warmup, args.ticks).await,
+            None => fleet(Memory::new(), size, args.warmup, args.ticks).await,
+        };
         print_fleet(&r);
         previous = Some((size, started.elapsed().as_secs_f64()));
         report.fleets.push(r);
@@ -539,7 +576,10 @@ async fn main() {
     println!("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for &size in &args.fanout_fleets {
         for &subs in &args.subscribers {
-            let r = fanout(size, subs, args.rounds).await;
+            let r = match &args.postgres {
+                Some(url) => fanout(postgres(url).await, size, subs, args.rounds).await,
+                None => fanout(Memory::new(), size, subs, args.rounds).await,
+            };
             print_fanout(&r);
             report.fanout.push(r);
         }

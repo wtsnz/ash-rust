@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use ash_core::{Context, DataLayer, ResourceDef};
+use ash_core::{Context, DataLayer, Error, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_pubsub::PubSub;
 use ash_typescript::{TypeScriptConfig, TypeScriptGenerator};
@@ -56,4 +56,21 @@ pub fn typescript_sdk() -> Result<String, ash_typescript::CodegenError> {
 pub fn context<D>(data: D, pubsub: &PubSub) -> Context<D> {
     use ash_pubsub::ContextPubSubExt;
     Context::new(data).with_pubsub(Arc::new(pubsub.clone()))
+}
+
+/// Connects to Postgres at `url`, installs the command center's tables, and empties them,
+/// so a shift starts from the seed. It touches only its own tables.
+pub async fn postgres(url: &str) -> ash_core::Result<ash_postgres::Postgres> {
+    let db = ash_postgres::Postgres::connect(url).await?;
+    db.install(&resources()).await?;
+    let tables: Vec<String> = resources()
+        .iter()
+        .map(|resource| format!("\"{}\"", resource.table))
+        .collect();
+    let pool = db.pool().expect("a pool, outside any transaction");
+    sqlx::query(&format!("TRUNCATE {} CASCADE", tables.join(", ")))
+        .execute(pool)
+        .await
+        .map_err(|err| Error::DataLayer(err.to_string()))?;
+    Ok(db)
 }

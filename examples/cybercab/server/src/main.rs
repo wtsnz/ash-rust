@@ -5,10 +5,12 @@
 //! cargo run -p cybercab -- --codegen-only # write frontend/src/lib/ash.ts and exit
 //! SIM_SPEED=4 DEMAND=1.5 PORT=4100 cargo run -p cybercab
 //! FLEET=5000 cargo run -p cybercab --release  # a bigger fleet, and a busier city
+//! DATABASE_URL=postgres://… cargo run -p cybercab  # on Postgres; empties its own tables
 //! ```
 
 use std::path::Path;
 
+use ash_core::DataLayer;
 use ash_memory::Memory;
 use ash_pubsub::PubSub;
 use cybercab::city::City;
@@ -33,13 +35,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    match std::env::var("DATABASE_URL") {
+        Ok(url) => serve(cybercab::server::postgres(&url).await?, "Postgres").await,
+        Err(_) => serve(Memory::new(), "memory").await,
+    }
+}
+
+/// Seeds the city on `data`, sets the fleet running, and serves the API.
+async fn serve<D>(data: D, store: &str) -> Result<(), Box<dyn std::error::Error>>
+where
+    D: DataLayer + Clone + Send + Sync + 'static,
+{
     let config = SimConfig {
         speedup: env("SIM_SPEED", 8.0),
         demand: env("DEMAND", 1.0),
         seed: env("SEED", 0xCAB5),
     };
     let pubsub = PubSub::new();
-    let ctx = context(Memory::new(), &pubsub);
+    let ctx = context(data, &pubsub);
     let city = City::austin();
     let fleet = env("FLEET", cybercab::seed::FLEET_SIZE);
     cybercab::seed::austin_with_fleet(&ctx, &city, config.seed, fleet).await?;
@@ -50,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("127.0.0.1:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!(
-        "\n  Cybercab Command Center API · Austin · {fleet} cabs at {}x",
+        "\n  Cybercab Command Center API · Austin · {fleet} cabs at {}x, on {store}",
         config.speedup
     );
     println!("  GraphQL      http://{addr}/graphql");

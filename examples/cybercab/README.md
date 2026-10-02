@@ -17,7 +17,12 @@ front end learned over a GraphQL subscription.
 ```bash
 ./run.sh                    # API on :4000, command center on http://localhost:4321
 SIM_SPEED=4 DEMAND=1.5 ./run.sh
+FLEET=2000 DATABASE_URL=postgres://localhost/cybercab ./run.sh   # a bigger fleet, on Postgres
 ```
+
+The API runs on the in-memory data layer unless `DATABASE_URL` names a Postgres
+database. On Postgres, it installs its tables and empties them at start-up, so each run
+starts from the seed. It touches only its own tables, but use a database of its own.
 
 ## The domain
 
@@ -86,6 +91,7 @@ the ODbL.
 | `SEED`      | `51893` | Seeds the fleet, the riders and the simulation's random choices |
 | `PORT`      | `4000`  | The API's port                                           |
 | `FLEET`     | `34`    | Cabs in the fleet. Riders, hubs' load and demand scale with it |
+| `DATABASE_URL` | unset | Run on this Postgres database instead of in memory |
 
 ## Live data
 

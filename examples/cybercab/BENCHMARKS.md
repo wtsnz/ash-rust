@@ -173,6 +173,50 @@ On the in-memory store, the simulation now keeps up in real time to about 4,000 
 from about 500. Past that, the transitions that still fetch a cab or trip by id (arrival,
 boarding, drop-off), and the pulse's whole-fleet reads, copy whole tables.
 
+## On Postgres
+
+`--postgres <url>` runs the same benchmark on `ash-postgres`. These runs used Postgres 16
+in Docker Desktop on the same machine. Every round trip crosses Docker's VM network,
+and with `synchronous_commit` on, every commit waits for Docker's virtualized disk:
+a bare `INSERT` from `psql` takes 2.3 ms that way, and 0.02 ms with it off. The two runs
+below separate what the stack costs from what each durable commit costs here.
+
+**Durable commits** (`synchronous_commit = on`, the default):
+
+| Fleet | Seed | `Cab::get` | Find by call sign | `Cab.report` | Tick p50 | Tick p95 | Actions/s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 34 | 1.5 s | 164 µs | 0.20 ms | 1,627 µs | 14 ms | 56 ms | 464 |
+| 250 | 8.2 s | 308 µs | 0.70 ms | 1,571 µs | 80 ms | 384 ms | 1,003 |
+| 1,000 | 29.6 s | 216 µs | 0.25 ms | 948 µs | 306 ms | **1,115 ms** | 1,173 |
+| 2,500 | 36.3 s | 186 µs | 0.31 ms | 1,037 µs | 753 ms | **2,388 ms** | 879 |
+
+**The stack itself** (`synchronous_commit = off`, the URL's
+`?options=-c%20synchronous_commit%3Doff`):
+
+| Fleet | Seed | `Cab::get` | Find by call sign | `Cab.report` | Tick p50 | Tick p95 | Actions/s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 34 | 0.4 s | 260 µs | 0.57 ms | 303 µs | 3 ms | 9 ms | 2,265 |
+| 250 | 1.5 s | 199 µs | 0.36 ms | 221 µs | 20 ms | 68 ms | 3,873 |
+| 1,000 | 5.9 s | 183 µs | 0.41 ms | 222 µs | 72 ms | 248 ms | 4,081 |
+| 2,500 | 8.9 s | 190 µs | 0.40 ms | 202 µs | 187 ms | 627 ms | 3,119 |
+| 5,000 | 9.7 s | 176 µs | 0.39 ms | 210 µs | 362 ms | **1,201 ms** | 3,309 |
+| 10,000 | 13.9 s | 166 µs | 0.46 ms | 233 µs | 694 ms | **2,437 ms** | 3,309 |
+
+Fan-out on Postgres, at 1,000 cabs with asynchronous commit: every update reached all
+100 subscribers (500,000 deliveries) at 1.0 ms p50 and 1.5 ms p99. No subscriber fell
+behind, because each round takes 583 ms to publish.
+
+- **Lookups no longer grow with the table.** Fetching a cab, or finding one by call sign,
+  costs the same at 10,000 cabs as at 34, through Postgres's indexes. Only reading every
+  cab grows with the fleet, as it must.
+- **The stack holds about 3,300 to 4,100 actions a second**, at every fleet size. Each
+  action is a full round trip: validations, the policy check, the write, `RETURNING`, the
+  notification. About 200 µs each, here.
+- **A tick is now one round trip after another.** At 10,000 cabs a tick makes about
+  3,300 of them in sequence. With durable commits, each also waits for its own commit.
+  Batching a tick's position reports into one bulk update would turn about 3,300 round
+  trips and commits into a handful. That's fix 3.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a

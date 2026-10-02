@@ -1,0 +1,176 @@
+{
+  "machine": "macos aarch64, 16 threads",
+  "store": "postgres",
+  "fleets": [
+    {
+      "fleet": 34,
+      "seed_s": 0.433998458,
+      "get_us": 259.583,
+      "read_all_ms": 0.622875,
+      "find_by_call_sign_ms": 0.571,
+      "report_us": 302.5,
+      "record_us": 318.0,
+      "tick_ms": {
+        "p50": 3.0475,
+        "p95": 8.733167,
+        "p99": 11.953292000000001,
+        "max": 11.953292000000001
+      },
+      "actions_per_tick": 8.3,
+      "actions_per_s": 2264.745563953502,
+      "busy_pct": 15
+    },
+    {
+      "fleet": 250,
+      "seed_s": 1.5248465420000001,
+      "get_us": 198.708,
+      "read_all_ms": 1.8229170000000001,
+      "find_by_call_sign_ms": 0.363792,
+      "report_us": 221.375,
+      "record_us": 191.375,
+      "tick_ms": {
+        "p50": 19.837291999999998,
+        "p95": 68.176833,
+        "p99": 126.12445799999999,
+        "max": 126.12445799999999
+      },
+      "actions_per_tick": 108.65,
+      "actions_per_s": 3873.2780355903096,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 1000,
+      "seed_s": 5.868832417,
+      "get_us": 182.875,
+      "read_all_ms": 6.368666999999999,
+      "find_by_call_sign_ms": 0.41025,
+      "report_us": 221.5,
+      "record_us": 195.042,
+      "tick_ms": {
+        "p50": 72.24775,
+        "p95": 247.913083,
+        "p99": 726.0259169999999,
+        "max": 726.0259169999999
+      },
+      "actions_per_tick": 476.35,
+      "actions_per_s": 4081.391203628968,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 2500,
+      "seed_s": 8.898211542,
+      "get_us": 189.75,
+      "read_all_ms": 15.060291999999999,
+      "find_by_call_sign_ms": 0.397458,
+      "report_us": 201.5,
+      "record_us": 182.459,
+      "tick_ms": {
+        "p50": 186.754166,
+        "p95": 626.494291,
+        "p99": 2090.6096669999997,
+        "max": 2090.6096669999997
+      },
+      "actions_per_tick": 959.7,
+      "actions_per_s": 3118.719398323486,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 5000,
+      "seed_s": 9.666358709,
+      "get_us": 175.875,
+      "read_all_ms": 30.598457999999997,
+      "find_by_call_sign_ms": 0.389375,
+      "report_us": 210.208,
+      "record_us": 186.333,
+      "tick_ms": {
+        "p50": 362.393833,
+        "p95": 1200.667,
+        "p99": 2591.85125,
+        "max": 2591.85125
+      },
+      "actions_per_tick": 1741.4,
+      "actions_per_s": 3308.6272445902787,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 10000,
+      "seed_s": 13.8581455,
+      "get_us": 165.75,
+      "read_all_ms": 60.730292,
+      "find_by_call_sign_ms": 0.463583,
+      "report_us": 232.708,
+      "record_us": 211.25,
+      "tick_ms": {
+        "p50": 694.14175,
+        "p95": 2436.795333,
+        "p99": 4861.607542,
+        "max": 4861.607542
+      },
+      "actions_per_tick": 3292.45,
+      "actions_per_s": 3309.4027672995358,
+      "busy_pct": 20
+    }
+  ],
+  "fanout": [
+    {
+      "fleet": 1000,
+      "subscribers": 1,
+      "publish_round_ms": {
+        "p50": 229.762375,
+        "p95": 415.009833,
+        "p99": 415.009833,
+        "max": 415.009833
+      },
+      "expected": 5000,
+      "delivered": 5000,
+      "latency_ms": {
+        "p50": 0.249,
+        "p95": 0.427,
+        "p99": 0.836,
+        "max": 75.577
+      },
+      "ended": 0,
+      "told": 0
+    },
+    {
+      "fleet": 1000,
+      "subscribers": 10,
+      "publish_round_ms": {
+        "p50": 261.489666,
+        "p95": 306.554084,
+        "p99": 306.554084,
+        "max": 306.554084
+      },
+      "expected": 50000,
+      "delivered": 50000,
+      "latency_ms": {
+        "p50": 0.321,
+        "p95": 0.484,
+        "p99": 0.678,
+        "max": 4.084
+      },
+      "ended": 0,
+      "told": 0
+    },
+    {
+      "fleet": 1000,
+      "subscribers": 100,
+      "publish_round_ms": {
+        "p50": 583.3395409999999,
+        "p95": 606.7452079999999,
+        "p99": 606.7452079999999,
+        "max": 606.7452079999999
+      },
+      "expected": 500000,
+      "delivered": 500000,
+      "latency_ms": {
+        "p50": 0.973,
+        "p95": 1.241,
+        "p99": 1.49,
+        "max": 20.022
+      },
+      "ended": 0,
+      "told": 0
+    }
+  ]
+}
