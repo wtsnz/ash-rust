@@ -808,7 +808,10 @@ fn actor_reads(
 ) -> bool {
     match policy {
         Ok(None) => true,
-        Ok(Some(filter)) => eval_filter(tables, tenant, resource, filter, row, None) == Some(true),
+        Ok(Some(filter)) => {
+            let row = with_calculations(resource, filter, row);
+            eval_filter(tables, tenant, resource, filter, &row, None) == Some(true)
+        }
         Err(()) => false,
     }
 }

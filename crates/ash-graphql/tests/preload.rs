@@ -151,9 +151,14 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
 };
 
 /// Who wrote a post, and how many comments it has, are for signed-in readers only.
+/// A post's label is no one's to read, and a labelled post's comment count isn't either.
 static POST_FIELD_POLICIES: &[FieldPolicyDef] = &[
     FieldPolicyDef::new("author_id", &[PolicyEffect::AuthorizeIf(Check::ActorPresent)]),
-    FieldPolicyDef::new("comment_count", &[PolicyEffect::AuthorizeIf(Check::ActorPresent)]),
+    FieldPolicyDef::new("label", &[PolicyEffect::ForbidIf(Check::Always)]),
+    FieldPolicyDef::new(
+        "comment_count",
+        &[PolicyEffect::AuthorizeIf(Check::And(&[Check::ActorPresent, Check::IsNil { field: "label" }]))],
+    ),
 ];
 
 static IS_FIRST: Expr = Expr::Eq(&Expr::Field("title"), &Expr::LitString("A0P0"));
@@ -613,4 +618,19 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
     let project = &page["listProjects"]["results"][0];
     assert_eq!(project["invoiceCount"], 2);
     assert_eq!(project["invoices"].as_array().unwrap().len(), 2);
+}
+
+/// A field policy that checks a field the writer can't read checks it as stored, not as
+/// the write's result shows it (hidden, so nil).
+#[tokio::test]
+async fn a_mutation_result_checks_field_policies_against_the_record_as_stored() {
+    let (data, post) = seeded().await;
+    data.update(&POST_DEF, None, post, FieldMap::from([("label".to_string(), Value::from("secret"))])).await.unwrap();
+    let page = run(
+        &data,
+        &format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "Labelled" }}) {{ result {{ title commentCount }} }} }}"#),
+        Some(Actor::new(Uuid::new_v4())),
+    )
+    .await;
+    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Labelled", "commentCount": null }));
 }

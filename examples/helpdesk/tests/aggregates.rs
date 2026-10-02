@@ -266,6 +266,25 @@ async fn sqlite_aggregates_loading_and_filtering() {
     assert_eq!(filtered_reps.len(), 1);
     assert_eq!(filtered_reps[0].name, "Alice");
     assert_eq!(filtered_reps[0].ticket_count, Some(2));
+
+    // Paged by keyset, sorted by an aggregate: each page's cursor holds the count it
+    // sorts by, so the next page starts after it.
+    let mut names = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = as_customer
+            .representatives()
+            .sort(r::ticket_count)
+            .page_keyset(1, after.as_deref(), None)
+            .await
+            .unwrap();
+        names.extend(page.results.iter().map(|rep| rep.name.clone()));
+        if !page.has_more {
+            break;
+        }
+        after = page.after.clone();
+    }
+    assert_eq!(names, ["Carol", "Bob", "Alice"]);
 }
 
 #[tokio::test]

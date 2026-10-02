@@ -521,6 +521,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let ty = resource
                     .attribute(field)
                     .map(|attr| attr.ty)
+                    .or_else(|| resource.aggregate(field).map(|agg| agg.ty))
                     .or_else(|| resource.calculation(field).map(|calc| calc.ty));
                 if ty == Some(AttrType::Binary) {
                     // Each value needs decoding, so compare one bound value at a time.

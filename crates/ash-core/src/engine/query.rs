@@ -311,6 +311,15 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     ) -> Result<Page<R>> {
         let pk = pk_name(&R::DEF)?.to_string();
         self.sort = keyset_sort(&R::DEF, std::mem::take(&mut self.sort));
+        // Each record's keyset holds the values it sorts by: an aggregate or calculation
+        // sorted by loads with it.
+        for sort in &self.sort {
+            if R::DEF.aggregate(&sort.field).is_some() && !self.aggregates.contains(&sort.field) {
+                self.aggregates.push(sort.field.clone());
+            } else if R::DEF.calculation(&sort.field).is_some() && !self.calculations.contains(&sort.field) {
+                self.calculations.push(sort.field.clone());
+            }
+        }
 
         let is_before = before.is_some() && after.is_none();
         let target_cursor_str = if is_before { before } else { after };

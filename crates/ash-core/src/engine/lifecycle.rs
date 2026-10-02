@@ -177,7 +177,7 @@ async fn read_visible<D: DataLayer>(ctx: &Context<D>, resource: &'static Resourc
     let pk = pk_name(resource)?;
     let (filter, tenant) = crate::pipeline::visible_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
     ctx.data
-        .run_query(resource, &CompiledQuery { filter, tenant, ..CompiledQuery::default() })
+        .run_query(resource, &CompiledQuery { filter, tenant, actor: ctx.actor.clone(), ..CompiledQuery::default() })
         .await?
         .into_iter()
         .next()

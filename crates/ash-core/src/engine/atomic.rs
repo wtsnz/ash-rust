@@ -76,6 +76,7 @@ fn atomic_query<D>(
     Ok(crate::data_layer::CompiledQuery {
         filter,
         tenant,
+        actor: ctx.actor.clone(),
         limit: Some(1),
         ..crate::data_layer::CompiledQuery::default()
     })

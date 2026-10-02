@@ -210,8 +210,9 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 // archived record or another tenant's is not found.
                 Ok(match destroy_dynamic_by_id(ash, resource, action, id, version).await {
                     Ok(mut destroyed) => {
-                        redact_record(resource, ash.actor.as_ref(), &mut destroyed);
                         let fields = selected(ctx.ctx.field(), Some("result"));
+                        load_selected(ash, resource, &fields, std::slice::from_mut(&mut destroyed)).await?;
+                        redact_record(resource, ash.actor.as_ref(), &mut destroyed);
                         preload(ash, resource, fields, std::slice::from_mut(&mut destroyed)).await?;
                         succeeded(Some(destroyed))
                     }

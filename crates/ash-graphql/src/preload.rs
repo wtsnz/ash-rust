@@ -107,11 +107,7 @@ impl Load {
             load.add(resource, agg.name);
         }
         for calc in resource.calculations.iter().filter(|calc| is_selected(calc.name)) {
-            if calc.expr.is_custom() {
-                load.every_attribute = true;
-            } else {
-                load.add(resource, calc.name);
-            }
+            load.add(resource, calc.name);
         }
         for rel in resource.relationships.iter().filter(|rel| is_selected(rel.name)) {
             for column in rel.source_columns() {
@@ -124,13 +120,19 @@ impl Load {
         load
     }
 
-    /// Loads `field` of `resource`: an attribute, aggregate or calculation.
+    /// Loads `field` of `resource`: an attribute, aggregate or calculation. A calculation
+    /// only Rust can compute isn't the data layer's to load: every attribute is read, for
+    /// Rust to compute it from.
     fn add(&mut self, resource: &ResourceDef, field: &str) {
         let list = if resource.attribute(field).is_some() {
             &mut self.select
         } else if resource.aggregate(field).is_some() {
             &mut self.aggregates
-        } else if resource.calculation(field).is_some() {
+        } else if let Some(calc) = resource.calculation(field) {
+            if calc.expr.is_custom() {
+                self.every_attribute = true;
+                return;
+            }
             &mut self.calculations
         } else {
             return;
@@ -162,35 +164,44 @@ impl Load {
 
 /// Loads the aggregates and calculations `fields` select on `records`, written records of
 /// `resource`, as AshGraphql loads a mutation's result: one read of them all, by key, as
-/// the actor reads them. Load them before redacting the records, so field policies apply
-/// to what loads too.
+/// the actor reads them. A written record may already be redacted, so the fields its
+/// field policies check are read again as stored, and each loaded value is kept only if
+/// the policies let the actor read it, as they would on a read.
 pub(crate) async fn load_selected<D: DataLayer>(
     ash: &Context<D>,
     resource: &'static ResourceDef,
     fields: &[SelectionField<'_>],
     records: &mut [FieldMap],
 ) -> async_graphql::Result<()> {
-    let load = Load::of(resource, fields, []);
-    if records.is_empty() || (load.aggregates.is_empty() && load.calculations.is_empty()) {
+    let Load { aggregates, calculations, .. } = Load::of(resource, fields, []);
+    if records.is_empty() || (aggregates.is_empty() && calculations.is_empty()) {
         return Ok(());
     }
     let Some(pk) = resource.primary_key().map(|attr| attr.name) else {
         return Ok(());
     };
     let ids: Vec<Value> = records.iter().filter_map(|record| record.get(pk).cloned()).collect();
+    let mut policy_inputs = Load::default();
+    for field in field_policy_fields(resource) {
+        policy_inputs.add(resource, field);
+    }
+    let loaded_names: Vec<String> = aggregates.iter().chain(&calculations).cloned().collect();
     let query = CompiledQuery {
         filter: Some(Filter::In(pk.to_string(), ids)),
-        select: Some(Vec::new()),
-        aggregates: load.aggregates,
-        calculations: load.calculations,
+        select: (!policy_inputs.every_attribute).then_some(policy_inputs.select),
+        aggregates: aggregates.into_iter().chain(policy_inputs.aggregates).collect(),
+        calculations: calculations.into_iter().chain(policy_inputs.calculations).collect(),
         tenant: ash.tenant.clone(),
         actor: ash.actor.clone(),
         ..CompiledQuery::default()
     };
-    let loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    let mut loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    for row in &mut loaded {
+        ash_core::redact_fields(resource, ash.actor.as_ref(), row).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    }
     for record in records.iter_mut() {
         if let Some(row) = loaded.iter().find(|row| row.get(pk) == record.get(pk)) {
-            for name in query.aggregates.iter().chain(&query.calculations) {
+            for name in &loaded_names {
                 if let Some(value) = row.get(name) {
                     record.insert(name.clone(), value.clone());
                 }
