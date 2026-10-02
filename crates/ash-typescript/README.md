@@ -270,6 +270,18 @@ One WebSocket serves every subscription of a client. It connects on first use, r
 with backoff, and live queries re-read themselves once it's back, so nothing missed while
 it was down stays missing.
 
+The server buffers a bounded number of events for each subscriber, so a slow client can't
+grow its memory without limit. A subscriber that falls further behind misses the oldest
+events. The server tells it how many (a `MISSED_EVENTS` error) and ends that subscription,
+and the client resubscribes straight away. Live queries re-read themselves when that
+happens. Your own listeners hear it through `onMissed`, or `onError` if they don't pass one:
+
+```typescript
+client.cab.onUpdated(moveMarker, {
+  onMissed: (count) => reloadMarkers(), // `count` events were missed; re-read
+});
+```
+
 ## Relay Keyset Pagination
 
 Ash provides built-in keyset pagination matching Relay specifications:

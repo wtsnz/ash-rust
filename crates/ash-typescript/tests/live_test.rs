@@ -239,3 +239,158 @@ async fn generated_live_queries_stay_in_sync_over_websocket() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.starts_with("OK idle,connecting,connected"), "{stdout}");
 }
+
+const CATCH_UP: &str = r#"
+import { DeskClient, type Ticket } from "./sdk";
+
+declare const process: {
+  argv: string[];
+  exit(code: number): never;
+  stdout: { write(text: string): void };
+};
+
+const client = new DeskClient({ baseUrl: process.argv[2] });
+const burst = Number(process.argv[3]);
+const errors: unknown[] = [];
+const onError = (error: unknown) => errors.push(error);
+
+function until(label: string, test: () => boolean): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const poll = () => {
+      if (test()) return resolve();
+      if (Date.now() - started > 10000) return reject(new Error(`timed out waiting for ${label}`));
+      setTimeout(poll, 20);
+    };
+    poll();
+  });
+}
+
+async function main() {
+  let all: Ticket[] = [];
+  const everything = client.ticket.query().live((items) => (all = items), { onError });
+  const heard: string[] = [];
+  const missed: Array<number | undefined> = [];
+  const stopListening = client.ticket.onCreated((ticket) => heard.push(ticket.title), {
+    onError,
+    onMissed: (count) => missed.push(count),
+  });
+
+  // Live: a ticket of our own comes back over the subscription.
+  await until("the seeded ticket", () => all.length === 1);
+  await client.ticket.open({ title: "Probe", priority: 1 });
+  await until("the probe", () => heard.includes("Probe"));
+  process.stdout.write("READY\n");
+
+  // The server bursts far more creates than this subscriber's buffer holds.
+  await until("the burst, re-read", () => all.length === 2 + burst);
+  // The server said how many it missed.
+  await until("the missed events", () => missed.some((count) => count !== undefined && count > 0));
+  // Resubscribed: a create after the burst is heard, and lands in the list.
+  await client.ticket.open({ title: "After", priority: 1 });
+  await until("the create after", () => heard.includes("After") && all.length === 3 + burst);
+
+  everything.stop();
+  stopListening();
+  client.subscriptions.close();
+  if (errors.length > 0) throw new Error(`live errors: ${errors.map(String).join("; ")}`);
+  console.log(`OK missed=${missed.join(",")}`);
+}
+
+main().then(
+  () => process.exit(0),
+  (error) => {
+    console.error(error);
+    process.exit(1);
+  },
+);
+"#;
+
+/// A live query whose subscriber falls behind the server re-reads and catches up, and its
+/// subscriptions carry on. The server runs on one thread, so a burst of creates runs
+/// without its subscriptions draining a one-event buffer: they're certain to fall behind.
+#[tokio::test(flavor = "current_thread")]
+async fn a_live_query_that_falls_behind_catches_up() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
+    let pubsub = PubSub::with_capacity(1);
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let open = |title: String| {
+        let ctx = ctx.clone();
+        async move {
+            let mut input = ash_core::FieldMap::new();
+            input.insert("title".into(), ash_core::Value::String(title));
+            input.insert("priority".into(), ash_core::Value::Int(3));
+            ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+        }
+    };
+    open("Seeded".into()).await;
+    let schema = AshGraphQL::from_domain(&DOMAIN)
+        .with_pubsub(pubsub)
+        .finish_with_context(ctx.clone())
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, ash_graphql::axum::graphql_router(schema)).await.unwrap();
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sdk.ts"), sdk(false)).unwrap();
+    std::fs::write(dir.path().join("main.ts"), CATCH_UP).unwrap();
+    let compile = [
+        "--strict", "--target", "ES2022", "--module", "commonjs", "--skipLibCheck",
+        "--outDir", "out", "sdk.ts", "main.ts",
+    ];
+    let Some(compiled) = run("tsc", &compile, dir.path()) else { return };
+    assert_success(&compiled, "tsc");
+
+    const BURST: usize = 300;
+    let mut client = match tokio::process::Command::new("node")
+        .args(["out/main.js", &format!("http://{addr}"), &BURST.to_string()])
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            assert!(std::env::var("CI").is_err(), "CI installs node");
+            return;
+        }
+    };
+    let mut stdout = BufReader::new(client.stdout.take().unwrap()).lines();
+    let mut stderr = client.stderr.take().unwrap();
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while let Some(line) = stdout.next_line().await.unwrap() {
+            if line == "READY" {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    if ready != Ok(true) {
+        let mut errors = String::new();
+        stderr.read_to_string(&mut errors).await.unwrap();
+        panic!("the client never got ready: {errors}");
+    }
+
+    for i in 0..BURST {
+        open(format!("Burst {i}")).await;
+    }
+
+    let status = tokio::time::timeout(std::time::Duration::from_secs(30), client.wait())
+        .await
+        .expect("the client finishes")
+        .unwrap();
+    let mut out = Vec::new();
+    while let Some(line) = stdout.next_line().await.unwrap() {
+        out.push(line);
+    }
+    let mut errors = String::new();
+    stderr.read_to_string(&mut errors).await.unwrap();
+    assert!(status.success(), "the live client failed:\n{}\n{errors}", out.join("\n"));
+    assert!(out.iter().any(|line| line.starts_with("OK missed=")), "{out:?}");
+}

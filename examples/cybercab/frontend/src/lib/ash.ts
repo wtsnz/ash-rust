@@ -1362,13 +1362,23 @@ export type AshConnectionStatus = "idle" | "connecting" | "connected" | "reconne
 export interface AshSubscriptionSink<T> {
   next(data: T): void;
   error?(error: AshClientError): void;
-  complete?(): void;
+  /**
+   * Events were missed: the subscriber fell behind the server, or the server ended the
+   * subscription. `count` is how many, when the server says. The subscription carries on;
+   * anything built from its events should be re-read. Without this, `error` hears it.
+   */
+  missed?(count?: number): void;
 }
 
 interface AshActiveSubscription {
   query: string;
   variables: Record<string, unknown>;
   sink: AshSubscriptionSink<unknown>;
+  /** Times in a row the server ended it before it heard anything. */
+  restarts: number;
+  /** How many events the server said this subscription missed, before it ended it. */
+  missed?: number;
+  restartTimer?: ReturnType<typeof setTimeout>;
 }
 
 type AshWireMessage = {
@@ -1380,7 +1390,8 @@ type AshWireMessage = {
 /**
  * One WebSocket shared by every subscription of a client. It connects on the first
  * subscription, resubscribes everything after a dropped connection, and closes once
- * nothing is subscribed.
+ * nothing is subscribed. A subscription the server ends, as it does one that falls too
+ * far behind, is resubscribed and told it missed events.
  */
 export class AshSubscriptionClient {
   private readonly defaultEndpoint = "/graphql/ws";
@@ -1428,7 +1439,7 @@ export class AshSubscriptionClient {
     sink: AshSubscriptionSink<T>,
   ): () => void {
     const id = String(this.nextId++);
-    this.active.set(id, { query, variables, sink: sink as AshSubscriptionSink<unknown> });
+    this.active.set(id, { query, variables, sink: sink as AshSubscriptionSink<unknown>, restarts: 0 });
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = undefined;
@@ -1439,7 +1450,10 @@ export class AshSubscriptionClient {
       this.connect();
     }
     return () => {
-      if (!this.active.delete(id)) return;
+      const subscription = this.active.get(id);
+      if (!subscription) return;
+      this.active.delete(id);
+      if (subscription.restartTimer) clearTimeout(subscription.restartTimer);
       if (this.acknowledged) this.send({ id, type: "complete" });
       if (this.active.size === 0) {
         this.idleTimer = setTimeout(() => this.close(), 1000);
@@ -1497,6 +1511,10 @@ export class AshSubscriptionClient {
         this.retries = 0;
         this.setStatus("connected");
         for (const [id, subscription] of this.active) {
+          // Resubscribed here, and re-read through `onConnected`.
+          if (subscription.restartTimer) clearTimeout(subscription.restartTimer);
+          subscription.restartTimer = undefined;
+          subscription.missed = undefined;
           this.send({
             id,
             type: "subscribe",
@@ -1513,12 +1531,17 @@ export class AshSubscriptionClient {
         const subscription = message.id ? this.active.get(message.id) : undefined;
         const payload = message.payload as {
           data?: unknown;
-          errors?: Array<{ message: string }>;
+          errors?: Array<{ message: string; extensions?: { code?: string; missed?: number } }>;
         };
         if (!subscription) break;
-        if (payload.errors && payload.errors.length > 0) {
+        const missed = payload.errors?.find((error) => error.extensions?.code === "MISSED_EVENTS");
+        if (missed) {
+          // The server ends the subscription next; it's resubscribed then.
+          subscription.missed = missed.extensions?.missed;
+        } else if (payload.errors && payload.errors.length > 0) {
           subscription.sink.error?.(new AshClientError(payload.errors[0].message, payload.errors));
         } else if (payload.data !== undefined) {
+          subscription.restarts = 0;
           subscription.sink.next(payload.data);
         }
         break;
@@ -1533,12 +1556,40 @@ export class AshSubscriptionClient {
         break;
       }
       case "complete": {
-        const subscription = message.id ? this.active.get(message.id) : undefined;
-        if (message.id) this.active.delete(message.id);
-        subscription?.sink.complete?.();
+        // Still wanted, so the server ended it: resubscribe, then say what was missed.
+        const id = message.id;
+        const subscription = id ? this.active.get(id) : undefined;
+        if (id && subscription) this.restart(id, subscription);
         break;
       }
     }
+  }
+
+  private restart(id: string, subscription: AshActiveSubscription): void {
+    const missed = subscription.missed;
+    subscription.missed = undefined;
+    // Straight away after falling behind; with a growing pause if the server keeps
+    // ending it before it hears anything.
+    const delay = subscription.restarts === 0 ? 0 : Math.min(30_000, 250 * 2 ** subscription.restarts);
+    subscription.restarts += 1;
+    subscription.restartTimer = setTimeout(() => {
+      subscription.restartTimer = undefined;
+      if (this.active.get(id) !== subscription || !this.acknowledged) return;
+      this.send({
+        id,
+        type: "subscribe",
+        payload: { query: subscription.query, variables: subscription.variables },
+      });
+      if (subscription.sink.missed) {
+        subscription.sink.missed(missed);
+      } else {
+        subscription.sink.error?.(
+          new AshClientError(
+            missed === undefined ? "Subscription restarted" : `Missed ${missed} events`,
+          ),
+        );
+      }
+    }, delay);
   }
 
   private dropped(socket: WebSocket): void {
@@ -1571,6 +1622,11 @@ export class AshSubscriptionClient {
 
 export interface AshSubscribeOptions {
   onError?: (error: AshClientError) => void;
+  /**
+   * Called when events were missed, because this subscriber fell behind the server. It
+   * carries on; re-read anything built from its events. Without it, `onError` hears it.
+   */
+  onMissed?: (count?: number) => void;
 }
 
 export interface AshLiveOptions {
@@ -1606,6 +1662,7 @@ export interface AshLiveSpec<T> {
  * Changes apply as they arrive: an exact list (no filter, sort or paging) is patched in
  * place; any other list patches the records it holds and re-reads itself shortly after,
  * so records that enter or leave it, or move within it, land where the server puts them.
+ * If it misses events, because it fell behind the server, it re-reads straight away.
  */
 export function ashLiveQuery<T>(
   spec: AshLiveSpec<T>,
@@ -1662,7 +1719,11 @@ export function ashLiveQuery<T>(
     emit();
   };
 
-  const subscribeOptions: AshSubscribeOptions = { onError: (error) => options?.onError?.(error) };
+  const subscribeOptions: AshSubscribeOptions = {
+    onError: (error) => options?.onError?.(error),
+    // Changes it didn't hear about: read the list again.
+    onMissed: () => void refresh(),
+  };
   const unsubscribes = [
     spec.onCreated((record) => {
       if (spec.exact) upsert(record, true);
@@ -3479,6 +3540,7 @@ export class CabClient {
     return this.subscriptions.subscribe<{ cabCreated: Cab }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.cabCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3496,6 +3558,7 @@ export class CabClient {
     return this.subscriptions.subscribe<{ cabUpdated: Cab }>(query, { id: options?.id }, {
       next: (data) => handler(data.cabUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3510,6 +3573,7 @@ export class CabClient {
     return this.subscriptions.subscribe<{ cabDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.cabDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -3585,6 +3649,7 @@ export class DepotClient {
     return this.subscriptions.subscribe<{ depotCreated: Depot }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.depotCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3602,6 +3667,7 @@ export class DepotClient {
     return this.subscriptions.subscribe<{ depotUpdated: Depot }>(query, { id: options?.id }, {
       next: (data) => handler(data.depotUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3616,6 +3682,7 @@ export class DepotClient {
     return this.subscriptions.subscribe<{ depotDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.depotDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -3691,6 +3758,7 @@ export class RiderClient {
     return this.subscriptions.subscribe<{ riderCreated: Rider }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.riderCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3708,6 +3776,7 @@ export class RiderClient {
     return this.subscriptions.subscribe<{ riderUpdated: Rider }>(query, { id: options?.id }, {
       next: (data) => handler(data.riderUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3722,6 +3791,7 @@ export class RiderClient {
     return this.subscriptions.subscribe<{ riderDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.riderDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -3978,6 +4048,7 @@ export class TripClient {
     return this.subscriptions.subscribe<{ tripCreated: Trip }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.tripCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -3995,6 +4066,7 @@ export class TripClient {
     return this.subscriptions.subscribe<{ tripUpdated: Trip }>(query, { id: options?.id }, {
       next: (data) => handler(data.tripUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4009,6 +4081,7 @@ export class TripClient {
     return this.subscriptions.subscribe<{ tripDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.tripDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -4177,6 +4250,7 @@ export class ServiceZoneClient {
     return this.subscriptions.subscribe<{ serviceZoneCreated: ServiceZone }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.serviceZoneCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4194,6 +4268,7 @@ export class ServiceZoneClient {
     return this.subscriptions.subscribe<{ serviceZoneUpdated: ServiceZone }>(query, { id: options?.id }, {
       next: (data) => handler(data.serviceZoneUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4208,6 +4283,7 @@ export class ServiceZoneClient {
     return this.subscriptions.subscribe<{ serviceZoneDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.serviceZoneDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -4309,6 +4385,7 @@ export class TelemetrySampleClient {
     return this.subscriptions.subscribe<{ telemetrySampleCreated: TelemetrySample }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.telemetrySampleCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4326,6 +4403,7 @@ export class TelemetrySampleClient {
     return this.subscriptions.subscribe<{ telemetrySampleUpdated: TelemetrySample }>(query, { id: options?.id }, {
       next: (data) => handler(data.telemetrySampleUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4340,6 +4418,7 @@ export class TelemetrySampleClient {
     return this.subscriptions.subscribe<{ telemetrySampleDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.telemetrySampleDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -4503,6 +4582,7 @@ export class FleetAlertClient {
     return this.subscriptions.subscribe<{ fleetAlertCreated: FleetAlert }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.fleetAlertCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4520,6 +4600,7 @@ export class FleetAlertClient {
     return this.subscriptions.subscribe<{ fleetAlertUpdated: FleetAlert }>(query, { id: options?.id }, {
       next: (data) => handler(data.fleetAlertUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4534,6 +4615,7 @@ export class FleetAlertClient {
     return this.subscriptions.subscribe<{ fleetAlertDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.fleetAlertDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
@@ -4635,6 +4717,7 @@ export class PulseSampleClient {
     return this.subscriptions.subscribe<{ pulseSampleCreated: PulseSample }>(query, { filter: options?.filter }, {
       next: (data) => handler(data.pulseSampleCreated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4652,6 +4735,7 @@ export class PulseSampleClient {
     return this.subscriptions.subscribe<{ pulseSampleUpdated: PulseSample }>(query, { id: options?.id }, {
       next: (data) => handler(data.pulseSampleUpdated),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 
@@ -4666,6 +4750,7 @@ export class PulseSampleClient {
     return this.subscriptions.subscribe<{ pulseSampleDestroyed: string }>(query, { id: options?.id }, {
       next: (data) => handler(data.pulseSampleDestroyed),
       error: options?.onError,
+      missed: options?.onMissed,
     });
   }
 }
