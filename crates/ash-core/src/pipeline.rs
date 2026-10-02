@@ -302,9 +302,30 @@ pub fn run_validations_with_context(
                 }
             }
             Validation::Numericality { field, min, max } => {
-                if let Some(Value::Int(n)) = get_val(field) {
+                // Integers, and floats and decimals stored as their text, as Ash's
+                // numericality checks every kind of number.
+                let number = match get_val(field) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Int(n)) => Some(*n as f64),
+                    Some(Value::String(text)) => match text.parse::<f64>() {
+                        Ok(n) if n.is_finite() => Some(n),
+                        _ => {
+                            return Err(Error::Validation {
+                                field: (*field).to_string(),
+                                message: "must be a number".to_string(),
+                            });
+                        }
+                    },
+                    Some(_) => {
+                        return Err(Error::Validation {
+                            field: (*field).to_string(),
+                            message: "must be a number".to_string(),
+                        });
+                    }
+                };
+                if let Some(n) = number {
                     if let Some(min_val) = min
-                        && *n < *min_val
+                        && n < *min_val as f64
                     {
                         return Err(Error::Validation {
                             field: (*field).to_string(),
@@ -312,7 +333,7 @@ pub fn run_validations_with_context(
                         });
                     }
                     if let Some(max_val) = max
-                        && *n > *max_val
+                        && n > *max_val as f64
                     {
                         return Err(Error::Validation {
                             field: (*field).to_string(),

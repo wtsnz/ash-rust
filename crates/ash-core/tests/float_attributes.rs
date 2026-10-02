@@ -19,7 +19,11 @@ resource! {
         }
 
         actions {
-            create place { primary; accept [name, lat, lng, accuracy_m]; }
+            create place {
+                primary;
+                accept [name, lat, lng, accuracy_m];
+                validate numericality(lat, min: -90, max: 90);
+            }
             update nudge { primary; accept [lat, lng]; }
             read read { primary; }
         }
@@ -54,7 +58,10 @@ async fn floats_round_trip<D: DataLayer>(data: D) {
     let moved = capitol.nudge_on(&ctx).lat(30.275).lng(-97.74).await.unwrap();
     assert_eq!((moved.lat, moved.lng), (30.275, -97.74));
     let err = Beacon::place(&ctx).name("Nowhere").lat(f64::NAN).lng(0.0).await.unwrap_err();
-    assert!(matches!(err, Error::Constraint { .. }), "{err:?}");
+    assert!(matches!(err, Error::Constraint { .. } | Error::Validation { .. }), "{err:?}");
+    // Numericality checks floats as it does integers.
+    let err = Beacon::place(&ctx).name("Off the map").lat(91.5).lng(0.0).await.unwrap_err();
+    assert!(matches!(err, Error::Validation { ref field, .. } if field == "lat"), "{err:?}");
 }
 
 #[test]

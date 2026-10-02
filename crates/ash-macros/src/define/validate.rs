@@ -146,8 +146,18 @@ fn is_string_type(ty: &Type) -> bool {
     is_string(ty) || option_inner(ty).is_some_and(is_string)
 }
 
+/// Integers, floats and decimals, as Ash's numericality accepts.
 fn is_numeric_type(ty: &Type) -> bool {
-    is_integer(ty) || option_inner(ty).is_some_and(is_integer)
+    let number = |ty: &Type| {
+        is_integer(ty)
+            || matches!(
+                ty,
+                Type::Path(path) if path.path.segments.last().is_some_and(|segment| {
+                    matches!(segment.ident.to_string().as_str(), "f64" | "f32" | "Float" | "Decimal")
+                })
+            )
+    };
+    number(ty) || option_inner(ty).is_some_and(number)
 }
 
 fn check_unique_idents<'a>(
