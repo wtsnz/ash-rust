@@ -32,9 +32,9 @@ export function TripRow({
     <button className={`trip ${live ? "trip--live" : ""} ${selected ? "is-selected" : ""}`} onClick={onSelect}>
       <div className="trip__top">
         <span className="trip__route">
-          {trip.pickup_name}
+          {trip.pickupName}
           <i>→</i>
-          {trip.dropoff_name}
+          {trip.dropoffName}
         </span>
         <span className={`trip__state trip__state--${trip.status}`}>
           {journey.eta !== undefined ? `${TRIP_STATUS[trip.status]} · ${duration(journey.eta)}` : TRIP_STATUS[trip.status]}
@@ -44,19 +44,19 @@ export function TripRow({
       <div className="trip__meta">
         <span className="code">{trip.code}</span>
         <span>
-          {trip.rider?.display_name}
+          {trip.rider?.displayName}
           {trip.rider && TIER_MARK[trip.rider.tier] && <em className={`tier tier--${trip.rider.tier.toLowerCase()}`}>{TIER_MARK[trip.rider.tier]}</em>}
         </span>
         {cab && (
           <span className="cabchip" style={{ color: status ? CAB_STATUS[status].color : undefined }}>
-            {cab.call_sign}
+            {cab.callSign}
           </span>
         )}
         <span className="trip__fare">
-          {dollars(trip.fare_cents)}
+          {dollars(trip.fareCents)}
           {trip.surge > 1 && <small>{trip.surge.toFixed(1)}×</small>}
         </span>
-        <span className="trip__when">{ago(trip.completed_at ?? trip.cancelled_at ?? trip.requested_at, now)}</span>
+        <span className="trip__when">{ago(trip.completedAt ?? trip.cancelledAt ?? trip.requestedAt, now)}</span>
       </div>
     </button>
   );
@@ -93,10 +93,10 @@ export function TripFeed({
           <TripRow
             key={trip.id}
             trip={trip}
-            cab={trip.cab_id ? cabs.get(trip.cab_id) : undefined}
+            cab={trip.cabId ? cabs.get(trip.cabId) : undefined}
             now={now}
-            selected={!!trip.cab_id && trip.cab_id === selectedCabId}
-            onSelect={() => trip.cab_id && onSelectCab(trip.cab_id)}
+            selected={!!trip.cabId && trip.cabId === selectedCabId}
+            onSelect={() => trip.cabId && onSelectCab(trip.cabId)}
           />
         ))}
         {shown.length > FEED_ROWS && (
@@ -133,14 +133,14 @@ export function AlertStack({
   const [busy, setBusy] = useState<string>();
   const rank = { CRITICAL: 0, WARNING: 1, INFO: 2 } as Record<string, number>;
   const sorted = [...alerts].sort(
-    (a, b) => rank[a.severity] - rank[b.severity] || Date.parse(b.raised_at) - Date.parse(a.raised_at),
+    (a, b) => rank[a.severity] - rank[b.severity] || Date.parse(b.raisedAt) - Date.parse(a.raisedAt),
   );
   const act = async (alert: FleetAlert, kind: "acknowledge" | "resolve") => {
     setBusy(alert.id);
     try {
       const at = new Date().toISOString();
-      if (kind === "acknowledge") await client.fleetAlert.acknowledge(alert.id, { acknowledged_at: at, handled_by: "Ops desk" });
-      else await client.fleetAlert.resolve(alert.id, { resolved_at: at, handled_by: "Ops desk" });
+      if (kind === "acknowledge") await client.fleetAlert.acknowledge(alert.id, { acknowledgedAt: at, handledBy: "Ops desk" });
+      else await client.fleetAlert.resolve(alert.id, { resolvedAt: at, handledBy: "Ops desk" });
     } finally {
       setBusy(undefined);
     }
@@ -152,9 +152,9 @@ export function AlertStack({
         <article key={alert.id} className={`alert alert--${alert.severity.toLowerCase()} alert--${alert.status}`}>
           <div className="alert__head">
             <span className="alert__kind">{KIND[alert.kind] ?? alert.kind}</span>
-            <span className="alert__when">{ago(alert.raised_at, now)}</span>
+            <span className="alert__when">{ago(alert.raisedAt, now)}</span>
           </div>
-          <button className="alert__message" onClick={() => onSelectCab(alert.cab_id)}>
+          <button className="alert__message" onClick={() => onSelectCab(alert.cabId)}>
             {alert.message}
           </button>
           {!readOnly && (
@@ -195,8 +195,8 @@ export function ZoneBoard({ zones, readOnly }: { zones: ServiceZone[]; readOnly?
   const toggle = async (zone: ServiceZone) => {
     setBusy(zone.id);
     try {
-      if (zone.event_name) await client.serviceZone.clearEvent(zone.id, { event_name: null, event_boost: 1 });
-      else await client.serviceZone.hostEvent(zone.id, { event_name: EVENTS[zone.code] ?? "Special event", event_boost: 4 });
+      if (zone.eventName) await client.serviceZone.clearEvent(zone.id, { eventName: null, eventBoost: 1 });
+      else await client.serviceZone.hostEvent(zone.id, { eventName: EVENTS[zone.code] ?? "Special event", eventBoost: 4 });
     } finally {
       setBusy(undefined);
     }
@@ -204,10 +204,10 @@ export function ZoneBoard({ zones, readOnly }: { zones: ServiceZone[]; readOnly?
   return (
     <section className="zones">
       {sorted.map((zone) => (
-        <div key={zone.id} className={`zone ${zone.event_name ? "zone--event" : ""}`}>
+        <div key={zone.id} className={`zone ${zone.eventName ? "zone--event" : ""}`}>
           <div className="zone__name">
             {zone.name}
-            {zone.event_name && <span className="zone__event">{zone.event_name}</span>}
+            {zone.eventName && <span className="zone__event">{zone.eventName}</span>}
           </div>
           <div className="zone__stats">
             <span className={zone.waiting >= 3 ? "is-warn" : ""}>
@@ -216,7 +216,7 @@ export function ZoneBoard({ zones, readOnly }: { zones: ServiceZone[]; readOnly?
             <span className={`surge ${zone.surge > 1 ? "surge--on" : ""}`}>{zone.surge.toFixed(1)}×</span>
             {!readOnly && (
               <button className="ghost" disabled={busy === zone.id} onClick={() => toggle(zone)}>
-                {zone.event_name ? "End event" : "Stage event"}
+                {zone.eventName ? "End event" : "Stage event"}
               </button>
             )}
           </div>

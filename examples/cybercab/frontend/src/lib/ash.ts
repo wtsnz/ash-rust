@@ -10,231 +10,189 @@ import { useEffect, useState } from "react";
 // Common Ash TypeScript Types
 export type SortOrder = "asc" | "desc";
 
-export interface PageInfo {
-  hasNextPage: boolean;
-  hasPreviousPage: boolean;
-  startCursor?: string | null;
-  endCursor?: string | null;
-}
-
+/** A keyset page of records, as AshGraphql returns a paginated read. */
 export interface PaginatedResult<T> {
   results: T[];
-  totalCount?: number;
-  pageInfo?: PageInfo;
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  startKeyset?: string | null;
+  endKeyset?: string | null;
 }
 
-export interface UuidFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
+/** The operators AshGraphql filters a field by. */
+export interface AshFilter<T> {
   isNil?: boolean;
+  eq?: T | null;
+  notEq?: T | null;
+  in?: (T | null)[];
+  lessThan?: T;
+  greaterThan?: T;
+  lessThanOrEqual?: T;
+  greaterThanOrEqual?: T;
+  isDistinctFrom?: T | null;
+  isNotDistinctFrom?: T | null;
 }
 
-export interface StringFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
-}
-
-export interface TextFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
+/** A text field's filter: AshFilter's operators and AshGraphql's text operators. */
+export interface AshTextFilter extends AshFilter<string> {
   contains?: string;
-  startsWith?: string;
-  endsWith?: string;
-}
-
-export interface FloatFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  isNil?: boolean;
-}
-
-export interface IntFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  in?: number[];
-  isNil?: boolean;
-}
-
-export interface BooleanFilter {
-  eq?: boolean;
-  ne?: boolean;
-  isNil?: boolean;
+  stringStartsWith?: string;
+  stringEndsWith?: string;
+  like?: string;
+  ilike?: string;
 }
 
 // --- Section 2: Resource Types & Action Inputs ---
 export interface Cab {
   id: string;
-  call_sign: string;
+  callSign: string;
   nickname: string;
   vin: string;
   software: string;
-  depot_id: string;
+  depotId: string;
   lng: number;
   lat: number;
-  heading_deg: number;
-  speed_kph: number;
-  battery_pct: number;
-  range_km: number;
-  odometer_km: number;
-  cabin_temp_c: number;
+  headingDeg: number;
+  speedKph: number;
+  batteryPct: number;
+  rangeKm: number;
+  odometerKm: number;
+  cabinTempC: number;
   halted: boolean;
-  trip_id?: string | null;
-  last_seen_at?: string | null;
+  tripId?: string | null;
+  lastSeenAt?: string | null;
   status: string;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
   depot?: Depot | null;
   trip?: Trip | null;
   trips?: Trip[];
-  trips_completed?: number | null;
-  fares_cents?: number | null;
+  tripsCompleted?: number | null;
+  faresCents?: number | null;
 }
 
 export interface CommissionCabInput {
-  call_sign: string;
+  callSign: string;
   nickname: string;
   vin: string;
   software: string;
-  depot_id: string;
+  depotId: string;
   lng: number;
   lat: number;
-  heading_deg: number;
-  speed_kph: number;
-  battery_pct: number;
-  range_km: number;
-  odometer_km: number;
-  cabin_temp_c: number;
+  headingDeg: number;
+  speedKph: number;
+  batteryPct: number;
+  rangeKm: number;
+  odometerKm: number;
+  cabinTempC: number;
 }
 
 export type CabCommissionInput = CommissionCabInput;
 
 export interface ReportCabInput {
-  id?: string;
   lng?: number | null;
   lat?: number | null;
-  heading_deg?: number | null;
-  speed_kph?: number | null;
-  battery_pct?: number | null;
-  range_km?: number | null;
-  odometer_km?: number | null;
-  cabin_temp_c?: number | null;
-  last_seen_at?: string | null;
+  headingDeg?: number | null;
+  speedKph?: number | null;
+  batteryPct?: number | null;
+  rangeKm?: number | null;
+  odometerKm?: number | null;
+  cabinTempC?: number | null;
+  lastSeenAt?: string | null;
 }
 
 export type CabReportInput = ReportCabInput;
 
 export interface DispatchCabInput {
-  id?: string;
-  trip_id?: string | null;
+  tripId?: string | null;
 }
 
 export type CabDispatchInput = DispatchCabInput;
 
 export interface BeginRideCabInput {
-  id?: string;
 }
 
 export type CabBeginRideInput = BeginRideCabInput;
 
 export interface FinishRideCabInput {
-  id?: string;
-  trip_id?: string | null;
+  tripId?: string | null;
 }
 
 export type CabFinishRideInput = FinishRideCabInput;
 
 export interface StandDownCabInput {
-  id?: string;
-  trip_id?: string | null;
+  tripId?: string | null;
 }
 
 export type CabStandDownInput = StandDownCabInput;
 
 export interface RecallCabInput {
-  id?: string;
 }
 
 export type CabRecallInput = RecallCabInput;
 
 export interface PlugInCabInput {
-  id?: string;
 }
 
 export type CabPlugInInput = PlugInCabInput;
 
 export interface UnplugCabInput {
-  id?: string;
 }
 
 export type CabUnplugInput = UnplugCabInput;
 
 export interface GroundCabInput {
-  id?: string;
 }
 
 export type CabGroundInput = GroundCabInput;
 
 export interface ReleaseCabInput {
-  id?: string;
 }
 
 export type CabReleaseInput = ReleaseCabInput;
 
 export interface PullOverCabInput {
-  id?: string;
 }
 
 export type CabPullOverInput = PullOverCabInput;
 
 export interface ResumeCabInput {
-  id?: string;
 }
 
 export type CabResumeInput = ResumeCabInput;
 
 export interface CabFilterInput {
-  id?: UuidFilter;
-  call_sign?: TextFilter;
-  nickname?: TextFilter;
-  vin?: TextFilter;
-  software?: TextFilter;
-  depot_id?: UuidFilter;
-  lng?: FloatFilter;
-  lat?: FloatFilter;
-  heading_deg?: IntFilter;
-  speed_kph?: IntFilter;
-  battery_pct?: IntFilter;
-  range_km?: IntFilter;
-  odometer_km?: FloatFilter;
-  cabin_temp_c?: FloatFilter;
-  halted?: BooleanFilter;
-  trip_id?: UuidFilter;
-  last_seen_at?: StringFilter;
-  status?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  callSign?: AshTextFilter;
+  nickname?: AshTextFilter;
+  vin?: AshTextFilter;
+  software?: AshTextFilter;
+  depotId?: AshFilter<string>;
+  lng?: AshFilter<number>;
+  lat?: AshFilter<number>;
+  headingDeg?: AshFilter<number>;
+  speedKph?: AshFilter<number>;
+  batteryPct?: AshFilter<number>;
+  rangeKm?: AshFilter<number>;
+  odometerKm?: AshFilter<number>;
+  cabinTempC?: AshFilter<number>;
+  halted?: AshFilter<boolean>;
+  tripId?: AshFilter<string>;
+  lastSeenAt?: AshFilter<string>;
+  status?: AshTextFilter;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  tripsCompleted?: AshFilter<number>;
+  faresCents?: AshFilter<number>;
   depot?: DepotFilterInput;
   trip?: TripFilterInput;
   trips?: TripFilterInput;
   and?: CabFilterInput[];
   or?: CabFilterInput[];
-  not?: CabFilterInput;
+  not?: CabFilterInput[];
 }
 
-export type CabSortField = "id" | "call_sign" | "nickname" | "vin" | "software" | "depot_id" | "lng" | "lat" | "heading_deg" | "speed_kph" | "battery_pct" | "range_km" | "odometer_km" | "cabin_temp_c" | "halted" | "trip_id" | "last_seen_at" | "status" | "created_at" | "updated_at";
+export type CabSortField = "id" | "callSign" | "nickname" | "vin" | "software" | "depotId" | "lng" | "lat" | "headingDeg" | "speedKph" | "batteryPct" | "rangeKm" | "odometerKm" | "cabinTempC" | "halted" | "tripId" | "lastSeenAt" | "status" | "createdAt" | "updatedAt" | "tripsCompleted" | "faresCents";
 
 export interface CabSortInput {
   field: CabSortField;
@@ -256,7 +214,7 @@ export interface Depot {
   lat: number;
   stalls: number;
   cabs?: Cab[];
-  cab_count?: number | null;
+  cabCount?: number | null;
   charging?: number | null;
 }
 
@@ -271,19 +229,21 @@ export interface OpenDepotInput {
 export type DepotOpenInput = OpenDepotInput;
 
 export interface DepotFilterInput {
-  id?: UuidFilter;
-  code?: TextFilter;
-  name?: TextFilter;
-  lng?: FloatFilter;
-  lat?: FloatFilter;
-  stalls?: IntFilter;
+  id?: AshFilter<string>;
+  code?: AshTextFilter;
+  name?: AshTextFilter;
+  lng?: AshFilter<number>;
+  lat?: AshFilter<number>;
+  stalls?: AshFilter<number>;
+  cabCount?: AshFilter<number>;
+  charging?: AshFilter<number>;
   cabs?: CabFilterInput;
   and?: DepotFilterInput[];
   or?: DepotFilterInput[];
-  not?: DepotFilterInput;
+  not?: DepotFilterInput[];
 }
 
-export type DepotSortField = "id" | "code" | "name" | "lng" | "lat" | "stalls";
+export type DepotSortField = "id" | "code" | "name" | "lng" | "lat" | "stalls" | "cabCount" | "charging";
 
 export interface DepotSortInput {
   field: DepotSortField;
@@ -297,51 +257,46 @@ export interface DepotInclude {
 
 export interface Rider {
   id: string;
-  display_name: string;
+  displayName: string;
   tier: "STANDARD" | "PLUS" | "FOUNDER";
   rating: number;
-  phone_last4: string;
-  assisted_boarding: boolean;
-  created_at: string;
-  updated_at: string;
+  phoneLast4: string;
+  assistedBoarding: boolean;
+  createdAt: string;
+  updatedAt: string;
   trips?: Trip[];
-  trip_count?: number | null;
-  lifetime_cents?: number | null;
+  tripCount?: number | null;
+  lifetimeCents?: number | null;
 }
 
 export interface SignUpRiderInput {
-  display_name: string;
+  displayName: string;
   tier: "STANDARD" | "PLUS" | "FOUNDER";
   rating: number;
-  phone_last4: string;
-  assisted_boarding: boolean;
+  phoneLast4: string;
+  assistedBoarding?: boolean | null;
 }
 
 export type RiderSignUpInput = SignUpRiderInput;
 
-export interface RiderTierFilter {
-  eq?: "STANDARD" | "PLUS" | "FOUNDER";
-  ne?: "STANDARD" | "PLUS" | "FOUNDER";
-  in?: ("STANDARD" | "PLUS" | "FOUNDER")[];
-  isNil?: boolean;
-}
-
 export interface RiderFilterInput {
-  id?: UuidFilter;
-  display_name?: TextFilter;
-  tier?: RiderTierFilter;
-  rating?: FloatFilter;
-  phone_last4?: TextFilter;
-  assisted_boarding?: BooleanFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  displayName?: AshTextFilter;
+  tier?: AshFilter<"STANDARD" | "PLUS" | "FOUNDER">;
+  rating?: AshFilter<number>;
+  phoneLast4?: AshTextFilter;
+  assistedBoarding?: AshFilter<boolean>;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  tripCount?: AshFilter<number>;
+  lifetimeCents?: AshFilter<number>;
   trips?: TripFilterInput;
   and?: RiderFilterInput[];
   or?: RiderFilterInput[];
-  not?: RiderFilterInput;
+  not?: RiderFilterInput[];
 }
 
-export type RiderSortField = "id" | "display_name" | "tier" | "rating" | "phone_last4" | "assisted_boarding" | "created_at" | "updated_at";
+export type RiderSortField = "id" | "displayName" | "tier" | "rating" | "phoneLast4" | "assistedBoarding" | "createdAt" | "updatedAt" | "tripCount" | "lifetimeCents";
 
 export interface RiderSortInput {
   field: RiderSortField;
@@ -356,147 +311,142 @@ export interface RiderInclude {
 export interface Trip {
   id: string;
   code: string;
-  rider_id: string;
-  zone_id: string;
-  cab_id?: string | null;
-  pickup_name: string;
-  pickup_lng: number;
-  pickup_lat: number;
-  dropoff_name: string;
-  dropoff_lng: number;
-  dropoff_lat: number;
-  ride_polyline: string;
-  approach_polyline?: string | null;
-  distance_m: number;
-  duration_s: number;
+  riderId: string;
+  zoneId: string;
+  cabId?: string | null;
+  pickupName: string;
+  pickupLng: number;
+  pickupLat: number;
+  dropoffName: string;
+  dropoffLng: number;
+  dropoffLat: number;
+  ridePolyline: string;
+  approachPolyline?: string | null;
+  distanceM: number;
+  durationS: number;
   surge: number;
-  fare_cents: number;
-  requested_at: string;
-  assigned_at?: string | null;
-  pickup_eta_at?: string | null;
-  arrived_at?: string | null;
-  picked_up_at?: string | null;
-  dropoff_eta_at?: string | null;
-  completed_at?: string | null;
-  cancelled_at?: string | null;
-  cancel_reason?: string | null;
+  fareCents: number;
+  requestedAt: string;
+  assignedAt?: string | null;
+  pickupEtaAt?: string | null;
+  arrivedAt?: string | null;
+  pickedUpAt?: string | null;
+  dropoffEtaAt?: string | null;
+  completedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
   rating?: number | null;
   status: string;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
   rider?: Rider | null;
   cab?: Cab | null;
   zone?: ServiceZone | null;
-  route_label?: string | null;
+  routeLabel?: string | null;
 }
 
 export interface RequestTripInput {
   code: string;
-  rider_id: string;
-  zone_id: string;
-  pickup_name: string;
-  pickup_lng: number;
-  pickup_lat: number;
-  dropoff_name: string;
-  dropoff_lng: number;
-  dropoff_lat: number;
-  ride_polyline: string;
-  distance_m: number;
-  duration_s: number;
+  riderId: string;
+  zoneId: string;
+  pickupName: string;
+  pickupLng: number;
+  pickupLat: number;
+  dropoffName: string;
+  dropoffLng: number;
+  dropoffLat: number;
+  ridePolyline: string;
+  distanceM: number;
+  durationS: number;
   surge: number;
-  fare_cents: number;
-  requested_at: string;
+  fareCents: number;
+  requestedAt: string;
 }
 
 export type TripRequestInput = RequestTripInput;
 
 export interface AssignTripInput {
-  id?: string;
-  cab_id?: string | null;
-  approach_polyline?: string | null;
-  assigned_at?: string | null;
-  pickup_eta_at?: string | null;
+  cabId?: string | null;
+  approachPolyline?: string | null;
+  assignedAt?: string | null;
+  pickupEtaAt?: string | null;
 }
 
 export type TripAssignInput = AssignTripInput;
 
 export interface ArriveTripInput {
-  id?: string;
-  arrived_at?: string | null;
+  arrivedAt?: string | null;
 }
 
 export type TripArriveInput = ArriveTripInput;
 
 export interface BoardTripInput {
-  id?: string;
-  picked_up_at?: string | null;
-  dropoff_eta_at?: string | null;
+  pickedUpAt?: string | null;
+  dropoffEtaAt?: string | null;
 }
 
 export type TripBoardInput = BoardTripInput;
 
 export interface CompleteTripInput {
-  id?: string;
-  completed_at?: string | null;
+  completedAt?: string | null;
   rating?: number | null;
 }
 
 export type TripCompleteInput = CompleteTripInput;
 
 export interface CancelTripInput {
-  id?: string;
-  cancelled_at?: string | null;
-  cancel_reason?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
 }
 
 export type TripCancelInput = CancelTripInput;
 
 export interface ArchiveTripInput {
-  id: string;
 }
 
 export type TripArchiveInput = ArchiveTripInput;
 
 export interface TripFilterInput {
-  id?: UuidFilter;
-  code?: TextFilter;
-  rider_id?: UuidFilter;
-  zone_id?: UuidFilter;
-  cab_id?: UuidFilter;
-  pickup_name?: TextFilter;
-  pickup_lng?: FloatFilter;
-  pickup_lat?: FloatFilter;
-  dropoff_name?: TextFilter;
-  dropoff_lng?: FloatFilter;
-  dropoff_lat?: FloatFilter;
-  ride_polyline?: TextFilter;
-  approach_polyline?: TextFilter;
-  distance_m?: IntFilter;
-  duration_s?: IntFilter;
-  surge?: FloatFilter;
-  fare_cents?: IntFilter;
-  requested_at?: StringFilter;
-  assigned_at?: StringFilter;
-  pickup_eta_at?: StringFilter;
-  arrived_at?: StringFilter;
-  picked_up_at?: StringFilter;
-  dropoff_eta_at?: StringFilter;
-  completed_at?: StringFilter;
-  cancelled_at?: StringFilter;
-  cancel_reason?: TextFilter;
-  rating?: IntFilter;
-  status?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  code?: AshTextFilter;
+  riderId?: AshFilter<string>;
+  zoneId?: AshFilter<string>;
+  cabId?: AshFilter<string>;
+  pickupName?: AshTextFilter;
+  pickupLng?: AshFilter<number>;
+  pickupLat?: AshFilter<number>;
+  dropoffName?: AshTextFilter;
+  dropoffLng?: AshFilter<number>;
+  dropoffLat?: AshFilter<number>;
+  ridePolyline?: AshTextFilter;
+  approachPolyline?: AshTextFilter;
+  distanceM?: AshFilter<number>;
+  durationS?: AshFilter<number>;
+  surge?: AshFilter<number>;
+  fareCents?: AshFilter<number>;
+  requestedAt?: AshFilter<string>;
+  assignedAt?: AshFilter<string>;
+  pickupEtaAt?: AshFilter<string>;
+  arrivedAt?: AshFilter<string>;
+  pickedUpAt?: AshFilter<string>;
+  dropoffEtaAt?: AshFilter<string>;
+  completedAt?: AshFilter<string>;
+  cancelledAt?: AshFilter<string>;
+  cancelReason?: AshTextFilter;
+  rating?: AshFilter<number>;
+  status?: AshTextFilter;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  routeLabel?: AshTextFilter;
   rider?: RiderFilterInput;
   cab?: CabFilterInput;
   zone?: ServiceZoneFilterInput;
   and?: TripFilterInput[];
   or?: TripFilterInput[];
-  not?: TripFilterInput;
+  not?: TripFilterInput[];
 }
 
-export type TripSortField = "id" | "code" | "rider_id" | "zone_id" | "cab_id" | "pickup_name" | "pickup_lng" | "pickup_lat" | "dropoff_name" | "dropoff_lng" | "dropoff_lat" | "ride_polyline" | "approach_polyline" | "distance_m" | "duration_s" | "surge" | "fare_cents" | "requested_at" | "assigned_at" | "pickup_eta_at" | "arrived_at" | "picked_up_at" | "dropoff_eta_at" | "completed_at" | "cancelled_at" | "cancel_reason" | "rating" | "status" | "created_at" | "updated_at";
+export type TripSortField = "id" | "code" | "riderId" | "zoneId" | "cabId" | "pickupName" | "pickupLng" | "pickupLat" | "dropoffName" | "dropoffLng" | "dropoffLat" | "ridePolyline" | "approachPolyline" | "distanceM" | "durationS" | "surge" | "fareCents" | "requestedAt" | "assignedAt" | "pickupEtaAt" | "arrivedAt" | "pickedUpAt" | "dropoffEtaAt" | "completedAt" | "cancelledAt" | "cancelReason" | "rating" | "status" | "createdAt" | "updatedAt" | "routeLabel";
 
 export interface TripSortInput {
   field: TripSortField;
@@ -516,15 +466,15 @@ export interface ServiceZone {
   name: string;
   lng: number;
   lat: number;
-  radius_m: number;
-  base_demand: number;
+  radiusM: number;
+  baseDemand: number;
   surge: number;
   waiting: number;
-  event_name?: string | null;
-  event_boost: number;
+  eventName?: string | null;
+  eventBoost: number;
   trips?: Trip[];
-  trips_today?: number | null;
-  completed_today?: number | null;
+  tripsToday?: number | null;
+  completedToday?: number | null;
 }
 
 export interface ChartServiceZoneInput {
@@ -532,57 +482,56 @@ export interface ChartServiceZoneInput {
   name: string;
   lng: number;
   lat: number;
-  radius_m: number;
-  base_demand: number;
+  radiusM: number;
+  baseDemand: number;
   surge: number;
-  event_boost: number;
+  eventBoost: number;
 }
 
 export type ServiceZoneChartInput = ChartServiceZoneInput;
 
 export interface MeasureServiceZoneInput {
-  id?: string;
-  waiting?: number | null;
   surge?: number | null;
+  waiting?: number | null;
 }
 
 export type ServiceZoneMeasureInput = MeasureServiceZoneInput;
 
 export interface HostEventServiceZoneInput {
-  id?: string;
-  event_name?: string | null;
-  event_boost?: number | null;
+  eventName?: string | null;
+  eventBoost?: number | null;
 }
 
 export type ServiceZoneHostEventInput = HostEventServiceZoneInput;
 
 export interface ClearEventServiceZoneInput {
-  id?: string;
-  event_name?: string | null;
-  event_boost?: number | null;
+  eventName?: string | null;
+  eventBoost?: number | null;
 }
 
 export type ServiceZoneClearEventInput = ClearEventServiceZoneInput;
 
 export interface ServiceZoneFilterInput {
-  id?: UuidFilter;
-  code?: TextFilter;
-  name?: TextFilter;
-  lng?: FloatFilter;
-  lat?: FloatFilter;
-  radius_m?: IntFilter;
-  base_demand?: FloatFilter;
-  surge?: FloatFilter;
-  waiting?: IntFilter;
-  event_name?: TextFilter;
-  event_boost?: FloatFilter;
+  id?: AshFilter<string>;
+  code?: AshTextFilter;
+  name?: AshTextFilter;
+  lng?: AshFilter<number>;
+  lat?: AshFilter<number>;
+  radiusM?: AshFilter<number>;
+  baseDemand?: AshFilter<number>;
+  surge?: AshFilter<number>;
+  waiting?: AshFilter<number>;
+  eventName?: AshTextFilter;
+  eventBoost?: AshFilter<number>;
+  tripsToday?: AshFilter<number>;
+  completedToday?: AshFilter<number>;
   trips?: TripFilterInput;
   and?: ServiceZoneFilterInput[];
   or?: ServiceZoneFilterInput[];
-  not?: ServiceZoneFilterInput;
+  not?: ServiceZoneFilterInput[];
 }
 
-export type ServiceZoneSortField = "id" | "code" | "name" | "lng" | "lat" | "radius_m" | "base_demand" | "surge" | "waiting" | "event_name" | "event_boost";
+export type ServiceZoneSortField = "id" | "code" | "name" | "lng" | "lat" | "radiusM" | "baseDemand" | "surge" | "waiting" | "eventName" | "eventBoost" | "tripsToday" | "completedToday";
 
 export interface ServiceZoneSortInput {
   field: ServiceZoneSortField;
@@ -596,47 +545,46 @@ export interface ServiceZoneInclude {
 
 export interface TelemetrySample {
   id: string;
-  cab_id: string;
-  recorded_at: string;
+  cabId: string;
+  recordedAt: string;
   lng: number;
   lat: number;
-  speed_kph: number;
-  battery_pct: number;
+  speedKph: number;
+  batteryPct: number;
   cab?: Cab | null;
 }
 
 export interface RecordTelemetrySampleInput {
-  cab_id: string;
-  recorded_at: string;
+  cabId: string;
+  recordedAt: string;
   lng: number;
   lat: number;
-  speed_kph: number;
-  battery_pct: number;
+  speedKph: number;
+  batteryPct: number;
 }
 
 export type TelemetrySampleRecordInput = RecordTelemetrySampleInput;
 
 export interface PruneTelemetrySampleInput {
-  id: string;
 }
 
 export type TelemetrySamplePruneInput = PruneTelemetrySampleInput;
 
 export interface TelemetrySampleFilterInput {
-  id?: UuidFilter;
-  cab_id?: UuidFilter;
-  recorded_at?: StringFilter;
-  lng?: FloatFilter;
-  lat?: FloatFilter;
-  speed_kph?: IntFilter;
-  battery_pct?: IntFilter;
+  id?: AshFilter<string>;
+  cabId?: AshFilter<string>;
+  recordedAt?: AshFilter<string>;
+  lng?: AshFilter<number>;
+  lat?: AshFilter<number>;
+  speedKph?: AshFilter<number>;
+  batteryPct?: AshFilter<number>;
   cab?: CabFilterInput;
   and?: TelemetrySampleFilterInput[];
   or?: TelemetrySampleFilterInput[];
-  not?: TelemetrySampleFilterInput;
+  not?: TelemetrySampleFilterInput[];
 }
 
-export type TelemetrySampleSortField = "id" | "cab_id" | "recorded_at" | "lng" | "lat" | "speed_kph" | "battery_pct";
+export type TelemetrySampleSortField = "id" | "cabId" | "recordedAt" | "lng" | "lat" | "speedKph" | "batteryPct";
 
 export interface TelemetrySampleSortInput {
   field: TelemetrySampleSortField;
@@ -650,93 +598,76 @@ export interface TelemetrySampleInclude {
 
 export interface FleetAlert {
   id: string;
-  cab_id: string;
-  trip_id?: string | null;
+  cabId: string;
+  tripId?: string | null;
   kind: "LOW_BATTERY" | "HARD_BRAKING" | "OBSTRUCTION" | "RIDER_ASSIST" | "SENSOR_DEGRADED" | "DOOR_AJAR";
   severity: "INFO" | "WARNING" | "CRITICAL";
   message: string;
   lng: number;
   lat: number;
-  raised_at: string;
-  acknowledged_at?: string | null;
-  resolved_at?: string | null;
-  handled_by?: string | null;
+  raisedAt: string;
+  acknowledgedAt?: string | null;
+  resolvedAt?: string | null;
+  handledBy?: string | null;
   status: string;
   cab?: Cab | null;
   trip?: Trip | null;
 }
 
 export interface RaiseFleetAlertInput {
-  cab_id: string;
-  trip_id?: string | null;
+  cabId: string;
+  tripId?: string | null;
   kind: "LOW_BATTERY" | "HARD_BRAKING" | "OBSTRUCTION" | "RIDER_ASSIST" | "SENSOR_DEGRADED" | "DOOR_AJAR";
   severity: "INFO" | "WARNING" | "CRITICAL";
   message: string;
   lng: number;
   lat: number;
-  raised_at: string;
+  raisedAt: string;
 }
 
 export type FleetAlertRaiseInput = RaiseFleetAlertInput;
 
 export interface AcknowledgeFleetAlertInput {
-  id?: string;
-  acknowledged_at?: string | null;
-  handled_by?: string | null;
+  acknowledgedAt?: string | null;
+  handledBy?: string | null;
 }
 
 export type FleetAlertAcknowledgeInput = AcknowledgeFleetAlertInput;
 
 export interface ResolveFleetAlertInput {
-  id?: string;
-  resolved_at?: string | null;
-  handled_by?: string | null;
+  resolvedAt?: string | null;
+  handledBy?: string | null;
 }
 
 export type FleetAlertResolveInput = ResolveFleetAlertInput;
 
 export interface PruneFleetAlertInput {
-  id: string;
 }
 
 export type FleetAlertPruneInput = PruneFleetAlertInput;
 
-export interface FleetAlertKindFilter {
-  eq?: "LOW_BATTERY" | "HARD_BRAKING" | "OBSTRUCTION" | "RIDER_ASSIST" | "SENSOR_DEGRADED" | "DOOR_AJAR";
-  ne?: "LOW_BATTERY" | "HARD_BRAKING" | "OBSTRUCTION" | "RIDER_ASSIST" | "SENSOR_DEGRADED" | "DOOR_AJAR";
-  in?: ("LOW_BATTERY" | "HARD_BRAKING" | "OBSTRUCTION" | "RIDER_ASSIST" | "SENSOR_DEGRADED" | "DOOR_AJAR")[];
-  isNil?: boolean;
-}
-
-export interface FleetAlertSeverityFilter {
-  eq?: "INFO" | "WARNING" | "CRITICAL";
-  ne?: "INFO" | "WARNING" | "CRITICAL";
-  in?: ("INFO" | "WARNING" | "CRITICAL")[];
-  isNil?: boolean;
-}
-
 export interface FleetAlertFilterInput {
-  id?: UuidFilter;
-  cab_id?: UuidFilter;
-  trip_id?: UuidFilter;
-  kind?: FleetAlertKindFilter;
-  severity?: FleetAlertSeverityFilter;
-  message?: TextFilter;
-  lng?: FloatFilter;
-  lat?: FloatFilter;
-  raised_at?: StringFilter;
-  acknowledged_at?: StringFilter;
-  resolved_at?: StringFilter;
-  handled_by?: TextFilter;
-  status?: TextFilter;
+  id?: AshFilter<string>;
+  cabId?: AshFilter<string>;
+  tripId?: AshFilter<string>;
+  kind?: AshFilter<"LOW_BATTERY" | "HARD_BRAKING" | "OBSTRUCTION" | "RIDER_ASSIST" | "SENSOR_DEGRADED" | "DOOR_AJAR">;
+  severity?: AshFilter<"INFO" | "WARNING" | "CRITICAL">;
+  message?: AshTextFilter;
+  lng?: AshFilter<number>;
+  lat?: AshFilter<number>;
+  raisedAt?: AshFilter<string>;
+  acknowledgedAt?: AshFilter<string>;
+  resolvedAt?: AshFilter<string>;
+  handledBy?: AshTextFilter;
+  status?: AshTextFilter;
   cab?: CabFilterInput;
   trip?: TripFilterInput;
   and?: FleetAlertFilterInput[];
   or?: FleetAlertFilterInput[];
-  not?: FleetAlertFilterInput;
+  not?: FleetAlertFilterInput[];
 }
 
-export type FleetAlertSortField = "id" | "cab_id" | "trip_id" | "kind" | "severity" | "message" | "lng" | "lat" | "raised_at" | "acknowledged_at" | "resolved_at" | "handled_by" | "status";
+export type FleetAlertSortField = "id" | "cabId" | "tripId" | "kind" | "severity" | "message" | "lng" | "lat" | "raisedAt" | "acknowledgedAt" | "resolvedAt" | "handledBy" | "status";
 
 export interface FleetAlertSortInput {
   field: FleetAlertSortField;
@@ -751,66 +682,65 @@ export interface FleetAlertInclude {
 
 export interface PulseSample {
   id: string;
-  recorded_at: string;
+  recordedAt: string;
   available: number;
   dispatched: number;
-  on_trip: number;
+  onTrip: number;
   returning: number;
   charging: number;
   maintenance: number;
   waiting: number;
-  completed_today: number;
-  revenue_cents_today: number;
-  avg_wait_s: number;
-  utilization_pct: number;
-  avg_battery_pct: number;
+  completedToday: number;
+  revenueCentsToday: number;
+  avgWaitS: number;
+  utilizationPct: number;
+  avgBatteryPct: number;
 }
 
 export interface RecordPulseSampleInput {
-  recorded_at: string;
+  recordedAt: string;
   available: number;
   dispatched: number;
-  on_trip: number;
+  onTrip: number;
   returning: number;
   charging: number;
   maintenance: number;
   waiting: number;
-  completed_today: number;
-  revenue_cents_today: number;
-  avg_wait_s: number;
-  utilization_pct: number;
-  avg_battery_pct: number;
+  completedToday: number;
+  revenueCentsToday: number;
+  avgWaitS: number;
+  utilizationPct: number;
+  avgBatteryPct: number;
 }
 
 export type PulseSampleRecordInput = RecordPulseSampleInput;
 
 export interface PrunePulseSampleInput {
-  id: string;
 }
 
 export type PulseSamplePruneInput = PrunePulseSampleInput;
 
 export interface PulseSampleFilterInput {
-  id?: UuidFilter;
-  recorded_at?: StringFilter;
-  available?: IntFilter;
-  dispatched?: IntFilter;
-  on_trip?: IntFilter;
-  returning?: IntFilter;
-  charging?: IntFilter;
-  maintenance?: IntFilter;
-  waiting?: IntFilter;
-  completed_today?: IntFilter;
-  revenue_cents_today?: IntFilter;
-  avg_wait_s?: IntFilter;
-  utilization_pct?: IntFilter;
-  avg_battery_pct?: IntFilter;
+  id?: AshFilter<string>;
+  recordedAt?: AshFilter<string>;
+  available?: AshFilter<number>;
+  dispatched?: AshFilter<number>;
+  onTrip?: AshFilter<number>;
+  returning?: AshFilter<number>;
+  charging?: AshFilter<number>;
+  maintenance?: AshFilter<number>;
+  waiting?: AshFilter<number>;
+  completedToday?: AshFilter<number>;
+  revenueCentsToday?: AshFilter<number>;
+  avgWaitS?: AshFilter<number>;
+  utilizationPct?: AshFilter<number>;
+  avgBatteryPct?: AshFilter<number>;
   and?: PulseSampleFilterInput[];
   or?: PulseSampleFilterInput[];
-  not?: PulseSampleFilterInput;
+  not?: PulseSampleFilterInput[];
 }
 
-export type PulseSampleSortField = "id" | "recorded_at" | "available" | "dispatched" | "on_trip" | "returning" | "charging" | "maintenance" | "waiting" | "completed_today" | "revenue_cents_today" | "avg_wait_s" | "utilization_pct" | "avg_battery_pct";
+export type PulseSampleSortField = "id" | "recordedAt" | "available" | "dispatched" | "onTrip" | "returning" | "charging" | "maintenance" | "waiting" | "completedToday" | "revenueCentsToday" | "avgWaitS" | "utilizationPct" | "avgBatteryPct";
 
 export interface PulseSampleSortInput {
   field: PulseSampleSortField;
@@ -824,125 +754,113 @@ export interface PulseSampleInclude {
 // --- Section 3: Zod Validation Schemas ---
 export const CabSchema = z.object({
   id: z.string().uuid(),
-  call_sign: z.string(),
+  callSign: z.string(),
   nickname: z.string(),
   vin: z.string(),
   software: z.string(),
-  depot_id: z.string().uuid(),
+  depotId: z.string().uuid(),
   lng: z.number(),
   lat: z.number(),
-  heading_deg: z.number().int(),
-  speed_kph: z.number().int(),
-  battery_pct: z.number().int(),
-  range_km: z.number().int(),
-  odometer_km: z.number(),
-  cabin_temp_c: z.number(),
+  headingDeg: z.number().int(),
+  speedKph: z.number().int(),
+  batteryPct: z.number().int(),
+  rangeKm: z.number().int(),
+  odometerKm: z.number(),
+  cabinTempC: z.number(),
   halted: z.boolean(),
-  trip_id: z.string().uuid().nullable().optional(),
-  last_seen_at: z.string().nullable().optional(),
+  tripId: z.string().uuid().nullable().optional(),
+  lastSeenAt: z.string().nullable().optional(),
   status: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const CommissionCabInputSchema = z.object({
-  call_sign: z.string(),
+  callSign: z.string(),
   nickname: z.string(),
   vin: z.string(),
   software: z.string(),
-  depot_id: z.string().uuid(),
+  depotId: z.string().uuid(),
   lng: z.number(),
   lat: z.number(),
-  heading_deg: z.number().int(),
-  speed_kph: z.number().int(),
-  battery_pct: z.number().int(),
-  range_km: z.number().int(),
-  odometer_km: z.number(),
-  cabin_temp_c: z.number(),
+  headingDeg: z.number().int(),
+  speedKph: z.number().int(),
+  batteryPct: z.number().int(),
+  rangeKm: z.number().int(),
+  odometerKm: z.number(),
+  cabinTempC: z.number(),
 });
 
 export const CabCommissionInputSchema = CommissionCabInputSchema;
 
 export const ReportCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
   lng: z.number().nullable().optional(),
   lat: z.number().nullable().optional(),
-  heading_deg: z.number().int().nullable().optional(),
-  speed_kph: z.number().int().nullable().optional(),
-  battery_pct: z.number().int().nullable().optional(),
-  range_km: z.number().int().nullable().optional(),
-  odometer_km: z.number().nullable().optional(),
-  cabin_temp_c: z.number().nullable().optional(),
-  last_seen_at: z.string().nullable().optional(),
+  headingDeg: z.number().int().nullable().optional(),
+  speedKph: z.number().int().nullable().optional(),
+  batteryPct: z.number().int().nullable().optional(),
+  rangeKm: z.number().int().nullable().optional(),
+  odometerKm: z.number().nullable().optional(),
+  cabinTempC: z.number().nullable().optional(),
+  lastSeenAt: z.string().nullable().optional(),
 });
 
 export const CabReportInputSchema = ReportCabInputSchema;
 
 export const DispatchCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  trip_id: z.string().uuid().nullable().optional(),
+  tripId: z.string().uuid().nullable().optional(),
 });
 
 export const CabDispatchInputSchema = DispatchCabInputSchema;
 
 export const BeginRideCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabBeginRideInputSchema = BeginRideCabInputSchema;
 
 export const FinishRideCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  trip_id: z.string().uuid().nullable().optional(),
+  tripId: z.string().uuid().nullable().optional(),
 });
 
 export const CabFinishRideInputSchema = FinishRideCabInputSchema;
 
 export const StandDownCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  trip_id: z.string().uuid().nullable().optional(),
+  tripId: z.string().uuid().nullable().optional(),
 });
 
 export const CabStandDownInputSchema = StandDownCabInputSchema;
 
 export const RecallCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabRecallInputSchema = RecallCabInputSchema;
 
 export const PlugInCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabPlugInInputSchema = PlugInCabInputSchema;
 
 export const UnplugCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabUnplugInputSchema = UnplugCabInputSchema;
 
 export const GroundCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabGroundInputSchema = GroundCabInputSchema;
 
 export const ReleaseCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabReleaseInputSchema = ReleaseCabInputSchema;
 
 export const PullOverCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabPullOverInputSchema = PullOverCabInputSchema;
 
 export const ResumeCabInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const CabResumeInputSchema = ResumeCabInputSchema;
@@ -970,21 +888,21 @@ export const DepotOpenInputSchema = OpenDepotInputSchema;
 
 export const RiderSchema = z.object({
   id: z.string().uuid(),
-  display_name: z.string(),
+  displayName: z.string(),
   tier: z.enum(["STANDARD", "PLUS", "FOUNDER"]),
   rating: z.number(),
-  phone_last4: z.string(),
-  assisted_boarding: z.boolean(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  phoneLast4: z.string(),
+  assistedBoarding: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const SignUpRiderInputSchema = z.object({
-  display_name: z.string(),
+  displayName: z.string(),
   tier: z.enum(["STANDARD", "PLUS", "FOUNDER"]),
   rating: z.number().min(1).max(5),
-  phone_last4: z.string(),
-  assisted_boarding: z.boolean(),
+  phoneLast4: z.string(),
+  assistedBoarding: z.boolean().nullable().optional(),
 });
 
 export const RiderSignUpInputSchema = SignUpRiderInputSchema;
@@ -993,99 +911,93 @@ export const RiderSignUpInputSchema = SignUpRiderInputSchema;
 export const TripSchema = z.object({
   id: z.string().uuid(),
   code: z.string(),
-  rider_id: z.string().uuid(),
-  zone_id: z.string().uuid(),
-  cab_id: z.string().uuid().nullable().optional(),
-  pickup_name: z.string(),
-  pickup_lng: z.number(),
-  pickup_lat: z.number(),
-  dropoff_name: z.string(),
-  dropoff_lng: z.number(),
-  dropoff_lat: z.number(),
-  ride_polyline: z.string(),
-  approach_polyline: z.string().nullable().optional(),
-  distance_m: z.number().int(),
-  duration_s: z.number().int(),
+  riderId: z.string().uuid(),
+  zoneId: z.string().uuid(),
+  cabId: z.string().uuid().nullable().optional(),
+  pickupName: z.string(),
+  pickupLng: z.number(),
+  pickupLat: z.number(),
+  dropoffName: z.string(),
+  dropoffLng: z.number(),
+  dropoffLat: z.number(),
+  ridePolyline: z.string(),
+  approachPolyline: z.string().nullable().optional(),
+  distanceM: z.number().int(),
+  durationS: z.number().int(),
   surge: z.number(),
-  fare_cents: z.number().int(),
-  requested_at: z.string(),
-  assigned_at: z.string().nullable().optional(),
-  pickup_eta_at: z.string().nullable().optional(),
-  arrived_at: z.string().nullable().optional(),
-  picked_up_at: z.string().nullable().optional(),
-  dropoff_eta_at: z.string().nullable().optional(),
-  completed_at: z.string().nullable().optional(),
-  cancelled_at: z.string().nullable().optional(),
-  cancel_reason: z.string().nullable().optional(),
+  fareCents: z.number().int(),
+  requestedAt: z.string(),
+  assignedAt: z.string().nullable().optional(),
+  pickupEtaAt: z.string().nullable().optional(),
+  arrivedAt: z.string().nullable().optional(),
+  pickedUpAt: z.string().nullable().optional(),
+  dropoffEtaAt: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
+  cancelledAt: z.string().nullable().optional(),
+  cancelReason: z.string().nullable().optional(),
   rating: z.number().int().nullable().optional(),
   status: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const RequestTripInputSchema = z.object({
   code: z.string(),
-  rider_id: z.string().uuid(),
-  zone_id: z.string().uuid(),
-  pickup_name: z.string(),
-  pickup_lng: z.number(),
-  pickup_lat: z.number(),
-  dropoff_name: z.string(),
-  dropoff_lng: z.number(),
-  dropoff_lat: z.number(),
-  ride_polyline: z.string(),
-  distance_m: z.number().int(),
-  duration_s: z.number().int(),
+  riderId: z.string().uuid(),
+  zoneId: z.string().uuid(),
+  pickupName: z.string(),
+  pickupLng: z.number(),
+  pickupLat: z.number(),
+  dropoffName: z.string(),
+  dropoffLng: z.number(),
+  dropoffLat: z.number(),
+  ridePolyline: z.string(),
+  distanceM: z.number().int(),
+  durationS: z.number().int(),
   surge: z.number(),
-  fare_cents: z.number().int().min(0),
-  requested_at: z.string(),
+  fareCents: z.number().int().min(0),
+  requestedAt: z.string(),
 });
 
 export const TripRequestInputSchema = RequestTripInputSchema;
 
 export const AssignTripInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  cab_id: z.string().uuid().nullable().optional(),
-  approach_polyline: z.string().nullable().optional(),
-  assigned_at: z.string().nullable().optional(),
-  pickup_eta_at: z.string().nullable().optional(),
+  cabId: z.string().uuid().nullable().optional(),
+  approachPolyline: z.string().nullable().optional(),
+  assignedAt: z.string().nullable().optional(),
+  pickupEtaAt: z.string().nullable().optional(),
 });
 
 export const TripAssignInputSchema = AssignTripInputSchema;
 
 export const ArriveTripInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  arrived_at: z.string().nullable().optional(),
+  arrivedAt: z.string().nullable().optional(),
 });
 
 export const TripArriveInputSchema = ArriveTripInputSchema;
 
 export const BoardTripInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  picked_up_at: z.string().nullable().optional(),
-  dropoff_eta_at: z.string().nullable().optional(),
+  pickedUpAt: z.string().nullable().optional(),
+  dropoffEtaAt: z.string().nullable().optional(),
 });
 
 export const TripBoardInputSchema = BoardTripInputSchema;
 
 export const CompleteTripInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  completed_at: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
   rating: z.number().int().min(1).max(5).nullable().optional(),
 });
 
 export const TripCompleteInputSchema = CompleteTripInputSchema;
 
 export const CancelTripInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  cancelled_at: z.string().nullable().optional(),
-  cancel_reason: z.string().nullable().optional(),
+  cancelledAt: z.string().nullable().optional(),
+  cancelReason: z.string().nullable().optional(),
 });
 
 export const TripCancelInputSchema = CancelTripInputSchema;
 
 export const ArchiveTripInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const TripArchiveInputSchema = ArchiveTripInputSchema;
@@ -1097,12 +1009,12 @@ export const ServiceZoneSchema = z.object({
   name: z.string(),
   lng: z.number(),
   lat: z.number(),
-  radius_m: z.number().int(),
-  base_demand: z.number(),
+  radiusM: z.number().int(),
+  baseDemand: z.number(),
   surge: z.number(),
   waiting: z.number().int(),
-  event_name: z.string().nullable().optional(),
-  event_boost: z.number(),
+  eventName: z.string().nullable().optional(),
+  eventBoost: z.number(),
 });
 
 export const ChartServiceZoneInputSchema = z.object({
@@ -1110,34 +1022,31 @@ export const ChartServiceZoneInputSchema = z.object({
   name: z.string(),
   lng: z.number(),
   lat: z.number(),
-  radius_m: z.number().int(),
-  base_demand: z.number(),
+  radiusM: z.number().int(),
+  baseDemand: z.number(),
   surge: z.number(),
-  event_boost: z.number(),
+  eventBoost: z.number(),
 });
 
 export const ServiceZoneChartInputSchema = ChartServiceZoneInputSchema;
 
 export const MeasureServiceZoneInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  waiting: z.number().int().nullable().optional(),
   surge: z.number().nullable().optional(),
+  waiting: z.number().int().nullable().optional(),
 });
 
 export const ServiceZoneMeasureInputSchema = MeasureServiceZoneInputSchema;
 
 export const HostEventServiceZoneInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  event_name: z.string(),
-  event_boost: z.number().min(1).max(8).nullable().optional(),
+  eventName: z.string(),
+  eventBoost: z.number().min(1).max(8).nullable().optional(),
 });
 
 export const ServiceZoneHostEventInputSchema = HostEventServiceZoneInputSchema;
 
 export const ClearEventServiceZoneInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  event_name: z.string().nullable().optional(),
-  event_boost: z.number().nullable().optional(),
+  eventName: z.string().nullable().optional(),
+  eventBoost: z.number().nullable().optional(),
 });
 
 export const ServiceZoneClearEventInputSchema = ClearEventServiceZoneInputSchema;
@@ -1145,27 +1054,26 @@ export const ServiceZoneClearEventInputSchema = ClearEventServiceZoneInputSchema
 
 export const TelemetrySampleSchema = z.object({
   id: z.string().uuid(),
-  cab_id: z.string().uuid(),
-  recorded_at: z.string(),
+  cabId: z.string().uuid(),
+  recordedAt: z.string(),
   lng: z.number(),
   lat: z.number(),
-  speed_kph: z.number().int(),
-  battery_pct: z.number().int(),
+  speedKph: z.number().int(),
+  batteryPct: z.number().int(),
 });
 
 export const RecordTelemetrySampleInputSchema = z.object({
-  cab_id: z.string().uuid(),
-  recorded_at: z.string(),
+  cabId: z.string().uuid(),
+  recordedAt: z.string(),
   lng: z.number(),
   lat: z.number(),
-  speed_kph: z.number().int(),
-  battery_pct: z.number().int(),
+  speedKph: z.number().int(),
+  batteryPct: z.number().int(),
 });
 
 export const TelemetrySampleRecordInputSchema = RecordTelemetrySampleInputSchema;
 
 export const PruneTelemetrySampleInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const TelemetrySamplePruneInputSchema = PruneTelemetrySampleInputSchema;
@@ -1173,51 +1081,48 @@ export const TelemetrySamplePruneInputSchema = PruneTelemetrySampleInputSchema;
 
 export const FleetAlertSchema = z.object({
   id: z.string().uuid(),
-  cab_id: z.string().uuid(),
-  trip_id: z.string().uuid().nullable().optional(),
+  cabId: z.string().uuid(),
+  tripId: z.string().uuid().nullable().optional(),
   kind: z.enum(["LOW_BATTERY", "HARD_BRAKING", "OBSTRUCTION", "RIDER_ASSIST", "SENSOR_DEGRADED", "DOOR_AJAR"]),
   severity: z.enum(["INFO", "WARNING", "CRITICAL"]),
   message: z.string(),
   lng: z.number(),
   lat: z.number(),
-  raised_at: z.string(),
-  acknowledged_at: z.string().nullable().optional(),
-  resolved_at: z.string().nullable().optional(),
-  handled_by: z.string().nullable().optional(),
+  raisedAt: z.string(),
+  acknowledgedAt: z.string().nullable().optional(),
+  resolvedAt: z.string().nullable().optional(),
+  handledBy: z.string().nullable().optional(),
   status: z.string(),
 });
 
 export const RaiseFleetAlertInputSchema = z.object({
-  cab_id: z.string().uuid(),
-  trip_id: z.string().uuid().nullable().optional(),
+  cabId: z.string().uuid(),
+  tripId: z.string().uuid().nullable().optional(),
   kind: z.enum(["LOW_BATTERY", "HARD_BRAKING", "OBSTRUCTION", "RIDER_ASSIST", "SENSOR_DEGRADED", "DOOR_AJAR"]),
   severity: z.enum(["INFO", "WARNING", "CRITICAL"]),
   message: z.string(),
   lng: z.number(),
   lat: z.number(),
-  raised_at: z.string(),
+  raisedAt: z.string(),
 });
 
 export const FleetAlertRaiseInputSchema = RaiseFleetAlertInputSchema;
 
 export const AcknowledgeFleetAlertInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  acknowledged_at: z.string().nullable().optional(),
-  handled_by: z.string().nullable().optional(),
+  acknowledgedAt: z.string().nullable().optional(),
+  handledBy: z.string().nullable().optional(),
 });
 
 export const FleetAlertAcknowledgeInputSchema = AcknowledgeFleetAlertInputSchema;
 
 export const ResolveFleetAlertInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  resolved_at: z.string().nullable().optional(),
-  handled_by: z.string().nullable().optional(),
+  resolvedAt: z.string().nullable().optional(),
+  handledBy: z.string().nullable().optional(),
 });
 
 export const FleetAlertResolveInputSchema = ResolveFleetAlertInputSchema;
 
 export const PruneFleetAlertInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const FleetAlertPruneInputSchema = PruneFleetAlertInputSchema;
@@ -1225,41 +1130,40 @@ export const FleetAlertPruneInputSchema = PruneFleetAlertInputSchema;
 
 export const PulseSampleSchema = z.object({
   id: z.string().uuid(),
-  recorded_at: z.string(),
+  recordedAt: z.string(),
   available: z.number().int(),
   dispatched: z.number().int(),
-  on_trip: z.number().int(),
+  onTrip: z.number().int(),
   returning: z.number().int(),
   charging: z.number().int(),
   maintenance: z.number().int(),
   waiting: z.number().int(),
-  completed_today: z.number().int(),
-  revenue_cents_today: z.number().int(),
-  avg_wait_s: z.number().int(),
-  utilization_pct: z.number().int(),
-  avg_battery_pct: z.number().int(),
+  completedToday: z.number().int(),
+  revenueCentsToday: z.number().int(),
+  avgWaitS: z.number().int(),
+  utilizationPct: z.number().int(),
+  avgBatteryPct: z.number().int(),
 });
 
 export const RecordPulseSampleInputSchema = z.object({
-  recorded_at: z.string(),
+  recordedAt: z.string(),
   available: z.number().int(),
   dispatched: z.number().int(),
-  on_trip: z.number().int(),
+  onTrip: z.number().int(),
   returning: z.number().int(),
   charging: z.number().int(),
   maintenance: z.number().int(),
   waiting: z.number().int(),
-  completed_today: z.number().int(),
-  revenue_cents_today: z.number().int(),
-  avg_wait_s: z.number().int(),
-  utilization_pct: z.number().int(),
-  avg_battery_pct: z.number().int(),
+  completedToday: z.number().int(),
+  revenueCentsToday: z.number().int(),
+  avgWaitS: z.number().int(),
+  utilizationPct: z.number().int(),
+  avgBatteryPct: z.number().int(),
 });
 
 export const PulseSampleRecordInputSchema = RecordPulseSampleInputSchema;
 
 export const PrunePulseSampleInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const PulseSamplePruneInputSchema = PrunePulseSampleInputSchema;
@@ -1284,9 +1188,15 @@ export interface AshClientConfig {
     | (() => Record<string, unknown> | Promise<Record<string, unknown>>);
 }
 
+/** An error a mutation reports, as AshGraphql's `MutationError`, or a GraphQL error. */
 export interface AshUserError {
-  field?: string;
   message: string;
+  shortMessage?: string | null;
+  /** Ash's error code, e.g. `invalid_attribute`, `required`, `not_found`, `forbidden`. */
+  code?: string | null;
+  /** The input fields it's about. */
+  fields?: string[];
+  path?: (string | number)[];
 }
 
 export class AshClientError extends Error {
@@ -1337,13 +1247,13 @@ export class AshTransport {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message: string; path?: string[] }>;
+      errors?: Array<{ message: string; path?: (string | number)[] }>;
     };
 
     if (json.errors && json.errors.length > 0) {
       const userErrors: AshUserError[] = json.errors.map((e) => ({
-        field: e.path ? e.path.join(".") : undefined,
         message: e.message,
+        path: e.path,
       }));
       throw new AshClientError(userErrors[0].message || "GraphQL execution error", userErrors);
     }
@@ -1679,6 +1589,14 @@ function ashFieldVerdict(kind: AshFieldKind | undefined, ops: Record<string, unk
     }
     // Datetimes compare only by presence: a filter's value may be spelled another way.
     if (kind === "datetime") return undefined;
+    // Null-safe equality: nulls are equal to each other and to nothing else.
+    if (op === "isDistinctFrom" || op === "isNotDistinctFrom") {
+      const same = missing || operand === null ? missing && operand === null : norm(value) === norm(operand);
+      verdicts.push(op === "isNotDistinctFrom" ? same : !same);
+      continue;
+    }
+    // A comparison with a null operand is the server's to judge.
+    if (operand === null) return undefined;
     if (missing) {
       verdicts.push(null);
       continue;
@@ -1688,18 +1606,29 @@ function ashFieldVerdict(kind: AshFieldKind | undefined, ops: Record<string, unk
       case "eq":
         verdicts.push(v === norm(operand));
         break;
-      case "ne":
+      case "notEq":
         verdicts.push(v !== norm(operand));
         break;
-      case "in":
-        verdicts.push(Array.isArray(operand) && operand.map(norm).includes(v));
+      case "in": {
+        if (!Array.isArray(operand)) return undefined;
+        const values = operand.map(norm);
+        verdicts.push(values.includes(v) ? true : values.includes(null) ? null : false);
         break;
-      case "gt":
-      case "gte":
-      case "lt":
-      case "lte": {
+      }
+      case "lessThan":
+      case "greaterThan":
+      case "lessThanOrEqual":
+      case "greaterThanOrEqual": {
         if (kind !== "number" || typeof operand !== "number" || typeof v !== "number") return undefined;
-        verdicts.push(op === "gt" ? v > operand : op === "gte" ? v >= operand : op === "lt" ? v < operand : v <= operand);
+        verdicts.push(
+          op === "greaterThan"
+            ? v > operand
+            : op === "greaterThanOrEqual"
+              ? v >= operand
+              : op === "lessThan"
+                ? v < operand
+                : v <= operand,
+        );
         break;
       }
       default:
@@ -1721,7 +1650,9 @@ function ashFilterVerdict(
       const parts = (condition as Record<string, unknown>[]).map((part) => ashFilterVerdict(part, record, kinds));
       verdicts.push(key === "and" ? ashAll(parts) : ashAny(parts));
     } else if (key === "not") {
-      const inner = ashFilterVerdict(condition as Record<string, unknown>, record, kinds);
+      // `not: [a, b]` excludes records matching all of them.
+      const parts = (condition as Record<string, unknown>[]).map((part) => ashFilterVerdict(part, record, kinds));
+      const inner = ashAll(parts);
       // NOT over SQL's NULL is NULL in Postgres; leave it to the server.
       verdicts.push(inner === true ? false : inner === false ? true : undefined);
     } else {
@@ -1777,7 +1708,7 @@ export interface AshLiveSpec<T> {
   matches?: (record: T) => boolean | undefined;
   /** The list's order: `undefined` when the client can't tell. Absent for an unsorted list, whose new records go last. */
   compare?: (a: T, b: T) => number | undefined;
-  /** A page (limit or offset): a record leaving it is replaced by one only the server knows. */
+  /** A page (a limit): a record leaving it is replaced by one only the server knows. */
   paged: boolean;
   subscriptions: AshSubscriptionClient;
   onCreated: (handler: (record: T) => void, options: AshSubscribeOptions) => () => void;
@@ -1792,8 +1723,8 @@ export interface AshLiveSpec<T> {
  * Changes apply as they arrive. A change the client can place exactly, because it can
  * evaluate the list's filter and sort as the server would, goes straight where the server
  * would put it: in, out, or to its place in the order. Any other change patches the records
- * the list holds and the list re-reads itself shortly after, as does a page (limit or
- * offset), since what enters it when a record leaves only the server knows.
+ * the list holds and the list re-reads itself shortly after, as does a page (a limit),
+ * since what enters it when a record leaves only the server knows.
  * If it misses events, because it fell behind the server, it re-reads straight away.
  * However fast changes arrive, the listener hears the list at most once an animation
  * frame.
@@ -1967,7 +1898,7 @@ export function ashLiveQuery<T>(
 }
 
 export function buildCabSelectionSet(include?: CabInclude): string {
-  let fields = "id call_sign nickname vin software depot_id lng lat heading_deg speed_kph battery_pct range_km odometer_km cabin_temp_c halted trip_id last_seen_at status created_at updated_at";
+  let fields = "id callSign nickname vin software depotId lng lat headingDeg speedKph batteryPct rangeKm odometerKm cabinTempC halted tripId lastSeenAt status createdAt updatedAt";
   if (include?.depot) {
     const subInclude = typeof include.depot === "object" ? include.depot : undefined;
     fields += ` depot { ${buildDepotSelectionSet(subInclude)} }`;
@@ -1993,7 +1924,7 @@ export function buildDepotSelectionSet(include?: DepotInclude): string {
 }
 
 export function buildRiderSelectionSet(include?: RiderInclude): string {
-  let fields = "id display_name tier rating phone_last4 assisted_boarding created_at updated_at";
+  let fields = "id displayName tier rating phoneLast4 assistedBoarding createdAt updatedAt";
   if (include?.trips) {
     const subInclude = typeof include.trips === "object" ? include.trips : undefined;
     fields += ` trips { ${buildTripSelectionSet(subInclude)} }`;
@@ -2002,7 +1933,7 @@ export function buildRiderSelectionSet(include?: RiderInclude): string {
 }
 
 export function buildTripSelectionSet(include?: TripInclude): string {
-  let fields = "id code rider_id zone_id cab_id pickup_name pickup_lng pickup_lat dropoff_name dropoff_lng dropoff_lat ride_polyline approach_polyline distance_m duration_s surge fare_cents requested_at assigned_at pickup_eta_at arrived_at picked_up_at dropoff_eta_at completed_at cancelled_at cancel_reason rating status created_at updated_at";
+  let fields = "id code riderId zoneId cabId pickupName pickupLng pickupLat dropoffName dropoffLng dropoffLat ridePolyline approachPolyline distanceM durationS surge fareCents requestedAt assignedAt pickupEtaAt arrivedAt pickedUpAt dropoffEtaAt completedAt cancelledAt cancelReason rating status createdAt updatedAt";
   if (include?.rider) {
     const subInclude = typeof include.rider === "object" ? include.rider : undefined;
     fields += ` rider { ${buildRiderSelectionSet(subInclude)} }`;
@@ -2019,7 +1950,7 @@ export function buildTripSelectionSet(include?: TripInclude): string {
 }
 
 export function buildServiceZoneSelectionSet(include?: ServiceZoneInclude): string {
-  let fields = "id code name lng lat radius_m base_demand surge waiting event_name event_boost";
+  let fields = "id code name lng lat radiusM baseDemand surge waiting eventName eventBoost";
   if (include?.trips) {
     const subInclude = typeof include.trips === "object" ? include.trips : undefined;
     fields += ` trips { ${buildTripSelectionSet(subInclude)} }`;
@@ -2028,7 +1959,7 @@ export function buildServiceZoneSelectionSet(include?: ServiceZoneInclude): stri
 }
 
 export function buildTelemetrySampleSelectionSet(include?: TelemetrySampleInclude): string {
-  let fields = "id cab_id recorded_at lng lat speed_kph battery_pct";
+  let fields = "id cabId recordedAt lng lat speedKph batteryPct";
   if (include?.cab) {
     const subInclude = typeof include.cab === "object" ? include.cab : undefined;
     fields += ` cab { ${buildCabSelectionSet(subInclude)} }`;
@@ -2037,7 +1968,7 @@ export function buildTelemetrySampleSelectionSet(include?: TelemetrySampleInclud
 }
 
 export function buildFleetAlertSelectionSet(include?: FleetAlertInclude): string {
-  let fields = "id cab_id trip_id kind severity message lng lat raised_at acknowledged_at resolved_at handled_by status";
+  let fields = "id cabId tripId kind severity message lng lat raisedAt acknowledgedAt resolvedAt handledBy status";
   if (include?.cab) {
     const subInclude = typeof include.cab === "object" ? include.cab : undefined;
     fields += ` cab { ${buildCabSelectionSet(subInclude)} }`;
@@ -2050,15 +1981,16 @@ export function buildFleetAlertSelectionSet(include?: FleetAlertInclude): string
 }
 
 export function buildPulseSampleSelectionSet(include?: PulseSampleInclude): string {
-  let fields = "id recorded_at available dispatched on_trip returning charging maintenance waiting completed_today revenue_cents_today avg_wait_s utilization_pct avg_battery_pct";
+  let fields = "id recordedAt available dispatched onTrip returning charging maintenance waiting completedToday revenueCentsToday avgWaitS utilizationPct avgBatteryPct";
   return fields;
 }
+
+const CabSortFieldNames: Record<CabSortField, string> = { id: "ID", callSign: "CALL_SIGN", nickname: "NICKNAME", vin: "VIN", software: "SOFTWARE", depotId: "DEPOT_ID", lng: "LNG", lat: "LAT", headingDeg: "HEADING_DEG", speedKph: "SPEED_KPH", batteryPct: "BATTERY_PCT", rangeKm: "RANGE_KM", odometerKm: "ODOMETER_KM", cabinTempC: "CABIN_TEMP_C", halted: "HALTED", tripId: "TRIP_ID", lastSeenAt: "LAST_SEEN_AT", status: "STATUS", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", tripsCompleted: "TRIPS_COMPLETED", faresCents: "FARES_CENTS" };
 
 export class CabQueryBuilder {
   private _filter?: CabFilterInput;
   private _sort: CabSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: CabInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -2073,13 +2005,9 @@ export class CabQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2088,69 +2016,58 @@ export class CabQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Cab[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: CabSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<Cab>> {
     const fields = buildCabSelectionSet(this._include);
-    const query = `query ListCab($filter: CabFilterInput, $sort: [CabSortInput!], $limit: Int, $offset: Int) {
-      listCabs(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListCab($filter: CabFilterInput, $sort: [CabSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listCabs(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listCabs: Cab[] }>(query, {
+    const data = await this.transport.request<{ listCabs: PaginatedResult<Cab> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listCabs;
   }
 
-  public async first(): Promise<Cab | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<Cab[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Cab>> {
-    const fields = buildCabSelectionSet(this._include);
-    const query = `query ConnCab($filter: CabFilterInput, $sort: [CabSortInput!], $first: Int, $after: String) {
-      cabsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<Cab | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      cabsConnection: {
-        edges: Array<{ node: Cab; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.cabsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Cab>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -2162,7 +2079,6 @@ export class CabQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -2170,7 +2086,7 @@ export class CabQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "Cab",
@@ -2180,10 +2096,11 @@ export class CabQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -2194,14 +2111,14 @@ export class CabQueryBuilder {
   public live(listener: (items: Cab[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new CabClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", call_sign: "text", nickname: "text", vin: "text", software: "text", depot_id: "uuid", lng: "number", lat: "number", heading_deg: "number", speed_kph: "number", battery_pct: "number", range_km: "number", odometer_km: "number", cabin_temp_c: "number", halted: "boolean", trip_id: "uuid", last_seen_at: "datetime", status: "text", created_at: "datetime", updated_at: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", callSign: "text", nickname: "text", vin: "text", software: "text", depotId: "uuid", lng: "number", lat: "number", headingDeg: "number", speedKph: "number", batteryPct: "number", rangeKm: "number", odometerKm: "number", cabinTempC: "number", halted: "boolean", tripId: "uuid", lastSeenAt: "datetime", status: "text", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Cab>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -2213,11 +2130,12 @@ export class CabQueryBuilder {
   }
 }
 
+const DepotSortFieldNames: Record<DepotSortField, string> = { id: "ID", code: "CODE", name: "NAME", lng: "LNG", lat: "LAT", stalls: "STALLS", cabCount: "CAB_COUNT", charging: "CHARGING" };
+
 export class DepotQueryBuilder {
   private _filter?: DepotFilterInput;
   private _sort: DepotSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: DepotInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -2232,13 +2150,9 @@ export class DepotQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2247,69 +2161,58 @@ export class DepotQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Depot[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: DepotSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<Depot>> {
     const fields = buildDepotSelectionSet(this._include);
-    const query = `query ListDepot($filter: DepotFilterInput, $sort: [DepotSortInput!], $limit: Int, $offset: Int) {
-      listDepots(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListDepot($filter: DepotFilterInput, $sort: [DepotSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listDepots(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listDepots: Depot[] }>(query, {
+    const data = await this.transport.request<{ listDepots: PaginatedResult<Depot> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listDepots;
   }
 
-  public async first(): Promise<Depot | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<Depot[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Depot>> {
-    const fields = buildDepotSelectionSet(this._include);
-    const query = `query ConnDepot($filter: DepotFilterInput, $sort: [DepotSortInput!], $first: Int, $after: String) {
-      depotsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<Depot | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      depotsConnection: {
-        edges: Array<{ node: Depot; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.depotsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Depot>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -2321,7 +2224,6 @@ export class DepotQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -2329,7 +2231,7 @@ export class DepotQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "Depot",
@@ -2339,10 +2241,11 @@ export class DepotQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -2360,7 +2263,7 @@ export class DepotQueryBuilder {
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -2372,11 +2275,12 @@ export class DepotQueryBuilder {
   }
 }
 
+const RiderSortFieldNames: Record<RiderSortField, string> = { id: "ID", displayName: "DISPLAY_NAME", tier: "TIER", rating: "RATING", phoneLast4: "PHONE_LAST4", assistedBoarding: "ASSISTED_BOARDING", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", tripCount: "TRIP_COUNT", lifetimeCents: "LIFETIME_CENTS" };
+
 export class RiderQueryBuilder {
   private _filter?: RiderFilterInput;
   private _sort: RiderSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: RiderInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -2391,13 +2295,9 @@ export class RiderQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2406,69 +2306,58 @@ export class RiderQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Rider[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: RiderSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<Rider>> {
     const fields = buildRiderSelectionSet(this._include);
-    const query = `query ListRider($filter: RiderFilterInput, $sort: [RiderSortInput!], $limit: Int, $offset: Int) {
-      listRiders(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListRider($filter: RiderFilterInput, $sort: [RiderSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listRiders(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listRiders: Rider[] }>(query, {
+    const data = await this.transport.request<{ listRiders: PaginatedResult<Rider> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listRiders;
   }
 
-  public async first(): Promise<Rider | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<Rider[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Rider>> {
-    const fields = buildRiderSelectionSet(this._include);
-    const query = `query ConnRider($filter: RiderFilterInput, $sort: [RiderSortInput!], $first: Int, $after: String) {
-      ridersConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<Rider | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      ridersConnection: {
-        edges: Array<{ node: Rider; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.ridersConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Rider>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -2480,7 +2369,6 @@ export class RiderQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -2488,7 +2376,7 @@ export class RiderQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "Rider",
@@ -2498,10 +2386,11 @@ export class RiderQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -2512,14 +2401,14 @@ export class RiderQueryBuilder {
   public live(listener: (items: Rider[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new RiderClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", display_name: "text", rating: "number", phone_last4: "text", assisted_boarding: "boolean", created_at: "datetime", updated_at: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", displayName: "text", rating: "number", phoneLast4: "text", assistedBoarding: "boolean", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Rider>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -2531,11 +2420,12 @@ export class RiderQueryBuilder {
   }
 }
 
+const TripSortFieldNames: Record<TripSortField, string> = { id: "ID", code: "CODE", riderId: "RIDER_ID", zoneId: "ZONE_ID", cabId: "CAB_ID", pickupName: "PICKUP_NAME", pickupLng: "PICKUP_LNG", pickupLat: "PICKUP_LAT", dropoffName: "DROPOFF_NAME", dropoffLng: "DROPOFF_LNG", dropoffLat: "DROPOFF_LAT", ridePolyline: "RIDE_POLYLINE", approachPolyline: "APPROACH_POLYLINE", distanceM: "DISTANCE_M", durationS: "DURATION_S", surge: "SURGE", fareCents: "FARE_CENTS", requestedAt: "REQUESTED_AT", assignedAt: "ASSIGNED_AT", pickupEtaAt: "PICKUP_ETA_AT", arrivedAt: "ARRIVED_AT", pickedUpAt: "PICKED_UP_AT", dropoffEtaAt: "DROPOFF_ETA_AT", completedAt: "COMPLETED_AT", cancelledAt: "CANCELLED_AT", cancelReason: "CANCEL_REASON", rating: "RATING", status: "STATUS", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", routeLabel: "ROUTE_LABEL" };
+
 export class TripQueryBuilder {
   private _filter?: TripFilterInput;
   private _sort: TripSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: TripInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -2550,13 +2440,9 @@ export class TripQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2565,69 +2451,58 @@ export class TripQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Trip[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: TripSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<Trip>> {
     const fields = buildTripSelectionSet(this._include);
-    const query = `query ListTrip($filter: TripFilterInput, $sort: [TripSortInput!], $limit: Int, $offset: Int) {
-      listTrips(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListTrip($filter: TripFilterInput, $sort: [TripSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listTrips(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listTrips: Trip[] }>(query, {
+    const data = await this.transport.request<{ listTrips: PaginatedResult<Trip> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listTrips;
   }
 
-  public async first(): Promise<Trip | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<Trip[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Trip>> {
-    const fields = buildTripSelectionSet(this._include);
-    const query = `query ConnTrip($filter: TripFilterInput, $sort: [TripSortInput!], $first: Int, $after: String) {
-      tripsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<Trip | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      tripsConnection: {
-        edges: Array<{ node: Trip; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.tripsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Trip>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -2639,7 +2514,6 @@ export class TripQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -2647,7 +2521,7 @@ export class TripQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "Trip",
@@ -2657,10 +2531,11 @@ export class TripQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -2671,14 +2546,14 @@ export class TripQueryBuilder {
   public live(listener: (items: Trip[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new TripClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", rider_id: "uuid", zone_id: "uuid", cab_id: "uuid", pickup_name: "text", pickup_lng: "number", pickup_lat: "number", dropoff_name: "text", dropoff_lng: "number", dropoff_lat: "number", ride_polyline: "text", approach_polyline: "text", distance_m: "number", duration_s: "number", surge: "number", fare_cents: "number", requested_at: "datetime", assigned_at: "datetime", pickup_eta_at: "datetime", arrived_at: "datetime", picked_up_at: "datetime", dropoff_eta_at: "datetime", completed_at: "datetime", cancelled_at: "datetime", cancel_reason: "text", rating: "number", status: "text", created_at: "datetime", updated_at: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", riderId: "uuid", zoneId: "uuid", cabId: "uuid", pickupName: "text", pickupLng: "number", pickupLat: "number", dropoffName: "text", dropoffLng: "number", dropoffLat: "number", ridePolyline: "text", approachPolyline: "text", distanceM: "number", durationS: "number", surge: "number", fareCents: "number", requestedAt: "datetime", assignedAt: "datetime", pickupEtaAt: "datetime", arrivedAt: "datetime", pickedUpAt: "datetime", dropoffEtaAt: "datetime", completedAt: "datetime", cancelledAt: "datetime", cancelReason: "text", rating: "number", status: "text", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Trip>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -2690,11 +2565,12 @@ export class TripQueryBuilder {
   }
 }
 
+const ServiceZoneSortFieldNames: Record<ServiceZoneSortField, string> = { id: "ID", code: "CODE", name: "NAME", lng: "LNG", lat: "LAT", radiusM: "RADIUS_M", baseDemand: "BASE_DEMAND", surge: "SURGE", waiting: "WAITING", eventName: "EVENT_NAME", eventBoost: "EVENT_BOOST", tripsToday: "TRIPS_TODAY", completedToday: "COMPLETED_TODAY" };
+
 export class ServiceZoneQueryBuilder {
   private _filter?: ServiceZoneFilterInput;
   private _sort: ServiceZoneSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: ServiceZoneInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -2709,13 +2585,9 @@ export class ServiceZoneQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2724,69 +2596,58 @@ export class ServiceZoneQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<ServiceZone[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: ServiceZoneSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<ServiceZone>> {
     const fields = buildServiceZoneSelectionSet(this._include);
-    const query = `query ListServiceZone($filter: ServiceZoneFilterInput, $sort: [ServiceZoneSortInput!], $limit: Int, $offset: Int) {
-      listServiceZones(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListServiceZone($filter: ServiceZoneFilterInput, $sort: [ServiceZoneSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listServiceZones(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listServiceZones: ServiceZone[] }>(query, {
+    const data = await this.transport.request<{ listServiceZones: PaginatedResult<ServiceZone> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listServiceZones;
   }
 
-  public async first(): Promise<ServiceZone | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<ServiceZone[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<ServiceZone>> {
-    const fields = buildServiceZoneSelectionSet(this._include);
-    const query = `query ConnServiceZone($filter: ServiceZoneFilterInput, $sort: [ServiceZoneSortInput!], $first: Int, $after: String) {
-      serviceZonesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<ServiceZone | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      serviceZonesConnection: {
-        edges: Array<{ node: ServiceZone; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.serviceZonesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<ServiceZone>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -2798,7 +2659,6 @@ export class ServiceZoneQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -2806,7 +2666,7 @@ export class ServiceZoneQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "ServiceZone",
@@ -2816,10 +2676,11 @@ export class ServiceZoneQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -2830,14 +2691,14 @@ export class ServiceZoneQueryBuilder {
   public live(listener: (items: ServiceZone[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new ServiceZoneClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", name: "text", lng: "number", lat: "number", radius_m: "number", base_demand: "number", surge: "number", waiting: "number", event_name: "text", event_boost: "number" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", name: "text", lng: "number", lat: "number", radiusM: "number", baseDemand: "number", surge: "number", waiting: "number", eventName: "text", eventBoost: "number" };
     return ashLiveQuery<ServiceZone>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -2849,11 +2710,12 @@ export class ServiceZoneQueryBuilder {
   }
 }
 
+const TelemetrySampleSortFieldNames: Record<TelemetrySampleSortField, string> = { id: "ID", cabId: "CAB_ID", recordedAt: "RECORDED_AT", lng: "LNG", lat: "LAT", speedKph: "SPEED_KPH", batteryPct: "BATTERY_PCT" };
+
 export class TelemetrySampleQueryBuilder {
   private _filter?: TelemetrySampleFilterInput;
   private _sort: TelemetrySampleSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: TelemetrySampleInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -2868,13 +2730,9 @@ export class TelemetrySampleQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2883,69 +2741,58 @@ export class TelemetrySampleQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<TelemetrySample[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: TelemetrySampleSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<TelemetrySample>> {
     const fields = buildTelemetrySampleSelectionSet(this._include);
-    const query = `query ListTelemetrySample($filter: TelemetrySampleFilterInput, $sort: [TelemetrySampleSortInput!], $limit: Int, $offset: Int) {
-      listTelemetrySamples(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListTelemetrySample($filter: TelemetrySampleFilterInput, $sort: [TelemetrySampleSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listTelemetrySamples(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listTelemetrySamples: TelemetrySample[] }>(query, {
+    const data = await this.transport.request<{ listTelemetrySamples: PaginatedResult<TelemetrySample> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listTelemetrySamples;
   }
 
-  public async first(): Promise<TelemetrySample | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<TelemetrySample[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<TelemetrySample>> {
-    const fields = buildTelemetrySampleSelectionSet(this._include);
-    const query = `query ConnTelemetrySample($filter: TelemetrySampleFilterInput, $sort: [TelemetrySampleSortInput!], $first: Int, $after: String) {
-      telemetrySamplesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<TelemetrySample | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      telemetrySamplesConnection: {
-        edges: Array<{ node: TelemetrySample; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.telemetrySamplesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<TelemetrySample>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -2957,7 +2804,6 @@ export class TelemetrySampleQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -2965,7 +2811,7 @@ export class TelemetrySampleQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "TelemetrySample",
@@ -2975,10 +2821,11 @@ export class TelemetrySampleQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -2989,14 +2836,14 @@ export class TelemetrySampleQueryBuilder {
   public live(listener: (items: TelemetrySample[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new TelemetrySampleClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cab_id: "uuid", recorded_at: "datetime", lng: "number", lat: "number", speed_kph: "number", battery_pct: "number" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cabId: "uuid", recordedAt: "datetime", lng: "number", lat: "number", speedKph: "number", batteryPct: "number" };
     return ashLiveQuery<TelemetrySample>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -3008,11 +2855,12 @@ export class TelemetrySampleQueryBuilder {
   }
 }
 
+const FleetAlertSortFieldNames: Record<FleetAlertSortField, string> = { id: "ID", cabId: "CAB_ID", tripId: "TRIP_ID", kind: "KIND", severity: "SEVERITY", message: "MESSAGE", lng: "LNG", lat: "LAT", raisedAt: "RAISED_AT", acknowledgedAt: "ACKNOWLEDGED_AT", resolvedAt: "RESOLVED_AT", handledBy: "HANDLED_BY", status: "STATUS" };
+
 export class FleetAlertQueryBuilder {
   private _filter?: FleetAlertFilterInput;
   private _sort: FleetAlertSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: FleetAlertInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -3027,13 +2875,9 @@ export class FleetAlertQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3042,69 +2886,58 @@ export class FleetAlertQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<FleetAlert[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: FleetAlertSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<FleetAlert>> {
     const fields = buildFleetAlertSelectionSet(this._include);
-    const query = `query ListFleetAlert($filter: FleetAlertFilterInput, $sort: [FleetAlertSortInput!], $limit: Int, $offset: Int) {
-      listFleetAlerts(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListFleetAlert($filter: FleetAlertFilterInput, $sort: [FleetAlertSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listFleetAlerts(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listFleetAlerts: FleetAlert[] }>(query, {
+    const data = await this.transport.request<{ listFleetAlerts: PaginatedResult<FleetAlert> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listFleetAlerts;
   }
 
-  public async first(): Promise<FleetAlert | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<FleetAlert[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<FleetAlert>> {
-    const fields = buildFleetAlertSelectionSet(this._include);
-    const query = `query ConnFleetAlert($filter: FleetAlertFilterInput, $sort: [FleetAlertSortInput!], $first: Int, $after: String) {
-      fleetAlertsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<FleetAlert | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      fleetAlertsConnection: {
-        edges: Array<{ node: FleetAlert; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.fleetAlertsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<FleetAlert>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -3116,7 +2949,6 @@ export class FleetAlertQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -3124,7 +2956,7 @@ export class FleetAlertQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "FleetAlert",
@@ -3134,10 +2966,11 @@ export class FleetAlertQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -3148,14 +2981,14 @@ export class FleetAlertQueryBuilder {
   public live(listener: (items: FleetAlert[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new FleetAlertClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cab_id: "uuid", trip_id: "uuid", message: "text", lng: "number", lat: "number", raised_at: "datetime", acknowledged_at: "datetime", resolved_at: "datetime", handled_by: "text", status: "text" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cabId: "uuid", tripId: "uuid", message: "text", lng: "number", lat: "number", raisedAt: "datetime", acknowledgedAt: "datetime", resolvedAt: "datetime", handledBy: "text", status: "text" };
     return ashLiveQuery<FleetAlert>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -3167,11 +3000,12 @@ export class FleetAlertQueryBuilder {
   }
 }
 
+const PulseSampleSortFieldNames: Record<PulseSampleSortField, string> = { id: "ID", recordedAt: "RECORDED_AT", available: "AVAILABLE", dispatched: "DISPATCHED", onTrip: "ON_TRIP", returning: "RETURNING", charging: "CHARGING", maintenance: "MAINTENANCE", waiting: "WAITING", completedToday: "COMPLETED_TODAY", revenueCentsToday: "REVENUE_CENTS_TODAY", avgWaitS: "AVG_WAIT_S", utilizationPct: "UTILIZATION_PCT", avgBatteryPct: "AVG_BATTERY_PCT" };
+
 export class PulseSampleQueryBuilder {
   private _filter?: PulseSampleFilterInput;
   private _sort: PulseSampleSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: PulseSampleInclude;
 
   constructor(private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient) {}
@@ -3186,13 +3020,9 @@ export class PulseSampleQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3201,69 +3031,58 @@ export class PulseSampleQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<PulseSample[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: PulseSampleSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<PulseSample>> {
     const fields = buildPulseSampleSelectionSet(this._include);
-    const query = `query ListPulseSample($filter: PulseSampleFilterInput, $sort: [PulseSampleSortInput!], $limit: Int, $offset: Int) {
-      listPulseSamples(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListPulseSample($filter: PulseSampleFilterInput, $sort: [PulseSampleSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listPulseSamples(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listPulseSamples: PulseSample[] }>(query, {
+    const data = await this.transport.request<{ listPulseSamples: PaginatedResult<PulseSample> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listPulseSamples;
   }
 
-  public async first(): Promise<PulseSample | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. */
+  public async all(): Promise<PulseSample[]> {
+    const page = await this.read({ first: this._limit }, false);
+    return page.results;
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<PulseSample>> {
-    const fields = buildPulseSampleSelectionSet(this._include);
-    const query = `query ConnPulseSample($filter: PulseSampleFilterInput, $sort: [PulseSampleSortInput!], $first: Int, $after: String) {
-      pulseSamplesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<PulseSample | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      pulseSamplesConnection: {
-        edges: Array<{ node: PulseSample; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.pulseSamplesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<PulseSample>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -3275,7 +3094,6 @@ export class PulseSampleQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -3283,7 +3101,7 @@ export class PulseSampleQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "PulseSample",
@@ -3293,10 +3111,11 @@ export class PulseSampleQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 
@@ -3307,14 +3126,14 @@ export class PulseSampleQueryBuilder {
   public live(listener: (items: PulseSample[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new PulseSampleClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", recorded_at: "datetime", available: "number", dispatched: "number", on_trip: "number", returning: "number", charging: "number", maintenance: "number", waiting: "number", completed_today: "number", revenue_cents_today: "number", avg_wait_s: "number", utilization_pct: "number", avg_battery_pct: "number" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", recordedAt: "datetime", available: "number", dispatched: "number", onTrip: "number", returning: "number", charging: "number", maintenance: "number", waiting: "number", completedToday: "number", revenueCentsToday: "number", avgWaitS: "number", utilizationPct: "number", avgBatteryPct: "number" };
     return ashLiveQuery<PulseSample>(
       {
         key: (record) => String(record.id),
         fetch: () => this.all(),
         matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
         compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
-        paged: this._limit !== undefined || this._offset !== undefined,
+        paged: this._limit !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, { ...opts, filter: this._filter, include }),
         onUpdated: (handler, opts) => client.onUpdated(handler, { ...opts, include }),
@@ -3360,395 +3179,395 @@ export class CabClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       commissionCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.commissionCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async report(id: string, input: ReportCabInput, include?: CabInclude): Promise<Cab> {
+  public async report(id: string, input: ReportCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: ReportCabInput!) {
-      reportCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!, $input: ReportCabInput) {
+      reportCab(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       reportCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.reportCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async dispatch(id: string, input: DispatchCabInput, include?: CabInclude): Promise<Cab> {
+  public async dispatch(id: string, input: DispatchCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: DispatchCabInput!) {
-      dispatchCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!, $input: DispatchCabInput) {
+      dispatchCab(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       dispatchCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.dispatchCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async beginRide(id: string, input: BeginRideCabInput, include?: CabInclude): Promise<Cab> {
+  public async beginRide(id: string, _input: BeginRideCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: BeginRideCabInput!) {
-      beginRideCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      beginRideCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       beginRideCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.beginRideCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async finishRide(id: string, input: FinishRideCabInput, include?: CabInclude): Promise<Cab> {
+  public async finishRide(id: string, input: FinishRideCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: FinishRideCabInput!) {
-      finishRideCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!, $input: FinishRideCabInput) {
+      finishRideCab(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       finishRideCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.finishRideCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async standDown(id: string, input: StandDownCabInput, include?: CabInclude): Promise<Cab> {
+  public async standDown(id: string, input: StandDownCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: StandDownCabInput!) {
-      standDownCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!, $input: StandDownCabInput) {
+      standDownCab(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       standDownCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.standDownCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async recall(id: string, input: RecallCabInput, include?: CabInclude): Promise<Cab> {
+  public async recall(id: string, _input: RecallCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: RecallCabInput!) {
-      recallCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      recallCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       recallCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.recallCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async plugIn(id: string, input: PlugInCabInput, include?: CabInclude): Promise<Cab> {
+  public async plugIn(id: string, _input: PlugInCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: PlugInCabInput!) {
-      plugInCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      plugInCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       plugInCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.plugInCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async unplug(id: string, input: UnplugCabInput, include?: CabInclude): Promise<Cab> {
+  public async unplug(id: string, _input: UnplugCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: UnplugCabInput!) {
-      unplugCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      unplugCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       unplugCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.unplugCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async ground(id: string, input: GroundCabInput, include?: CabInclude): Promise<Cab> {
+  public async ground(id: string, _input: GroundCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: GroundCabInput!) {
-      groundCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      groundCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       groundCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.groundCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async release(id: string, input: ReleaseCabInput, include?: CabInclude): Promise<Cab> {
+  public async release(id: string, _input: ReleaseCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: ReleaseCabInput!) {
-      releaseCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      releaseCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       releaseCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.releaseCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async pullOver(id: string, input: PullOverCabInput, include?: CabInclude): Promise<Cab> {
+  public async pullOver(id: string, _input: PullOverCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: PullOverCabInput!) {
-      pullOverCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      pullOverCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       pullOverCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.pullOverCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async resume(id: string, input: ResumeCabInput, include?: CabInclude): Promise<Cab> {
+  public async resume(id: string, _input: ResumeCabInput = {}, include?: CabInclude): Promise<Cab> {
     const fields = buildCabSelectionSet(include);
-    const query = `mutation MutateCab($input: ResumeCabInput!) {
-      resumeCab(input: $input) {
+    const query = `mutation MutateCab($id: ID!) {
+      resumeCab(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       resumeCab: {
-        result?: Cab;
+        result?: Cab | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.resumeCab;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -3763,32 +3582,54 @@ export class CabClient {
     const fields = buildCabSelectionSet(options?.include);
     const query = `subscription CabCreated($filter: CabFilterInput) {
       cabCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ cabCreated: Cab }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.cabCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ cabCreated: { created: Cab | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.cabCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: Cab) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: CabInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: CabFilterInput; include?: CabInclude },
   ): () => void {
     const fields = buildCabSelectionSet(options?.include);
-    const query = `subscription CabUpdated($id: ID) {
-      cabUpdated(id: $id) {
-        ${fields}
+    const query = `subscription CabUpdated($filter: CabFilterInput) {
+      cabUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ cabUpdated: Cab }>(query, { id: options?.id }, {
-      next: (data) => handler(data.cabUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ cabUpdated: { updated: Cab | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.cabUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -3796,14 +3637,24 @@ export class CabClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription CabDestroyed($id: ID) {
-      cabDestroyed(id: $id)
+    const query = `subscription CabDestroyed($filter: CabFilterInput) {
+      cabDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ cabDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.cabDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ cabDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.cabDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -3841,23 +3692,23 @@ export class DepotClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       openDepot: {
-        result?: Depot;
+        result?: Depot | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.openDepot;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -3872,32 +3723,54 @@ export class DepotClient {
     const fields = buildDepotSelectionSet(options?.include);
     const query = `subscription DepotCreated($filter: DepotFilterInput) {
       depotCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ depotCreated: Depot }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.depotCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ depotCreated: { created: Depot | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.depotCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: Depot) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: DepotInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: DepotFilterInput; include?: DepotInclude },
   ): () => void {
     const fields = buildDepotSelectionSet(options?.include);
-    const query = `subscription DepotUpdated($id: ID) {
-      depotUpdated(id: $id) {
-        ${fields}
+    const query = `subscription DepotUpdated($filter: DepotFilterInput) {
+      depotUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ depotUpdated: Depot }>(query, { id: options?.id }, {
-      next: (data) => handler(data.depotUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ depotUpdated: { updated: Depot | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.depotUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -3905,14 +3778,24 @@ export class DepotClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription DepotDestroyed($id: ID) {
-      depotDestroyed(id: $id)
+    const query = `subscription DepotDestroyed($filter: DepotFilterInput) {
+      depotDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ depotDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.depotDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ depotDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.depotDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -3950,23 +3833,23 @@ export class RiderClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       signUpRider: {
-        result?: Rider;
+        result?: Rider | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.signUpRider;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -3981,32 +3864,54 @@ export class RiderClient {
     const fields = buildRiderSelectionSet(options?.include);
     const query = `subscription RiderCreated($filter: RiderFilterInput) {
       riderCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ riderCreated: Rider }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.riderCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ riderCreated: { created: Rider | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.riderCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: Rider) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: RiderInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: RiderFilterInput; include?: RiderInclude },
   ): () => void {
     const fields = buildRiderSelectionSet(options?.include);
-    const query = `subscription RiderUpdated($id: ID) {
-      riderUpdated(id: $id) {
-        ${fields}
+    const query = `subscription RiderUpdated($filter: RiderFilterInput) {
+      riderUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ riderUpdated: Rider }>(query, { id: options?.id }, {
-      next: (data) => handler(data.riderUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ riderUpdated: { updated: Rider | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.riderUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -4014,14 +3919,24 @@ export class RiderClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription RiderDestroyed($id: ID) {
-      riderDestroyed(id: $id)
+    const query = `subscription RiderDestroyed($filter: RiderFilterInput) {
+      riderDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ riderDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.riderDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ riderDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.riderDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -4059,205 +3974,206 @@ export class TripClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       requestTrip: {
-        result?: Trip;
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.requestTrip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async assign(id: string, input: AssignTripInput, include?: TripInclude): Promise<Trip> {
+  public async assign(id: string, input: AssignTripInput = {}, include?: TripInclude): Promise<Trip> {
     const fields = buildTripSelectionSet(include);
-    const query = `mutation MutateTrip($input: AssignTripInput!) {
-      assignTrip(input: $input) {
+    const query = `mutation MutateTrip($id: ID!, $input: AssignTripInput) {
+      assignTrip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       assignTrip: {
-        result?: Trip;
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.assignTrip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async arrive(id: string, input: ArriveTripInput, include?: TripInclude): Promise<Trip> {
+  public async arrive(id: string, input: ArriveTripInput = {}, include?: TripInclude): Promise<Trip> {
     const fields = buildTripSelectionSet(include);
-    const query = `mutation MutateTrip($input: ArriveTripInput!) {
-      arriveTrip(input: $input) {
+    const query = `mutation MutateTrip($id: ID!, $input: ArriveTripInput) {
+      arriveTrip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       arriveTrip: {
-        result?: Trip;
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.arriveTrip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async board(id: string, input: BoardTripInput, include?: TripInclude): Promise<Trip> {
+  public async board(id: string, input: BoardTripInput = {}, include?: TripInclude): Promise<Trip> {
     const fields = buildTripSelectionSet(include);
-    const query = `mutation MutateTrip($input: BoardTripInput!) {
-      boardTrip(input: $input) {
+    const query = `mutation MutateTrip($id: ID!, $input: BoardTripInput) {
+      boardTrip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       boardTrip: {
-        result?: Trip;
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.boardTrip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async complete(id: string, input: CompleteTripInput, include?: TripInclude): Promise<Trip> {
+  public async complete(id: string, input: CompleteTripInput = {}, include?: TripInclude): Promise<Trip> {
     const fields = buildTripSelectionSet(include);
-    const query = `mutation MutateTrip($input: CompleteTripInput!) {
-      completeTrip(input: $input) {
+    const query = `mutation MutateTrip($id: ID!, $input: CompleteTripInput) {
+      completeTrip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       completeTrip: {
-        result?: Trip;
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.completeTrip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async cancel(id: string, input: CancelTripInput, include?: TripInclude): Promise<Trip> {
+  public async cancel(id: string, input: CancelTripInput = {}, include?: TripInclude): Promise<Trip> {
     const fields = buildTripSelectionSet(include);
-    const query = `mutation MutateTrip($input: CancelTripInput!) {
-      cancelTrip(input: $input) {
+    const query = `mutation MutateTrip($id: ID!, $input: CancelTripInput) {
+      cancelTrip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       cancelTrip: {
-        result?: Trip;
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.cancelTrip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async archive(id: string): Promise<boolean> {
-    const query = `mutation MutateTrip($input: ArchiveTripInput!) {
-      archiveTrip(input: $input) {
+  public async archive(id: string, _input: ArchiveTripInput = {}): Promise<boolean> {
+    const query = `mutation MutateTrip($id: ID!) {
+      archiveTrip(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       archiveTrip: {
+        result?: Trip | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.archiveTrip;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4271,32 +4187,54 @@ export class TripClient {
     const fields = buildTripSelectionSet(options?.include);
     const query = `subscription TripCreated($filter: TripFilterInput) {
       tripCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ tripCreated: Trip }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.tripCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ tripCreated: { created: Trip | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.tripCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: Trip) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: TripInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: TripFilterInput; include?: TripInclude },
   ): () => void {
     const fields = buildTripSelectionSet(options?.include);
-    const query = `subscription TripUpdated($id: ID) {
-      tripUpdated(id: $id) {
-        ${fields}
+    const query = `subscription TripUpdated($filter: TripFilterInput) {
+      tripUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ tripUpdated: Trip }>(query, { id: options?.id }, {
-      next: (data) => handler(data.tripUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ tripUpdated: { updated: Trip | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.tripUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -4304,14 +4242,24 @@ export class TripClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription TripDestroyed($id: ID) {
-      tripDestroyed(id: $id)
+    const query = `subscription TripDestroyed($filter: TripFilterInput) {
+      tripDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ tripDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.tripDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ tripDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.tripDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -4349,116 +4297,116 @@ export class ServiceZoneClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       chartServiceZone: {
-        result?: ServiceZone;
+        result?: ServiceZone | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.chartServiceZone;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async measure(id: string, input: MeasureServiceZoneInput, include?: ServiceZoneInclude): Promise<ServiceZone> {
+  public async measure(id: string, input: MeasureServiceZoneInput = {}, include?: ServiceZoneInclude): Promise<ServiceZone> {
     const fields = buildServiceZoneSelectionSet(include);
-    const query = `mutation MutateServiceZone($input: MeasureServiceZoneInput!) {
-      measureServiceZone(input: $input) {
+    const query = `mutation MutateServiceZone($id: ID!, $input: MeasureServiceZoneInput) {
+      measureServiceZone(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       measureServiceZone: {
-        result?: ServiceZone;
+        result?: ServiceZone | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.measureServiceZone;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async hostEvent(id: string, input: HostEventServiceZoneInput, include?: ServiceZoneInclude): Promise<ServiceZone> {
+  public async hostEvent(id: string, input: HostEventServiceZoneInput = {}, include?: ServiceZoneInclude): Promise<ServiceZone> {
     const fields = buildServiceZoneSelectionSet(include);
-    const query = `mutation MutateServiceZone($input: HostEventServiceZoneInput!) {
-      hostEventServiceZone(input: $input) {
+    const query = `mutation MutateServiceZone($id: ID!, $input: HostEventServiceZoneInput) {
+      hostEventServiceZone(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       hostEventServiceZone: {
-        result?: ServiceZone;
+        result?: ServiceZone | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.hostEventServiceZone;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async clearEvent(id: string, input: ClearEventServiceZoneInput, include?: ServiceZoneInclude): Promise<ServiceZone> {
+  public async clearEvent(id: string, input: ClearEventServiceZoneInput = {}, include?: ServiceZoneInclude): Promise<ServiceZone> {
     const fields = buildServiceZoneSelectionSet(include);
-    const query = `mutation MutateServiceZone($input: ClearEventServiceZoneInput!) {
-      clearEventServiceZone(input: $input) {
+    const query = `mutation MutateServiceZone($id: ID!, $input: ClearEventServiceZoneInput) {
+      clearEventServiceZone(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       clearEventServiceZone: {
-        result?: ServiceZone;
+        result?: ServiceZone | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.clearEventServiceZone;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -4473,32 +4421,54 @@ export class ServiceZoneClient {
     const fields = buildServiceZoneSelectionSet(options?.include);
     const query = `subscription ServiceZoneCreated($filter: ServiceZoneFilterInput) {
       serviceZoneCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ serviceZoneCreated: ServiceZone }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.serviceZoneCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ serviceZoneCreated: { created: ServiceZone | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.serviceZoneCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: ServiceZone) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: ServiceZoneInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: ServiceZoneFilterInput; include?: ServiceZoneInclude },
   ): () => void {
     const fields = buildServiceZoneSelectionSet(options?.include);
-    const query = `subscription ServiceZoneUpdated($id: ID) {
-      serviceZoneUpdated(id: $id) {
-        ${fields}
+    const query = `subscription ServiceZoneUpdated($filter: ServiceZoneFilterInput) {
+      serviceZoneUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ serviceZoneUpdated: ServiceZone }>(query, { id: options?.id }, {
-      next: (data) => handler(data.serviceZoneUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ serviceZoneUpdated: { updated: ServiceZone | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.serviceZoneUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -4506,14 +4476,24 @@ export class ServiceZoneClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription ServiceZoneDestroyed($id: ID) {
-      serviceZoneDestroyed(id: $id)
+    const query = `subscription ServiceZoneDestroyed($filter: ServiceZoneFilterInput) {
+      serviceZoneDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ serviceZoneDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.serviceZoneDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ serviceZoneDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.serviceZoneDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -4551,50 +4531,51 @@ export class TelemetrySampleClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       recordTelemetrySample: {
-        result?: TelemetrySample;
+        result?: TelemetrySample | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.recordTelemetrySample;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async prune(id: string): Promise<boolean> {
-    const query = `mutation MutateTelemetrySample($input: PruneTelemetrySampleInput!) {
-      pruneTelemetrySample(input: $input) {
+  public async prune(id: string, _input: PruneTelemetrySampleInput = {}): Promise<boolean> {
+    const query = `mutation MutateTelemetrySample($id: ID!) {
+      pruneTelemetrySample(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       pruneTelemetrySample: {
+        result?: TelemetrySample | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.pruneTelemetrySample;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4608,32 +4589,54 @@ export class TelemetrySampleClient {
     const fields = buildTelemetrySampleSelectionSet(options?.include);
     const query = `subscription TelemetrySampleCreated($filter: TelemetrySampleFilterInput) {
       telemetrySampleCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ telemetrySampleCreated: TelemetrySample }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.telemetrySampleCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ telemetrySampleCreated: { created: TelemetrySample | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.telemetrySampleCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: TelemetrySample) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: TelemetrySampleInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: TelemetrySampleFilterInput; include?: TelemetrySampleInclude },
   ): () => void {
     const fields = buildTelemetrySampleSelectionSet(options?.include);
-    const query = `subscription TelemetrySampleUpdated($id: ID) {
-      telemetrySampleUpdated(id: $id) {
-        ${fields}
+    const query = `subscription TelemetrySampleUpdated($filter: TelemetrySampleFilterInput) {
+      telemetrySampleUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ telemetrySampleUpdated: TelemetrySample }>(query, { id: options?.id }, {
-      next: (data) => handler(data.telemetrySampleUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ telemetrySampleUpdated: { updated: TelemetrySample | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.telemetrySampleUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -4641,14 +4644,24 @@ export class TelemetrySampleClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription TelemetrySampleDestroyed($id: ID) {
-      telemetrySampleDestroyed(id: $id)
+    const query = `subscription TelemetrySampleDestroyed($filter: TelemetrySampleFilterInput) {
+      telemetrySampleDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ telemetrySampleDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.telemetrySampleDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ telemetrySampleDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.telemetrySampleDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -4686,112 +4699,113 @@ export class FleetAlertClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       raiseFleetAlert: {
-        result?: FleetAlert;
+        result?: FleetAlert | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.raiseFleetAlert;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async acknowledge(id: string, input: AcknowledgeFleetAlertInput, include?: FleetAlertInclude): Promise<FleetAlert> {
+  public async acknowledge(id: string, input: AcknowledgeFleetAlertInput = {}, include?: FleetAlertInclude): Promise<FleetAlert> {
     const fields = buildFleetAlertSelectionSet(include);
-    const query = `mutation MutateFleetAlert($input: AcknowledgeFleetAlertInput!) {
-      acknowledgeFleetAlert(input: $input) {
+    const query = `mutation MutateFleetAlert($id: ID!, $input: AcknowledgeFleetAlertInput) {
+      acknowledgeFleetAlert(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       acknowledgeFleetAlert: {
-        result?: FleetAlert;
+        result?: FleetAlert | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.acknowledgeFleetAlert;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async resolve(id: string, input: ResolveFleetAlertInput, include?: FleetAlertInclude): Promise<FleetAlert> {
+  public async resolve(id: string, input: ResolveFleetAlertInput = {}, include?: FleetAlertInclude): Promise<FleetAlert> {
     const fields = buildFleetAlertSelectionSet(include);
-    const query = `mutation MutateFleetAlert($input: ResolveFleetAlertInput!) {
-      resolveFleetAlert(input: $input) {
+    const query = `mutation MutateFleetAlert($id: ID!, $input: ResolveFleetAlertInput) {
+      resolveFleetAlert(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       resolveFleetAlert: {
-        result?: FleetAlert;
+        result?: FleetAlert | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.resolveFleetAlert;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async prune(id: string): Promise<boolean> {
-    const query = `mutation MutateFleetAlert($input: PruneFleetAlertInput!) {
-      pruneFleetAlert(input: $input) {
+  public async prune(id: string, _input: PruneFleetAlertInput = {}): Promise<boolean> {
+    const query = `mutation MutateFleetAlert($id: ID!) {
+      pruneFleetAlert(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       pruneFleetAlert: {
+        result?: FleetAlert | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.pruneFleetAlert;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4805,32 +4819,54 @@ export class FleetAlertClient {
     const fields = buildFleetAlertSelectionSet(options?.include);
     const query = `subscription FleetAlertCreated($filter: FleetAlertFilterInput) {
       fleetAlertCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ fleetAlertCreated: FleetAlert }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.fleetAlertCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ fleetAlertCreated: { created: FleetAlert | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.fleetAlertCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: FleetAlert) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: FleetAlertInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: FleetAlertFilterInput; include?: FleetAlertInclude },
   ): () => void {
     const fields = buildFleetAlertSelectionSet(options?.include);
-    const query = `subscription FleetAlertUpdated($id: ID) {
-      fleetAlertUpdated(id: $id) {
-        ${fields}
+    const query = `subscription FleetAlertUpdated($filter: FleetAlertFilterInput) {
+      fleetAlertUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ fleetAlertUpdated: FleetAlert }>(query, { id: options?.id }, {
-      next: (data) => handler(data.fleetAlertUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ fleetAlertUpdated: { updated: FleetAlert | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.fleetAlertUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -4838,14 +4874,24 @@ export class FleetAlertClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription FleetAlertDestroyed($id: ID) {
-      fleetAlertDestroyed(id: $id)
+    const query = `subscription FleetAlertDestroyed($filter: FleetAlertFilterInput) {
+      fleetAlertDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ fleetAlertDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.fleetAlertDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ fleetAlertDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.fleetAlertDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -4883,50 +4929,51 @@ export class PulseSampleClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       recordPulseSample: {
-        result?: PulseSample;
+        result?: PulseSample | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.recordPulseSample;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async prune(id: string): Promise<boolean> {
-    const query = `mutation MutatePulseSample($input: PrunePulseSampleInput!) {
-      prunePulseSample(input: $input) {
+  public async prune(id: string, _input: PrunePulseSampleInput = {}): Promise<boolean> {
+    const query = `mutation MutatePulseSample($id: ID!) {
+      prunePulseSample(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       prunePulseSample: {
+        result?: PulseSample | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.prunePulseSample;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4940,32 +4987,54 @@ export class PulseSampleClient {
     const fields = buildPulseSampleSelectionSet(options?.include);
     const query = `subscription PulseSampleCreated($filter: PulseSampleFilterInput) {
       pulseSampleCreated(filter: $filter) {
-        ${fields}
+        created {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ pulseSampleCreated: PulseSample }>(query, { filter: options?.filter }, {
-      next: (data) => handler(data.pulseSampleCreated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    return this.subscriptions.subscribe<{ pulseSampleCreated: { created: PulseSample | null } }>(
+      query,
+      { filter: options?.filter },
+      {
+        next: (data) => {
+          const record = data.pulseSampleCreated?.created;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
-  /** Calls `handler` with each record updated from now on, or only record `id`. */
+  /**
+   * Calls `handler` with each record updated from now on: only record `id`, or only those
+   * matching `filter` once updated.
+   */
   public onUpdated(
     handler: (record: PulseSample) => void,
-    options?: AshSubscribeOptions & { id?: string; include?: PulseSampleInclude },
+    options?: AshSubscribeOptions & { id?: string; filter?: PulseSampleFilterInput; include?: PulseSampleInclude },
   ): () => void {
     const fields = buildPulseSampleSelectionSet(options?.include);
-    const query = `subscription PulseSampleUpdated($id: ID) {
-      pulseSampleUpdated(id: $id) {
-        ${fields}
+    const query = `subscription PulseSampleUpdated($filter: PulseSampleFilterInput) {
+      pulseSampleUpdated(filter: $filter) {
+        updated {
+          ${fields}
+        }
       }
     }`;
-    return this.subscriptions.subscribe<{ pulseSampleUpdated: PulseSample }>(query, { id: options?.id }, {
-      next: (data) => handler(data.pulseSampleUpdated),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { ...options?.filter, id: { eq: options.id } } : options?.filter;
+    return this.subscriptions.subscribe<{ pulseSampleUpdated: { updated: PulseSample | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const record = data.pulseSampleUpdated?.updated;
+          if (record) handler(record);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 
   /** Calls `handler` with the id of each record destroyed from now on, or only record `id`. */
@@ -4973,14 +5042,24 @@ export class PulseSampleClient {
     handler: (id: string) => void,
     options?: AshSubscribeOptions & { id?: string },
   ): () => void {
-    const query = `subscription PulseSampleDestroyed($id: ID) {
-      pulseSampleDestroyed(id: $id)
+    const query = `subscription PulseSampleDestroyed($filter: PulseSampleFilterInput) {
+      pulseSampleDestroyed(filter: $filter) {
+        destroyed
+      }
     }`;
-    return this.subscriptions.subscribe<{ pulseSampleDestroyed: string }>(query, { id: options?.id }, {
-      next: (data) => handler(data.pulseSampleDestroyed),
-      error: options?.onError,
-      missed: options?.onMissed,
-    });
+    const filter = options?.id !== undefined ? { id: { eq: options.id } } : undefined;
+    return this.subscriptions.subscribe<{ pulseSampleDestroyed: { destroyed: string | null } }>(
+      query,
+      { filter },
+      {
+        next: (data) => {
+          const id = data.pulseSampleDestroyed?.destroyed;
+          if (id) handler(id);
+        },
+        error: options?.onError,
+        missed: options?.onMissed,
+      },
+    );
   }
 }
 
@@ -5081,7 +5160,6 @@ export function useCabQuery(
   params?: {
     filter?: CabFilterInput;
     limit?: number;
-    offset?: number;
     include?: CabInclude;
   },
   options?: Record<string, unknown>
@@ -5089,7 +5167,6 @@ export function useCabQuery(
   const builder = client.cab.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5258,7 +5335,6 @@ export function useDepotQuery(
   params?: {
     filter?: DepotFilterInput;
     limit?: number;
-    offset?: number;
     include?: DepotInclude;
   },
   options?: Record<string, unknown>
@@ -5266,7 +5342,6 @@ export function useDepotQuery(
   const builder = client.depot.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5303,7 +5378,6 @@ export function useRiderQuery(
   params?: {
     filter?: RiderFilterInput;
     limit?: number;
-    offset?: number;
     include?: RiderInclude;
   },
   options?: Record<string, unknown>
@@ -5311,7 +5385,6 @@ export function useRiderQuery(
   const builder = client.rider.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5348,7 +5421,6 @@ export function useTripQuery(
   params?: {
     filter?: TripFilterInput;
     limit?: number;
-    offset?: number;
     include?: TripInclude;
   },
   options?: Record<string, unknown>
@@ -5356,7 +5428,6 @@ export function useTripQuery(
   const builder = client.trip.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5458,7 +5529,6 @@ export function useServiceZoneQuery(
   params?: {
     filter?: ServiceZoneFilterInput;
     limit?: number;
-    offset?: number;
     include?: ServiceZoneInclude;
   },
   options?: Record<string, unknown>
@@ -5466,7 +5536,6 @@ export function useServiceZoneQuery(
   const builder = client.serviceZone.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5536,7 +5605,6 @@ export function useTelemetrySampleQuery(
   params?: {
     filter?: TelemetrySampleFilterInput;
     limit?: number;
-    offset?: number;
     include?: TelemetrySampleInclude;
   },
   options?: Record<string, unknown>
@@ -5544,7 +5612,6 @@ export function useTelemetrySampleQuery(
   const builder = client.telemetrySample.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5591,7 +5658,6 @@ export function useFleetAlertQuery(
   params?: {
     filter?: FleetAlertFilterInput;
     limit?: number;
-    offset?: number;
     include?: FleetAlertInclude;
   },
   options?: Record<string, unknown>
@@ -5599,7 +5665,6 @@ export function useFleetAlertQuery(
   const builder = client.fleetAlert.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5668,7 +5733,6 @@ export function usePulseSampleQuery(
   params?: {
     filter?: PulseSampleFilterInput;
     limit?: number;
-    offset?: number;
     include?: PulseSampleInclude;
   },
   options?: Record<string, unknown>
@@ -5676,7 +5740,6 @@ export function usePulseSampleQuery(
   const builder = client.pulseSample.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5717,7 +5780,6 @@ export interface CabLiveParams {
   filter?: CabFilterInput;
   sort?: CabSortInput[];
   limit?: number;
-  offset?: number;
   include?: CabInclude;
 }
 
@@ -5740,7 +5802,6 @@ export function useCabLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5757,7 +5818,6 @@ export interface DepotLiveParams {
   filter?: DepotFilterInput;
   sort?: DepotSortInput[];
   limit?: number;
-  offset?: number;
   include?: DepotInclude;
 }
 
@@ -5780,7 +5840,6 @@ export function useDepotLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5797,7 +5856,6 @@ export interface RiderLiveParams {
   filter?: RiderFilterInput;
   sort?: RiderSortInput[];
   limit?: number;
-  offset?: number;
   include?: RiderInclude;
 }
 
@@ -5820,7 +5878,6 @@ export function useRiderLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5837,7 +5894,6 @@ export interface TripLiveParams {
   filter?: TripFilterInput;
   sort?: TripSortInput[];
   limit?: number;
-  offset?: number;
   include?: TripInclude;
 }
 
@@ -5860,7 +5916,6 @@ export function useTripLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5877,7 +5932,6 @@ export interface ServiceZoneLiveParams {
   filter?: ServiceZoneFilterInput;
   sort?: ServiceZoneSortInput[];
   limit?: number;
-  offset?: number;
   include?: ServiceZoneInclude;
 }
 
@@ -5900,7 +5954,6 @@ export function useServiceZoneLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5917,7 +5970,6 @@ export interface TelemetrySampleLiveParams {
   filter?: TelemetrySampleFilterInput;
   sort?: TelemetrySampleSortInput[];
   limit?: number;
-  offset?: number;
   include?: TelemetrySampleInclude;
 }
 
@@ -5940,7 +5992,6 @@ export function useTelemetrySampleLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5957,7 +6008,6 @@ export interface FleetAlertLiveParams {
   filter?: FleetAlertFilterInput;
   sort?: FleetAlertSortInput[];
   limit?: number;
-  offset?: number;
   include?: FleetAlertInclude;
 }
 
@@ -5980,7 +6030,6 @@ export function useFleetAlertLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,
@@ -5997,7 +6046,6 @@ export interface PulseSampleLiveParams {
   filter?: PulseSampleFilterInput;
   sort?: PulseSampleSortInput[];
   limit?: number;
-  offset?: number;
   include?: PulseSampleInclude;
 }
 
@@ -6020,7 +6068,6 @@ export function usePulseSampleLive(
     if (params?.filter) builder.filter(params.filter);
     for (const sort of params?.sort ?? []) builder.sort(sort.field, sort.order);
     if (params?.limit !== undefined) builder.limit(params.limit);
-    if (params?.offset !== undefined) builder.offset(params.offset);
     if (params?.include) builder.include(params.include);
     const live = builder.live((data) => setState({ data, loading: false }), {
       syncDelayMs,

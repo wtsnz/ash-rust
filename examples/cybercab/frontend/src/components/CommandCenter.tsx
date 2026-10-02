@@ -52,32 +52,32 @@ export function CommandCenter({ initialMode = "console" }: { initialMode?: "cons
   const { data: cabs } = useCabLive(client);
   const { data: active } = useTripLive(
     client,
-    { filter: { status: { in: [...ACTIVE_TRIP_STATES] } }, sort: [{ field: "requested_at", order: "desc" }], include: { rider: true } },
+    { filter: { status: { in: [...ACTIVE_TRIP_STATES] } }, sort: [{ field: "requestedAt", order: "desc" }], include: { rider: true } },
     { syncDelayMs: 300 },
   );
   const { data: recent } = useTripLive(
     client,
-    { sort: [{ field: "requested_at", order: "desc" }], limit: 50, include: { rider: true } },
+    { sort: [{ field: "requestedAt", order: "desc" }], limit: 50, include: { rider: true } },
     { syncDelayMs: 800 },
   );
   const { data: alerts } = useFleetAlertLive(
     client,
-    { filter: { status: { in: [...OPEN_ALERT_STATES] } }, sort: [{ field: "raised_at", order: "desc" }] },
+    { filter: { status: { in: [...OPEN_ALERT_STATES] } }, sort: [{ field: "raisedAt", order: "desc" }] },
     { syncDelayMs: 300 },
   );
-  const { data: pulse } = usePulseSampleLive(client, { sort: [{ field: "recorded_at", order: "desc" }], limit: 72 }, { syncDelayMs: 300 });
+  const { data: pulse } = usePulseSampleLive(client, { sort: [{ field: "recordedAt", order: "desc" }], limit: 72 }, { syncDelayMs: 300 });
   const { data: zones } = useServiceZoneLive(client);
   const { data: depots } = useDepotLive(client);
   const { data: trail } = useTelemetrySampleLive(
     client,
-    { filter: { cab_id: { eq: selectedCabId ?? "" } }, sort: [{ field: "recorded_at", order: "desc" }], limit: 120 },
+    { filter: { cabId: { eq: selectedCabId ?? "" } }, sort: [{ field: "recordedAt", order: "desc" }], limit: 120 },
     { enabled: !!selectedCabId, syncDelayMs: 1500 },
   );
 
   const cabsById = useMemo(() => new Map(cabs.map((cab) => [cab.id, cab])), [cabs]);
   const tripsById = useMemo(() => new Map(active.map((trip) => [trip.id, trip])), [active]);
   const selected = selectedCabId ? cabsById.get(selectedCabId) : undefined;
-  const selectedTrip = selected?.trip_id ? tripsById.get(selected.trip_id) : undefined;
+  const selectedTrip = selected?.tripId ? tripsById.get(selected.tripId) : undefined;
   const critical = alerts.filter((a) => a.severity === "CRITICAL" && a.status === "open").length;
 
   // Wall mode: the spotlight stays on a ride for a while, then moves to the next one,
@@ -155,10 +155,10 @@ export function CommandCenter({ initialMode = "console" }: { initialMode?: "cons
                     <TripRow
                       key={trip.id}
                       trip={trip}
-                      cab={trip.cab_id ? cabsById.get(trip.cab_id) : undefined}
+                      cab={trip.cabId ? cabsById.get(trip.cabId) : undefined}
                       now={now}
-                      selected={trip.cab_id === selectedCabId}
-                      onSelect={() => trip.cab_id && setSelectedCabId(trip.cab_id)}
+                      selected={trip.cabId === selectedCabId}
+                      onSelect={() => trip.cabId && setSelectedCabId(trip.cabId)}
                     />
                   ))}
               </div>
@@ -172,7 +172,7 @@ export function CommandCenter({ initialMode = "console" }: { initialMode?: "cons
               <CabPanel
                 cab={selected}
                 trip={selectedTrip}
-                depot={depots.find((d) => d.id === selected.depot_id)}
+                depot={depots.find((d) => d.id === selected.depotId)}
                 now={now}
                 onClose={() => setSelectedCabId(undefined)}
               />
@@ -218,7 +218,7 @@ function mergeTrips(active: Trip[], recent: Trip[]): Trip[] {
 }
 
 function MapLegend({ cabs }: { cabs: Cab[] }) {
-  const moving = cabs.filter((cab) => cab.speed_kph > 0).length;
+  const moving = cabs.filter((cab) => cab.speedKph > 0).length;
   return (
     <div className="legend">
       {(["on_trip", "dispatched", "available", "charging"] as const).map((status) => (
@@ -239,15 +239,15 @@ function Spotlight({ cab, trip, now }: { cab: Cab; trip?: Trip; now: number }) {
   return (
     <section className="spotlight" key={cab.id}>
       <div className="spotlight__kicker">
-        <span style={{ color: CAB_STATUS[status].color }}>●</span> {cab.call_sign} · “{cab.nickname}” · {cab.speed_kph} km/h · {cab.battery_pct}%
+        <span style={{ color: CAB_STATUS[status].color }}>●</span> {cab.callSign} · “{cab.nickname}” · {cab.speedKph} km/h · {cab.batteryPct}%
       </div>
       {trip && journey ? (
         <>
           <div className="spotlight__route">
-            {trip.pickup_name} <i>→</i> {trip.dropoff_name}
+            {trip.pickupName} <i>→</i> {trip.dropoffName}
           </div>
           <div className="spotlight__who">
-            {trip.rider?.display_name}
+            {trip.rider?.displayName}
             {journey.eta !== undefined && <span> · arriving in {duration(journey.eta)}</span>}
           </div>
           <JourneyRibbon journey={journey} size="wall" />
@@ -264,14 +264,14 @@ function Ticker({ trips, now }: { trips: Trip[]; now: number }) {
   const events = trips.slice(0, 14).map((trip) => {
     const verb =
       trip.status === "completed"
-        ? `dropped off at ${trip.dropoff_name}`
+        ? `dropped off at ${trip.dropoffName}`
         : trip.status === "cancelled"
           ? "cancelled"
           : trip.status === "requested"
-            ? `hailing from ${trip.pickup_name}`
-            : `${trip.pickup_name} → ${trip.dropoff_name}`;
-    const when = Math.round((now - Date.parse(trip.completed_at ?? trip.requested_at)) / 60_000);
-    return `${trip.rider?.display_name ?? "Rider"} ${verb} · ${when <= 0 ? "now" : `${when}m`}`;
+            ? `hailing from ${trip.pickupName}`
+            : `${trip.pickupName} → ${trip.dropoffName}`;
+    const when = Math.round((now - Date.parse(trip.completedAt ?? trip.requestedAt)) / 60_000);
+    return `${trip.rider?.displayName ?? "Rider"} ${verb} · ${when <= 0 ? "now" : `${when}m`}`;
   });
   return (
     <div className="ticker" aria-hidden>

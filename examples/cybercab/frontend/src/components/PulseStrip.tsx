@@ -121,7 +121,7 @@ export function PulseStrip({
       </div>
 
       <div className="pulse__readings">
-        <Reading label="Riders aboard" value={String(counts.on_trip ?? 0)} series={series((p) => p.on_trip)} color="var(--champagne)" />
+        <Reading label="Riders aboard" value={String(counts.on_trip ?? 0)} series={series((p) => p.onTrip)} color="var(--champagne)" />
         <Reading
           label="Waiting"
           value={String(waiting)}
@@ -129,12 +129,12 @@ export function PulseStrip({
           color="var(--sodium)"
           tone={waiting >= 6 ? "alarm" : waiting >= 3 ? "warn" : undefined}
         />
-        <Reading label="Avg pickup" value={duration(latest?.avg_wait_s ?? 0)} series={series((p) => p.avg_wait_s)} color="var(--sensor)" />
-        <Reading label="Utilization" value={String(latest?.utilization_pct ?? 0)} unit="%" series={series((p) => p.utilization_pct)} color="var(--curb)" />
+        <Reading label="Avg pickup" value={duration(latest?.avgWaitS ?? 0)} series={series((p) => p.avgWaitS)} color="var(--sensor)" />
+        <Reading label="Utilization" value={String(latest?.utilizationPct ?? 0)} unit="%" series={series((p) => p.utilizationPct)} color="var(--curb)" />
         <Reading
-          label={`Today · ${latest?.completed_today ?? 0} rides`}
-          value={dollars(latest?.revenue_cents_today ?? 0)}
-          series={series((p) => p.revenue_cents_today)}
+          label={`Today · ${latest?.completedToday ?? 0} rides`}
+          value={dollars(latest?.revenueCentsToday ?? 0)}
+          series={series((p) => p.revenueCentsToday)}
           color="var(--charge)"
         />
       </div>

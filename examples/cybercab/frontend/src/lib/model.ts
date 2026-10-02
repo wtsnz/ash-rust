@@ -63,11 +63,11 @@ export interface Journey {
 export function journeyOf(trip: Trip, cab: Pick<Cab, "lng" | "lat"> | undefined, now: number): Journey {
   const at = (iso?: string | null) => (iso ? Date.parse(iso) : undefined);
   const span = (from?: number, to?: number) => (from !== undefined && to !== undefined ? Math.max(0, (to - from) / 1000) : 0);
-  const requested = at(trip.requested_at)!;
-  const assigned = at(trip.assigned_at);
-  const arrived = at(trip.arrived_at);
-  const picked = at(trip.picked_up_at);
-  const completed = at(trip.completed_at);
+  const requested = at(trip.requestedAt)!;
+  const assigned = at(trip.assignedAt);
+  const arrived = at(trip.arrivedAt);
+  const picked = at(trip.pickedUpAt);
+  const completed = at(trip.completedAt);
   const position: LngLat | undefined = cab ? [cab.lng, cab.lat] : undefined;
 
   // The plan until the cab is well along the leg, then what its pace says.
@@ -88,9 +88,9 @@ export function journeyOf(trip: Trip, cab: Pick<Cab, "lng" | "lat"> | undefined,
       break;
     case "assigned": {
       journey.phase = "approach";
-      const elapsed = since(trip.assigned_at, now);
-      const fraction = position ? progressAlong(route(trip.approach_polyline), position).fraction : 0;
-      const planned = span(assigned, at(trip.pickup_eta_at));
+      const elapsed = since(trip.assignedAt, now);
+      const fraction = position ? progressAlong(route(trip.approachPolyline), position).fraction : 0;
+      const planned = span(assigned, at(trip.pickupEtaAt));
       journey.approach = { seconds: estimate(elapsed, fraction, planned), done: fraction };
       journey.eta = Math.max(0, journey.approach.seconds - elapsed);
       break;
@@ -101,9 +101,9 @@ export function journeyOf(trip: Trip, cab: Pick<Cab, "lng" | "lat"> | undefined,
       break;
     case "riding": {
       journey.phase = "ride";
-      const elapsed = since(trip.picked_up_at, now);
-      const fraction = position ? progressAlong(route(trip.ride_polyline), position).fraction : 0;
-      const planned = span(picked, at(trip.dropoff_eta_at));
+      const elapsed = since(trip.pickedUpAt, now);
+      const fraction = position ? progressAlong(route(trip.ridePolyline), position).fraction : 0;
+      const planned = span(picked, at(trip.dropoffEtaAt));
       journey.ride = { seconds: estimate(elapsed, fraction, planned), done: fraction };
       journey.eta = Math.max(0, journey.ride.seconds - elapsed);
       break;
@@ -113,7 +113,7 @@ export function journeyOf(trip: Trip, cab: Pick<Cab, "lng" | "lat"> | undefined,
       break;
     case "cancelled":
       journey.phase = "cancelled";
-      journey.hail = span(requested, at(trip.cancelled_at));
+      journey.hail = span(requested, at(trip.cancelledAt));
       break;
   }
   return journey;

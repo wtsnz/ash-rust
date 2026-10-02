@@ -114,7 +114,7 @@ export function FleetMap(props: FleetMapProps) {
       const selected = current.cabs.find((cab) => cab.id === current.selectedCabId);
       const at = selected && cabs.positionOf(selected.id, now);
       if (selected && at) {
-        callout.textContent = selected.call_sign;
+        callout.textContent = selected.callSign;
         label.setLngLat(at).addTo(instance);
         const target: LngLat = [selected.lng, selected.lat];
         if (current.follow && !flying.current && (following?.[0] !== target[0] || following?.[1] !== target[1])) {
@@ -180,7 +180,7 @@ function marks(props: FleetMapProps): CabMark[] {
     return {
       id: cab.id,
       at: [cab.lng, cab.lat],
-      heading: cab.heading_deg,
+      heading: cab.headingDeg,
       color: cab.halted ? "#f0a84a" : CAB_STATUS[status].color,
       halo: selected || status === "on_trip",
       selected,
@@ -342,7 +342,7 @@ function drawTrails(map: MapLibre, cabs: Cab[], trails: Map<string, LngLat[]>) {
   const features: Feature[] = [];
   for (const cab of cabs) {
     const trail = trails.get(cab.id);
-    if (!trail || trail.length < 2 || cab.speed_kph === 0) continue;
+    if (!trail || trail.length < 2 || cab.speedKph === 0) continue;
     const color = CAB_STATUS[cabStatus(cab)].color;
     for (let i = 1; i < trail.length; i++) {
       features.push({
@@ -358,18 +358,18 @@ function drawTrails(map: MapLibre, cabs: Cab[], trails: Map<string, LngLat[]>) {
 function drawStatic(map: MapLibre, props: FleetMapProps) {
   const zones: Feature[] = [];
   for (const zone of props.zones) {
-    const event = !!zone.event_name;
-    const label = `${zone.name}${zone.surge > 1 ? `  ${zone.surge.toFixed(1)}×` : ""}${event ? ` · ${zone.event_name}` : ""}`;
+    const event = !!zone.eventName;
+    const label = `${zone.name}${zone.surge > 1 ? `  ${zone.surge.toFixed(1)}×` : ""}${event ? ` · ${zone.eventName}` : ""}`;
     const properties = { surge: zone.surge, event, label };
-    zones.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [circle([zone.lng, zone.lat], zone.radius_m)] }, properties });
-    zones.push({ type: "Feature", geometry: { type: "Point", coordinates: [zone.lng, zone.lat + zone.radius_m / 111_000] }, properties });
+    zones.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [circle([zone.lng, zone.lat], zone.radiusM)] }, properties });
+    zones.push({ type: "Feature", geometry: { type: "Point", coordinates: [zone.lng, zone.lat + zone.radiusM / 111_000] }, properties });
   }
   (map.getSource("zones") as GeoJSONSource).setData(collection(zones));
 
   (map.getSource("depots") as GeoJSONSource).setData(
     collection(
       props.depots.map((depot) => {
-        const charging = props.cabs.filter((c) => c.depot_id === depot.id && c.status === "charging").length;
+        const charging = props.cabs.filter((c) => c.depotId === depot.id && c.status === "charging").length;
         const label = `${depot.code}${charging ? ` · ${charging} charging` : ""}`;
         return { type: "Feature", geometry: { type: "Point", coordinates: [depot.lng, depot.lat] }, properties: { label } };
       }),
@@ -393,7 +393,7 @@ function drawStatic(map: MapLibre, props: FleetMapProps) {
   const journey: Feature[] = [];
   const stops: Feature[] = [];
   const cab = props.cabs.find((c) => c.id === props.selectedCabId);
-  const trip = cab?.trip_id ? props.trips.get(cab.trip_id) : undefined;
+  const trip = cab?.tripId ? props.trips.get(cab.tripId) : undefined;
   const line = (coordinates: LngLat[], color: string, width: number, opacity: number) => {
     if (coordinates.length > 1) {
       journey.push({ type: "Feature", geometry: { type: "LineString", coordinates }, properties: { color, width, opacity } });
@@ -409,8 +409,8 @@ function drawStatic(map: MapLibre, props: FleetMapProps) {
   }
   if (cab && trip) {
     const at: LngLat = [cab.lng, cab.lat];
-    const approach = route(trip.approach_polyline);
-    const ride = route(trip.ride_polyline);
+    const approach = route(trip.approachPolyline);
+    const ride = route(trip.ridePolyline);
     if (trip.status === "assigned" && approach.length > 1) {
       const split = progressAlong(approach, at);
       line(split.ahead, "#45c8e8", 3.5, 0.95);
@@ -423,8 +423,8 @@ function drawStatic(map: MapLibre, props: FleetMapProps) {
       line(ride, "#d9b97a", 3.5, 0.85);
     }
     stops.push(
-      { type: "Feature", geometry: { type: "Point", coordinates: [trip.pickup_lng, trip.pickup_lat] }, properties: { color: "#45c8e8" } },
-      { type: "Feature", geometry: { type: "Point", coordinates: [trip.dropoff_lng, trip.dropoff_lat] }, properties: { color: "#d9b97a" } },
+      { type: "Feature", geometry: { type: "Point", coordinates: [trip.pickupLng, trip.pickupLat] }, properties: { color: "#45c8e8" } },
+      { type: "Feature", geometry: { type: "Point", coordinates: [trip.dropoffLng, trip.dropoffLat] }, properties: { color: "#d9b97a" } },
     );
   }
   (map.getSource("journey") as GeoJSONSource).setData(collection(journey));

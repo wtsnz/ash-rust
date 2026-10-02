@@ -67,19 +67,19 @@ export function CabPanel({
 
   const milestones: Array<[string, string | null | undefined]> = trip
     ? [
-        ["Hailed", trip.requested_at],
-        ["Cab assigned", trip.assigned_at],
-        ["At the curb", trip.arrived_at],
-        ["Picked up", trip.picked_up_at],
-        ["Dropped off", trip.completed_at],
+        ["Hailed", trip.requestedAt],
+        ["Cab assigned", trip.assignedAt],
+        ["At the curb", trip.arrivedAt],
+        ["Picked up", trip.pickedUpAt],
+        ["Dropped off", trip.completedAt],
       ]
     : [];
 
   return (
-    <aside className="cabpanel" aria-label={`${cab.call_sign} details`}>
+    <aside className="cabpanel" aria-label={`${cab.callSign} details`}>
       <header className="cabpanel__head">
         <div>
-          <div className="cabpanel__sign">{cab.call_sign}</div>
+          <div className="cabpanel__sign">{cab.callSign}</div>
           <div className="cabpanel__nick">
             “{cab.nickname}” · {cab.software}
           </div>
@@ -96,22 +96,22 @@ export function CabPanel({
       </div>
 
       <div className="cabpanel__telemetry">
-        <Battery pct={cab.battery_pct} range={cab.range_km} />
+        <Battery pct={cab.batteryPct} range={cab.rangeKm} />
         <div className="readout">
           <div className="readout__label">Speed</div>
           <div className="readout__value">
-            {cab.speed_kph}
+            {cab.speedKph}
             <small>km/h</small>
           </div>
-          <div className="readout__sub">heading {cab.heading_deg}°</div>
+          <div className="readout__sub">heading {cab.headingDeg}°</div>
         </div>
         <div className="readout">
           <div className="readout__label">Cabin</div>
           <div className="readout__value">
-            {cab.cabin_temp_c.toFixed(1)}
+            {cab.cabinTempC.toFixed(1)}
             <small>°C</small>
           </div>
-          <div className="readout__sub">{Math.round(cab.odometer_km).toLocaleString()} km total</div>
+          <div className="readout__sub">{Math.round(cab.odometerKm).toLocaleString()} km total</div>
         </div>
       </div>
 
@@ -127,16 +127,16 @@ export function CabPanel({
           </div>
 
           <div className="passenger">
-            <div className={`passenger__avatar tier--${(trip.rider?.tier ?? "STANDARD").toLowerCase()}`}>{initials(trip.rider?.display_name)}</div>
+            <div className={`passenger__avatar tier--${(trip.rider?.tier ?? "STANDARD").toLowerCase()}`}>{initials(trip.rider?.displayName)}</div>
             <div className="passenger__who">
-              <div className="passenger__name">{trip.rider?.display_name ?? "Rider"}</div>
+              <div className="passenger__name">{trip.rider?.displayName ?? "Rider"}</div>
               <div className="passenger__sub">
-                ★ {trip.rider?.rating.toFixed(2)} · {trip.rider?.tier.toLowerCase()} · ••{trip.rider?.phone_last4}
-                {trip.rider?.assisted_boarding && <span className="flag">Assisted boarding</span>}
+                ★ {trip.rider?.rating.toFixed(2)} · {trip.rider?.tier.toLowerCase()} · ••{trip.rider?.phoneLast4}
+                {trip.rider?.assistedBoarding && <span className="flag">Assisted boarding</span>}
               </div>
             </div>
             <div className="passenger__fare">
-              {dollars(trip.fare_cents)}
+              {dollars(trip.fareCents)}
               {trip.surge > 1 && <small>{trip.surge.toFixed(1)}× surge</small>}
             </div>
           </div>
@@ -144,14 +144,14 @@ export function CabPanel({
           <div className="leg">
             <div className="leg__stop">
               <i className="dot dot--approach" />
-              {trip.pickup_name}
+              {trip.pickupName}
             </div>
             <div className="leg__stop">
               <i className="dot dot--ride" />
-              {trip.dropoff_name}
+              {trip.dropoffName}
             </div>
             <div className="leg__dist">
-              {km(trip.distance_m)} · {trip.code}
+              {km(trip.distanceM)} · {trip.code}
             </div>
           </div>
 
@@ -200,7 +200,7 @@ export function CabPanel({
               disabled={!!busy}
               onClick={() =>
                 command("cancel", () =>
-                  client.trip.cancel(trip.id, { cancelled_at: new Date().toISOString(), cancel_reason: "Cancelled by operator" }),
+                  client.trip.cancel(trip.id, { cancelledAt: new Date().toISOString(), cancelReason: "Cancelled by operator" }),
                 )
               }
             >
