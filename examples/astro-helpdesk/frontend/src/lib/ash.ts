@@ -218,6 +218,9 @@ export const RepresentativeCreateInputSchema = CreateRepresentativeInputSchema;
 
 // --- Section 4: Isomorphic Client SDK & Transport ---
 // Ash Client Runtime & Transport
+/** The most records a page holds: Ash's default `max_page_size`. */
+export const ASH_PAGE_SIZE = 250;
+
 export interface AshClientConfig {
   baseUrl: string;
   graphqlEndpoint?: string;
@@ -380,10 +383,21 @@ export class TicketQueryBuilder {
     return data.listTickets;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<Ticket[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: Ticket[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<Ticket | null> {
@@ -500,10 +514,21 @@ export class RepresentativeQueryBuilder {
     return data.listRepresentatives;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<Representative[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: Representative[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<Representative | null> {

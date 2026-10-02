@@ -1171,6 +1171,9 @@ export const PulseSamplePruneInputSchema = PrunePulseSampleInputSchema;
 
 // --- Section 4: Isomorphic Client SDK & Transport ---
 // Ash Client Runtime & Transport
+/** The most records a page holds: Ash's default `max_page_size`. */
+export const ASH_PAGE_SIZE = 250;
+
 export interface AshClientConfig {
   baseUrl: string;
   graphqlEndpoint?: string;
@@ -2048,10 +2051,21 @@ export class CabQueryBuilder {
     return data.listCabs;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<Cab[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: Cab[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<Cab | null> {
@@ -2193,10 +2207,21 @@ export class DepotQueryBuilder {
     return data.listDepots;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<Depot[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: Depot[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<Depot | null> {
@@ -2338,10 +2363,21 @@ export class RiderQueryBuilder {
     return data.listRiders;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<Rider[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: Rider[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<Rider | null> {
@@ -2483,10 +2519,21 @@ export class TripQueryBuilder {
     return data.listTrips;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<Trip[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: Trip[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<Trip | null> {
@@ -2628,10 +2675,21 @@ export class ServiceZoneQueryBuilder {
     return data.listServiceZones;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<ServiceZone[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: ServiceZone[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<ServiceZone | null> {
@@ -2773,10 +2831,21 @@ export class TelemetrySampleQueryBuilder {
     return data.listTelemetrySamples;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<TelemetrySample[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: TelemetrySample[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<TelemetrySample | null> {
@@ -2918,10 +2987,21 @@ export class FleetAlertQueryBuilder {
     return data.listFleetAlerts;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<FleetAlert[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: FleetAlert[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<FleetAlert | null> {
@@ -3063,10 +3143,21 @@ export class PulseSampleQueryBuilder {
     return data.listPulseSamples;
   }
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<PulseSample[]> {
-    const page = await this.read({ first: this._limit }, false);
-    return page.results;
+    const records: PulseSample[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
   public async first(): Promise<PulseSample | null> {

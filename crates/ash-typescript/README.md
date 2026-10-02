@@ -323,8 +323,8 @@ try {
 
 ## Keyset Pagination
 
-`all()` reads every matching record (or the first `limit(n)`). `page()` reads a keyset
-page, as AshGraphql pages a read:
+`all()` reads every matching record (or the first `limit(n)`), following the keysets page
+by page, since the server pages every read. `page()` reads one keyset page:
 
 ```typescript
 const query = ash.ticket.query()

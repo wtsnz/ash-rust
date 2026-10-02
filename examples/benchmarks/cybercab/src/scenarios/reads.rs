@@ -5,7 +5,9 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::{Plan, load};
-use crate::gql::Graphql;
+use std::time::Duration;
+
+use crate::gql::{Graphql, Response};
 use crate::record::Record;
 use crate::server::Running;
 
@@ -13,9 +15,28 @@ pub const CAB_QUERY: &str = "query Cab($id: ID!) {
   getCab(id: $id) { id callSign status lng lat headingDeg speedKph batteryPct depot { name } }
 }";
 
-pub const FLEET_QUERY: &str = "{
-  listCabs { results { id callSign status lng lat headingDeg speedKph batteryPct } }
+const FLEET_PAGE: &str = "query Fleet($after: String) {
+  listCabs(first: 250, after: $after) {
+    results { id callSign status lng lat headingDeg speedKph batteryPct } endKeyset
+  }
 }";
+
+/// The whole fleet, as the SDK's `all()` reads it: page after page of the most a page holds
+/// (250), each after the last's end keyset, as both servers page every read.
+pub async fn whole_fleet(api: &Graphql) -> Response {
+    let mut elapsed = Duration::ZERO;
+    let mut after = Value::Null;
+    loop {
+        let page = api.request(FLEET_PAGE, json!({ "after": after })).await;
+        elapsed += page.elapsed;
+        let list = &page.data["listCabs"];
+        let read = list["results"].as_array().map_or(0, Vec::len);
+        if page.failed || read < 250 || list["endKeyset"].is_null() {
+            return Response { data: Value::Null, elapsed, failed: page.failed };
+        }
+        after = list["endKeyset"].clone();
+    }
+}
 
 pub const TRIPS_QUERY: &str = "{
   listTrips(sort: [{ field: REQUESTED_AT, order: DESC }], first: 50) {
@@ -73,7 +94,7 @@ pub async fn run(plan: &Plan, server: &Running, fleet: usize, rep: usize) -> Vec
                             let id = &ids[(worker * 7919 + n as usize) % ids.len()];
                             api.request(CAB_QUERY, json!({ "id": id })).await
                         }
-                        "fleet" => api.request(FLEET_QUERY, json!({})).await,
+                        "fleet" => whole_fleet(&api).await,
                         "trips_with_riders" => api.request(TRIPS_QUERY, json!({})).await,
                         "aggregates" => api.request(AGGREGATES_QUERY, json!({})).await,
                         "counted_page" => api.request(COUNTED_PAGE, json!({})).await,

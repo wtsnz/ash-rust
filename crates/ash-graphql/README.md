@@ -97,7 +97,8 @@ Each field's filter takes `eq`, `notEq`, `in`, `lessThan`, `greaterThan`,
 
 ### 3. Keyset Pagination
 
-A list without `first` or `last` returns every record; with one, a page of at most 250.
+Every list pages, as AshGraphql's do: `first` records after `after`, or `last` before
+`before`, at most 250; without either, the first 250. Follow `endKeyset` for the rest.
 `count` is read only when it's asked for:
 ```graphql
 query {

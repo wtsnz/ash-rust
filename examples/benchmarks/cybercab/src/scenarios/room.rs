@@ -46,7 +46,7 @@ pub async fn run(plan: &Plan, server: &Running, fleet: usize, rep: usize) -> Rec
                 let cab = &cabs[(operator * 131 + n / OPERATOR_LOOP.len()) % cabs.len()];
                 let action = OPERATOR_LOOP[n % OPERATOR_LOOP.len()];
                 let response = match action {
-                    "fleet" => api.request(super::reads::FLEET_QUERY, json!({})).await,
+                    "fleet" => super::reads::whole_fleet(&api).await,
                     "trips_with_riders" => api.request(super::reads::TRIPS_QUERY, json!({})).await,
                     "cab_by_id" => api.request(super::reads::CAB_QUERY, json!({ "id": cab })).await,
                     "aggregates" => api.request(super::reads::AGGREGATES_QUERY, json!({})).await,

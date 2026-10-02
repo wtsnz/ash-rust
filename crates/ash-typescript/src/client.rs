@@ -52,6 +52,9 @@ pub fn generate_transport_runtime(default_endpoint: &str, live: bool) -> String 
     };
     format!(
         r#"// Ash Client Runtime & Transport
+/** The most records a page holds: Ash's default `max_page_size`. */
+export const ASH_PAGE_SIZE = 250;
+
 export interface AshClientConfig {{
   baseUrl: string;
   graphqlEndpoint?: string;
@@ -264,10 +267,21 @@ export class {name}QueryBuilder {{
     return data.{list_q};
   }}
 
-  /** Every matching record, or the first `limit` of them. */
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
   public async all(): Promise<{name}[]> {{
-    const page = await this.read({{ first: this._limit }}, false);
-    return page.results;
+    const records: {name}[] = [];
+    let after: string | undefined;
+    for (;;) {{
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({{ first: wanted, after }}, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }}
   }}
 
   public async first(): Promise<{name} | null> {{

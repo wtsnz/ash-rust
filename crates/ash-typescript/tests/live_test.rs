@@ -221,6 +221,15 @@ async function main() {
   if (heard - before > 20) throw new Error(`heard ${heard - before} notifications for 40 creates`);
   counted.stop();
 
+  // Every read pages, so all() follows the keysets past the first page.
+  await Promise.all(Array.from({ length: 220 }, (_, i) => client.ticket.open({ title: `More ${i}`, priority: 2 })));
+  const everyTicket = await client.ticket.query().all();
+  const someTickets = await client.ticket.query().limit(255).all();
+  if (everyTicket.length !== 261 || new Set(everyTicket.map((t) => t.id)).size !== 261 || someTickets.length !== 255) {
+    throw new Error(`all() read ${everyTicket.length}, limit(255) ${someTickets.length}`);
+  }
+  await Promise.all(everyTicket.filter((t) => t.title.startsWith("More")).map((t) => client.ticket.remove(t.id)));
+
   // Keyset pages walk the list in order, and say how many records there are.
   const pages = client.ticket.query().sort("title", "asc");
   const first = await pages.page(30);

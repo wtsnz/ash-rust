@@ -126,9 +126,8 @@ pub(crate) fn read_field_arguments(
 }
 
 /// A keyset-paginated read through `action`: `<name>(sort, filter, first, before, after,
-/// last, <arguments>): KeysetPageOf<Resource>`. Given none of `first`, `last`, `after` or
-/// `before` it doesn't page, as Ash doesn't: the page holds every record in the order
-/// asked for, and has no keysets.
+/// last, <arguments>): KeysetPageOf<Resource>`. Every read pages, as AshGraphql's do:
+/// given no `first` or `last`, a page holds as many records as it may (250).
 pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
     name: String,
     resource: &'static ResourceDef,
@@ -154,17 +153,13 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 None => Vec::new(),
             };
             let number = |name: &str| {
-                ctx.args
-                    .get(name)
-                    .and_then(|v| v.i64().ok())
-                    .map(|n| (n.max(0) as usize).min(MAX_PAGE_SIZE))
+                ctx.args.get(name).filter(|v| !v.is_null()).map(|v| v.i64()).transpose()
             };
             let keyset = |name: &str| ctx.args.get(name).and_then(|v| v.string().ok().map(str::to_string));
-            let (first, last) = (number("first"), number("last"));
+            let (first, last) = (number("first")?, number("last")?);
             let (after, before) = (keyset("after"), keyset("before"));
-            let paged = first.is_some() || last.is_some() || after.is_some() || before.is_some();
-            let backward = before.is_some() && after.is_none() || (last.is_some() && first.is_none());
-            let limit = if backward { last.or(first) } else { first.or(last) };
+            let limit = page_limit(first, last, after.is_some(), before.is_some())?;
+            let backward = last.is_some() || (before.is_some() && after.is_none());
 
             let scoped = scope_read(
                 resource,
@@ -182,11 +177,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             .map_err(|e| async_graphql::Error::new(e.to_string()))?;
 
             // A page sorts stably, so every record has its own keyset.
-            let sort = if paged {
-                keyset_sort(resource, scoped.sort.clone())
-            } else {
-                scoped.sort.clone()
-            };
+            let sort = keyset_sort(resource, scoped.sort.clone());
 
             let count = if ctx.look_ahead().field("count").exists() {
                 let query = CompiledQuery {
@@ -240,7 +231,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             let query = CompiledQuery {
                 filter: page_filter,
                 sort: query_sort,
-                limit,
+                limit: Some(limit),
                 offset: None,
                 ..scoped
             };
@@ -256,7 +247,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 redact_record(resource, ash.actor.as_ref(), record);
             }
             preload(&ash, resource, selected(ctx.ctx.field(), Some("results")), &mut records).await?;
-            let keyset = |record: Option<&FieldMap>| record.filter(|_| paged).map(|r| keyset_of(r, &sort, pk_name));
+            let keyset = |record: Option<&FieldMap>| record.map(|r| keyset_of(r, &sort, pk_name));
             Ok(Some(FieldValue::owned_any(KeysetPage {
                 start_keyset: keyset(records.first()),
                 end_keyset: keyset(records.last()),
@@ -271,6 +262,25 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
         .argument(InputValue::new("before", TypeRef::named(TypeRef::STRING)))
         .argument(InputValue::new("after", TypeRef::named(TypeRef::STRING)))
         .argument(InputValue::new("last", TypeRef::named(TypeRef::INT)))
+}
+
+/// How many records a page holds, as AshGraphql validates a keyset read's arguments:
+/// `first` records after `after`, `last` before `before`, or, given neither, as many as a
+/// page may hold. Never more than that.
+fn page_limit(first: Option<i64>, last: Option<i64>, after: bool, before: bool) -> async_graphql::Result<usize> {
+    let error = |message: &str| Err(async_graphql::Error::new(message));
+    let cursors = "You can pass either `first` and `after` cursor, or `last` and `before` cursor";
+    match (first, last) {
+        (Some(_), Some(_)) => error("You can pass either `first` or `last`, not both"),
+        (Some(_), _) if before => error(cursors),
+        (_, Some(_)) if after => error(cursors),
+        (Some(n), _) if n < 1 => error("`first` must be a positive integer"),
+        (_, Some(n)) if n < 1 => error("`last` must be a positive integer"),
+        (Some(n), _) => Ok((n as usize).min(MAX_PAGE_SIZE)),
+        (_, Some(n)) if before => Ok((n as usize).min(MAX_PAGE_SIZE)),
+        (_, Some(_)) => error("You can pass `last` only with `before` cursor"),
+        (None, None) => Ok(MAX_PAGE_SIZE),
+    }
 }
 
 fn keyset_of(record: &FieldMap, sort: &[Sort], pk_name: &str) -> String {
