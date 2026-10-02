@@ -1,0 +1,20 @@
+---
+import { CommandCenter } from "../components/CommandCenter";
+import "../styles/tokens.css";
+import "../styles/room.css";
+
+const mode = Astro.url.searchParams.get("mode") === "wall" ? "wall" : "console";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Cybercab Ops · Austin</title>
+  </head>
+  <body>
+    <CommandCenter client:only="react" initialMode={mode} />
+  </body>
+</html>

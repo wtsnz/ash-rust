@@ -1,0 +1,37 @@
+[package]
+name = "cybercab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Cybercab fleet command center: a live robotaxi operations demo on ash-rust"
+publish = false
+
+[lib]
+path = "server/src/lib.rs"
+
+[[bin]]
+name = "cybercab"
+path = "server/src/main.rs"
+
+[dependencies]
+ash-core = { path = "../../crates/ash-core" }
+ash-graphql = { path = "../../crates/ash-graphql", features = ["axum"] }
+ash-memory = { path = "../../crates/ash-memory" }
+ash-pubsub = { path = "../../crates/ash-pubsub" }
+ash-state-machine = { path = "../../crates/ash-state-machine" }
+ash-typescript = { path = "../../crates/ash-typescript" }
+async-graphql = { version = "7", features = ["dynamic-schema"] }
+axum = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["now", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tower-http = { version = "0.6", features = ["cors"] }
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util = "0.3"
+http-body-util = "0.1"
+tokio-tungstenite = "0.29"
+tower = { version = "0.5", features = ["util"] }

@@ -1,0 +1,41 @@
+{
+  "city": "Austin, TX",
+  "center": [-97.7431, 30.2850],
+  "zones": [
+    { "code": "DTX", "name": "Downtown", "center": [-97.7430, 30.2690], "radius_m": 1500, "base_demand": 1.0 },
+    { "code": "SOC", "name": "South Congress", "center": [-97.7560, 30.2480], "radius_m": 1800, "base_demand": 0.7 },
+    { "code": "EAS", "name": "East Austin", "center": [-97.7250, 30.2600], "radius_m": 1700, "base_demand": 0.6 },
+    { "code": "UTX", "name": "UT & Hyde Park", "center": [-97.7380, 30.2950], "radius_m": 2000, "base_demand": 0.65 },
+    { "code": "MUE", "name": "Mueller", "center": [-97.7080, 30.2990], "radius_m": 1600, "base_demand": 0.4 },
+    { "code": "DOM", "name": "The Domain", "center": [-97.7240, 30.3950], "radius_m": 2500, "base_demand": 0.5 },
+    { "code": "AUS", "name": "Airport", "center": [-97.6700, 30.2050], "radius_m": 2600, "base_demand": 0.55 },
+    { "code": "GIG", "name": "Giga & COTA", "center": [-97.6250, 30.1800], "radius_m": 5500, "base_demand": 0.25 }
+  ],
+  "places": [
+    { "code": "CON6", "name": "Congress & 6th", "zone": "DTX", "at": [-97.74285, 30.26820] },
+    { "code": "CAP", "name": "Texas State Capitol", "zone": "DTX", "at": [-97.74045, 30.27470] },
+    { "code": "SEA", "name": "Seaholm District", "zone": "DTX", "at": [-97.75330, 30.27000] },
+    { "code": "RAI", "name": "Rainey Street", "zone": "DTX", "at": [-97.73850, 30.25900] },
+    { "code": "SOCO", "name": "South Congress", "zone": "SOC", "at": [-97.75050, 30.24700] },
+    { "code": "SLAM", "name": "South Lamar", "zone": "SOC", "at": [-97.76900, 30.24490] },
+    { "code": "ZIL", "name": "Zilker Park", "zone": "SOC", "at": [-97.77290, 30.26690] },
+    { "code": "E6", "name": "East 6th", "zone": "EAS", "at": [-97.72800, 30.26250] },
+    { "code": "RIV", "name": "East Riverside", "zone": "EAS", "at": [-97.72060, 30.24200] },
+    { "code": "MOO", "name": "Moody Center", "zone": "UTX", "at": [-97.73190, 30.28140] },
+    { "code": "DRAG", "name": "The Drag (UT)", "zone": "UTX", "at": [-97.74200, 30.28750] },
+    { "code": "HYDE", "name": "Hyde Park", "zone": "UTX", "at": [-97.72980, 30.30600] },
+    { "code": "CLK", "name": "Clarksville", "zone": "UTX", "at": [-97.76000, 30.28080] },
+    { "code": "MUEL", "name": "Mueller Lake Park", "zone": "MUE", "at": [-97.70460, 30.29850] },
+    { "code": "NLP", "name": "North Loop", "zone": "MUE", "at": [-97.72250, 30.31850] },
+    { "code": "DOMN", "name": "The Domain", "zone": "DOM", "at": [-97.72530, 30.40210] },
+    { "code": "Q2", "name": "Q2 Stadium", "zone": "DOM", "at": [-97.71970, 30.38780] },
+    { "code": "AUSA", "name": "AUS Arrivals", "zone": "AUS", "at": [-97.66680, 30.20240] },
+    { "code": "GIGA", "name": "Giga Texas", "zone": "GIG", "at": [-97.61700, 30.22230] },
+    { "code": "COTA", "name": "Circuit of the Americas", "zone": "GIG", "at": [-97.63590, 30.13460] }
+  ],
+  "depots": [
+    { "code": "HUB-R", "name": "Riverside Supercharger Hub", "zone": "EAS", "at": [-97.71800, 30.23950], "stalls": 12 },
+    { "code": "HUB-N", "name": "North Supercharger Hub", "zone": "DOM", "at": [-97.73000, 30.39400], "stalls": 10 },
+    { "code": "HUB-A", "name": "Airport Supercharger Hub", "zone": "AUS", "at": [-97.68300, 30.21200], "stalls": 8 }
+  ]
+}

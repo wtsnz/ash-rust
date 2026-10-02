@@ -60,4 +60,7 @@ jobs:
       - name: Install astro-helpdesk frontend deps
         working-directory: examples/astro-helpdesk/frontend
         run: bun install --frozen-lockfile
+      - name: Install cybercab frontend deps
+        working-directory: examples/cybercab/frontend
+        run: bun install --frozen-lockfile
       - run: cargo test --locked --all
