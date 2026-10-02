@@ -39,8 +39,8 @@ pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
 pub use bulk::{BulkCreateOptions, BulkDestroyOptions, BulkResult, bulk_create, bulk_destroy};
 pub use changeset::{
-    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, IntoFieldMap,
-    ManagedRelationshipSpec,
+    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, DynamicChangeset,
+    DynamicChangesetHook, IntoFieldMap, ManagedRelationshipSpec,
 };
 pub use context::Context;
 pub use data_layer::{

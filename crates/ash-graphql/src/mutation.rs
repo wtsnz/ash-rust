@@ -132,13 +132,7 @@ pub fn register_action_input(
     // 2. Attributes accepted by the action
     if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
         for attr in resource.attributes {
-            let is_accepted = if !action.accept.is_empty() {
-                action.accept.contains(&attr.name)
-            } else {
-                !attr.primary_key && !attr.generated && !attr.version
-            };
-
-            if is_accepted {
+            if action.accept.contains(&attr.name) {
                 let type_ref = attr_type_to_type_ref(resource.name, attr.name, attr.ty, true);
                 input_obj = input_obj.field(InputValue::new(attr.name, type_ref));
             }
@@ -177,7 +171,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
             let mut input_map = FieldMap::new();
 
             // Extract accepted attributes
-            for attr in resource.attributes {
+            for attr in resource.attributes.iter().filter(|attr| action.accept.contains(&attr.name)) {
                 if let Some(val) = input_obj.get(attr.name) {
                     let ash_val = parse_input_val(&val, attr.ty)?;
                     if !ash_val.is_null() {

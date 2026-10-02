@@ -423,26 +423,6 @@ pub fn apply_tenant_to_fields(
 /// Split accepted attributes from action arguments. Extra keys (pk, version) are ignored
 /// so GraphQL can pass `id` on the same map. An empty accept list keeps non-argument keys
 /// as fields, matching the GraphQL input builder.
-pub fn take_accepted_and_args(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
-    let mut fields = FieldMap::new();
-    let mut arguments = FieldMap::new();
-    for (field, value) in input {
-        if action.has_argument(&field) {
-            arguments.insert(field, value);
-        } else if action.accept.is_empty() || action.accept.contains(&field.as_str()) {
-            fields.insert(field, value);
-        }
-    }
-    for arg in action.arguments {
-        if !arg.allow_nil && !arguments.contains_key(arg.name) {
-            return Err(Error::Missing {
-                field: arg.name.to_string(),
-            });
-        }
-    }
-    Ok((fields, arguments))
-}
-
 /// Checks each attribute's value against its type, then rewrites values with several
 /// spellings (IP addresses, vectors, floats) to their canonical text.
 pub fn validate(def: &ResourceDef, fields: &mut FieldMap) -> Result<()> {
