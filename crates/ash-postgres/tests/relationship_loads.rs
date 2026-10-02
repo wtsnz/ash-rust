@@ -199,10 +199,11 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
     let none = load_related_query(&ctx, &SHELF, "books", &[keyless], &paged).await.unwrap();
     assert_eq!(none, [Vec::<FieldMap>::new()]);
 
-    // Keyed by binary digests, paged for each.
-    let digests = ["AAEC", "AwQF"];
+    // Keyed by binary digests, paged for each; this run's own, as a database may hold
+    // earlier runs' chunks.
+    let digests: Vec<String> = (0..2).map(|_| ash_core::Binary::from_bytes(Uuid::new_v4().as_bytes().to_vec()).encode()).collect();
     let mut blobs = Vec::new();
-    for digest in digests {
+    for digest in digests.iter().map(String::as_str) {
         blobs.push(insert(&*ctx.data, &BLOB, &[("digest", Value::from(digest))]).await);
         for n in [3, 1, 2] {
             insert(&*ctx.data, &CHUNK, &[("digest", Value::from(digest)), ("n", Value::Int(n))]).await;

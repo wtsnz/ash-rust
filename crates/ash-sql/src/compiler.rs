@@ -1320,7 +1320,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         by: &ash_core::PerKey<'_>,
         keys: Vec<Value>,
     ) -> Result<CompiledSql> {
+        // The join resource's filter compiles before the read does, as the same actor.
         self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
         let key_ty = match by {
             ash_core::PerKey::Attribute(field) => resource.attribute(field).map(|attr| attr.ty),
             ash_core::PerKey::Through { resource: through, source, .. } => through.attribute(source).map(|attr| attr.ty),
