@@ -61,6 +61,7 @@ pub fn scope_read(
     let (filter, tenant) = apply_tenant_scope(resource, filter, query.tenant.take())?;
     query.filter = filter;
     query.tenant = tenant;
+    query.actor = actor.cloned();
     Ok(query)
 }
 

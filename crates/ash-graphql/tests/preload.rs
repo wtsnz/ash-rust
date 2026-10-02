@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    ActionDef, Actor, AggregateDef, AttrType, AttributeDef, Check, CompiledQuery, Context, DataLayer, FieldMap,
+    ActionDef, Actor, AggregateDef, AttrType, CalculationDef, Expr, AttributeDef, Check, CompiledQuery, Context, DataLayer, FieldMap,
     FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind, RelationshipDef, ResourceDef, Result,
     Value,
 };
@@ -150,11 +150,19 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
     multitenancy: None,
 };
 
-/// Who wrote a post is for signed-in readers only.
-static POST_FIELD_POLICIES: &[FieldPolicyDef] = &[FieldPolicyDef::new(
-    "author_id",
-    &[PolicyEffect::AuthorizeIf(Check::ActorPresent)],
-)];
+/// Who wrote a post, and how many comments it has, are for signed-in readers only.
+static POST_FIELD_POLICIES: &[FieldPolicyDef] = &[
+    FieldPolicyDef::new("author_id", &[PolicyEffect::AuthorizeIf(Check::ActorPresent)]),
+    FieldPolicyDef::new("comment_count", &[PolicyEffect::AuthorizeIf(Check::ActorPresent)]),
+];
+
+static IS_FIRST: Expr = Expr::Eq(&Expr::Field("title"), &Expr::LitString("A0P0"));
+static LABEL: Expr = Expr::Field("label");
+static OTHER: Expr = Expr::LitString("other");
+
+fn shout(fields: &FieldMap) -> Result<Value> {
+    Ok(fields.get("title").and_then(Value::as_str).map(|t| Value::String(t.to_uppercase())).unwrap_or(Value::Null))
+}
 
 static POST_DEF: ResourceDef = ResourceDef {
     name: "Post",
@@ -163,6 +171,7 @@ static POST_DEF: ResourceDef = ResourceDef {
         AttributeDef::uuid_pk("id"),
         AttributeDef::required("title", AttrType::String),
         AttributeDef::required("author_id", AttrType::Uuid),
+        AttributeDef::optional("label", AttrType::String),
     ],
     relationships: &[
         rel("author", RelKind::BelongsTo, || &AUTHOR_DEF, "author_id", "id"),
@@ -175,6 +184,16 @@ static POST_DEF: ResourceDef = ResourceDef {
         ActionDef::destroy("destroy"),
     ],
     aggregates: &[AggregateDef::count("comment_count", "comments")],
+    calculations: &[
+        // The first post's label, which it hasn't got; any other's "other".
+        CalculationDef::new(
+            "first_label",
+            AttrType::String,
+            Expr::IfElse { cond: &IS_FIRST, then_expr: &LABEL, else_expr: &OTHER },
+        ),
+        // Only Rust can compute this.
+        CalculationDef::new("shout", AttrType::String, Expr::Custom(shout)),
+    ],
     field_policies: POST_FIELD_POLICIES,
     ..AUTHOR_DEF
 };
@@ -517,4 +536,81 @@ async fn selected_aggregates_load_and_sort_and_filter() {
     )
     .await;
     assert_eq!(page["retitlePost"]["result"], json!({ "title": "Renamed", "commentCount": 3 }));
+}
+
+/// A field policy hides an aggregate a mutation's result selects, as it does a read's.
+#[tokio::test]
+async fn a_mutation_result_hides_what_field_policies_hide() {
+    let (data, post) = seeded().await;
+    let mutation = |title: &str| {
+        format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "{title}" }}) {{ result {{ title commentCount }} }} }}"#)
+    };
+    let page = run(&data, &mutation("Anonymous"), None).await;
+    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Anonymous", "commentCount": null }));
+    let page = run(&data, &mutation("Signed in"), Some(Actor::new(Uuid::new_v4()))).await;
+    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Signed in", "commentCount": 2 }));
+}
+
+/// A calculation loaded with the record is its value, nil included: the narrowed record
+/// can't compute it again. One only Rust computes reads every attribute it might need.
+#[tokio::test]
+async fn calculations_load_as_the_record_is_stored() {
+    let (data, _) = seeded().await;
+    let actor = || Some(Actor::new(Uuid::new_v4()));
+    let page = run(&data, r#"{ listPosts(filter: { title: { in: ["A0P0", "A0P1"] } }, sort: [{ field: TITLE }]) { results { firstLabel } } }"#, actor()).await;
+    assert_eq!(page["listPosts"]["results"], json!([{ "firstLabel": null }, { "firstLabel": "other" }]));
+    data.take_selects();
+
+    let page = run(&data, r#"{ listPosts(filter: { title: { eq: "A1P0" } }) { results { shout } } }"#, actor()).await;
+    assert_eq!(page["listPosts"]["results"], json!([{ "shout": "A1P0" }]));
+    assert_eq!(data.take_selects(), [("Post", None)]);
+}
+
+static PROJECT_DEF: ResourceDef = ResourceDef {
+    name: "Project",
+    table: "projects",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    relationships: &[rel("invoices", RelKind::HasMany, || &INVOICE_DEF, "id", "project_id")],
+    aggregates: &[AggregateDef::count("invoice_count", "invoices")],
+    ..AUTHOR_DEF
+};
+
+/// Each invoice is its owner's to read.
+static INVOICE_DEF: ResourceDef = ResourceDef {
+    name: "Invoice",
+    table: "invoices",
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("project_id", AttrType::Uuid),
+        AttributeDef::required("owner_id", AttrType::Uuid),
+    ],
+    policies: &[ash_core::PolicyDef::when(
+        ash_core::PolicyWhen::ActionType(ash_core::ActionKind::Read),
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+    )],
+    ..AUTHOR_DEF
+};
+
+/// An aggregate counts only the related rows the actor may read, as Ash authorizes an
+/// aggregate's query by default: what loading the relationship would return.
+#[tokio::test]
+async fn an_aggregate_counts_only_what_the_actor_may_read() {
+    let data = Counting::default();
+    let project = insert(&data, &PROJECT_DEF, &[("name", Value::from("P"))]).await;
+    let (mine, theirs) = (Uuid::new_v4(), Uuid::new_v4());
+    for owner in [mine, mine, theirs] {
+        insert(&data, &INVOICE_DEF, &[("project_id", Value::Uuid(project)), ("owner_id", Value::Uuid(owner))]).await;
+    }
+    let schema = AshGraphQL::from_resources(&[&PROJECT_DEF, &INVOICE_DEF]).finish::<Counting>().unwrap();
+    let res = schema
+        .execute(
+            Request::new("{ listProjects { results { invoiceCount invoices { id } } } }")
+                .data(Context::new(data.clone()).with_actor(Actor::new(mine))),
+        )
+        .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let page = res.data.into_json().unwrap();
+    let project = &page["listProjects"]["results"][0];
+    assert_eq!(project["invoiceCount"], 2);
+    assert_eq!(project["invoices"].as_array().unwrap().len(), 2);
 }

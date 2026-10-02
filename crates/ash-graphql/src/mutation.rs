@@ -172,9 +172,9 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 if action.kind == ActionKind::Create {
                     return Ok(match create_dynamic(ash, resource, action, input).await {
                         Ok(mut stored) => {
-                            redact_record(resource, ash.actor.as_ref(), &mut stored);
                             let fields = selected(ctx.ctx.field(), Some("result"));
                             load_selected(ash, resource, &fields, std::slice::from_mut(&mut stored)).await?;
+                            redact_record(resource, ash.actor.as_ref(), &mut stored);
                             preload(ash, resource, fields, std::slice::from_mut(&mut stored)).await?;
                             succeeded(Some(stored))
                         }
@@ -195,9 +195,9 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 if action.kind == ActionKind::Update {
                     return Ok(match update_dynamic_expecting(ash, resource, action, id, input, version).await {
                         Ok(mut updated) => {
-                            redact_record(resource, ash.actor.as_ref(), &mut updated);
                             let fields = selected(ctx.ctx.field(), Some("result"));
                             load_selected(ash, resource, &fields, std::slice::from_mut(&mut updated)).await?;
+                            redact_record(resource, ash.actor.as_ref(), &mut updated);
                             preload(ash, resource, fields, std::slice::from_mut(&mut updated)).await?;
                             succeeded(Some(updated))
                         }

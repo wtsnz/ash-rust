@@ -81,13 +81,16 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let field = Field::new(camel(calc_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
+                    // Loaded with the record, nil included: computed from the record as
+                    // stored, which the record here may not wholly hold.
                     match map.get(calc_name) {
-                        Some(val) if !val.is_null() => {
+                        Some(val) if val.is_null() => return Ok(None),
+                        Some(val) => {
                             return Ok(Some(FieldValue::value(ash_value_to_graphql_value_typed(
                                 val, calc_ty,
                             ))));
                         }
-                        _ => {}
+                        None => {}
                     }
 
                     match eval_expr(&expr, map) {
@@ -110,10 +113,11 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
     // is null, as in AshGraphql.
     for agg in resource.aggregates {
         let agg_name = agg.name;
+        // Unless a field policy may hide it, as one may an attribute.
         let always = matches!(
             agg.kind,
             ash_core::AggregateKind::Count | ash_core::AggregateKind::Exists
-        );
+        ) && !resource.field_policies.iter().any(|fp| fp.field == agg.name);
         let type_ref = attr_type_to_type_ref(resource.name, agg.name, agg.ty, !always);
 
         let field = Field::new(camel(agg_name), type_ref, move |ctx| {

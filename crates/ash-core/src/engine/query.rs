@@ -200,6 +200,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 sort: this.sort.clone(),
                 // A typed record holds every attribute.
                 select: None,
+                actor: None,
                 calculations: this.calculations.clone(),
                 calculation_args: this.calculation_args.clone(),
                 aggregates: this.aggregates.clone(),

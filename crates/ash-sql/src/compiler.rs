@@ -96,6 +96,8 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     applying_read_filters: Vec<&'static str>,
     /// The query's tenant, which also limits the rows read through relationships.
     tenant: Option<String>,
+    /// The query's actor, whose read policies limit the related rows aggregates count.
+    actor: Option<ash_core::Actor>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -111,6 +113,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             calc_args: std::collections::HashMap::new(),
             applying_read_filters: Vec::new(),
             tenant: None,
+            actor: None,
         }
     }
 
@@ -214,7 +217,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     fn bind_field(&mut self, resource: &ResourceDef, field: &str, val: Value) -> String {
-        match resource.attribute(field).map(|attr| attr.ty) {
+        let ty = resource
+            .attribute(field)
+            .map(|attr| attr.ty)
+            .or_else(|| resource.aggregate(field).map(|agg| agg.ty))
+            .or_else(|| resource.calculation(field).map(|calc| calc.ty));
+        match ty {
             Some(ty) => self.bind_typed(ty, val),
             None => self.push_param(val),
         }
@@ -656,15 +664,30 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         join: Option<(&'static ResourceDef, &str)>,
     ) -> Result<String> {
         let mut sql = self.compile_aggregate_filter(dest_alias, &agg.filter)?;
-        if let Some(compiled) = self.compile_read_filter(dest, dest_alias)? {
+        if let Some(compiled) = self.compile_related_read_filter(dest, dest_alias)? {
             sql.push_str(&format!(" AND {compiled}"));
         }
         if let Some((through, join_alias)) = join
-            && let Some(compiled) = self.compile_read_filter(through, join_alias)?
+            && let Some(compiled) = self.compile_related_read_filter(through, join_alias)?
         {
             sql.push_str(&format!(" AND {compiled}"));
         }
         Ok(sql)
+    }
+
+    /// The rows of `resource` an aggregate counts, as a condition on `alias`'s rows: those
+    /// its primary read returns to the query's actor, its policies included, as Ash
+    /// authorizes an aggregate's query by default. No policy letting the actor read any
+    /// means none.
+    fn compile_related_read_filter(&mut self, resource: &'static ResourceDef, alias: &str) -> Result<Option<String>> {
+        let mut parts: Vec<String> = self.compile_read_filter(resource, alias)?.into_iter().collect();
+        match ash_core::compile_read_filter(resource, resource.default_read(), self.actor.as_ref()) {
+            Ok(None) => {}
+            Ok(Some(policy)) => parts.push(self.compile_filter_scoped(resource, &policy, Some(alias))?),
+            Err(Error::Forbidden) => parts.push("1=0".to_string()),
+            Err(err) => return Err(err),
+        }
+        Ok((!parts.is_empty()).then(|| format!("({})", parts.join(" AND "))))
     }
 
     pub fn compile_aggregate(
@@ -908,6 +931,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     ) -> Result<CompiledSql> {
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 
@@ -990,6 +1014,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_count(&mut self, resource: &ResourceDef, query: &CompiledQuery) -> Result<CompiledSql> {
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
         let mut from = self.table(resource)?;
         if let Some(filter) = &query.filter {
             from.push_str(" WHERE ");
@@ -1139,6 +1164,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         update: &AtomicUpdate,
     ) -> Result<CompiledSql> {
         self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
         let pk = resource.primary_key().ok_or(Error::NoPrimaryKey(resource.name))?;
         let pk_col = ident(self.dialect, pk.name)?;
         let table = self.table(resource)?;
@@ -1192,6 +1218,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         conditions: &[AtomicCondition],
     ) -> Result<CompiledSql> {
         self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
         let pk = resource.primary_key().ok_or(Error::NoPrimaryKey(resource.name))?;
         let pk_col = ident(self.dialect, pk.name)?;
         let table = self.table(resource)?;

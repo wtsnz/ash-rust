@@ -767,7 +767,7 @@ fn compute<'a>(
     aggregates.sort_unstable();
     aggregates.dedup();
     if !aggregates.is_empty() {
-        apply_aggregates(tables, tenant, resource, rows, &aggregates)?;
+        apply_aggregates(tables, tenant, resource, rows, &aggregates, query.actor.as_ref())?;
     }
     computed.extend(&aggregates);
     Ok(())
@@ -797,12 +797,38 @@ fn strip_unrequested_aggregates(
     }
 }
 
+/// Whether `actor` may read `row` of `resource`, as its primary read's policies say, as
+/// Ash authorizes an aggregate's query by default.
+fn actor_reads(
+    tables: &Tables,
+    tenant: Option<&str>,
+    resource: &'static ResourceDef,
+    policy: &std::result::Result<Option<Filter>, ()>,
+    row: &FieldMap,
+) -> bool {
+    match policy {
+        Ok(None) => true,
+        Ok(Some(filter)) => eval_filter(tables, tenant, resource, filter, row, None) == Some(true),
+        Err(()) => false,
+    }
+}
+
+/// `resource`'s read policies for `actor`: a filter, none, or `Err` if it may read nothing.
+fn read_policy(resource: &'static ResourceDef, actor: Option<&ash_core::Actor>) -> Result<std::result::Result<Option<Filter>, ()>> {
+    match ash_core::compile_read_filter(resource, resource.default_read(), actor) {
+        Ok(filter) => Ok(Ok(filter)),
+        Err(Error::Forbidden) => Ok(Err(())),
+        Err(err) => Err(err),
+    }
+}
+
 fn apply_aggregates(
     tables: &Tables,
     tenant: Option<&str>,
     resource: &ResourceDef,
     rows: &mut [FieldMap],
     needed: &[&str],
+    actor: Option<&ash_core::Actor>,
 ) -> Result<()> {
     for agg_name in needed {
         let agg = resource.aggregate(agg_name).ok_or_else(|| {
@@ -815,11 +841,13 @@ fn apply_aggregates(
             ))
         })?;
         let dest = (rel.destination)();
+        let dest_policy = read_policy(dest, actor)?;
         let dest_rows: Vec<&FieldMap> = tables
             .get(&table_key(dest, tenant))
             .map(|t| {
                 t.values()
                     .filter(|dest_row| passes_read_filter(tables, tenant, dest, dest_row, None))
+                    .filter(|dest_row| actor_reads(tables, tenant, dest, &dest_policy, dest_row))
                     .collect()
             })
             .unwrap_or_default();
@@ -848,11 +876,13 @@ fn apply_aggregates(
                 let dest_on_join = rel
                     .destination_attribute_on_join_resource
                     .unwrap_or(rel.destination_attribute);
+                let through_policy = read_policy(through_def, actor)?;
                 let join_rows: Vec<&FieldMap> = tables
                     .get(&table_key(through_def, tenant))
                     .map(|t| {
                         t.values()
                             .filter(|jr| passes_read_filter(tables, tenant, through_def, jr, None))
+                            .filter(|jr| actor_reads(tables, tenant, through_def, &through_policy, jr))
                             .collect()
                     })
                     .unwrap_or_default();

@@ -84,6 +84,9 @@ pub(crate) struct Load {
     pub select: Vec<String>,
     pub aggregates: Vec<String>,
     pub calculations: Vec<String>,
+    /// A calculation only Rust can compute is selected, which reads whatever of the
+    /// record it likes: every attribute is read.
+    pub every_attribute: bool,
 }
 
 impl Load {
@@ -104,7 +107,11 @@ impl Load {
             load.add(resource, agg.name);
         }
         for calc in resource.calculations.iter().filter(|calc| is_selected(calc.name)) {
-            load.add(resource, calc.name);
+            if calc.expr.is_custom() {
+                load.every_attribute = true;
+            } else {
+                load.add(resource, calc.name);
+            }
         }
         for rel in resource.relationships.iter().filter(|rel| is_selected(rel.name)) {
             for column in rel.source_columns() {
@@ -136,7 +143,7 @@ impl Load {
     /// `query`, reading only this.
     pub(crate) fn onto(self, query: CompiledQuery) -> CompiledQuery {
         let mut query = query;
-        query.select = Some(self.select);
+        query.select = (!self.every_attribute).then_some(self.select);
         query.aggregates.extend(self.aggregates);
         query.calculations.extend(self.calculations);
         query
@@ -145,7 +152,7 @@ impl Load {
     /// `query`, loading only this of the related rows.
     fn onto_related(self, query: RelatedQuery) -> RelatedQuery {
         RelatedQuery {
-            select: Some(self.select),
+            select: (!self.every_attribute).then_some(self.select),
             aggregates: self.aggregates,
             calculations: self.calculations,
             ..query
@@ -154,7 +161,9 @@ impl Load {
 }
 
 /// Loads the aggregates and calculations `fields` select on `records`, written records of
-/// `resource`, as AshGraphql loads a mutation's result: one read of them all, by key.
+/// `resource`, as AshGraphql loads a mutation's result: one read of them all, by key, as
+/// the actor reads them. Load them before redacting the records, so field policies apply
+/// to what loads too.
 pub(crate) async fn load_selected<D: DataLayer>(
     ash: &Context<D>,
     resource: &'static ResourceDef,
@@ -175,6 +184,7 @@ pub(crate) async fn load_selected<D: DataLayer>(
         aggregates: load.aggregates,
         calculations: load.calculations,
         tenant: ash.tenant.clone(),
+        actor: ash.actor.clone(),
         ..CompiledQuery::default()
     };
     let loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;

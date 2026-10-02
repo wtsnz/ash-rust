@@ -18,6 +18,9 @@ pub struct CompiledQuery {
     /// The attributes to read, as Ash's `select`: `None` reads every one. The primary key
     /// is always read. A record read with a selection lacks the attributes left out.
     pub select: Option<Vec<String>>,
+    /// The actor the read runs as. Aggregates count only the related rows the actor may
+    /// read, as Ash authorizes an aggregate's query by default.
+    pub actor: Option<crate::actor::Actor>,
     pub calculations: Vec<String>,
     pub calculation_args: std::collections::HashMap<String, FieldMap>,
     pub aggregates: Vec<String>,

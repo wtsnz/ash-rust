@@ -776,6 +776,81 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
     }
 }
 
+static OWNED_LINE_DEF: ResourceDef = ResourceDef {
+    name: "OwnedLine",
+    table: "owned_lines",
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("order_id", AttrType::Uuid),
+        AttributeDef::required("owner_id", AttrType::Uuid),
+        AttributeDef::required("at", AttrType::UTC_DATETIME_USEC),
+    ],
+    actions: &[ash_core::ActionDef::read("read").primary()],
+    // Each line is its owner's to read.
+    policies: &[ash_core::PolicyDef::when(
+        ash_core::PolicyWhen::ActionType(ash_core::ActionKind::Read),
+        &[ash_core::PolicyEffect::AuthorizeIf(ash_core::Check::RelatesToActor { field: "owner_id" })],
+    )],
+    ..NULLABLE_DEF
+};
+
+static OWNED_ORDER_DEF: ResourceDef = ResourceDef {
+    name: "OwnedOrder",
+    table: "owned_orders",
+    attributes: &[AttributeDef::uuid_pk("id")],
+    relationships: &[ash_core::RelationshipDef::has_many("lines", || &OWNED_LINE_DEF, "order_id")],
+    aggregates: &[
+        ash_core::AggregateDef::count("line_count", "lines"),
+        ash_core::AggregateDef::first("first_at", "lines", "at", AttrType::UTC_DATETIME_USEC),
+    ],
+    ..NULLABLE_DEF
+};
+
+/// An aggregate counts only the related rows its actor may read, as Ash authorizes an
+/// aggregate's query by default; and a filter on an aggregate binds its value as the
+/// aggregate's type.
+#[tokio::test]
+async fn test_postgres_aggregates_count_what_the_actor_reads() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&OWNED_ORDER_DEF, &OWNED_LINE_DEF]).await.unwrap();
+    let order = Uuid::new_v4();
+    pg.create(&OWNED_ORDER_DEF, None, order, FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
+    let (mine, theirs) = (Uuid::new_v4(), Uuid::new_v4());
+    for owner in [mine, mine, theirs] {
+        let id = Uuid::new_v4();
+        let fields = FieldMap::from([
+            ("id".into(), Value::Uuid(id)),
+            ("order_id".into(), Value::Uuid(order)),
+            ("owner_id".into(), Value::Uuid(owner)),
+            ("at".into(), Value::from("2026-01-02T03:04:05.000000Z")),
+        ]);
+        pg.create(&OWNED_LINE_DEF, None, id, fields).await.unwrap();
+    }
+    let count_as = |actor: Option<ash_core::Actor>| CompiledQuery {
+        filter: Some(Filter::eq("id", Value::Uuid(order))),
+        aggregates: vec!["line_count".into()],
+        actor,
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&OWNED_ORDER_DEF, &count_as(Some(ash_core::Actor::new(mine)))).await.unwrap();
+    assert_eq!(rows[0].get("line_count"), Some(&Value::Int(2)));
+    let rows = pg.run_query(&OWNED_ORDER_DEF, &count_as(None)).await.unwrap();
+    assert_eq!(rows[0].get("line_count"), Some(&Value::Int(0)));
+
+    let query = CompiledQuery {
+        filter: Some(Filter::and([
+            Filter::eq("id", Value::Uuid(order)),
+            Filter::gt("first_at", Value::from("2026-01-01T00:00:00.000000Z")),
+        ])),
+        actor: Some(ash_core::Actor::new(mine)),
+        ..CompiledQuery::default()
+    };
+    assert_eq!(pg.run_query(&OWNED_ORDER_DEF, &query).await.unwrap().len(), 1);
+}
+
 mod pg_shift {
     use ash_core::{UtcDateTime, UtcDateTimeUsec, resource};
     use uuid::Uuid;
