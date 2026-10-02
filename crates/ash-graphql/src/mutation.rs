@@ -3,7 +3,7 @@ use ash_core::destroy_dynamic;
 
 use crate::redact::redact_record;
 use crate::preload::{preload, selected};
-use ash_core::update_dynamic;
+use ash_core::update_existing_dynamic;
 use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
 use uuid::Uuid;
@@ -222,7 +222,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 }
 
                 Ok(match action.kind {
-                    ActionKind::Update => match update_dynamic(ash, resource, action, id, input).await {
+                    ActionKind::Update => match update_existing_dynamic(ash, resource, action, existing, input).await {
                         Ok(mut updated) => {
                             redact_record(resource, ash.actor.as_ref(), &mut updated);
                             let fields = selected(ctx.ctx.field(), Some("result"));

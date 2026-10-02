@@ -126,6 +126,7 @@ static POST_DEF: ResourceDef = ResourceDef {
     actions: &[
         ActionDef::read("read").primary(),
         ActionDef::create("create").accept(&["title", "author_id"]),
+        ActionDef::update("retitle").accept(&["title"]),
     ],
     field_policies: POST_FIELD_POLICIES,
     ..AUTHOR_DEF
@@ -344,4 +345,18 @@ async fn a_relationship_with_arguments_is_still_shaped_by_them() {
         assert!(posts[0]["title"].as_str().unwrap().ends_with("P1"), "{author}");
     }
     assert_eq!(json!(data.take().len() > 1), json!(true));
+}
+
+/// An update reads its record once, to see it as the requester may, and updates it.
+#[tokio::test]
+async fn an_update_reads_its_record_once() {
+    let (data, post) = seeded().await;
+    let page = run(
+        &data,
+        &format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "Renamed" }}) {{ result {{ title }} errors {{ message }} }} }}"#),
+        Some(Actor::new(Uuid::new_v4())),
+    )
+    .await;
+    assert_eq!(page["retitlePost"]["result"]["title"], "Renamed");
+    assert_eq!(data.take(), ["Post"]);
 }

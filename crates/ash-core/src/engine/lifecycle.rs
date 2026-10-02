@@ -152,6 +152,18 @@ pub async fn update_dynamic<D: DataLayer>(
         .into_iter()
         .next()
         .ok_or(Error::NotFound)?;
+    update_existing_dynamic(ctx, resource, action, existing, input).await
+}
+
+/// [`update_dynamic`] of a record already read, as `ctx` sees it: no second read.
+pub async fn update_existing_dynamic<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+    existing: FieldMap,
+    input: FieldMap,
+) -> Result<FieldMap> {
+    expect_kind(action, ActionKind::Update)?;
     DynamicChangeset::for_update(ctx, resource, action, existing, input)?
         .commit(ctx)
         .await
