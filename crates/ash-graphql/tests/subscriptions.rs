@@ -450,3 +450,30 @@ where
         }
     }
 }
+
+/// An optional argument given as `null`, as an unset variable is, means no argument.
+#[tokio::test]
+async fn null_subscription_arguments_mean_none() {
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub)
+        .finish::<Memory>()
+        .unwrap();
+    let request = Request::new(
+        "subscription ($filter: TicketFilterInput) { ticketCreated(filter: $filter) { title } }",
+    )
+    .variables(async_graphql::Variables::from_json(serde_json::json!({ "filter": null })))
+    .data(ctx.clone());
+    let mut stream = schema.execute_stream(request);
+    let heard = tokio::spawn(async move { stream.next().await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut input = ash_core::FieldMap::new();
+    input.insert("title".into(), ash_core::Value::String("Unfiltered".into()));
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(2), heard).await.unwrap().unwrap().unwrap();
+    assert!(event.errors.is_empty(), "{:?}", event.errors);
+    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["title"], "Unfiltered");
+}

@@ -43,7 +43,8 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
         move |ctx| {
             let pubsub = pubsub_clone.clone();
             SubscriptionFieldFuture::new(async move {
-                let filter_arg = ctx.args.get("filter");
+                // An argument given as `null`, as an unset variable is, means none.
+                let filter_arg = ctx.args.get("filter").filter(|arg| !arg.is_null());
                 let filter = if let Some(f_acc) = filter_arg {
                     let obj = f_acc.object()?;
                     Some(parse_resource_filter(resource, &obj)?)
@@ -91,7 +92,7 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
         move |ctx| {
             let pubsub = pubsub_clone2.clone();
             SubscriptionFieldFuture::new(async move {
-                let target_id = if let Some(id_arg) = ctx.args.get("id") {
+                let target_id = if let Some(id_arg) = ctx.args.get("id").filter(|arg| !arg.is_null()) {
                     let s = id_arg.string()?;
                     Some(
                         Uuid::parse_str(s)
@@ -137,7 +138,7 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
         move |ctx| {
             let pubsub = pubsub.clone();
             SubscriptionFieldFuture::new(async move {
-                let target_id = if let Some(id_arg) = ctx.args.get("id") {
+                let target_id = if let Some(id_arg) = ctx.args.get("id").filter(|arg| !arg.is_null()) {
                     let s = id_arg.string()?;
                     Some(
                         Uuid::parse_str(s)
