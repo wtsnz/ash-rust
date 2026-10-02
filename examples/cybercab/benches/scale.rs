@@ -115,6 +115,8 @@ struct FanoutReport {
     latency_ms: Spread,
     /// Subscriptions the server ended before the run did.
     ended: usize,
+    /// Of those, how many were told first that they had missed events.
+    told: usize,
 }
 
 #[derive(Serialize, Clone, Copy, Default)]
@@ -282,6 +284,7 @@ async fn fleet(fleet: usize, warmup: usize, ticks: usize) -> FleetReport {
 struct Watcher {
     received: AtomicUsize,
     ended: AtomicBool,
+    told: AtomicBool,
     latencies: Mutex<Vec<f64>>,
 }
 
@@ -317,6 +320,16 @@ async fn watch(addr: String, watcher: Arc<Watcher>, ready: Arc<AtomicUsize>) {
         };
         let message: Value = serde_json::from_str(&text).expect("json");
         match message["type"].as_str() {
+            Some("next") if message["payload"]["errors"].is_array() => {
+                let missed = message["payload"]["errors"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|error| error["extensions"]["code"] == "MISSED_EVENTS");
+                if missed {
+                    watcher.told.store(true, Ordering::SeqCst);
+                }
+            }
             Some("next") => {
                 let sent = message["payload"]["data"]["cabUpdated"]["last_seen_at"]
                     .as_str()
@@ -416,6 +429,10 @@ async fn fanout(fleet: usize, subscribers: usize, rounds: usize) -> FanoutReport
         .iter()
         .filter(|w| w.ended.load(Ordering::SeqCst))
         .count();
+    let told = watchers
+        .iter()
+        .filter(|w| w.told.load(Ordering::SeqCst))
+        .count();
     let latencies = watchers
         .iter()
         .flat_map(|w| w.latencies.lock().expect("a lock").clone())
@@ -432,6 +449,7 @@ async fn fanout(fleet: usize, subscribers: usize, rounds: usize) -> FanoutReport
         delivered,
         latency_ms: Spread::of(latencies),
         ended,
+        told,
     }
 }
 
@@ -456,7 +474,7 @@ fn print_fleet(r: &FleetReport) {
 
 fn print_fanout(r: &FanoutReport) {
     println!(
-        "| {:>6} | {:>4} | {:>8.1} | {:>9} | {:>9} | {:>5.1}% | {:>8.1} | {:>8.1} | {:>8.1} | {:>5} |",
+        "| {:>6} | {:>4} | {:>8.1} | {:>9} | {:>9} | {:>5.1}% | {:>8.1} | {:>8.1} | {:>8.1} | {:>5} | {:>5} |",
         r.fleet,
         r.subscribers,
         r.publish_round_ms.p50,
@@ -467,6 +485,7 @@ fn print_fanout(r: &FanoutReport) {
         r.latency_ms.p99,
         r.latency_ms.max,
         r.ended,
+        r.ended - r.told,
     );
 }
 
@@ -515,9 +534,9 @@ async fn main() {
 
     println!("\nFan-out: every cab reports once per round, over /graphql/ws to each subscriber.\n");
     println!(
-        "|  fleet | subs | publish round ms | expected | delivered | delivered | latency p50 ms | p99 ms | max ms | ended |"
+        "|  fleet | subs | publish round ms | expected | delivered | delivered | latency p50 ms | p99 ms | max ms | ended | ended silently |"
     );
-    println!("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for &size in &args.fanout_fleets {
         for &subs in &args.subscribers {
             let r = fanout(size, subs, args.rounds).await;

@@ -34,7 +34,7 @@ await page.setViewport({ width, height, deviceScaleFactor: 1 });
 
 // Count what the live connection delivers, before the page opens it.
 await page.evaluateOnNewDocument(() => {
-  window.__ws = { messages: 0, bytes: 0 };
+  window.__ws = { messages: 0, bytes: 0, missed: 0 };
   const Native = window.WebSocket;
   window.WebSocket = class extends Native {
     constructor(...args) {
@@ -42,6 +42,8 @@ await page.evaluateOnNewDocument(() => {
       this.addEventListener("message", (event) => {
         window.__ws.messages += 1;
         window.__ws.bytes += typeof event.data === "string" ? event.data.length : event.data.size ?? 0;
+        // A subscription that fell behind the server, which re-reads to catch up.
+        if (typeof event.data === "string" && event.data.includes("MISSED_EVENTS")) window.__ws.missed += 1;
       });
     }
   };
@@ -94,6 +96,7 @@ const result = await page.evaluate(async (seconds) => {
     heapMb: performance.memory ? performance.memory.usedJSHeapSize / 1e6 : null,
     wsMessagesPerS: (window.__ws.messages - ws.messages) / seconds,
     wsKbPerS: (window.__ws.bytes - ws.bytes) / 1024 / seconds,
+    missedEventsPerMin: ((window.__ws.missed - ws.missed) * 60) / seconds,
   };
 }, seconds);
 
