@@ -27,6 +27,7 @@ uuid.workspace = true
 [dev-dependencies]
 ash-macros = { path = "../ash-macros" }
 ash-memory = { path = "../ash-memory" }
+ash-sqlite = { path = "../ash-sqlite" }
 criterion = { version = "0.5", features = ["async_tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

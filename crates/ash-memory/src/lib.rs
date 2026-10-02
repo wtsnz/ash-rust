@@ -871,7 +871,8 @@ fn apply_aggregates(
                     AggregateKind::Count => Value::Int(0),
                     AggregateKind::Exists => Value::Bool(false),
                     AggregateKind::First { .. } => Value::Null,
-                    AggregateKind::Sum { .. } => Value::Int(0),
+                    // A sum of nothing is nil, as Ash's is.
+                    AggregateKind::Sum { .. } => Value::Null,
                 };
                 row.insert(agg.name.to_string(), default_val);
                 continue;
@@ -947,15 +948,12 @@ fn apply_aggregates(
                     .first()
                     .and_then(|r| r.get(field).cloned())
                     .unwrap_or(Value::Null),
-                AggregateKind::Sum { field } => {
-                    let mut sum: i64 = 0;
-                    for r in matching {
-                        if let Some(Value::Int(n)) = r.get(field) {
-                            sum += *n;
-                        }
-                    }
-                    Value::Int(sum)
-                }
+                // As SQL's SUM: nil values are skipped, and a sum of none is nil.
+                AggregateKind::Sum { field } => matching
+                    .iter()
+                    .filter_map(|r| r.get(field).and_then(Value::as_int))
+                    .reduce(|sum, n| sum + n)
+                    .map_or(Value::Null, Value::Int),
             };
             row.insert(agg.name.to_string(), val);
         }

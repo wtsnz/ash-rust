@@ -129,8 +129,10 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Whether the dialect supports `RETURNING *` on INSERT/UPDATE.
     fn supports_returning(&self) -> bool;
 
-    /// Render lateral join syntax for aggregates/relationships.
-    fn render_lateral_join(&self, subquery: &str, alias: &str) -> String;
+    /// How a read loads aggregates, as ash_sql's `aggregate_strategy`: each relationship's
+    /// aggregates in one subquery, laterally joined to each record where the database
+    /// can, else grouped by the relationship's key and joined on it.
+    fn aggregate_strategy(&self) -> AggregateStrategy;
 
     /// Render boolean literal for SQL statements.
     fn boolean_literal(&self, val: bool) -> &'static str {
@@ -182,6 +184,19 @@ pub trait SqlDialect: Send + Sync + 'static {
 
     /// Render a text filter on `op`. `pattern` is the placeholder bound to [`Self::text_pattern`].
     fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
+}
+
+/// How a read loads aggregates over a relationship, as ash_sql's `:lateral` and
+/// `:grouped` strategies do. Either way, the aggregates over one relationship share one
+/// subquery, each with its own filter, so its rows are read once, not once per aggregate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggregateStrategy {
+    /// `LEFT JOIN LATERAL (SELECT … WHERE related.key = record.key) ON TRUE`: computed for
+    /// each record the read returns, as AshPostgres does.
+    Lateral,
+    /// `LEFT JOIN (SELECT key, … GROUP BY key) ON key = record.key`: computed for every key
+    /// at once, as AshSqlite does, where there are no lateral joins.
+    Grouped,
 }
 
 /// Dialect implementation for SQLite.
@@ -249,8 +264,9 @@ impl SqlDialect for SqliteDialect {
         false
     }
 
-    fn render_lateral_join(&self, subquery: &str, alias: &str) -> String {
-        format!("(SELECT * FROM ({subquery})) AS {}", self.quote_identifier(alias))
+    /// SQLite has no lateral joins, so aggregates group, as AshSqlite's do.
+    fn aggregate_strategy(&self) -> AggregateStrategy {
+        AggregateStrategy::Grouped
     }
 
     fn boolean_literal(&self, val: bool) -> &'static str {
@@ -373,8 +389,8 @@ impl SqlDialect for PostgresDialect {
         true
     }
 
-    fn render_lateral_join(&self, subquery: &str, alias: &str) -> String {
-        format!("LEFT JOIN LATERAL ({subquery}) AS {} ON true", self.quote_identifier(alias))
+    fn aggregate_strategy(&self) -> AggregateStrategy {
+        AggregateStrategy::Lateral
     }
 
     fn boolean_literal(&self, val: bool) -> &'static str {

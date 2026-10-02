@@ -5,7 +5,7 @@ use ash_core::{
 };
 use uuid::Uuid;
 
-use crate::dialect::{SqlDialect, TextMatch};
+use crate::dialect::{AggregateStrategy, SqlDialect, TextMatch};
 use crate::param::SqlParam;
 
 /// A parameterized SQL statement and its bound parameter values.
@@ -950,6 +950,33 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
         self.actor = query.actor.clone();
+
+        // The aggregates over each relationship, together: those that can share a subquery.
+        let mut groups: Vec<(&ash_core::RelationshipDef, Vec<&AggregateDef>)> = Vec::new();
+        let mut inline: Vec<&AggregateDef> = Vec::new();
+        for agg_name in &query.aggregates {
+            let agg = resource.aggregate(agg_name).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "unknown aggregate `{agg_name}` on {}",
+                    resource.name
+                ))
+            })?;
+            let rel = resource.relationship(agg.relationship).ok_or_else(|| {
+                Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
+            })?;
+            if matches!(agg.kind, AggregateKind::First { .. }) {
+                inline.push(agg);
+            } else {
+                match groups.iter_mut().find(|(r, _)| r.name == rel.name) {
+                    Some((_, aggs)) => aggs.push(agg),
+                    None => groups.push((rel, vec![agg])),
+                }
+            }
+        }
+        if !groups.is_empty() {
+            return self.compile_select_with_aggregate_groups(resource, query, cursor, &groups, &inline);
+        }
+
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 
@@ -1029,6 +1056,221 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The read with each relationship's aggregates computed once, together, as ash_sql
+    /// loads them: the records the query selects, sorted and paged, as a subquery, with one
+    /// subquery per relationship joined to it, laterally or grouped by the dialect's
+    /// [`AggregateStrategy`]. The rows come back in the query's order.
+    ///
+    /// ```sql
+    /// SELECT "__ash_s".*, "__ash_aggs_trips"."trips_completed", …
+    /// FROM (SELECT …, <sort> AS "__ash_sort_0" FROM cabs WHERE … ORDER BY "__ash_sort_0" LIMIT n) AS "__ash_s"
+    /// LEFT JOIN LATERAL (SELECT COUNT(*) FILTER (WHERE d.status = $1) AS "trips_completed", …
+    ///                    FROM trips AS d WHERE d.cab_id = "__ash_s".id) AS "__ash_aggs_trips" ON TRUE
+    /// ORDER BY "__ash_s"."__ash_sort_0"
+    /// ```
+    fn compile_select_with_aggregate_groups(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        cursor: Option<&KeysetCursor>,
+        groups: &[(&ash_core::RelationshipDef, Vec<&AggregateDef>)],
+        inline: &[&AggregateDef],
+    ) -> Result<CompiledSql> {
+        let source = ident(self.dialect, "__ash_s")?;
+
+        // The records: what's selected, the keys the aggregates join on, the sort.
+        let mut items = Vec::new();
+        for attr in resource.attributes {
+            let joins_on = groups.iter().any(|(rel, _)| rel.source_columns().contains(&attr.name));
+            if query.reads(attr) || joins_on {
+                items.push(ident(self.dialect, attr.name)?);
+            }
+        }
+        for calc_name in &query.calculations {
+            let calc = resource.calculation(calc_name).ok_or_else(|| {
+                Error::Invalid(format!("unknown calculation `{calc_name}` on {}", resource.name))
+            })?;
+            let expr_sql = self.compile_calculation(resource, calc)?;
+            items.push(format!("{expr_sql} AS {}", ident(self.dialect, calc.name)?));
+        }
+        for agg in inline {
+            let agg_sql = self.compile_aggregate(resource, agg)?;
+            items.push(format!("{agg_sql} AS {}", ident(self.dialect, agg.name)?));
+        }
+        let mut sorts = query.sort.clone();
+        if cursor.is_some() {
+            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
+            if !sorts.iter().any(|s| s.field == pk) {
+                sorts.push(Sort { field: pk.to_string(), descending: false });
+            }
+        }
+        let mut order = Vec::new();
+        for (i, sort) in sorts.iter().enumerate() {
+            let alias = ident(self.dialect, &format!("__ash_sort_{i}"))?;
+            items.push(format!("{} AS {alias}", self.compile_operand(resource, &sort.field)?));
+            order.push((alias, if sort.descending { "DESC" } else { "ASC" }));
+        }
+
+        let mut inner = format!("SELECT {} FROM {}", items.join(", "), self.table(resource)?);
+        let mut where_clauses = Vec::new();
+        if let Some(filter) = &query.filter {
+            where_clauses.push(self.compile_filter(resource, filter)?);
+        }
+        if let Some(c) = cursor {
+            where_clauses.push(self.compile_keyset_cursor(resource, c, &query.sort)?);
+        }
+        if !where_clauses.is_empty() {
+            inner.push_str(" WHERE ");
+            inner.push_str(&where_clauses.join(" AND "));
+        }
+        if !order.is_empty() {
+            let by: Vec<String> = order.iter().map(|(alias, dir)| format!("{alias} {dir}")).collect();
+            inner.push_str(&format!(" ORDER BY {}", by.join(", ")));
+        }
+        if let Some(limit) = query.limit {
+            let p = self.push_param(Value::Int(limit as i64));
+            inner.push_str(&format!(" LIMIT {p}"));
+        }
+        if let Some(offset) = query.offset {
+            let p = self.push_param(Value::Int(offset as i64));
+            inner.push_str(&format!(" OFFSET {p}"));
+        }
+
+        // Each relationship's aggregates, joined.
+        let mut columns = vec![format!("{source}.*")];
+        let mut joins = Vec::new();
+        for (rel, aggs) in groups {
+            let (join, values) = self.compile_aggregate_group(rel, aggs, &source)?;
+            joins.push(join);
+            columns.extend(values);
+        }
+
+        let mut sql = format!("SELECT {} FROM ({inner}) AS {source} {}", columns.join(", "), joins.join(" "));
+        if !order.is_empty() {
+            let by: Vec<String> = order.iter().map(|(alias, dir)| format!("{source}.{alias} {dir}")).collect();
+            sql.push_str(&format!(" ORDER BY {}", by.join(", ")));
+        }
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The join computing `aggs`, all over `rel`, for the records `source` names, and
+    /// the columns that read each from it, as the aggregate's name.
+    fn compile_aggregate_group(
+        &mut self,
+        rel: &ash_core::RelationshipDef,
+        aggs: &[&AggregateDef],
+        source: &str,
+    ) -> Result<(String, Vec<String>)> {
+        let strategy = self.dialect.aggregate_strategy();
+        let dest = (rel.destination)();
+        let dest_alias = ident(self.dialect, &format!("__ash_agg_{}", rel.name))?;
+        let group_alias = ident(self.dialect, &format!("__ash_aggs_{}", rel.name))?;
+
+        // What each aggregate computes, over the relationship's rows.
+        let mut computed = Vec::new();
+        for agg in aggs {
+            let filter = self.compile_aggregate_filter(&dest_alias, &agg.filter)?;
+            let filter = match filter.strip_prefix(" AND ") {
+                Some(condition) => format!(" FILTER (WHERE {condition})"),
+                None => String::new(),
+            };
+            let value = match &agg.kind {
+                AggregateKind::Count => format!("COUNT(*){filter}"),
+                AggregateKind::Exists => format!("COUNT(*){filter} > 0"),
+                AggregateKind::Sum { field } => format!("SUM({dest_alias}.{}){filter}", ident(self.dialect, field)?),
+                AggregateKind::First { .. } => {
+                    return Err(Error::Invalid(format!("aggregate `{}` can't be grouped", agg.name)));
+                }
+            };
+            computed.push(format!("{value} AS {}", ident(self.dialect, agg.name)?));
+        }
+
+        // The relationship's rows: the destination, through the join resource for a
+        // many_to_many, as the destination's primary read (and the join's) sees them.
+        let dest_table = self.table(dest)?;
+        let mut from = format!("{dest_table} AS {dest_alias}");
+        let mut conditions = Vec::new();
+        // The record's key and the related rows' key it matches, column by column.
+        let mut keys: Vec<(String, String)> = Vec::new();
+        match rel.kind {
+            RelKind::ManyToMany => {
+                let through = rel.through.ok_or_else(|| {
+                    Error::Invalid(format!("many_to_many relationship `{}` must specify a join resource", rel.name))
+                })?();
+                let join_alias = ident(self.dialect, &format!("__ash_agg_join_{}", rel.name))?;
+                let source_on_join = ident(self.dialect, rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute))?;
+                let dest_on_join = ident(self.dialect, rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute))?;
+                let dest_attr = ident(self.dialect, rel.destination_attribute)?;
+                from.push_str(&format!(
+                    " JOIN {} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join}",
+                    self.table(through)?
+                ));
+                if let Some(compiled) = self.compile_read_filter(through, &join_alias)? {
+                    conditions.push(compiled);
+                }
+                keys.push((ident(self.dialect, rel.source_attribute)?, format!("{join_alias}.{source_on_join}")));
+            }
+            _ => {
+                for (source_col, dest_col) in rel.source_columns().iter().zip(rel.destination_columns()) {
+                    keys.push((ident(self.dialect, source_col)?, format!("{dest_alias}.{}", column(self.dialect, dest, dest_col)?)));
+                }
+            }
+        }
+        if let Some(compiled) = self.compile_read_filter(dest, &dest_alias)? {
+            conditions.push(compiled);
+        }
+
+        let join = match strategy {
+            AggregateStrategy::Lateral => {
+                for (source_col, related) in &keys {
+                    conditions.push(format!("{related} = {source}.{source_col}"));
+                }
+                format!(
+                    "LEFT JOIN LATERAL (SELECT {} FROM {from} WHERE {}) AS {group_alias} ON TRUE",
+                    computed.join(", "),
+                    conditions.join(" AND ")
+                )
+            }
+            AggregateStrategy::Grouped => {
+                let mut select = Vec::new();
+                let mut on = Vec::new();
+                for (i, (source_col, related)) in keys.iter().enumerate() {
+                    let key = ident(self.dialect, &format!("__ash_key_{i}"))?;
+                    select.push(format!("{related} AS {key}"));
+                    on.push(format!("{group_alias}.{key} = {source}.{source_col}"));
+                }
+                select.extend(computed);
+                let related: Vec<&str> = keys.iter().map(|(_, related)| related.as_str()).collect();
+                let mut subquery = format!("SELECT {} FROM {from}", select.join(", "));
+                if !conditions.is_empty() {
+                    subquery.push_str(&format!(" WHERE {}", conditions.join(" AND ")));
+                }
+                subquery.push_str(&format!(" GROUP BY {}", related.join(", ")));
+                format!("LEFT JOIN ({subquery}) AS {group_alias} ON {}", on.join(" AND "))
+            }
+        };
+
+        // A grouped join finds no group for a record with no related rows: none counted.
+        let mut values = Vec::new();
+        for agg in aggs {
+            let name = ident(self.dialect, agg.name)?;
+            let value = format!("{group_alias}.{name}");
+            let value = match (&agg.kind, strategy) {
+                (AggregateKind::Count, AggregateStrategy::Grouped) => format!("COALESCE({value}, 0)"),
+                (AggregateKind::Exists, AggregateStrategy::Grouped) => {
+                    format!("COALESCE({value}, {})", self.dialect.boolean_literal(false))
+                }
+                (AggregateKind::Sum { .. }, _) => self.dialect.cast_expression(agg.ty, &value),
+                _ => value,
+            };
+            values.push(format!("{value} AS {name}"));
+        }
+        Ok((join, values))
     }
 
     /// `SELECT COUNT(*)` of the records `query` would return: its filter, and its limit

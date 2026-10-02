@@ -281,15 +281,15 @@ fn test_self_referential_aggregate_subquery_aliasing() {
     assert!(
         compiled
             .sql
-            .contains("FROM \"categories\" AS \"_ash_sub_subcategories_count\""),
+            .contains("FROM \"categories\" AS \"__ash_agg_subcategories\""),
         "Inner table must be aliased to prevent self-referential shadowing, got: {}",
         compiled.sql
     );
     assert!(
         compiled
             .sql
-            .contains("\"_ash_sub_subcategories_count\".\"parent_id\" = \"categories\".\"id\""),
-        "Inner alias must join against outer table, got: {}",
+            .contains("\"__ash_aggs_subcategories\".\"__ash_key_0\" = \"__ash_s\".\"id\""),
+        "Grouped counts must join on the outer record's key, got: {}",
         compiled.sql
     );
 }
@@ -537,7 +537,7 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
             ("sqlite", compiled.sql, compiled.params)
         },
     ] {
-        let sub = "\"_ash_sub_child_count\"";
+        let sub = "\"__ash_agg_children\"";
         assert!(
             sql.contains(&format!("{sub}.\"archived_at\" IS NULL AND {sub}.\"name\" <>")),
             "{dialect} aggregate must apply the read filter: {sql}"
@@ -550,9 +550,9 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
         assert_eq!(
             values,
             [
-                &Value::String("hidden".into()),
                 &Value::String("root".into()),
                 &Value::String("docs".into()),
+                &Value::String("hidden".into()),
                 &Value::String("hidden".into()),
             ]
         );

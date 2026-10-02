@@ -14,7 +14,7 @@ pub mod snapshot;
 
 pub use compiler::{CompiledSql, QueryCompiler, column, ident};
 pub use dialect::{
-    PostgresDialect, SqlDialect, SqliteDialect, TextMatch, glob_pattern, like_pattern,
+    AggregateStrategy, PostgresDialect, SqlDialect, SqliteDialect, TextMatch, glob_pattern, like_pattern,
 };
 pub use diff::{
     SchemaOperation, defer_forward_references, diff_snapshots, diff_snapshots_with_renames,
