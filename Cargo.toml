@@ -4,6 +4,8 @@ members = [
     "crates/*",
     "examples/*",
 ]
+# The Elixir counterparts of the examples are Mix projects.
+exclude = ["examples/elixir"]
 
 [workspace.package]
 edition = "2024"

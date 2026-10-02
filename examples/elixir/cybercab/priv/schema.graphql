@@ -1,0 +1,3291 @@
+schema {
+  subscription: RootSubscriptionType
+  mutation: RootMutationType
+  query: RootQueryType
+}
+
+enum Severity {
+  CRITICAL
+  INFO
+  WARNING
+}
+
+enum AlertKind {
+  DOOR_AJAR
+  HARD_BRAKING
+  LOW_BATTERY
+  OBSTRUCTION
+  RIDER_ASSIST
+  SENSOR_DEGRADED
+}
+
+enum RiderTier {
+  FOUNDER
+  PLUS
+  STANDARD
+}
+
+type depot_destroyed_result {
+  destroyed: ID
+}
+
+type depot_updated_result {
+  updated: Depot
+}
+
+type depot_created_result {
+  created: Depot
+}
+
+"The result of the :open_depot mutation"
+type OpenDepotResult {
+  "The successful result of the mutation"
+  result: Depot
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input OpenDepotInput {
+  code: String!
+  name: String!
+  lng: Float!
+  lat: Float!
+  stalls: Int!
+}
+
+enum DepotSortField {
+  ID
+  CODE
+  NAME
+  LNG
+  LAT
+  STALLS
+  CAB_COUNT
+  CHARGING
+}
+
+"A keyset page of :depot"
+type KeysetPageOfDepot {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [Depot!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input DepotFilterCharging {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input DepotFilterCabCount {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input DepotFilterStalls {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input DepotFilterLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input DepotFilterLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input DepotFilterName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input DepotFilterCode {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input DepotFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input DepotFilterInput {
+  and: [DepotFilterInput!]
+  or: [DepotFilterInput!]
+  not: [DepotFilterInput!]
+  id: DepotFilterId
+  code: DepotFilterCode
+  name: DepotFilterName
+  lng: DepotFilterLng
+  lat: DepotFilterLat
+  stalls: DepotFilterStalls
+  cabs: CabFilterInput
+  cabCount: DepotFilterCabCount
+  charging: DepotFilterCharging
+}
+
+input DepotSortInput {
+  order: SortOrder
+  field: DepotSortField!
+}
+
+type Depot {
+  id: ID!
+  code: String!
+  name: String!
+  lng: Float!
+  lat: Float!
+  stalls: Int!
+  cabs(
+    "How to sort the records in the response"
+    sort: [CabSortInput]
+
+    "A filter to limit the results"
+    filter: CabFilterInput
+
+    "The number of records to return."
+    limit: Int
+
+    "The number of records to skip."
+    offset: Int
+  ): [Cab!]!
+  cabCount: Int!
+  charging: Int!
+}
+
+type cab_destroyed_result {
+  destroyed: ID
+}
+
+type cab_updated_result {
+  updated: Cab
+}
+
+type cab_created_result {
+  created: Cab
+}
+
+"The result of the :resume_cab mutation"
+type ResumeCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :pull_over_cab mutation"
+type PullOverCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :release_cab mutation"
+type ReleaseCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :ground_cab mutation"
+type GroundCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :unplug_cab mutation"
+type UnplugCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :plug_in_cab mutation"
+type PlugInCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :recall_cab mutation"
+type RecallCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :stand_down_cab mutation"
+type StandDownCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input StandDownCabInput {
+  tripId: ID
+}
+
+"The result of the :finish_ride_cab mutation"
+type FinishRideCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input FinishRideCabInput {
+  tripId: ID
+}
+
+"The result of the :begin_ride_cab mutation"
+type BeginRideCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :dispatch_cab mutation"
+type DispatchCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input DispatchCabInput {
+  tripId: ID
+}
+
+"The result of the :report_cab mutation"
+type ReportCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input ReportCabInput {
+  lng: Float
+  lat: Float
+  headingDeg: Int
+  speedKph: Int
+  batteryPct: Int
+  rangeKm: Int
+  odometerKm: Float
+  cabinTempC: Float
+  lastSeenAt: DateTime
+}
+
+"The result of the :commission_cab mutation"
+type CommissionCabResult {
+  "The successful result of the mutation"
+  result: Cab
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input CommissionCabInput {
+  callSign: String!
+  nickname: String!
+  vin: String!
+  software: String!
+  lng: Float!
+  lat: Float!
+  headingDeg: Int!
+  speedKph: Int!
+  batteryPct: Int!
+  rangeKm: Int!
+  odometerKm: Float!
+  cabinTempC: Float!
+  depotId: ID!
+}
+
+enum CabSortField {
+  ID
+  CALL_SIGN
+  NICKNAME
+  VIN
+  SOFTWARE
+  LNG
+  LAT
+  HEADING_DEG
+  SPEED_KPH
+  BATTERY_PCT
+  RANGE_KM
+  ODOMETER_KM
+  CABIN_TEMP_C
+  HALTED
+  LAST_SEEN_AT
+  CREATED_AT
+  UPDATED_AT
+  STATUS
+  DEPOT_ID
+  TRIP_ID
+  TRIPS_COMPLETED
+  FARES_CENTS
+}
+
+"A keyset page of :cab"
+type KeysetPageOfCab {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [Cab!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input CabFilterFaresCents {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input CabFilterTripsCompleted {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input CabFilterTripId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input CabFilterDepotId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input CabFilterStatus {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+}
+
+input CabFilterUpdatedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input CabFilterCreatedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input CabFilterLastSeenAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input CabFilterHalted {
+  isNil: Boolean
+  eq: Boolean
+  notEq: Boolean
+  in: [Boolean!]
+  lessThan: Boolean
+  greaterThan: Boolean
+  lessThanOrEqual: Boolean
+  greaterThanOrEqual: Boolean
+  isDistinctFrom: Boolean
+  isNotDistinctFrom: Boolean
+}
+
+input CabFilterCabinTempC {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input CabFilterOdometerKm {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input CabFilterRangeKm {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input CabFilterBatteryPct {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input CabFilterSpeedKph {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input CabFilterHeadingDeg {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input CabFilterLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input CabFilterLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input CabFilterSoftware {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input CabFilterVin {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input CabFilterNickname {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input CabFilterCallSign {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input CabFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input CabFilterInput {
+  and: [CabFilterInput!]
+  or: [CabFilterInput!]
+  not: [CabFilterInput!]
+  id: CabFilterId
+  callSign: CabFilterCallSign
+  nickname: CabFilterNickname
+  vin: CabFilterVin
+  software: CabFilterSoftware
+  lng: CabFilterLng
+  lat: CabFilterLat
+  headingDeg: CabFilterHeadingDeg
+  speedKph: CabFilterSpeedKph
+  batteryPct: CabFilterBatteryPct
+  rangeKm: CabFilterRangeKm
+  odometerKm: CabFilterOdometerKm
+  cabinTempC: CabFilterCabinTempC
+  halted: CabFilterHalted
+  lastSeenAt: CabFilterLastSeenAt
+  createdAt: CabFilterCreatedAt
+  updatedAt: CabFilterUpdatedAt
+  status: CabFilterStatus
+  depotId: CabFilterDepotId
+  tripId: CabFilterTripId
+  depot: DepotFilterInput
+  trip: TripFilterInput
+  trips: TripFilterInput
+  tripsCompleted: CabFilterTripsCompleted
+  faresCents: CabFilterFaresCents
+}
+
+input CabSortInput {
+  order: SortOrder
+  field: CabSortField!
+}
+
+type Cab {
+  id: ID!
+  callSign: String!
+  nickname: String!
+  vin: String!
+  software: String!
+  lng: Float!
+  lat: Float!
+  headingDeg: Int!
+  speedKph: Int!
+  batteryPct: Int!
+  rangeKm: Int!
+  odometerKm: Float!
+  cabinTempC: Float!
+  halted: Boolean!
+  lastSeenAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  status: String!
+  depotId: ID!
+  tripId: ID
+  depot: Depot!
+  trip: Trip
+  trips(
+    "How to sort the records in the response"
+    sort: [TripSortInput]
+
+    "A filter to limit the results"
+    filter: TripFilterInput
+
+    "The number of records to return."
+    limit: Int
+
+    "The number of records to skip."
+    offset: Int
+  ): [Trip!]!
+  tripsCompleted: Int!
+  faresCents: Int
+}
+
+enum SortOrder {
+  DESC
+  DESC_NULLS_FIRST
+  DESC_NULLS_LAST
+  ASC
+  ASC_NULLS_FIRST
+  ASC_NULLS_LAST
+}
+
+"An error generated by a failed mutation"
+type MutationError {
+  "The human readable error message"
+  message: String
+
+  "A shorter error message, with vars not replaced"
+  shortMessage: String
+
+  "Replacements for the short message"
+  vars: Json
+
+  "An error code for the given error"
+  code: String
+
+  "The field or fields that produced the error"
+  fields: [String!]
+
+  "The path to the field that produced the error"
+  path: [String!]
+}
+
+type rider_destroyed_result {
+  destroyed: ID
+}
+
+type rider_updated_result {
+  updated: Rider
+}
+
+type rider_created_result {
+  created: Rider
+}
+
+"The result of the :sign_up_rider mutation"
+type SignUpRiderResult {
+  "The successful result of the mutation"
+  result: Rider
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input SignUpRiderInput {
+  displayName: String!
+  tier: RiderTier!
+  rating: Float!
+  phoneLast4: String!
+  assistedBoarding: Boolean
+}
+
+enum RiderSortField {
+  ID
+  DISPLAY_NAME
+  TIER
+  RATING
+  PHONE_LAST4
+  ASSISTED_BOARDING
+  CREATED_AT
+  UPDATED_AT
+  TRIP_COUNT
+  LIFETIME_CENTS
+}
+
+"A keyset page of :rider"
+type KeysetPageOfRider {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [Rider!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input RiderFilterLifetimeCents {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input RiderFilterTripCount {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input RiderFilterUpdatedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input RiderFilterCreatedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input RiderFilterAssistedBoarding {
+  isNil: Boolean
+  eq: Boolean
+  notEq: Boolean
+  in: [Boolean!]
+  lessThan: Boolean
+  greaterThan: Boolean
+  lessThanOrEqual: Boolean
+  greaterThanOrEqual: Boolean
+  isDistinctFrom: Boolean
+  isNotDistinctFrom: Boolean
+}
+
+input RiderFilterPhoneLast4 {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input RiderFilterRating {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input RiderFilterTier {
+  isNil: Boolean
+  eq: RiderTier
+  notEq: RiderTier
+  in: [RiderTier!]
+  lessThan: RiderTier
+  greaterThan: RiderTier
+  lessThanOrEqual: RiderTier
+  greaterThanOrEqual: RiderTier
+  isDistinctFrom: RiderTier
+  isNotDistinctFrom: RiderTier
+}
+
+input RiderFilterDisplayName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input RiderFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input RiderFilterInput {
+  and: [RiderFilterInput!]
+  or: [RiderFilterInput!]
+  not: [RiderFilterInput!]
+  id: RiderFilterId
+  displayName: RiderFilterDisplayName
+  tier: RiderFilterTier
+  rating: RiderFilterRating
+  phoneLast4: RiderFilterPhoneLast4
+  assistedBoarding: RiderFilterAssistedBoarding
+  createdAt: RiderFilterCreatedAt
+  updatedAt: RiderFilterUpdatedAt
+  trips: TripFilterInput
+  tripCount: RiderFilterTripCount
+  lifetimeCents: RiderFilterLifetimeCents
+}
+
+input RiderSortInput {
+  order: SortOrder
+  field: RiderSortField!
+}
+
+type Rider {
+  id: ID!
+  displayName: String!
+  tier: RiderTier!
+  rating: Float!
+  phoneLast4: String!
+  assistedBoarding: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  trips(
+    "How to sort the records in the response"
+    sort: [TripSortInput]
+
+    "A filter to limit the results"
+    filter: TripFilterInput
+
+    "The number of records to return."
+    limit: Int
+
+    "The number of records to skip."
+    offset: Int
+  ): [Trip!]!
+  tripCount: Int!
+  lifetimeCents: Int
+}
+
+type service_zone_destroyed_result {
+  destroyed: ID
+}
+
+type service_zone_updated_result {
+  updated: ServiceZone
+}
+
+type service_zone_created_result {
+  created: ServiceZone
+}
+
+"The result of the :clear_event_service_zone mutation"
+type ClearEventServiceZoneResult {
+  "The successful result of the mutation"
+  result: ServiceZone
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input ClearEventServiceZoneInput {
+  eventName: String
+  eventBoost: Float
+}
+
+"The result of the :host_event_service_zone mutation"
+type HostEventServiceZoneResult {
+  "The successful result of the mutation"
+  result: ServiceZone
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input HostEventServiceZoneInput {
+  eventName: String
+  eventBoost: Float
+}
+
+"The result of the :measure_service_zone mutation"
+type MeasureServiceZoneResult {
+  "The successful result of the mutation"
+  result: ServiceZone
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input MeasureServiceZoneInput {
+  surge: Float
+  waiting: Int
+}
+
+"The result of the :chart_service_zone mutation"
+type ChartServiceZoneResult {
+  "The successful result of the mutation"
+  result: ServiceZone
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input ChartServiceZoneInput {
+  code: String!
+  name: String!
+  lng: Float!
+  lat: Float!
+  radiusM: Int!
+  baseDemand: Float!
+  surge: Float!
+  eventBoost: Float!
+}
+
+enum ServiceZoneSortField {
+  ID
+  CODE
+  NAME
+  LNG
+  LAT
+  RADIUS_M
+  BASE_DEMAND
+  SURGE
+  WAITING
+  EVENT_NAME
+  EVENT_BOOST
+  TRIPS_TODAY
+  COMPLETED_TODAY
+}
+
+"A keyset page of :service_zone"
+type KeysetPageOfServiceZone {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [ServiceZone!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input ServiceZoneFilterCompletedToday {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input ServiceZoneFilterTripsToday {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input ServiceZoneFilterEventBoost {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input ServiceZoneFilterEventName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input ServiceZoneFilterWaiting {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input ServiceZoneFilterSurge {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input ServiceZoneFilterBaseDemand {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input ServiceZoneFilterRadiusM {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input ServiceZoneFilterLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input ServiceZoneFilterLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input ServiceZoneFilterName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input ServiceZoneFilterCode {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input ServiceZoneFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input ServiceZoneFilterInput {
+  and: [ServiceZoneFilterInput!]
+  or: [ServiceZoneFilterInput!]
+  not: [ServiceZoneFilterInput!]
+  id: ServiceZoneFilterId
+  code: ServiceZoneFilterCode
+  name: ServiceZoneFilterName
+  lng: ServiceZoneFilterLng
+  lat: ServiceZoneFilterLat
+  radiusM: ServiceZoneFilterRadiusM
+  baseDemand: ServiceZoneFilterBaseDemand
+  surge: ServiceZoneFilterSurge
+  waiting: ServiceZoneFilterWaiting
+  eventName: ServiceZoneFilterEventName
+  eventBoost: ServiceZoneFilterEventBoost
+  trips: TripFilterInput
+  tripsToday: ServiceZoneFilterTripsToday
+  completedToday: ServiceZoneFilterCompletedToday
+}
+
+input ServiceZoneSortInput {
+  order: SortOrder
+  field: ServiceZoneSortField!
+}
+
+type ServiceZone {
+  id: ID!
+  code: String!
+  name: String!
+  lng: Float!
+  lat: Float!
+  radiusM: Int!
+  baseDemand: Float!
+  surge: Float!
+  waiting: Int!
+  eventName: String
+  eventBoost: Float!
+  trips(
+    "How to sort the records in the response"
+    sort: [TripSortInput]
+
+    "A filter to limit the results"
+    filter: TripFilterInput
+
+    "The number of records to return."
+    limit: Int
+
+    "The number of records to skip."
+    offset: Int
+  ): [Trip!]!
+  tripsToday: Int!
+  completedToday: Int!
+}
+
+type trip_destroyed_result {
+  destroyed: ID
+}
+
+type trip_updated_result {
+  updated: Trip
+}
+
+type trip_created_result {
+  created: Trip
+}
+
+"The result of the :archive_trip mutation"
+type ArchiveTripResult {
+  "The record that was successfully deleted"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :cancel_trip mutation"
+type CancelTripResult {
+  "The successful result of the mutation"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input CancelTripInput {
+  cancelledAt: DateTime
+  cancelReason: String
+}
+
+"The result of the :complete_trip mutation"
+type CompleteTripResult {
+  "The successful result of the mutation"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input CompleteTripInput {
+  completedAt: DateTime
+  rating: Int
+}
+
+"The result of the :board_trip mutation"
+type BoardTripResult {
+  "The successful result of the mutation"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input BoardTripInput {
+  pickedUpAt: DateTime
+  dropoffEtaAt: DateTime
+}
+
+"The result of the :arrive_trip mutation"
+type ArriveTripResult {
+  "The successful result of the mutation"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input ArriveTripInput {
+  arrivedAt: DateTime
+}
+
+"The result of the :assign_trip mutation"
+type AssignTripResult {
+  "The successful result of the mutation"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input AssignTripInput {
+  approachPolyline: String
+  assignedAt: DateTime
+  pickupEtaAt: DateTime
+  cabId: ID
+}
+
+"The result of the :request_trip mutation"
+type RequestTripResult {
+  "The successful result of the mutation"
+  result: Trip
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input RequestTripInput {
+  code: String!
+  pickupName: String!
+  pickupLng: Float!
+  pickupLat: Float!
+  dropoffName: String!
+  dropoffLng: Float!
+  dropoffLat: Float!
+  ridePolyline: String!
+  distanceM: Int!
+  durationS: Int!
+  surge: Float!
+  fareCents: Int!
+  requestedAt: DateTime!
+  riderId: ID!
+  zoneId: ID!
+}
+
+enum TripSortField {
+  ID
+  CODE
+  PICKUP_NAME
+  PICKUP_LNG
+  PICKUP_LAT
+  DROPOFF_NAME
+  DROPOFF_LNG
+  DROPOFF_LAT
+  RIDE_POLYLINE
+  APPROACH_POLYLINE
+  DISTANCE_M
+  DURATION_S
+  SURGE
+  FARE_CENTS
+  REQUESTED_AT
+  ASSIGNED_AT
+  PICKUP_ETA_AT
+  ARRIVED_AT
+  PICKED_UP_AT
+  DROPOFF_ETA_AT
+  COMPLETED_AT
+  CANCELLED_AT
+  CANCEL_REASON
+  RATING
+  CREATED_AT
+  UPDATED_AT
+  STATUS
+  RIDER_ID
+  CAB_ID
+  ZONE_ID
+  ROUTE_LABEL
+}
+
+"A keyset page of :trip"
+type KeysetPageOfTrip {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [Trip!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input TripFilterRouteLabel {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterZoneId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TripFilterCabId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TripFilterRiderId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TripFilterStatus {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+}
+
+input TripFilterUpdatedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterCreatedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterRating {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TripFilterCancelReason {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterCancelledAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterCompletedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterDropoffEtaAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterPickedUpAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterArrivedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterPickupEtaAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterAssignedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterRequestedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TripFilterFareCents {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TripFilterSurge {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TripFilterDurationS {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TripFilterDistanceM {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TripFilterApproachPolyline {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterRidePolyline {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterDropoffLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TripFilterDropoffLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TripFilterDropoffName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterPickupLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TripFilterPickupLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TripFilterPickupName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterCode {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input TripFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TripFilterInput {
+  and: [TripFilterInput!]
+  or: [TripFilterInput!]
+  not: [TripFilterInput!]
+  id: TripFilterId
+  code: TripFilterCode
+  pickupName: TripFilterPickupName
+  pickupLng: TripFilterPickupLng
+  pickupLat: TripFilterPickupLat
+  dropoffName: TripFilterDropoffName
+  dropoffLng: TripFilterDropoffLng
+  dropoffLat: TripFilterDropoffLat
+  ridePolyline: TripFilterRidePolyline
+  approachPolyline: TripFilterApproachPolyline
+  distanceM: TripFilterDistanceM
+  durationS: TripFilterDurationS
+  surge: TripFilterSurge
+  fareCents: TripFilterFareCents
+  requestedAt: TripFilterRequestedAt
+  assignedAt: TripFilterAssignedAt
+  pickupEtaAt: TripFilterPickupEtaAt
+  arrivedAt: TripFilterArrivedAt
+  pickedUpAt: TripFilterPickedUpAt
+  dropoffEtaAt: TripFilterDropoffEtaAt
+  completedAt: TripFilterCompletedAt
+  cancelledAt: TripFilterCancelledAt
+  cancelReason: TripFilterCancelReason
+  rating: TripFilterRating
+  createdAt: TripFilterCreatedAt
+  updatedAt: TripFilterUpdatedAt
+  status: TripFilterStatus
+  riderId: TripFilterRiderId
+  cabId: TripFilterCabId
+  zoneId: TripFilterZoneId
+  rider: RiderFilterInput
+  cab: CabFilterInput
+  zone: ServiceZoneFilterInput
+  routeLabel: TripFilterRouteLabel
+}
+
+input TripSortInput {
+  order: SortOrder
+  field: TripSortField!
+}
+
+type Trip {
+  id: ID!
+  code: String!
+  pickupName: String!
+  pickupLng: Float!
+  pickupLat: Float!
+  dropoffName: String!
+  dropoffLng: Float!
+  dropoffLat: Float!
+  ridePolyline: String!
+  approachPolyline: String
+  distanceM: Int!
+  durationS: Int!
+  surge: Float!
+  fareCents: Int!
+  requestedAt: DateTime!
+  assignedAt: DateTime
+  pickupEtaAt: DateTime
+  arrivedAt: DateTime
+  pickedUpAt: DateTime
+  dropoffEtaAt: DateTime
+  completedAt: DateTime
+  cancelledAt: DateTime
+  cancelReason: String
+  rating: Int
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  status: String!
+  riderId: ID!
+  cabId: ID
+  zoneId: ID!
+  rider: Rider!
+  cab: Cab
+  zone: ServiceZone!
+  routeLabel: String
+}
+
+type pulse_sample_destroyed_result {
+  destroyed: ID
+}
+
+type pulse_sample_updated_result {
+  updated: PulseSample
+}
+
+type pulse_sample_created_result {
+  created: PulseSample
+}
+
+"The result of the :prune_pulse_sample mutation"
+type PrunePulseSampleResult {
+  "The record that was successfully deleted"
+  result: PulseSample
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :record_pulse_sample mutation"
+type RecordPulseSampleResult {
+  "The successful result of the mutation"
+  result: PulseSample
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input RecordPulseSampleInput {
+  recordedAt: DateTime!
+  available: Int!
+  dispatched: Int!
+  onTrip: Int!
+  returning: Int!
+  charging: Int!
+  maintenance: Int!
+  waiting: Int!
+  completedToday: Int!
+  revenueCentsToday: Int!
+  avgWaitS: Int!
+  utilizationPct: Int!
+  avgBatteryPct: Int!
+}
+
+enum PulseSampleSortField {
+  ID
+  RECORDED_AT
+  AVAILABLE
+  DISPATCHED
+  ON_TRIP
+  RETURNING
+  CHARGING
+  MAINTENANCE
+  WAITING
+  COMPLETED_TODAY
+  REVENUE_CENTS_TODAY
+  AVG_WAIT_S
+  UTILIZATION_PCT
+  AVG_BATTERY_PCT
+}
+
+"A keyset page of :pulse_sample"
+type KeysetPageOfPulseSample {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [PulseSample!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input PulseSampleFilterAvgBatteryPct {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterUtilizationPct {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterAvgWaitS {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterRevenueCentsToday {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterCompletedToday {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterWaiting {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterMaintenance {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterCharging {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterReturning {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterOnTrip {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterDispatched {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterAvailable {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input PulseSampleFilterRecordedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input PulseSampleFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input PulseSampleFilterInput {
+  and: [PulseSampleFilterInput!]
+  or: [PulseSampleFilterInput!]
+  not: [PulseSampleFilterInput!]
+  id: PulseSampleFilterId
+  recordedAt: PulseSampleFilterRecordedAt
+  available: PulseSampleFilterAvailable
+  dispatched: PulseSampleFilterDispatched
+  onTrip: PulseSampleFilterOnTrip
+  returning: PulseSampleFilterReturning
+  charging: PulseSampleFilterCharging
+  maintenance: PulseSampleFilterMaintenance
+  waiting: PulseSampleFilterWaiting
+  completedToday: PulseSampleFilterCompletedToday
+  revenueCentsToday: PulseSampleFilterRevenueCentsToday
+  avgWaitS: PulseSampleFilterAvgWaitS
+  utilizationPct: PulseSampleFilterUtilizationPct
+  avgBatteryPct: PulseSampleFilterAvgBatteryPct
+}
+
+input PulseSampleSortInput {
+  order: SortOrder
+  field: PulseSampleSortField!
+}
+
+type PulseSample {
+  id: ID!
+  recordedAt: DateTime!
+  available: Int!
+  dispatched: Int!
+  onTrip: Int!
+  returning: Int!
+  charging: Int!
+  maintenance: Int!
+  waiting: Int!
+  completedToday: Int!
+  revenueCentsToday: Int!
+  avgWaitS: Int!
+  utilizationPct: Int!
+  avgBatteryPct: Int!
+}
+
+type fleet_alert_destroyed_result {
+  destroyed: ID
+}
+
+type fleet_alert_updated_result {
+  updated: FleetAlert
+}
+
+type fleet_alert_created_result {
+  created: FleetAlert
+}
+
+"The result of the :prune_fleet_alert mutation"
+type PruneFleetAlertResult {
+  "The record that was successfully deleted"
+  result: FleetAlert
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :resolve_fleet_alert mutation"
+type ResolveFleetAlertResult {
+  "The successful result of the mutation"
+  result: FleetAlert
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input ResolveFleetAlertInput {
+  resolvedAt: DateTime
+  handledBy: String
+}
+
+"The result of the :acknowledge_fleet_alert mutation"
+type AcknowledgeFleetAlertResult {
+  "The successful result of the mutation"
+  result: FleetAlert
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input AcknowledgeFleetAlertInput {
+  acknowledgedAt: DateTime
+  handledBy: String
+}
+
+"The result of the :raise_fleet_alert mutation"
+type RaiseFleetAlertResult {
+  "The successful result of the mutation"
+  result: FleetAlert
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input RaiseFleetAlertInput {
+  kind: AlertKind!
+  severity: Severity!
+  message: String!
+  lng: Float!
+  lat: Float!
+  raisedAt: DateTime!
+  cabId: ID!
+  tripId: ID
+}
+
+enum FleetAlertSortField {
+  ID
+  KIND
+  SEVERITY
+  MESSAGE
+  LNG
+  LAT
+  RAISED_AT
+  ACKNOWLEDGED_AT
+  RESOLVED_AT
+  HANDLED_BY
+  STATUS
+  CAB_ID
+  TRIP_ID
+}
+
+"A keyset page of :fleet_alert"
+type KeysetPageOfFleetAlert {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [FleetAlert!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input FleetAlertFilterTripId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input FleetAlertFilterCabId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input FleetAlertFilterStatus {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+}
+
+input FleetAlertFilterHandledBy {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input FleetAlertFilterResolvedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input FleetAlertFilterAcknowledgedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input FleetAlertFilterRaisedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input FleetAlertFilterLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input FleetAlertFilterLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input FleetAlertFilterMessage {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+  like: String
+  ilike: String
+}
+
+input FleetAlertFilterSeverity {
+  isNil: Boolean
+  eq: Severity
+  notEq: Severity
+  in: [Severity!]
+  lessThan: Severity
+  greaterThan: Severity
+  lessThanOrEqual: Severity
+  greaterThanOrEqual: Severity
+  isDistinctFrom: Severity
+  isNotDistinctFrom: Severity
+}
+
+input FleetAlertFilterKind {
+  isNil: Boolean
+  eq: AlertKind
+  notEq: AlertKind
+  in: [AlertKind!]
+  lessThan: AlertKind
+  greaterThan: AlertKind
+  lessThanOrEqual: AlertKind
+  greaterThanOrEqual: AlertKind
+  isDistinctFrom: AlertKind
+  isNotDistinctFrom: AlertKind
+}
+
+input FleetAlertFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input FleetAlertFilterInput {
+  and: [FleetAlertFilterInput!]
+  or: [FleetAlertFilterInput!]
+  not: [FleetAlertFilterInput!]
+  id: FleetAlertFilterId
+  kind: FleetAlertFilterKind
+  severity: FleetAlertFilterSeverity
+  message: FleetAlertFilterMessage
+  lng: FleetAlertFilterLng
+  lat: FleetAlertFilterLat
+  raisedAt: FleetAlertFilterRaisedAt
+  acknowledgedAt: FleetAlertFilterAcknowledgedAt
+  resolvedAt: FleetAlertFilterResolvedAt
+  handledBy: FleetAlertFilterHandledBy
+  status: FleetAlertFilterStatus
+  cabId: FleetAlertFilterCabId
+  tripId: FleetAlertFilterTripId
+  cab: CabFilterInput
+  trip: TripFilterInput
+}
+
+input FleetAlertSortInput {
+  order: SortOrder
+  field: FleetAlertSortField!
+}
+
+type FleetAlert {
+  id: ID!
+  kind: AlertKind!
+  severity: Severity!
+  message: String!
+  lng: Float!
+  lat: Float!
+  raisedAt: DateTime!
+  acknowledgedAt: DateTime
+  resolvedAt: DateTime
+  handledBy: String
+  status: String!
+  cabId: ID!
+  tripId: ID
+  cab: Cab!
+  trip: Trip
+}
+
+type telemetry_sample_destroyed_result {
+  destroyed: ID
+}
+
+type telemetry_sample_updated_result {
+  updated: TelemetrySample
+}
+
+type telemetry_sample_created_result {
+  created: TelemetrySample
+}
+
+"The result of the :prune_telemetry_sample mutation"
+type PruneTelemetrySampleResult {
+  "The record that was successfully deleted"
+  result: TelemetrySample
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :record_telemetry_sample mutation"
+type RecordTelemetrySampleResult {
+  "The successful result of the mutation"
+  result: TelemetrySample
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input RecordTelemetrySampleInput {
+  recordedAt: DateTime!
+  lng: Float!
+  lat: Float!
+  speedKph: Int!
+  batteryPct: Int!
+  cabId: ID!
+}
+
+enum TelemetrySampleSortField {
+  ID
+  RECORDED_AT
+  LNG
+  LAT
+  SPEED_KPH
+  BATTERY_PCT
+  CAB_ID
+}
+
+"A keyset page of :telemetry_sample"
+type KeysetPageOfTelemetrySample {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [TelemetrySample!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input TelemetrySampleFilterCabId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TelemetrySampleFilterBatteryPct {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TelemetrySampleFilterSpeedKph {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TelemetrySampleFilterLat {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TelemetrySampleFilterLng {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float!]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TelemetrySampleFilterRecordedAt {
+  isNil: Boolean
+  eq: DateTime
+  notEq: DateTime
+  in: [DateTime!]
+  lessThan: DateTime
+  greaterThan: DateTime
+  lessThanOrEqual: DateTime
+  greaterThanOrEqual: DateTime
+  isDistinctFrom: DateTime
+  isNotDistinctFrom: DateTime
+}
+
+input TelemetrySampleFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TelemetrySampleFilterInput {
+  and: [TelemetrySampleFilterInput!]
+  or: [TelemetrySampleFilterInput!]
+  not: [TelemetrySampleFilterInput!]
+  id: TelemetrySampleFilterId
+  recordedAt: TelemetrySampleFilterRecordedAt
+  lng: TelemetrySampleFilterLng
+  lat: TelemetrySampleFilterLat
+  speedKph: TelemetrySampleFilterSpeedKph
+  batteryPct: TelemetrySampleFilterBatteryPct
+  cabId: TelemetrySampleFilterCabId
+  cab: CabFilterInput
+}
+
+input TelemetrySampleSortInput {
+  order: SortOrder
+  field: TelemetrySampleSortField!
+}
+
+type TelemetrySample {
+  id: ID!
+  recordedAt: DateTime!
+  lng: Float!
+  lat: Float!
+  speedKph: Int!
+  batteryPct: Int!
+  cabId: ID!
+  cab: Cab!
+}
+
+type RootQueryType {
+  getTelemetrySample(
+    "The id of the record"
+    id: ID!
+  ): TelemetrySample
+  listTelemetrySamples(
+    "How to sort the records in the response"
+    sort: [TelemetrySampleSortInput]
+
+    "A filter to limit the results"
+    filter: TelemetrySampleFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfTelemetrySample
+  getFleetAlert(
+    "The id of the record"
+    id: ID!
+  ): FleetAlert
+  listFleetAlerts(
+    "How to sort the records in the response"
+    sort: [FleetAlertSortInput]
+
+    "A filter to limit the results"
+    filter: FleetAlertFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfFleetAlert
+  getPulseSample(
+    "The id of the record"
+    id: ID!
+  ): PulseSample
+  listPulseSamples(
+    "How to sort the records in the response"
+    sort: [PulseSampleSortInput]
+
+    "A filter to limit the results"
+    filter: PulseSampleFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfPulseSample
+  getTrip(
+    "The id of the record"
+    id: ID!
+  ): Trip
+  listTrips(
+    "How to sort the records in the response"
+    sort: [TripSortInput]
+
+    "A filter to limit the results"
+    filter: TripFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfTrip
+  recentTrips(
+    "How to sort the records in the response"
+    sort: [TripSortInput]
+
+    "A filter to limit the results"
+    filter: TripFilterInput
+  ): [Trip!]!
+  getServiceZone(
+    "The id of the record"
+    id: ID!
+  ): ServiceZone
+  listServiceZones(
+    "How to sort the records in the response"
+    sort: [ServiceZoneSortInput]
+
+    "A filter to limit the results"
+    filter: ServiceZoneFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfServiceZone
+  getRider(
+    "The id of the record"
+    id: ID!
+  ): Rider
+  listRiders(
+    "How to sort the records in the response"
+    sort: [RiderSortInput]
+
+    "A filter to limit the results"
+    filter: RiderFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfRider
+  getCab(
+    "The id of the record"
+    id: ID!
+  ): Cab
+  listCabs(
+    "How to sort the records in the response"
+    sort: [CabSortInput]
+
+    "A filter to limit the results"
+    filter: CabFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfCab
+  getDepot(
+    "The id of the record"
+    id: ID!
+  ): Depot
+  listDepots(
+    "How to sort the records in the response"
+    sort: [DepotSortInput]
+
+    "A filter to limit the results"
+    filter: DepotFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfDepot
+}
+
+type RootMutationType {
+  recordTelemetrySample(input: RecordTelemetrySampleInput!): RecordTelemetrySampleResult!
+  pruneTelemetrySample(id: ID!): PruneTelemetrySampleResult!
+  raiseFleetAlert(input: RaiseFleetAlertInput!): RaiseFleetAlertResult!
+  acknowledgeFleetAlert(id: ID!, input: AcknowledgeFleetAlertInput): AcknowledgeFleetAlertResult!
+  resolveFleetAlert(id: ID!, input: ResolveFleetAlertInput): ResolveFleetAlertResult!
+  pruneFleetAlert(id: ID!): PruneFleetAlertResult!
+  recordPulseSample(input: RecordPulseSampleInput!): RecordPulseSampleResult!
+  prunePulseSample(id: ID!): PrunePulseSampleResult!
+  requestTrip(input: RequestTripInput!): RequestTripResult!
+  assignTrip(id: ID!, input: AssignTripInput): AssignTripResult!
+  arriveTrip(id: ID!, input: ArriveTripInput): ArriveTripResult!
+  boardTrip(id: ID!, input: BoardTripInput): BoardTripResult!
+  completeTrip(id: ID!, input: CompleteTripInput): CompleteTripResult!
+  cancelTrip(id: ID!, input: CancelTripInput): CancelTripResult!
+  archiveTrip(id: ID!): ArchiveTripResult!
+  chartServiceZone(input: ChartServiceZoneInput!): ChartServiceZoneResult!
+  measureServiceZone(id: ID!, input: MeasureServiceZoneInput): MeasureServiceZoneResult!
+  hostEventServiceZone(id: ID!, input: HostEventServiceZoneInput): HostEventServiceZoneResult!
+  clearEventServiceZone(id: ID!, input: ClearEventServiceZoneInput): ClearEventServiceZoneResult!
+  signUpRider(input: SignUpRiderInput!): SignUpRiderResult!
+  commissionCab(input: CommissionCabInput!): CommissionCabResult!
+  reportCab(id: ID!, input: ReportCabInput): ReportCabResult!
+  dispatchCab(id: ID!, input: DispatchCabInput): DispatchCabResult!
+  beginRideCab(id: ID!): BeginRideCabResult!
+  finishRideCab(id: ID!, input: FinishRideCabInput): FinishRideCabResult!
+  standDownCab(id: ID!, input: StandDownCabInput): StandDownCabResult!
+  recallCab(id: ID!): RecallCabResult!
+  plugInCab(id: ID!): PlugInCabResult!
+  unplugCab(id: ID!): UnplugCabResult!
+  groundCab(id: ID!): GroundCabResult!
+  releaseCab(id: ID!): ReleaseCabResult!
+  pullOverCab(id: ID!): PullOverCabResult!
+  resumeCab(id: ID!): ResumeCabResult!
+  openDepot(input: OpenDepotInput!): OpenDepotResult!
+}
+
+type RootSubscriptionType {
+  telemetrySampleCreated(
+    "A filter to limit the results"
+    filter: TelemetrySampleFilterInput
+  ): telemetry_sample_created_result
+  telemetrySampleUpdated(
+    "A filter to limit the results"
+    filter: TelemetrySampleFilterInput
+  ): telemetry_sample_updated_result
+  telemetrySampleDestroyed(
+    "A filter to limit the results"
+    filter: TelemetrySampleFilterInput
+  ): telemetry_sample_destroyed_result
+  fleetAlertCreated(
+    "A filter to limit the results"
+    filter: FleetAlertFilterInput
+  ): fleet_alert_created_result
+  fleetAlertUpdated(
+    "A filter to limit the results"
+    filter: FleetAlertFilterInput
+  ): fleet_alert_updated_result
+  fleetAlertDestroyed(
+    "A filter to limit the results"
+    filter: FleetAlertFilterInput
+  ): fleet_alert_destroyed_result
+  pulseSampleCreated(
+    "A filter to limit the results"
+    filter: PulseSampleFilterInput
+  ): pulse_sample_created_result
+  pulseSampleUpdated(
+    "A filter to limit the results"
+    filter: PulseSampleFilterInput
+  ): pulse_sample_updated_result
+  pulseSampleDestroyed(
+    "A filter to limit the results"
+    filter: PulseSampleFilterInput
+  ): pulse_sample_destroyed_result
+  tripCreated(
+    "A filter to limit the results"
+    filter: TripFilterInput
+  ): trip_created_result
+  tripUpdated(
+    "A filter to limit the results"
+    filter: TripFilterInput
+  ): trip_updated_result
+  tripDestroyed(
+    "A filter to limit the results"
+    filter: TripFilterInput
+  ): trip_destroyed_result
+  serviceZoneCreated(
+    "A filter to limit the results"
+    filter: ServiceZoneFilterInput
+  ): service_zone_created_result
+  serviceZoneUpdated(
+    "A filter to limit the results"
+    filter: ServiceZoneFilterInput
+  ): service_zone_updated_result
+  serviceZoneDestroyed(
+    "A filter to limit the results"
+    filter: ServiceZoneFilterInput
+  ): service_zone_destroyed_result
+  riderCreated(
+    "A filter to limit the results"
+    filter: RiderFilterInput
+  ): rider_created_result
+  riderUpdated(
+    "A filter to limit the results"
+    filter: RiderFilterInput
+  ): rider_updated_result
+  riderDestroyed(
+    "A filter to limit the results"
+    filter: RiderFilterInput
+  ): rider_destroyed_result
+  cabCreated(
+    "A filter to limit the results"
+    filter: CabFilterInput
+  ): cab_created_result
+  cabUpdated(
+    "A filter to limit the results"
+    filter: CabFilterInput
+  ): cab_updated_result
+  cabDestroyed(
+    "A filter to limit the results"
+    filter: CabFilterInput
+  ): cab_destroyed_result
+  depotCreated(
+    "A filter to limit the results"
+    filter: DepotFilterInput
+  ): depot_created_result
+  depotUpdated(
+    "A filter to limit the results"
+    filter: DepotFilterInput
+  ): depot_updated_result
+  depotDestroyed(
+    "A filter to limit the results"
+    filter: DepotFilterInput
+  ): depot_destroyed_result
+}
+
+"""
+The `Json` scalar type represents arbitrary json string data, represented as UTF-8
+character sequences. The Json type is most often used to represent a free-form
+human-readable json string.
+"""
+scalar Json
+
+"""
+The `DateTime` scalar type represents a date and time in the UTC
+timezone. The DateTime appears in a JSON response as an ISO8601 formatted
+string, including UTC timezone ("Z"). The parsed date and time string will
+be converted to UTC if there is an offset.
+"""
+scalar DateTime
