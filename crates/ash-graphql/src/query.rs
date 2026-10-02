@@ -9,7 +9,7 @@ use crate::redact::redact_record;
 use crate::filter::parse_resource_filter;
 use crate::names::{camel, plural};
 use crate::pagination::{build_keyset_query, calculation_arguments, read_arguments, read_field_arguments};
-use crate::preload::{preload, selected};
+use crate::preload::{Load, preload, selected};
 use crate::request::request_context;
 use crate::sort::parse_resource_sort;
 
@@ -72,18 +72,18 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 let id = Uuid::parse_str(id_arg.string()?)
                     .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
                 // A get sees what the primary read sees: an archived record is not found.
-                let query = CompiledQuery {
+                let fields = selected(ctx.ctx.field(), None);
+                let query = Load::of(resource, &fields, []).onto(CompiledQuery {
                     filter: Some(Filter::eq(pk_name, Value::Uuid(id))),
                     limit: Some(1),
                     tenant: ash.tenant.clone(),
                     ..CompiledQuery::default()
-                };
+                });
                 let records = run_read(&ash, resource, read_action, &FieldMap::new(), query).await?;
                 let Some(mut record) = records.into_iter().next() else {
                     return Ok(None);
                 };
                 redact_record(resource, ash.actor.as_ref(), &mut record);
-                let fields = selected(ctx.ctx.field(), None);
                 preload(&ash, resource, fields, std::slice::from_mut(&mut record)).await?;
                 Ok(Some(FieldValue::owned_any(record)))
             })
@@ -116,18 +116,20 @@ pub fn build_read_action_query<D: DataLayer + Clone + 'static>(
                     Some(sort) => parse_resource_sort(resource, sort.as_value())?,
                     None => Vec::new(),
                 };
-                let query = CompiledQuery {
+                let fields = selected(ctx.ctx.field(), None);
+                let load = Load::of(resource, &fields, sort.iter().map(|s| s.field.as_str()));
+                let query = load.onto(CompiledQuery {
                     filter,
                     sort,
                     calculation_args: calculation_arguments(resource, &arguments),
                     tenant: ash.tenant.clone(),
                     ..CompiledQuery::default()
-                };
+                });
                 let mut records = run_read(&ash, resource, action, &arguments, query).await?;
                 for record in &mut records {
                     redact_record(resource, ash.actor.as_ref(), record);
                 }
-                preload(&ash, resource, selected(ctx.ctx.field(), None), &mut records).await?;
+                preload(&ash, resource, fields, &mut records).await?;
                 Ok(Some(FieldValue::list(records.into_iter().map(FieldValue::owned_any))))
             })
         },

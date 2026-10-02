@@ -161,6 +161,12 @@ read filtered and sorted, each record's rows then limited and offset:
 { listAuthors { results { name latest: posts(sort: [{ field: TITLE, order: DESC }], limit: 1) { title } } } }
 ```
 
+Each read loads only what its selection asks for, as AshGraphql's `select_fields` and
+`load_fields` do: the attributes selected, the keys of the relationships selected, and the
+aggregates and calculations selected, besides the primary key, the fields a keyset sorts
+by, and those field policies check. A mutation's result loads the aggregates and
+calculations it selects. Reads filter and sort by aggregates too.
+
 Where a relationship wasn't loaded ahead (a subscription's record, say), its field loads
 it. N+1 relationship loading problems there are solved using `AshBatchLoader`, which loads every
 key of a relationship in one read. `with_dataloader()` gives each request its own loader,

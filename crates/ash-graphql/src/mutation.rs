@@ -2,7 +2,7 @@ use ash_core::create_dynamic;
 use ash_core::destroy_dynamic_by_id;
 
 use crate::redact::redact_record;
-use crate::preload::{preload, selected};
+use crate::preload::{load_selected, preload, selected};
 use ash_core::update_dynamic_expecting;
 use ash_core::{ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value};
 use async_graphql::dynamic::*;
@@ -174,6 +174,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                         Ok(mut stored) => {
                             redact_record(resource, ash.actor.as_ref(), &mut stored);
                             let fields = selected(ctx.ctx.field(), Some("result"));
+                            load_selected(ash, resource, &fields, std::slice::from_mut(&mut stored)).await?;
                             preload(ash, resource, fields, std::slice::from_mut(&mut stored)).await?;
                             succeeded(Some(stored))
                         }
@@ -196,6 +197,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                         Ok(mut updated) => {
                             redact_record(resource, ash.actor.as_ref(), &mut updated);
                             let fields = selected(ctx.ctx.field(), Some("result"));
+                            load_selected(ash, resource, &fields, std::slice::from_mut(&mut updated)).await?;
                             preload(ash, resource, fields, std::slice::from_mut(&mut updated)).await?;
                             succeeded(Some(updated))
                         }

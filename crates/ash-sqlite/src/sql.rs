@@ -70,9 +70,20 @@ pub fn row_to_fields(
     calculations: &[String],
     aggregates: &[String],
 ) -> Result<FieldMap> {
+    read_row(row, resource, &CompiledQuery::default(), calculations, aggregates)
+}
+
+/// A row `query` read: the attributes it selected, and the calculations and aggregates.
+pub fn read_row(
+    row: &SqliteRow,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+    calculations: &[String],
+    aggregates: &[String],
+) -> Result<FieldMap> {
     let mut map = FieldMap::new();
 
-    for attr in resource.attributes {
+    for attr in resource.attributes.iter().filter(|attr| query.reads(attr)) {
         let val = extract_column_value(row, attr.name, &attr.ty)?;
         map.insert(attr.name.to_string(), val);
     }

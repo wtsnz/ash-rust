@@ -718,6 +718,64 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
     assert_eq!(rows[0].get("total"), Some(&Value::Int(42)));
 }
 
+/// An aggregate is its subquery wherever a filter or sort refers to it, as AshPostgres
+/// writes it, and a read selects only the attributes asked for.
+#[tokio::test]
+async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&SUM_ORDER_DEF, &SUM_LINE_DEF]).await.unwrap();
+    let mut orders = Vec::new();
+    for amounts in [&[12, 30][..], &[5][..]] {
+        let order = Uuid::new_v4();
+        orders.push(order);
+        pg.create(&SUM_ORDER_DEF, None, order, FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
+        for amount in amounts {
+            let id = Uuid::new_v4();
+            let fields = FieldMap::from([
+                ("id".into(), Value::Uuid(id)),
+                ("order_id".into(), Value::Uuid(order)),
+                ("amount".into(), Value::Int(*amount)),
+            ]);
+            pg.create(&SUM_LINE_DEF, None, id, fields).await.unwrap();
+        }
+    }
+    let ours = Filter::in_list("id", orders.iter().copied().map(Value::Uuid));
+
+    let query = CompiledQuery {
+        filter: Some(Filter::and([ours.clone(), Filter::gt("total", Value::Int(10))])),
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    assert_eq!(rows.iter().map(|row| row.get("id")).collect::<Vec<_>>(), [Some(&Value::Uuid(orders[0]))]);
+
+    let query = CompiledQuery {
+        filter: Some(ours),
+        sort: vec![ash_core::Sort { field: "total".into(), descending: false }],
+        aggregates: vec!["total".into()],
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    let totals: Vec<_> = rows.iter().map(|row| row.get("total").cloned()).collect();
+    assert_eq!(totals, [Some(Value::Int(5)), Some(Value::Int(42))]);
+
+    // Only the primary key and what's selected.
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("order_id", Value::Uuid(orders[0]))),
+        select: Some(vec!["amount".into()]),
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_LINE_DEF, &query).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        let mut keys: Vec<_> = row.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["amount", "id"]);
+    }
+}
+
 mod pg_shift {
     use ash_core::{UtcDateTime, UtcDateTimeUsec, resource};
     use uuid::Uuid;

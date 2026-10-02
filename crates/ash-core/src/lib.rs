@@ -68,7 +68,7 @@ pub use notifier::{Notification, Notifier, SyncFnNotifier};
 pub use pipeline::visible_scope;
 pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_field_writes,
-    authorize_write, check_to_filter, compile_read_filter, redact_fields,
+    authorize_write, check_to_filter, compile_read_filter, field_policy_fields, redact_fields,
 };
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;

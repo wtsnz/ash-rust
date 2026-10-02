@@ -239,6 +239,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     ) -> Result<String> {
         if let Some(calc) = resource.calculation(field) {
             self.compile_calculation(resource, calc)
+        } else if let Some(agg) = resource.aggregate(field) {
+            // An aggregate is its subquery wherever a filter, sort or keyset refers to it,
+            // as AshPostgres writes it: there's no column of that name to refer to.
+            let source = match scope_alias {
+                Some(alias) => alias.to_string(),
+                None => ident(self.dialect, resource.table_name())?,
+            };
+            self.compile_aggregate_from(resource, agg, &source)
         } else {
             let col = column(self.dialect, resource, field)?;
             if let Some(alias) = scope_alias {
@@ -664,18 +672,29 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         agg: &AggregateDef,
     ) -> Result<String> {
+        let source_table = ident(self.dialect, resource.table_name())?;
+        self.compile_aggregate_from(resource, agg, &source_table)
+    }
+
+    /// [`compile_aggregate`](Self::compile_aggregate) of the record `source_table` names:
+    /// the table, or the alias a subquery gives it.
+    fn compile_aggregate_from(
+        &mut self,
+        resource: &ResourceDef,
+        agg: &AggregateDef,
+        source_table: &str,
+    ) -> Result<String> {
         let rel = resource.relationship(agg.relationship).ok_or_else(|| {
             Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
         })?;
         let dest = (rel.destination)();
         let dest_table = self.table(dest)?;
         let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
-        let source_table = ident(self.dialect, resource.table_name())?;
         let join_sql = relationship_equalities(
             self.dialect,
             &dest_alias,
             dest,
-            &source_table,
+            source_table,
             resource,
             rel,
         )?;
@@ -785,13 +804,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
-    pub fn compile_sort(&self, resource: &ResourceDef, sorts: &[Sort]) -> Result<String> {
+    pub fn compile_sort(&mut self, resource: &ResourceDef, sorts: &[Sort]) -> Result<String> {
         if sorts.is_empty() {
             return Ok(String::new());
         }
         let mut clauses = Vec::new();
         for sort in sorts {
-            let col = column(self.dialect, resource, &sort.field)?;
+            let col = self.compile_operand(resource, &sort.field)?;
             let dir = if sort.descending { "DESC" } else { "ASC" };
             clauses.push(format!("{col} {dir}"));
         }
@@ -815,14 +834,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         for (i, sort) in sorts.iter().enumerate() {
             let mut prefix_match = Vec::new();
             for prev in sorts.iter().take(i) {
-                let prev_col = column(self.dialect, resource, &prev.field)?;
+                let prev_col = self.compile_operand(resource, &prev.field)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
 
-            let col = column(self.dialect, resource, &sort.field)?;
+            let col = self.compile_operand(resource, &sort.field)?;
             let op = if sort.descending { "<" } else { ">" };
             if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &sort.field) {
                 let p = self.bind_field(resource, &sort.field, val.clone());
@@ -839,7 +858,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if !sorts.iter().any(|s| s.field == pk) {
             let mut prefix_match = Vec::new();
             for prev in sorts {
-                let prev_col = column(self.dialect, resource, &prev.field)?;
+                let prev_col = self.compile_operand(resource, &prev.field)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
@@ -892,7 +911,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 
-        for attr in resource.attributes {
+        for attr in resource.attributes.iter().filter(|attr| query.reads(attr)) {
             select_items.push(ident(self.dialect, attr.name)?);
         }
 

@@ -11,7 +11,7 @@ use async_graphql::dynamic::*;
 use crate::redact::redact_record;
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
 use crate::names::camel;
-use crate::preload::{preload, selected};
+use crate::preload::{Load, preload, selected};
 use crate::request::request_context;
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
 use crate::types::{attr_type_to_type_ref, parse_input_val};
@@ -228,13 +228,19 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     s.descending = !s.descending;
                 }
             }
-            let query = CompiledQuery {
+            // Only what's selected, and the sort a keyset holds.
+            let load = Load::of(
+                resource,
+                &selected(ctx.ctx.field(), Some("results")),
+                sort.iter().map(|s| s.field.as_str()),
+            );
+            let query = load.onto(CompiledQuery {
                 filter: page_filter,
                 sort: query_sort,
                 limit: Some(limit),
                 offset: None,
                 ..scoped
-            };
+            });
             let mut records = ash
                 .data
                 .run_query(resource, &query)

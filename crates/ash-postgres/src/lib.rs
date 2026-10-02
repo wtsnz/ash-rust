@@ -539,7 +539,7 @@ impl DataLayer for Postgres {
         let compiled = compiler.compile_select(resource, query)?;
         let rows = self.fetch_all(&compiled).await?;
         rows.iter()
-            .map(|row| row_to_fields(row, resource, &query.calculations, &query.aggregates))
+            .map(|row| read_row(row, resource, query, &query.calculations, &query.aggregates))
             .collect()
     }
 
@@ -1066,9 +1066,20 @@ fn row_to_fields(
     calculations: &[String],
     aggregates: &[String],
 ) -> Result<FieldMap> {
-    let mut map = FieldMap::new();
+    read_row(row, resource, &CompiledQuery::default(), calculations, aggregates)
+}
 
-    for attr in resource.attributes {
+/// A row `query` read: the attributes it selected, and the calculations and aggregates.
+fn read_row(
+    row: &PgRow,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+    calculations: &[String],
+    aggregates: &[String],
+) -> Result<FieldMap> {
+    let mut map = FieldMap::with_capacity(resource.attributes.len() + calculations.len() + aggregates.len());
+
+    for attr in resource.attributes.iter().filter(|attr| query.reads(attr)) {
         let val = extract_column_value(row, attr.name, &attr.ty);
         map.insert(attr.name.to_string(), val);
     }

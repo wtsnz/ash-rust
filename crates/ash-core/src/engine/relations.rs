@@ -53,6 +53,27 @@ pub struct RelatedQuery {
     pub sort: Vec<Sort>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    /// The destination's attributes to read, as Ash's `select` (`None`: every one). The
+    /// keys the load links rows to their sources by are read whatever it says.
+    pub select: Option<Vec<String>>,
+    /// The destination's aggregates and calculations to load with its rows.
+    pub aggregates: Vec<String>,
+    pub calculations: Vec<String>,
+}
+
+impl RelatedQuery {
+    /// This query, reading `keys` too if it selects attributes.
+    fn reading(&self, keys: &[&str]) -> RelatedQuery {
+        let mut query = self.clone();
+        if let Some(select) = &mut query.select {
+            for key in keys {
+                if !select.iter().any(|name| name == key) {
+                    select.push(key.to_string());
+                }
+            }
+        }
+        query
+    }
 }
 
 /// [`load_related`], shaped by `query`: still one read of the destination for every
@@ -84,8 +105,9 @@ pub async fn load_related_query<D: DataLayer>(
                 .filter_map(|key| key.first().cloned())
                 .collect();
             let first_column = rel.destination_columns()[0];
+            let query = query.reading(&rel.destination_columns());
             let mut related =
-                fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect(), query)
+                fetch_related_values(ctx, dest, first_column, first_values.into_iter().collect(), &query)
                     .await?;
             // Each row moves into its key's group, and each group is paged once.
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
@@ -146,7 +168,8 @@ pub async fn load_related_query<D: DataLayer>(
 
             // Each source's rows keep the destination read's order.
             let related =
-                fetch_related(ctx, dest, rel.destination_attribute, &all_dest_ids, query).await?;
+                fetch_related(ctx, dest, rel.destination_attribute, &all_dest_ids, &query.reading(&[rel.destination_attribute]))
+                    .await?;
             Ok(source_ids
                 .into_iter()
                 .map(|source_id| {
@@ -231,6 +254,9 @@ pub(crate) async fn fetch_related_values<D: DataLayer>(
             sort: shape.sort.clone(),
             limit: shape.limit,
             offset: shape.offset,
+            select: shape.select.clone(),
+            aggregates: shape.aggregates.clone(),
+            calculations: shape.calculations.clone(),
             tenant: ctx.tenant.clone(),
             ..CompiledQuery::default()
         },

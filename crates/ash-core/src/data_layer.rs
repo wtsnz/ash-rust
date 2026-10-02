@@ -15,12 +15,27 @@ pub struct Sort {
 pub struct CompiledQuery {
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
+    /// The attributes to read, as Ash's `select`: `None` reads every one. The primary key
+    /// is always read. A record read with a selection lacks the attributes left out.
+    pub select: Option<Vec<String>>,
     pub calculations: Vec<String>,
     pub calculation_args: std::collections::HashMap<String, FieldMap>,
     pub aggregates: Vec<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub tenant: Option<String>,
+}
+
+impl CompiledQuery {
+    /// Whether the query reads `attribute`: it's selected, or the primary key, or the
+    /// query selects everything.
+    pub fn reads(&self, attribute: &crate::resource::AttributeDef) -> bool {
+        attribute.primary_key
+            || self
+                .select
+                .as_ref()
+                .is_none_or(|select| select.iter().any(|name| name == attribute.name))
+    }
 }
 
 #[diagnostic::on_unimplemented(

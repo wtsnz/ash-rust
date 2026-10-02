@@ -495,7 +495,7 @@ impl DataLayer for Sqlite {
         let qb = sql::select_query(resource, query)?;
         let rows = self.fetch_all(&qb).await?;
         rows.iter()
-            .map(|row| sql::row_to_fields(row, resource, &query.calculations, &query.aggregates))
+            .map(|row| sql::read_row(row, resource, query, &query.calculations, &query.aggregates))
             .collect()
     }
 

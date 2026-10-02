@@ -477,9 +477,13 @@ impl DataLayer for Memory {
                 .collect();
             compute(&tables, tenant, resource, query, &mut rows, &requested, &mut computed)?;
 
+            // Only the attributes selected, as Ash's ETS layer returns them.
             for row in &mut rows {
                 strip_unrequested_calculations(resource, query, row);
                 strip_unrequested_aggregates(resource, query, row);
+                if query.select.is_some() {
+                    row.retain(|name, _| resource.attribute(name).is_none_or(|attr| query.reads(attr)));
+                }
             }
 
             Ok(rows)

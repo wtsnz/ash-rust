@@ -281,6 +281,33 @@ fn eval_policy(
     eval_policy_effects(policy.checks, actor, record)
 }
 
+impl Check {
+    /// The record's fields this check reads.
+    pub fn fields(&self, out: &mut Vec<&'static str>) {
+        match self {
+            Check::RelatesToActor { field } | Check::IsNil { field } | Check::Eq { field, .. } => out.push(field),
+            Check::And(checks) | Check::Or(checks) => checks.iter().for_each(|check| check.fields(out)),
+            Check::Always | Check::ActorPresent | Check::ActorAttributeEquals { .. } => {}
+        }
+    }
+}
+
+/// The record's fields `resource`'s field policies check: a read whose records are
+/// redacted reads them, whatever it selects.
+pub fn field_policy_fields(resource: &ResourceDef) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    for policy in resource.field_policies {
+        for effect in policy.checks {
+            let (PolicyEffect::AuthorizeIf(check)
+            | PolicyEffect::AuthorizeUnless(check)
+            | PolicyEffect::ForbidIf(check)
+            | PolicyEffect::ForbidUnless(check)) = effect;
+            check.fields(&mut fields);
+        }
+    }
+    fields
+}
+
 pub fn redact_fields(
     resource: &ResourceDef,
     actor: Option<&Actor>,

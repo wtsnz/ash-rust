@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    ActionDef, Actor, AttrType, AttributeDef, Check, CompiledQuery, Context, DataLayer, FieldMap,
+    ActionDef, Actor, AggregateDef, AttrType, AttributeDef, Check, CompiledQuery, Context, DataLayer, FieldMap,
     FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind, RelationshipDef, ResourceDef, Result,
     Value,
 };
@@ -15,14 +15,30 @@ use async_graphql::Request;
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
-/// Memory that notes which resource each read is of.
+/// A read's resource, and the attributes it selected.
+type Select = (&'static str, Option<Vec<String>>);
+
+/// Memory that notes which resource each read is of, and what it selects.
 #[derive(Clone, Default)]
 struct Counting {
     inner: Memory,
     reads: Arc<Mutex<Vec<&'static str>>>,
+    selects: Arc<Mutex<Vec<Select>>>,
 }
 
 impl Counting {
+    /// Each read's resource and the attributes it selected, in order.
+    fn take_selects(&self) -> Vec<Select> {
+        let mut selects = std::mem::take(&mut *self.selects.lock().unwrap());
+        for (_, select) in &mut selects {
+            if let Some(select) = select {
+                select.sort();
+            }
+        }
+        selects.sort();
+        selects
+    }
+
     fn take(&self) -> Vec<&'static str> {
         let mut reads = std::mem::take(&mut *self.reads.lock().unwrap());
         reads.sort_unstable();
@@ -78,6 +94,7 @@ impl DataLayer for Counting {
             .map(|def| def.name)
             .unwrap_or("other");
         self.reads.lock().unwrap().push(name);
+        self.selects.lock().unwrap().push((name, query.select.clone()));
         self.inner.run_query(resource, query).await
     }
 }
@@ -157,6 +174,7 @@ static POST_DEF: ResourceDef = ResourceDef {
         ActionDef::update("retitle").accept(&["title"]),
         ActionDef::destroy("destroy"),
     ],
+    aggregates: &[AggregateDef::count("comment_count", "comments")],
     field_policies: POST_FIELD_POLICIES,
     ..AUTHOR_DEF
 };
@@ -451,4 +469,52 @@ async fn relationship_arguments_may_be_variables() {
         assert_eq!(posts.len(), 1, "{author}");
         assert!(posts[0]["title"].as_str().unwrap().ends_with("P1"), "{author}");
     }
+}
+
+/// As AshGraphql selects only the fields asked for: the attributes selected, the keys
+/// of the relationships selected, and the primary key.
+#[tokio::test]
+async fn a_read_selects_only_what_is_asked_for() {
+    let (data, _) = seeded().await;
+    run(&data, "{ listPosts(first: 2) { results { title author { name } } } }", Some(Actor::new(Uuid::new_v4()))).await;
+    let strings = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect::<Vec<_>>());
+    assert_eq!(
+        data.take_selects(),
+        [("Author", strings(&["id", "name"])), ("Post", strings(&["author_id", "id", "title"]))]
+    );
+}
+
+/// Aggregates selected load with the records, as AshGraphql loads them, and a read can
+/// sort and filter by them; a mutation's result loads those it selects too.
+#[tokio::test]
+async fn selected_aggregates_load_and_sort_and_filter() {
+    let (data, post) = seeded().await;
+    insert(&data, &COMMENT_DEF, &[("body", Value::from("A0P0C2")), ("post_id", Value::Uuid(post))]).await;
+    let actor = || Some(Actor::new(Uuid::new_v4()));
+
+    let page = run(
+        &data,
+        "{ listPosts(sort: [{ field: COMMENT_COUNT, order: DESC }, { field: TITLE }], first: 2) { results { title commentCount } } }",
+        actor(),
+    )
+    .await;
+    assert_eq!(
+        page["listPosts"]["results"],
+        json!([{ "title": "A0P0", "commentCount": 3 }, { "title": "A0P1", "commentCount": 2 }])
+    );
+
+    let page = run(&data, "{ listPosts(filter: { commentCount: { greaterThan: 2 } }) { results { title } } }", actor()).await;
+    assert_eq!(page["listPosts"]["results"], json!([{ "title": "A0P0" }]));
+
+    // Under a relationship, loaded ahead with its rows.
+    let page = run(&data, r#"{ listAuthors(filter: { name: { eq: "A0" } }) { results { posts(sort: [{ field: TITLE }]) { commentCount } } } }"#, actor()).await;
+    assert_eq!(page["listAuthors"]["results"], json!([{ "posts": [{ "commentCount": 3 }, { "commentCount": 2 }] }]));
+
+    let page = run(
+        &data,
+        &format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "Renamed" }}) {{ result {{ title commentCount }} }} }}"#),
+        actor(),
+    )
+    .await;
+    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Renamed", "commentCount": 3 }));
 }

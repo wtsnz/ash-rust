@@ -10,7 +10,8 @@
 //! record's rows then limited and offset.
 
 use ash_core::{
-    Context, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value, load_related_query,
+    CompiledQuery, Context, DataLayer, FieldMap, Filter, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value,
+    field_policy_fields, load_related_query,
 };
 use async_graphql::{SelectionField, Value as GqlValue};
 use futures_util::future::{BoxFuture, try_join_all};
@@ -74,6 +75,121 @@ pub(crate) fn selected<'a>(field: SelectionField<'a>, child: Option<&str>) -> Ve
     }
 }
 
+/// What a read of a resource loads for the fields selected on its records, as
+/// AshGraphql's `select_fields` and `load_fields` decide: the attributes selected, the
+/// keys of the relationships selected, and the aggregates and calculations selected;
+/// and, whatever is selected, the primary key and the fields its field policies check.
+#[derive(Debug, Default)]
+pub(crate) struct Load {
+    pub select: Vec<String>,
+    pub aggregates: Vec<String>,
+    pub calculations: Vec<String>,
+}
+
+impl Load {
+    /// What `fields` selected on records of `resource` need loaded, and `also` (the
+    /// fields a read sorts by, which its keysets hold).
+    pub(crate) fn of<'s>(
+        resource: &'static ResourceDef,
+        fields: &[SelectionField<'_>],
+        also: impl IntoIterator<Item = &'s str>,
+    ) -> Load {
+        let selected: Vec<&str> = fields.iter().map(|field| field.name()).collect();
+        let is_selected = |name: &str| selected.iter().any(|field| *field == camel(name));
+        let mut load = Load::default();
+        for attr in resource.attributes.iter().filter(|attr| attr.primary_key || is_selected(attr.name)) {
+            load.add(resource, attr.name);
+        }
+        for agg in resource.aggregates.iter().filter(|agg| is_selected(agg.name)) {
+            load.add(resource, agg.name);
+        }
+        for calc in resource.calculations.iter().filter(|calc| is_selected(calc.name)) {
+            load.add(resource, calc.name);
+        }
+        for rel in resource.relationships.iter().filter(|rel| is_selected(rel.name)) {
+            for column in rel.source_columns() {
+                load.add(resource, column);
+            }
+        }
+        for field in field_policy_fields(resource).into_iter().chain(also) {
+            load.add(resource, field);
+        }
+        load
+    }
+
+    /// Loads `field` of `resource`: an attribute, aggregate or calculation.
+    fn add(&mut self, resource: &ResourceDef, field: &str) {
+        let list = if resource.attribute(field).is_some() {
+            &mut self.select
+        } else if resource.aggregate(field).is_some() {
+            &mut self.aggregates
+        } else if resource.calculation(field).is_some() {
+            &mut self.calculations
+        } else {
+            return;
+        };
+        if !list.iter().any(|name| name == field) {
+            list.push(field.to_string());
+        }
+    }
+
+    /// `query`, reading only this.
+    pub(crate) fn onto(self, query: CompiledQuery) -> CompiledQuery {
+        let mut query = query;
+        query.select = Some(self.select);
+        query.aggregates.extend(self.aggregates);
+        query.calculations.extend(self.calculations);
+        query
+    }
+
+    /// `query`, loading only this of the related rows.
+    fn onto_related(self, query: RelatedQuery) -> RelatedQuery {
+        RelatedQuery {
+            select: Some(self.select),
+            aggregates: self.aggregates,
+            calculations: self.calculations,
+            ..query
+        }
+    }
+}
+
+/// Loads the aggregates and calculations `fields` select on `records`, written records of
+/// `resource`, as AshGraphql loads a mutation's result: one read of them all, by key.
+pub(crate) async fn load_selected<D: DataLayer>(
+    ash: &Context<D>,
+    resource: &'static ResourceDef,
+    fields: &[SelectionField<'_>],
+    records: &mut [FieldMap],
+) -> async_graphql::Result<()> {
+    let load = Load::of(resource, fields, []);
+    if records.is_empty() || (load.aggregates.is_empty() && load.calculations.is_empty()) {
+        return Ok(());
+    }
+    let Some(pk) = resource.primary_key().map(|attr| attr.name) else {
+        return Ok(());
+    };
+    let ids: Vec<Value> = records.iter().filter_map(|record| record.get(pk).cloned()).collect();
+    let query = CompiledQuery {
+        filter: Some(Filter::In(pk.to_string(), ids)),
+        select: Some(Vec::new()),
+        aggregates: load.aggregates,
+        calculations: load.calculations,
+        tenant: ash.tenant.clone(),
+        ..CompiledQuery::default()
+    };
+    let loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    for record in records.iter_mut() {
+        if let Some(row) = loaded.iter().find(|row| row.get(pk) == record.get(pk)) {
+            for name in query.aggregates.iter().chain(&query.calculations) {
+                if let Some(value) = row.get(name) {
+                    record.insert(name.clone(), value.clone());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A relationship to preload: everything selected under it, however many times it's
 /// selected under the same response key.
 struct Wanted<'a> {
@@ -123,6 +239,8 @@ pub(crate) fn preload<'a, D: DataLayer>(
         let records_ref: &[FieldMap] = records;
         let loaded = try_join_all(wanted.into_iter().map(|Wanted { rel, key, query, children }| async move {
             let destination = (rel.destination)();
+            let sort: Vec<String> = query.sort.iter().map(|sort| sort.field.clone()).collect();
+            let query = Load::of(destination, &children, sort.iter().map(String::as_str)).onto_related(query);
             let sources: Vec<FieldMap> = records_ref.iter().map(|record| relationship_source(rel, record)).collect();
             let related = load_related_query(ash, resource, rel.name, &sources, &query)
                 .await
