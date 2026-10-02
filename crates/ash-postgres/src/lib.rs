@@ -14,7 +14,10 @@ use ash_core::{
     AttrType, CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
-use ash_sql::{CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam};
+use ash_sql::{
+    CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlDialect, SqlParam,
+    TableSnapshot,
+};
 use sqlx::Row;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow};
 use tokio::sync::Mutex;
@@ -254,14 +257,40 @@ impl Postgres {
         let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
-        for res in &resources {
-            for extension in ash_sql::required_extensions(&dialect, res) {
-                self.execute_raw(&extension).await?;
-            }
-            let ddl = compiler.compile_create_table(res)?;
-            self.execute_raw(&ddl).await?;
-            for idx_ddl in compiler.compile_create_indexes(res)? {
-                self.execute_raw(&idx_ddl).await?;
+        // Tables that refer to each other are created without the keys to tables not yet
+        // made, and those keys added after: no order creates them with every key inline.
+        let creates = resources
+            .iter()
+            .map(|res| ash_sql::SchemaOperation::CreateTable(TableSnapshot::from_resource(res, &dialect)))
+            .collect();
+        for operation in ash_sql::defer_forward_references(creates) {
+            match operation {
+                ash_sql::SchemaOperation::CreateTable(table) => {
+                    let res = resources
+                        .iter()
+                        .find(|res| res.table_name() == table.table)
+                        .expect("a table for each resource");
+                    for extension in ash_sql::required_extensions(&dialect, res) {
+                        self.execute_raw(&extension).await?;
+                    }
+                    self.execute_raw(&ash_sql::emit_create_table(&dialect, &table)).await?;
+                    for idx_ddl in compiler.compile_create_indexes(res)? {
+                        self.execute_raw(&idx_ddl).await?;
+                    }
+                }
+                ash_sql::SchemaOperation::AddReference { table, reference } => {
+                    // Installing again finds the key already there.
+                    let alter = ash_sql::emit_add_reference(&dialect, &table, &reference);
+                    let literal = |text: &str| format!("'{}'", text.replace('\'', "''"));
+                    self.execute_raw(&format!(
+                        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = {} \
+                         AND conrelid = to_regclass({})) THEN {alter} END IF; END $$",
+                        literal(&reference.name),
+                        literal(&dialect.quote_identifier(&table)),
+                    ))
+                    .await?;
+                }
+                _ => {}
             }
         }
         let has_statements = resources.iter().any(|res| {

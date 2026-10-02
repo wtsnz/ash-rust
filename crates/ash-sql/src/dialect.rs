@@ -113,6 +113,13 @@ pub trait SqlDialect: Send + Sync + 'static {
         true
     }
 
+    /// Whether a `CREATE TABLE` may declare a foreign key to a table that doesn't exist
+    /// yet. SQLite checks foreign keys only when rows are written; Postgres resolves the
+    /// target when the key is created.
+    fn allows_forward_references(&self) -> bool {
+        false
+    }
+
     /// Render membership check (`IN` / `= ANY(...)`).
     ///
     /// Given an operand expression `op` (e.g. `"tickets"."id"`) and a bound parameter placeholder `param`,
@@ -145,6 +152,10 @@ pub struct SqliteDialect;
 impl SqlDialect for SqliteDialect {
     fn name(&self) -> &'static str {
         "sqlite"
+    }
+
+    fn allows_forward_references(&self) -> bool {
+        true
     }
 
     fn placeholder(&self, _index: usize) -> String {

@@ -954,3 +954,103 @@ mod context_tenancy {
         tenants_stay_apart(Context::new(pg), &acme, &globex).await;
     }
 }
+
+mod pg_cycle {
+    pub mod car {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        use super::driver::PgDriver;
+
+        resource! {
+            PgCar {
+                table "pg_cars";
+
+                attributes {
+                    id: Uuid [pk];
+                    plate: String;
+                    driver_id: Option<Uuid>;
+                }
+
+                relationships {
+                    belongs_to driver: PgDriver [fk: driver_id];
+                }
+
+                actions {
+                    create create { primary; accept [plate, driver_id]; }
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod driver {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        use super::car::PgCar;
+
+        resource! {
+            PgDriver {
+                table "pg_drivers";
+
+                attributes {
+                    id: Uuid [pk];
+                    name: String;
+                    car_id: Option<Uuid>;
+                }
+
+                relationships {
+                    belongs_to car: PgCar [fk: car_id];
+                }
+
+                actions {
+                    create create { primary; accept [name, car_id]; }
+                    read read { primary; }
+                    update assign { accept [car_id]; }
+                }
+            }
+        }
+    }
+}
+
+/// Two tables that refer to each other install: neither can be created first with its
+/// foreign key inline, so the keys are added once both exist. Installing again changes
+/// nothing, and the keys hold.
+#[tokio::test]
+async fn test_postgres_installs_tables_that_refer_to_each_other() {
+    use ash_core::{Context, Resource};
+    use pg_cycle::{car::PgCar, driver::PgDriver};
+
+    let Some(admin) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    let schema = format!("cycle_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+        .execute(admin.pool().unwrap())
+        .await
+        .unwrap();
+    let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
+        .await
+        .unwrap();
+    pg.install(&[&PgCar::DEF, &PgDriver::DEF]).await.unwrap();
+    pg.install(&[&PgCar::DEF, &PgDriver::DEF]).await.unwrap();
+
+    let ctx = Context::new(pg);
+    let driver = PgDriver::create(&ctx).name("Ada".to_string()).await.unwrap();
+    let car = PgCar::create(&ctx)
+        .plate("CYBR-1".to_string())
+        .driver_id(Some(driver.id))
+        .await
+        .unwrap();
+    let driver = driver.assign_on(&ctx).car_id(Some(car.id)).await.unwrap();
+    assert_eq!(driver.car_id, Some(car.id));
+
+    // Both keys are enforced.
+    let missing = Some(Uuid::new_v4());
+    assert!(PgCar::create(&ctx).plate("GHOST".to_string()).driver_id(missing).await.is_err());
+    assert!(PgDriver::create(&ctx).name("Nobody".to_string()).car_id(missing).await.is_err());
+}

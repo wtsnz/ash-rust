@@ -331,6 +331,46 @@ fn drop_statement(table: &str, statement: &StatementSnapshot) -> SchemaOperation
     }
 }
 
+/// Moves each new table's foreign keys to tables created later in `operations` out of its
+/// `CREATE TABLE`, into `AddReference` operations after every table exists.
+///
+/// Tables that refer to each other can't be created in any order with their keys inline,
+/// so their keys are added once both exist, as AshPostgres's migrations add references
+/// after creating tables. Keys to the table itself, or to tables that already exist,
+/// stay inline. For dialects that need it; see `SqlDialect::allows_forward_references`.
+pub fn defer_forward_references(operations: Vec<SchemaOperation>) -> Vec<SchemaOperation> {
+    let creating: std::collections::HashSet<String> = operations
+        .iter()
+        .filter_map(|op| match op {
+            SchemaOperation::CreateTable(table) => Some(table.table.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut created = std::collections::HashSet::new();
+    let mut deferred = Vec::new();
+    let mut ordered = Vec::with_capacity(operations.len());
+    for op in operations {
+        let SchemaOperation::CreateTable(mut table) = op else {
+            ordered.push(op);
+            continue;
+        };
+        let (later, now): (Vec<_>, Vec<_>) = table.references.drain(..).partition(|reference| {
+            reference.target_table != table.table
+                && creating.contains(&reference.target_table)
+                && !created.contains(&reference.target_table)
+        });
+        table.references = now;
+        created.insert(table.table.clone());
+        deferred.extend(later.into_iter().map(|reference| SchemaOperation::AddReference {
+            table: table.table.clone(),
+            reference,
+        }));
+        ordered.push(SchemaOperation::CreateTable(table));
+    }
+    ordered.extend(deferred);
+    ordered
+}
+
 /// Diffs multiple table snapshots to produce an aggregate migration plan.
 pub fn diff_tables(
     old_tables: &[TableSnapshot],

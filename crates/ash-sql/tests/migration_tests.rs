@@ -428,3 +428,42 @@ fn index_include_is_emitted_for_postgres_only() {
     );
     assert!(!changes.is_empty(), "adding INCLUDE columns must change the index");
 }
+
+/// Two new tables that refer to each other: on Postgres, the key to the table not yet
+/// created is added once both exist; SQLite, which resolves keys only when rows are
+/// written, keeps both inline.
+#[test]
+fn tables_that_refer_to_each_other_are_created_before_their_keys() {
+    let table = |name: &str, target: &str| {
+        let mut snapshot = TableSnapshot::from_resource(&RES_V1, &PostgresDialect);
+        snapshot.table = name.into();
+        snapshot.identities.clear();
+        snapshot.references.push(ash_sql::ReferenceSnapshot {
+            name: format!("fk_{name}_{target}"),
+            column: format!("{target}_id"),
+            columns: vec![format!("{target}_id")],
+            target_table: target.into(),
+            target_column: "id".into(),
+            target_columns: vec!["id".into()],
+            on_delete: "NO ACTION".into(),
+            on_update: "NO ACTION".into(),
+        });
+        ash_sql::SchemaOperation::CreateTable(snapshot)
+    };
+    let operations = [table("cars", "drivers"), table("drivers", "cars")];
+
+    let postgres = generate_migration_with_version(&PostgresDialect, "1", "cycle", &operations);
+    let up = &postgres.up_sql;
+    let created_drivers = up.find(r#"CREATE TABLE IF NOT EXISTS "drivers""#).unwrap();
+    let alter = up
+        .find(r#"ALTER TABLE "cars" ADD CONSTRAINT "fk_cars_drivers""#)
+        .expect("the key to drivers is added after");
+    assert!(alter > created_drivers, "{up}");
+    assert_eq!(up.matches("fk_cars_drivers").count(), 1, "{up}");
+    // The key back to cars, which exists by then, stays inline.
+    assert!(up[created_drivers..alter].contains("fk_drivers_cars"), "{up}");
+    assert!(postgres.down_sql.contains(r#"DROP CONSTRAINT IF EXISTS "fk_cars_drivers""#));
+
+    let sqlite = generate_migration_with_version(&SqliteDialect, "1", "cycle", &operations);
+    assert!(!sqlite.up_sql.contains("ALTER TABLE"), "{}", sqlite.up_sql);
+}
