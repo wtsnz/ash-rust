@@ -493,7 +493,20 @@ impl DynamicChangeset {
                 }
                 None => ctx.data.create(self.resource, ctx.tenant.as_deref(), id, fields).await,
             },
-            ActionKind::Update => ctx.data.update(self.resource, ctx.tenant.as_deref(), id, fields).await,
+            ActionKind::Update => {
+                // As in Ash, an update writes only the attributes it changes, merged into
+                // the stored row: one made from a stale copy of the record doesn't write
+                // that copy's other fields back over newer values. Setting a field to the
+                // value the copy holds isn't a change either (`Ash.Changeset` drops it).
+                let changes = match &self.existing {
+                    Some(existing) => fields
+                        .into_iter()
+                        .filter(|(name, value)| existing.get(name) != Some(value))
+                        .collect(),
+                    None => fields,
+                };
+                ctx.data.update(self.resource, ctx.tenant.as_deref(), id, changes).await
+            }
             ActionKind::Destroy => {
                 let existing = self.existing.clone().unwrap_or_else(|| fields.clone());
                 crate::engine::persist_destroy(
