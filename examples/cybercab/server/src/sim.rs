@@ -274,15 +274,7 @@ impl<D: DataLayer> Simulation<D> {
             // Requests a simulated minute, spread over this tick's simulated seconds.
             let per_tick =
                 zone.base_demand * 0.27 * boost * self.config.demand * self.config.speedup / 60.0;
-            // A standard fleet sees at most one request a zone a tick; a bigger one sees
-            // proportionally more.
-            let expected = if self.fleet_scale > 1.0 {
-                per_tick * self.fleet_scale
-            } else {
-                per_tick.min(0.9)
-            };
-            let requests =
-                expected.floor() as usize + usize::from(self.rng.chance(expected.fract()));
+            let requests = hails(per_tick, self.fleet_scale, self.rng.unit());
             if requests == 0 {
                 continue;
             }
@@ -890,8 +882,48 @@ fn position_of(city: &City, motion: &Motion) -> Point {
     }
 }
 
+/// How many riders hail in a zone this tick, when `per_tick` hail there on average for
+/// the standard fleet and `roll` is uniform in `[0, 1)`. The standard fleet sees at most
+/// one a tick; a fleet `fleet_scale` times bigger sees proportionally more.
+fn hails(per_tick: f64, fleet_scale: f64, roll: f64) -> usize {
+    let expected = if fleet_scale > 1.0 {
+        per_tick * fleet_scale
+    } else {
+        per_tick.min(0.9)
+    };
+    expected.floor() as usize + usize::from(roll < expected.fract())
+}
+
 /// $2.50 to start, $1.10 a kilometre and $0.25 a minute, times the surge; at least $6.
 pub fn fare_cents(distance_m: f64, duration_s: f64, surge: f64) -> i64 {
     let base = 250.0 + 110.0 * distance_m / 1000.0 + 25.0 * duration_s / 60.0;
     ((base * surge).round() as i64).max(600)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hails;
+
+    /// Hails over evenly spread rolls: what a zone sees on average a tick.
+    fn average(per_tick: f64, fleet_scale: f64) -> f64 {
+        let rolls = 10_000;
+        (0..rolls)
+            .map(|i| hails(per_tick, fleet_scale, i as f64 / rolls as f64))
+            .sum::<usize>() as f64
+            / rolls as f64
+    }
+
+    #[test]
+    fn the_standard_fleet_sees_at_most_one_hail_a_zone_a_tick() {
+        assert!((average(0.3, 1.0) - 0.3).abs() < 1e-3);
+        assert!((average(2.0, 1.0) - 0.9).abs() < 1e-3);
+        assert!((0..100).all(|i| hails(2.0, 1.0, i as f64 / 100.0) <= 1));
+    }
+
+    #[test]
+    fn a_bigger_fleet_sees_proportionally_more() {
+        assert!((average(0.3, 3.0) - 0.9).abs() < 1e-3);
+        assert!((average(0.3, 10.0) - 3.0).abs() < 1e-3);
+        assert!((average(0.45, 10.0) - 4.5).abs() < 1e-3);
+    }
 }
