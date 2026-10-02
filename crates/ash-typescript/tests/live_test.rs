@@ -139,6 +139,14 @@ import { DeskClient, type Ticket } from "./sdk";
 
 declare const process: { argv: string[]; exit(code: number): never };
 
+// Counts the client's reads: requests that aren't mutations.
+let reads = 0;
+const realFetch = globalThis.fetch;
+globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+  if (!String(init?.body ?? "").includes("mutation")) reads += 1;
+  return realFetch(input, init);
+};
+
 const client = new DeskClient({ baseUrl: process.argv[2] });
 const statuses: string[] = [];
 client.subscriptions.onStatus((status) => statuses.push(status));
@@ -182,6 +190,36 @@ async function main() {
 
   await client.ticket.remove(minor.id);
   await until("the removal", () => all, (items) => items.length === 1);
+
+  // A filtered, sorted list the client can evaluate stays exact without re-reading:
+  // records enter it, move within it and leave it where the server would put them.
+  const readsBefore = reads;
+  const seven = await client.ticket.open({ title: "Seven", priority: 7 });
+  const six = await client.ticket.open({ title: "Six", priority: 6 });
+  await until("both urgent, in order", () => urgent, (items) => items.map((t) => t.title).join() === "Seven,Six");
+  await client.ticket.reprioritize(six.id, { priority: 8 });
+  await until("six to move up", () => urgent, (items) => items.map((t) => t.title).join() === "Six,Seven");
+  await client.ticket.reprioritize(seven.id, { priority: 1 });
+  await until("seven to leave", () => urgent, (items) => items.map((t) => t.title).join() === "Six");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (reads !== readsBefore) throw new Error(`the urgent list re-read ${reads - readsBefore} times`);
+  await client.ticket.remove(six.id);
+  await client.ticket.remove(seven.id);
+  await until("the cleanup", () => all, (items) => items.length === 1);
+
+  // A burst of changes reaches the listener in a few notifications, not one apiece.
+  let heard = 0;
+  let burst: Ticket[] = [];
+  const counted = client.ticket.query().live((items) => {
+    heard += 1;
+    burst = items;
+  }, { onError });
+  await until("the counted list", () => burst, (items) => items.length === 1);
+  const before = heard;
+  await Promise.all(Array.from({ length: 40 }, (_, i) => client.ticket.open({ title: `Burst ${i}`, priority: 1 })));
+  await until("the burst", () => burst, (items) => items.length === 41);
+  if (heard - before > 20) throw new Error(`heard ${heard - before} notifications for 40 creates`);
+  counted.stop();
 
   everything.stop();
   triage.stop();

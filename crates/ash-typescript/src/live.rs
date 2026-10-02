@@ -300,11 +300,141 @@ export interface AshLiveQuery {{
 }}
 
 /** What a live query needs from a resource client. */
+/**
+ * How the client can compare a field's values exactly as the server does, for the fields
+ * it can. Text sorts by the database's collation and enums cross the wire in another
+ * form, so those, like decimals and case-insensitive text, are left to the server.
+ */
+export type AshFieldKind = "uuid" | "text" | "number" | "boolean" | "datetime";
+
+/** True, false, SQL's NULL (which a filter treats as false), or `undefined`: can't tell. */
+type AshVerdict = boolean | null | undefined;
+
+function ashAll(verdicts: AshVerdict[]): AshVerdict {{
+  if (verdicts.some((v) => v === false)) return false;
+  if (verdicts.some((v) => v === undefined)) return undefined;
+  return verdicts.some((v) => v === null) ? null : true;
+}}
+
+function ashAny(verdicts: AshVerdict[]): AshVerdict {{
+  if (verdicts.some((v) => v === true)) return true;
+  if (verdicts.some((v) => v === undefined)) return undefined;
+  return verdicts.some((v) => v === null) ? null : false;
+}}
+
+function ashFieldVerdict(kind: AshFieldKind | undefined, ops: Record<string, unknown>, value: unknown): AshVerdict {{
+  if (!kind) return undefined;
+  const missing = value === null || value === undefined;
+  const norm = (v: unknown) => (kind === "uuid" && typeof v === "string" ? v.toLowerCase() : v);
+  const verdicts: AshVerdict[] = [];
+  for (const [op, operand] of Object.entries(ops)) {{
+    if (operand === undefined) continue;
+    if (op === "isNil") {{
+      verdicts.push(missing === operand);
+      continue;
+    }}
+    // Datetimes compare only by presence: a filter's value may be spelled another way.
+    if (kind === "datetime") return undefined;
+    if (missing) {{
+      verdicts.push(null);
+      continue;
+    }}
+    const v = norm(value);
+    switch (op) {{
+      case "eq":
+        verdicts.push(v === norm(operand));
+        break;
+      case "ne":
+        verdicts.push(v !== norm(operand));
+        break;
+      case "in":
+        verdicts.push(Array.isArray(operand) && operand.map(norm).includes(v));
+        break;
+      case "gt":
+      case "gte":
+      case "lt":
+      case "lte": {{
+        if (kind !== "number" || typeof operand !== "number" || typeof v !== "number") return undefined;
+        verdicts.push(op === "gt" ? v > operand : op === "gte" ? v >= operand : op === "lt" ? v < operand : v <= operand);
+        break;
+      }}
+      default:
+        return undefined;
+    }}
+  }}
+  return ashAll(verdicts);
+}}
+
+function ashFilterVerdict(
+  filter: Record<string, unknown>,
+  record: Record<string, unknown>,
+  kinds: Record<string, AshFieldKind>,
+): AshVerdict {{
+  const verdicts: AshVerdict[] = [];
+  for (const [key, condition] of Object.entries(filter)) {{
+    if (condition === undefined) continue;
+    if (key === "and" || key === "or") {{
+      const parts = (condition as Record<string, unknown>[]).map((part) => ashFilterVerdict(part, record, kinds));
+      verdicts.push(key === "and" ? ashAll(parts) : ashAny(parts));
+    }} else if (key === "not") {{
+      const inner = ashFilterVerdict(condition as Record<string, unknown>, record, kinds);
+      // NOT over SQL's NULL is NULL in Postgres; leave it to the server.
+      verdicts.push(inner === true ? false : inner === false ? true : undefined);
+    }} else {{
+      verdicts.push(ashFieldVerdict(kinds[key], condition as Record<string, unknown>, record[key]));
+    }}
+  }}
+  return ashAll(verdicts);
+}}
+
+/**
+ * Whether `record` matches `filter` as the server would decide it, or `undefined` when
+ * the client can't be sure: a relationship, an operator or a field it doesn't evaluate.
+ */
+export function ashMatches(
+  filter: object | undefined,
+  record: object,
+  kinds: Record<string, AshFieldKind>,
+): boolean | undefined {{
+  if (!filter) return true;
+  const verdict = ashFilterVerdict(filter as Record<string, unknown>, record as Record<string, unknown>, kinds);
+  return verdict === undefined ? undefined : verdict === true;
+}}
+
+/**
+ * The order `sort` puts two records in, as the server would, or `undefined` when the
+ * client can't be sure: a field it doesn't order, or a missing value.
+ */
+export function ashCompare(
+  sort: Array<{{ field: string; order?: "asc" | "desc" }}>,
+  kinds: Record<string, AshFieldKind>,
+): (a: object, b: object) => number | undefined {{
+  return (a, b) => {{
+    for (const {{ field, order }} of sort) {{
+      const kind = kinds[field];
+      if (!kind || kind === "text") return undefined;
+      const x = (a as Record<string, unknown>)[field];
+      const y = (b as Record<string, unknown>)[field];
+      if (x === null || x === undefined || y === null || y === undefined) return undefined;
+      const left = kind === "uuid" ? String(x).toLowerCase() : (x as number | string | boolean);
+      const right = kind === "uuid" ? String(y).toLowerCase() : (y as number | string | boolean);
+      if (left === right) continue;
+      const ascending = left < right ? -1 : 1;
+      return order === "desc" ? -ascending : ascending;
+    }}
+    return 0;
+  }};
+}}
+
 export interface AshLiveSpec<T> {{
   key: (record: T) => string;
   fetch: () => Promise<T[]>;
-  /** Whether events alone keep the list exact: no filter, sort, limit or offset. */
-  exact: boolean;
+  /** Whether a record belongs in the list: `undefined` when the client can't tell. Absent for an unfiltered list. */
+  matches?: (record: T) => boolean | undefined;
+  /** The list's order: `undefined` when the client can't tell. Absent for an unsorted list, whose new records go last. */
+  compare?: (a: T, b: T) => number | undefined;
+  /** A page (limit or offset): a record leaving it is replaced by one only the server knows. */
+  paged: boolean;
   subscriptions: AshSubscriptionClient;
   onCreated: (handler: (record: T) => void, options: AshSubscribeOptions) => () => void;
   onUpdated: (handler: (record: T) => void, options: AshSubscribeOptions) => () => void;
@@ -315,10 +445,14 @@ export interface AshLiveSpec<T> {{
  * Keeps a list in sync with the server. It subscribes, then reads the list, and reads it
  * again whenever the connection is acknowledged, since changes made before the
  * subscriptions were live (or while a dropped connection was down) were not heard.
- * Changes apply as they arrive: an exact list (no filter, sort or paging) is patched in
- * place; any other list patches the records it holds and re-reads itself shortly after,
- * so records that enter or leave it, or move within it, land where the server puts them.
+ * Changes apply as they arrive. A change the client can place exactly, because it can
+ * evaluate the list's filter and sort as the server would, goes straight where the server
+ * would put it: in, out, or to its place in the order. Any other change patches the records
+ * the list holds and the list re-reads itself shortly after, as does a page (limit or
+ * offset), since what enters it when a record leaves only the server knows.
  * If it misses events, because it fell behind the server, it re-reads straight away.
+ * However fast changes arrive, the listener hears the list at most once an animation
+ * frame.
  */
 export function ashLiveQuery<T>(
   spec: AshLiveSpec<T>,
@@ -331,8 +465,29 @@ export function ashLiveQuery<T>(
   let stale = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const emit = () => {{
+  // Changes arrive far faster than anyone can look at them, at scale: the listener hears
+  // the list at most once an animation frame (or every 16 ms without one), with every
+  // change since applied.
+  /** Cancels the scheduled notification, while one is. */
+  let pending: (() => void) | undefined;
+  const flush = () => {{
+    pending = undefined;
     if (!stopped) listener(items.slice());
+  }};
+  const emit = () => {{
+    if (pending || stopped) return;
+    if (typeof requestAnimationFrame === "function") {{
+      const frame = requestAnimationFrame(flush);
+      pending = () => cancelAnimationFrame(frame);
+    }} else {{
+      const timer = setTimeout(flush, 16);
+      pending = () => clearTimeout(timer);
+    }}
+  }};
+  // Where each record is in `items`, so a change finds its record without a search.
+  let index = new Map<string, number>();
+  const reindex = () => {{
+    index = new Map(items.map((item, at) => [spec.key(item), at]));
   }};
   const refresh = async (): Promise<void> => {{
     if (stopped) return;
@@ -343,6 +498,7 @@ export function ashLiveQuery<T>(
     fetching = true;
     try {{
       items = await spec.fetch();
+      reindex();
       emit();
     }} catch (error) {{
       options?.onError?.(error);
@@ -356,7 +512,7 @@ export function ashLiveQuery<T>(
   }};
   const resync = () => {{
     if (fetching) stale = true;
-    if (spec.exact || timer || stopped) return;
+    if (timer || stopped) return;
     timer = setTimeout(() => {{
       timer = undefined;
       void refresh();
@@ -364,15 +520,64 @@ export function ashLiveQuery<T>(
   }};
   const upsert = (record: T, append: boolean) => {{
     const key = spec.key(record);
-    const at = items.findIndex((item) => spec.key(item) === key);
-    if (at >= 0) {{
-      items = items.map((item, index) => (index === at ? record : item));
+    const at = index.get(key);
+    if (at !== undefined) {{
+      items[at] = record;
     }} else if (append) {{
-      items = [...items, record];
+      index.set(key, items.length);
+      items.push(record);
     }} else {{
       return;
     }}
     emit();
+  }};
+
+  /** Puts a created or updated record where the server would; false if it can't tell. */
+  const place = (record: T): boolean => {{
+    if (spec.paged) return false;
+    const verdict = spec.matches ? spec.matches(record) : true;
+    if (verdict === undefined) return false;
+    const key = spec.key(record);
+    const at = index.get(key);
+    if (!verdict) {{
+      if (at !== undefined) {{
+        items.splice(at, 1);
+        reindex();
+        emit();
+      }}
+      return true;
+    }}
+    const compare = spec.compare;
+    if (at !== undefined && (!compare || compare(items[at], record) === 0)) {{
+      items[at] = record;
+      emit();
+      return true;
+    }}
+    if (!compare) {{
+      index.set(key, items.length);
+      items.push(record);
+      emit();
+      return true;
+    }}
+    const rest = at === undefined ? items : items.filter((_, i) => i !== at);
+    let low = 0;
+    let high = rest.length;
+    while (low < high) {{
+      const middle = (low + high) >> 1;
+      const order = compare(rest[middle], record);
+      if (order === undefined) return false;
+      if (order <= 0) low = middle + 1;
+      else high = middle;
+    }}
+    rest.splice(low, 0, record);
+    items = rest;
+    reindex();
+    emit();
+    return true;
+  }};
+  // A list read while changes arrived may be older than they are.
+  const placed = () => {{
+    if (fetching) stale = true;
   }};
 
   const subscribeOptions: AshSubscribeOptions = {{
@@ -382,18 +587,25 @@ export function ashLiveQuery<T>(
   }};
   const unsubscribes = [
     spec.onCreated((record) => {{
-      if (spec.exact) upsert(record, true);
-      resync();
+      if (place(record)) placed();
+      else resync();
     }}, subscribeOptions),
     spec.onUpdated((record) => {{
-      upsert(record, spec.exact);
-      resync();
+      if (place(record)) {{
+        placed();
+      }} else {{
+        upsert(record, false);
+        resync();
+      }}
     }}, subscribeOptions),
     spec.onDestroyed((id) => {{
-      const before = items.length;
-      items = items.filter((item) => spec.key(item) !== id);
-      if (items.length !== before) emit();
-      resync();
+      if (index.has(id)) {{
+        items = items.filter((item) => spec.key(item) !== id);
+        reindex();
+        emit();
+      }}
+      if (spec.paged) resync();
+      else placed();
     }}, subscribeOptions),
     spec.subscriptions.onConnected(() => void refresh()),
   ];
@@ -404,6 +616,7 @@ export function ashLiveQuery<T>(
     stop() {{
       stopped = true;
       if (timer) clearTimeout(timer);
+      pending?.();
       for (const unsubscribe of unsubscribes) unsubscribe();
     }},
   }};
@@ -490,10 +703,32 @@ pub fn generate_resource_subscription_methods(res: &ResourceDef) -> String {
     )
 }
 
+/// The fields of `res` a client can filter and sort on exactly as the server does, by kind.
+fn field_kinds(res: &ResourceDef) -> String {
+    use ash_core::AttrType;
+    let fields: Vec<String> = res
+        .attributes
+        .iter()
+        .filter_map(|attr| {
+            let kind = match attr.ty {
+                AttrType::Uuid => "uuid",
+                AttrType::String => "text",
+                AttrType::Integer | AttrType::Float => "number",
+                AttrType::Boolean => "boolean",
+                AttrType::UtcDatetime { .. } => "datetime",
+                _ => return None,
+            };
+            Some(format!("{}: \"{kind}\"", attr.name))
+        })
+        .collect();
+    format!("{{ {} }}", fields.join(", "))
+}
+
 /// `live()` for a resource's query builder.
 pub fn generate_query_builder_live(res: &ResourceDef) -> String {
     let name = res.name;
     let pk = primary_key(res);
+    let kinds = field_kinds(res);
     format!(
         r#"
   /**
@@ -503,12 +738,14 @@ pub fn generate_query_builder_live(res: &ResourceDef) -> String {
   public live(listener: (items: {name}[]) => void, options?: AshLiveOptions): AshLiveQuery {{
     const client = new {name}Client(this.transport, this.subscriptions);
     const include = this._include;
+    const KINDS: Record<string, AshFieldKind> = {kinds};
     return ashLiveQuery<{name}>(
       {{
         key: (record) => String(record.{pk}),
         fetch: () => this.all(),
-        exact:
-          !this._filter && this._sort.length === 0 && this._limit === undefined && this._offset === undefined,
+        matches: this._filter ? (record) => ashMatches(this._filter, record, KINDS) : undefined,
+        compare: this._sort.length > 0 ? ashCompare(this._sort, KINDS) : undefined,
+        paged: this._limit !== undefined || this._offset !== undefined,
         subscriptions: this.subscriptions,
         onCreated: (handler, opts) => client.onCreated(handler, {{ ...opts, filter: this._filter, include }}),
         onUpdated: (handler, opts) => client.onUpdated(handler, {{ ...opts, include }}),

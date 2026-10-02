@@ -258,6 +258,18 @@ const urgent = client.ticket
 urgent.stop();
 ```
 
+A live query keeps its list where the server would put it, and does it without asking
+the server again when it can:
+- **Placed on the client.** When the client can evaluate the query's filter and sort
+  exactly as the server does, each change goes straight into, out of or along the list.
+  That means comparisons on UUIDs, text, numbers and booleans, ordering by numbers, UUIDs
+  and datetimes, and no limit or offset.
+- **Re-read otherwise.** Relationship filters, text search, enums, text ordering, and
+  pages need the server, so the list patches the records it holds and re-reads itself
+  shortly after.
+- **Notified once a frame.** However fast changes arrive, the listener hears the list at
+  most once an animation frame, with every change since applied.
+
 With React, `use<Resource>Live` wraps a live query and `useAshConnectionStatus` reports the
 connection for a "live" indicator:
 
