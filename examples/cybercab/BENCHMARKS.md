@@ -132,6 +132,27 @@ re-read, so the screen is correct, but they spend part of their time re-reading 
 than streaming, and the message rate swings between runs (29 to 181/s) depending on
 where they are in that cycle. Fixes 3 and 4 below are aimed at it.
 
+## After fix 2: `ash-memory` at Ash ETS parity
+
+- Updates check only the identities whose fields they change.
+- Calculations and aggregates are computed after filter, sort and paging.
+- Reads share the store.
+
+| Fleet | `Cab.report` before | after | Seed before | after | Tick p95 before | after |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 250 | 37 µs | **20 µs** | 0.2 s | 0.2 s | 94 ms | 92 ms |
+| 1,000 | 96 µs | **18 µs** | 2.2 s | **1.0 s** | 1,765 ms | 1,483 ms |
+| 2,500 | 225 µs | **18 µs** | 2.5 s | **1.3 s** | 13,961 ms | 11,257 ms |
+
+Writes no longer grow with the table. Ticks barely improve, because they're dominated by
+fetching each cab by id, which copies the whole table. That's how Ash's ETS layer reads
+too, so it's the limit of an ETS-style store. The scale story moves to Postgres.
+
+Faster writes expose the fan-out wall. At 1,000 cabs and 100 subscribers, a round now
+publishes in 30 ms instead of 129 ms, and 99 of the 100 subscribers fall behind (all of
+them told; none silently). The benchmark's subscribers don't resubscribe, so delivery
+drops to 1.4%. Fix 4 is aimed at this.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a

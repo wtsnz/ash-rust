@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::future::ready;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use ash_core::{
     all_of, any_of, apply_named_with_args, compare_typed, in_list, text_matches, AggregateFilter,
@@ -12,41 +12,60 @@ use ash_core::{
 };
 use uuid::Uuid;
 
+/// The store, shared by clones. Reads run side by side and writes one at a time, as an
+/// ETS table with `read_concurrency` does for the ETS data layer.
 #[derive(Clone, Debug, Default)]
 pub struct Memory {
-    tables: Arc<Mutex<HashMap<String, HashMap<Uuid, FieldMap>>>>,
+    tables: Arc<RwLock<Tables>>,
 }
 
 impl Memory {
     pub fn new() -> Self {
         Self {
-            tables: Arc::new(Mutex::new(HashMap::new())),
+            tables: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub fn from_tables(tables: HashMap<String, HashMap<Uuid, FieldMap>>) -> Self {
         Self {
-            tables: Arc::new(Mutex::new(tables)),
+            tables: Arc::new(RwLock::new(tables)),
         }
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, HashMap<Uuid, FieldMap>>>> {
+    fn read(&self) -> Result<RwLockReadGuard<'_, Tables>> {
         self.tables
-            .lock()
+            .read()
+            .map_err(|_| Error::DataLayer("memory store lock poisoned".into()))
+    }
+
+    fn write(&self) -> Result<RwLockWriteGuard<'_, Tables>> {
+        self.tables
+            .write()
             .map_err(|_| Error::DataLayer("memory store lock poisoned".into()))
     }
 }
 
+/// Refuses `fields` for record `id` if it clashes with another row on an identity.
+///
+/// An update passes the row as it was in `before`, and only identities whose fields it
+/// changes are checked, as Ash checks them: an update that leaves an identity's fields
+/// alone neither pays to scan for a clash nor is refused over one already stored.
 fn check_identities(
     resource: &ResourceDef,
     table: &HashMap<Uuid, FieldMap>,
     id: Uuid,
     fields: &FieldMap,
+    before: Option<&FieldMap>,
 ) -> Result<()> {
     for ident in resource.identities {
         // A `where:` predicate is SQL the in-memory store cannot evaluate, so it leaves
         // partial identities to the database rather than reject rows they do not cover.
         if ident.predicate.is_some() {
+            continue;
+        }
+        if let Some(before) = before
+            && ident.keys.iter().all(|k| fields.get(*k) == before.get(*k))
+        {
             continue;
         }
         for (existing_id, row) in table.iter() {
@@ -99,7 +118,7 @@ impl DataLayer for Memory {
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
-            let mut tables = self.lock()?;
+            let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
             if table.contains_key(&id) {
                 return Err(Error::DataLayer(format!(
@@ -107,7 +126,7 @@ impl DataLayer for Memory {
                     resource.name
                 )));
             }
-            check_identities(resource, table, id, &fields)?;
+            check_identities(resource, table, id, &fields, None)?;
             table.insert(id, fields.clone());
             Ok(fields)
         })())
@@ -121,7 +140,7 @@ impl DataLayer for Memory {
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
-            let mut tables = self.lock()?;
+            let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             let mut current_row = table.get(&id).ok_or(Error::NotFound)?.clone();
 
@@ -145,7 +164,8 @@ impl DataLayer for Memory {
             }
 
             current_row.extend(fields);
-            check_identities(resource, table, id, &current_row)?;
+            let before = table.get(&id).ok_or(Error::NotFound)?;
+            check_identities(resource, table, id, &current_row, Some(before))?;
             table.insert(id, current_row.clone());
             Ok(current_row)
         })())
@@ -169,7 +189,7 @@ impl DataLayer for Memory {
                     identity.name, resource.name
                 )));
             }
-            let mut tables = self.lock()?;
+            let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
             let existing_entry = table
                 .iter()
@@ -204,7 +224,7 @@ impl DataLayer for Memory {
                 table.insert(existing_id, existing_row.clone());
                 Ok(existing_row)
             } else {
-                check_identities(resource, table, id, &fields)?;
+                check_identities(resource, table, id, &fields, None)?;
                 table.insert(id, fields.clone());
                 Ok(fields)
             }
@@ -218,7 +238,7 @@ impl DataLayer for Memory {
         id: Uuid,
     ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
-            let mut tables = self.lock()?;
+            let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             table.remove(&id).ok_or(Error::NotFound)?;
             Ok(())
@@ -232,7 +252,7 @@ impl DataLayer for Memory {
         rows: Vec<(Uuid, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
-            let mut tables = self.lock()?;
+            let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
             let mut results = Vec::with_capacity(rows.len());
             for (id, fields) in rows {
@@ -242,7 +262,7 @@ impl DataLayer for Memory {
                         resource.name
                     )));
                 }
-                check_identities(resource, table, id, &fields)?;
+                check_identities(resource, table, id, &fields, None)?;
                 table.insert(id, fields.clone());
                 results.push(fields);
             }
@@ -257,7 +277,7 @@ impl DataLayer for Memory {
         ids: &[Uuid],
     ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
-            let mut tables = self.lock()?;
+            let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             for id in ids {
                 table.remove(id);
@@ -272,29 +292,28 @@ impl DataLayer for Memory {
         query: &CompiledQuery,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
-            let tables = self.lock()?;
+            let tables = self.read()?;
             let tenant = query.tenant.as_deref();
             let mut rows: Vec<FieldMap> = tables
                 .get(&table_key(resource, tenant))
                 .map(|table| table.values().cloned().collect())
                 .unwrap_or_default();
 
-            let needed = needed_calculations(resource, query);
-            let empty_args = ash_core::FieldMap::new();
-            for row in &mut rows {
-                for name in &needed {
-                    let args = query.calculation_args.get(*name).unwrap_or(&empty_args);
-                    apply_named_with_args(resource, row, name, args)?;
-                }
+            // As Ash's ETS layer does, compute calculations and aggregates for the rows
+            // that survive the filter and the page, not the whole table: first only those
+            // the filter needs, then those the sort needs, then the rest requested.
+            let mut computed = Vec::new();
+            let mut by_filter = Vec::new();
+            if let Some(filter) = &query.filter {
+                filter.collect_fields(&mut by_filter);
             }
-
-            let needed_aggs = needed_aggregates(resource, query);
-            apply_aggregates(&tables, tenant, resource, &mut rows, &needed_aggs)?;
-
+            compute(&tables, tenant, resource, query, &mut rows, &by_filter, &mut computed)?;
             if let Some(filter) = &query.filter {
                 rows.retain(|row| row_matches_filter(&tables, tenant, resource, filter, row));
             }
 
+            let by_sort: Vec<&str> = query.sort.iter().map(|sort| sort.field.as_str()).collect();
+            compute(&tables, tenant, resource, query, &mut rows, &by_sort, &mut computed)?;
             if !query.sort.is_empty() {
                 rows.sort_by(|left, right| {
                     let mut order = Ordering::Equal;
@@ -327,6 +346,14 @@ impl DataLayer for Memory {
             if let Some(limit) = query.limit {
                 rows.truncate(limit);
             }
+
+            let requested: Vec<&str> = query
+                .calculations
+                .iter()
+                .chain(&query.aggregates)
+                .map(String::as_str)
+                .collect();
+            compute(&tables, tenant, resource, query, &mut rows, &requested, &mut computed)?;
 
             for row in &mut rows {
                 strip_unrequested_calculations(resource, query, row);
@@ -574,21 +601,46 @@ fn compare(
     })
 }
 
-fn needed_calculations<'a>(resource: &'a ResourceDef, query: &'a CompiledQuery) -> Vec<&'a str> {
-    let mut names = Vec::new();
-    if let Some(filter) = &query.filter {
-        filter.collect_fields(&mut names);
+/// Computes, on every row, the calculations and then the aggregates among `names` that
+/// aren't in `computed` yet, and records them there.
+fn compute<'a>(
+    tables: &Tables,
+    tenant: Option<&str>,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+    rows: &mut [FieldMap],
+    names: &[&'a str],
+    computed: &mut Vec<&'a str>,
+) -> Result<()> {
+    let fresh = |computed: &[&str], name: &&'a str| !computed.contains(name);
+    let mut calculations: Vec<&'a str> = names
+        .iter()
+        .filter(|name| resource.calculation(name).is_some() && fresh(computed, name))
+        .copied()
+        .collect();
+    calculations.sort_unstable();
+    calculations.dedup();
+    let empty_args = FieldMap::new();
+    for row in rows.iter_mut() {
+        for name in &calculations {
+            let args = query.calculation_args.get(*name).unwrap_or(&empty_args);
+            apply_named_with_args(resource, row, name, args)?;
+        }
     }
-    for sort in &query.sort {
-        names.push(sort.field.as_str());
+    computed.extend(&calculations);
+
+    let mut aggregates: Vec<&'a str> = names
+        .iter()
+        .filter(|name| resource.aggregate(name).is_some() && fresh(computed, name))
+        .copied()
+        .collect();
+    aggregates.sort_unstable();
+    aggregates.dedup();
+    if !aggregates.is_empty() {
+        apply_aggregates(tables, tenant, resource, rows, &aggregates)?;
     }
-    for name in &query.calculations {
-        names.push(name.as_str());
-    }
-    names.retain(|name| resource.calculation(name).is_some());
-    names.sort_unstable();
-    names.dedup();
-    names
+    computed.extend(&aggregates);
+    Ok(())
 }
 
 fn strip_unrequested_calculations(
@@ -601,23 +653,6 @@ fn strip_unrequested_calculations(
             row.remove(calc.name);
         }
     }
-}
-
-fn needed_aggregates<'a>(resource: &'a ResourceDef, query: &'a CompiledQuery) -> Vec<&'a str> {
-    let mut names = Vec::new();
-    if let Some(filter) = &query.filter {
-        filter.collect_fields(&mut names);
-    }
-    for sort in &query.sort {
-        names.push(sort.field.as_str());
-    }
-    for name in &query.aggregates {
-        names.push(name.as_str());
-    }
-    names.retain(|name| resource.aggregate(name).is_some());
-    names.sort_unstable();
-    names.dedup();
-    names
 }
 
 fn strip_unrequested_aggregates(
@@ -770,7 +805,7 @@ impl TransactionSupport for Memory {
         T: Send,
     {
         let snapshot = {
-            let tables = self.lock()?;
+            let tables = self.read()?;
             tables.clone()
         };
 
@@ -779,10 +814,10 @@ impl TransactionSupport for Memory {
         match f(&tx_mem).await {
             Ok(val) => {
                 let committed = {
-                    let tables = tx_mem.lock()?;
+                    let tables = tx_mem.read()?;
                     tables.clone()
                 };
-                let mut live = self.lock()?;
+                let mut live = self.write()?;
 
                 // 1. Detect concurrent write conflicts for rows touched by tx_mem
                 for (table_name, committed_table) in &committed {

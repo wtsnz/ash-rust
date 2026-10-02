@@ -1,0 +1,99 @@
+{
+  "machine": "macos aarch64, 16 threads",
+  "fleets": [
+    {
+      "fleet": 34,
+      "seed_s": 0.023499459,
+      "get_us": 29.833000000000002,
+      "read_all_ms": 0.076667,
+      "find_by_call_sign_ms": 0.030208,
+      "report_us": 18.958000000000002,
+      "record_us": 7.5,
+      "tick_ms": {
+        "p50": 0.9213749999999999,
+        "p95": 3.2269590000000004,
+        "p99": 5.615458,
+        "max": 5.615458
+      },
+      "actions_per_tick": 11.9,
+      "actions_per_s": 8463.074698333168,
+      "busy_pct": 28
+    },
+    {
+      "fleet": 250,
+      "seed_s": 0.171168667,
+      "get_us": 289.25,
+      "read_all_ms": 0.693375,
+      "find_by_call_sign_ms": 0.316625,
+      "report_us": 19.709,
+      "record_us": 7.333,
+      "tick_ms": {
+        "p50": 24.379792000000002,
+        "p95": 91.94404200000001,
+        "p99": 117.62875000000001,
+        "max": 117.62875000000001
+      },
+      "actions_per_tick": 101.0,
+      "actions_per_s": 3044.9784423138726,
+      "busy_pct": 15
+    },
+    {
+      "fleet": 1000,
+      "seed_s": 1.022198959,
+      "get_us": 1403.208,
+      "read_all_ms": 3.215292,
+      "find_by_call_sign_ms": 1.370209,
+      "report_us": 18.041,
+      "record_us": 6.75,
+      "tick_ms": {
+        "p50": 421.89725,
+        "p95": 1483.424833,
+        "p99": 1891.81025,
+        "max": 1891.81025
+      },
+      "actions_per_tick": 478.65,
+      "actions_per_s": 925.1152146683247,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 2500,
+      "seed_s": 1.291236167,
+      "get_us": 3522.167,
+      "read_all_ms": 8.008292,
+      "find_by_call_sign_ms": 3.333166,
+      "report_us": 18.375,
+      "record_us": 6.708,
+      "tick_ms": {
+        "p50": 2566.135084,
+        "p95": 11256.901958,
+        "p99": 11894.194625,
+        "max": 11894.194625
+      },
+      "actions_per_tick": 973.6,
+      "actions_per_s": 282.16112694722284,
+      "busy_pct": 20
+    }
+  ],
+  "fanout": [
+    {
+      "fleet": 1000,
+      "subscribers": 100,
+      "publish_round_ms": {
+        "p50": 29.955625,
+        "p95": 33.741833,
+        "p99": 33.741833,
+        "max": 33.741833
+      },
+      "expected": 500000,
+      "delivered": 7106,
+      "latency_ms": {
+        "p50": 0.193,
+        "p95": 11.354,
+        "p99": 11.862,
+        "max": 12.31
+      },
+      "ended": 99,
+      "told": 99
+    }
+  ]
+}
