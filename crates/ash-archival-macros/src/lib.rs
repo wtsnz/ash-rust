@@ -93,7 +93,7 @@ fn is_option(ty: &[TokenTree]) -> bool {
 
 /// Soft delete for `resource!`, following AshArchival.
 ///
-/// Adds an `archived_at: Option<UtcDateTime>` attribute, filters `archived_at IS NULL`
+/// Adds an `archived_at: Option<UtcDateTimeUsec>` attribute, filters `archived_at IS NULL`
 /// into every read action, and turns every destroy action into a soft destroy that sets
 /// `archived_at`. An `archive { ... }` block inside the resource configures it.
 #[proc_macro_attribute]
@@ -138,14 +138,14 @@ fn expand(mut resource: ResourceTokens) -> Result<TokenStream2> {
                 attribute,
                 format!(
                     "`{attribute}` is empty until a record is archived, so declare it as \
-                     `Option<UtcDateTime>`"
+                     `Option<UtcDateTimeUsec>`"
                 ),
             ));
         }
         Some(_) => {}
         None => resource.append_to_section(
             "attributes",
-            quote! { #attribute: Option<::ash_core::UtcDateTime>; },
+            quote! { #attribute: Option<::ash_core::UtcDateTimeUsec>; },
         ),
     }
 
@@ -313,7 +313,7 @@ mod tests {
                 actions { read read { primary; } }
             }
         });
-        assert!(err.contains("declare it as `Option<UtcDateTime>`"), "{err}");
+        assert!(err.contains("declare it as `Option<UtcDateTimeUsec>`"), "{err}");
 
         let declared = quote! {
             Post {

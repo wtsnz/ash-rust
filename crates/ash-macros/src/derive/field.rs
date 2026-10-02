@@ -313,7 +313,7 @@ impl FieldSpec {
         match &self.kind {
             Kind::BelongsTo { dest, .. } => Some(quote! {
                 #name => {
-                    self.#ident = ::ash_core::Rel::Loaded(match related.first() {
+                    self.#ident = ::ash_core::Rel::of(match related.first() {
                         Some(row) => Some(<#dest as ::ash_core::Resource>::from_fields(row)?),
                         None => None,
                     });
@@ -322,7 +322,7 @@ impl FieldSpec {
             }),
             Kind::HasMany { dest, .. } => Some(quote! {
                 #name => {
-                    self.#ident = ::ash_core::Rel::Loaded(
+                    self.#ident = ::ash_core::Rel::of(
                         related
                             .iter()
                             .map(<#dest as ::ash_core::Resource>::from_fields)

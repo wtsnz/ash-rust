@@ -1,13 +1,13 @@
-use ash_core::compile_read_filter;
-use ash_core::redact_fields;
-use ash_core::{ActionDef, ActionKind, CompiledQuery, Context, DataLayer, FieldMap, Filter, KeysetCursor, ResourceDef, Sort, Value};
-use async_graphql::dynamic::*;
+use ash_core::{
+    CompiledQuery, DataLayer, FieldMap, Filter, KeysetCursor, ResourceDef, Sort, Value,
+    redact_fields, scope_read,
+};
 use async_graphql::Value as GqlValue;
+use async_graphql::dynamic::*;
 
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
+use crate::request::request_context;
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
-
-static FALLBACK_READ: ActionDef = ActionDef::read("read");
 
 #[derive(Clone)]
 pub struct ConnectionPayload {
@@ -237,49 +237,57 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
         .map(|a| a.name)
         .unwrap_or("id");
 
-    let read_action = resource
-        .primary_read()
-        .or_else(|| resource.actions.iter().find(|a| a.kind == ActionKind::Read))
-        .unwrap_or(&FALLBACK_READ);
+    let read_action = resource.default_read();
 
     Field::new(field_name, TypeRef::named_nn(conn_type_name), move |ctx| {
         FieldFuture::new(async move {
-            let ctx_ash = ctx.data::<Context<D>>()?;
+            let ash = request_context::<D>(&ctx)?;
 
-            // 1. Parse filter
-            let user_filter = if let Some(filter_arg) = ctx.args.get("filter") {
-                if let Ok(obj) = filter_arg.object() {
-                    Some(parse_resource_filter(resource, &obj)?)
-                } else {
-                    None
-                }
-            } else {
-                None
+            let filter = match ctx.args.get("filter").map(|f| f.object()) {
+                Some(Ok(obj)) => Some(parse_resource_filter(resource, &obj)?),
+                _ => None,
+            };
+            let sort = match ctx.args.get("sort").map(|s| s.list()) {
+                Some(Ok(list)) => parse_resource_sort(resource, &list)?,
+                _ => Vec::new(),
             };
 
-            // 2. Compile policy filter
-            let policy_filter = compile_read_filter(resource, read_action, ctx_ash.actor.as_ref())
-                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+            let first = ctx
+                .args
+                .get("first")
+                .and_then(|v| v.i64().ok())
+                .map(|n| n as usize);
+            let last = ctx
+                .args
+                .get("last")
+                .and_then(|v| v.i64().ok())
+                .map(|n| n as usize);
+            let after = ctx.args.get("after").and_then(|v| v.string().ok());
+            let before = ctx.args.get("before").and_then(|v| v.string().ok());
 
-            let mut base_filter = match (policy_filter, user_filter) {
-                (Some(pf), Some(uf)) => Some(Filter::And(vec![pf, uf])),
-                (Some(pf), None) => Some(pf),
-                (None, Some(uf)) => Some(uf),
-                (None, None) => None,
-            };
+            let limit = first.or(last).unwrap_or(20);
+            let is_before = before.is_some() && after.is_none();
+            let target_cursor_str = if is_before { before } else { after };
 
-            // 3. Parse sort
-            let mut sort = if let Some(sort_arg) = ctx.args.get("sort") {
-                if let Ok(list) = sort_arg.list() {
-                    parse_resource_sort(resource, &list)?
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
+            // The connection is the primary read's rows: its preparations, the actor's
+            // policies and the request's tenant. Pages are cut from it by cursor.
+            let scoped = scope_read(
+                resource,
+                read_action,
+                ash.actor.as_ref(),
+                &FieldMap::new(),
+                CompiledQuery {
+                    filter,
+                    sort,
+                    limit: Some(limit + 1),
+                    tenant: ash.tenant.clone(),
+                    ..CompiledQuery::default()
+                },
+            )
+            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
 
-            // Ensure sort contains pk as tie-breaker
+            // The primary key breaks ties so every row has a distinct cursor.
+            let mut sort = scoped.sort.clone();
             if sort.is_empty() {
                 sort.push(Sort {
                     field: pk_name.to_string(),
@@ -293,17 +301,20 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
                 });
             }
 
-            // 4. Parse first/last/after/before
-            let first = ctx.args.get("first").and_then(|v| v.i64().ok()).map(|n| n as usize);
-            let last = ctx.args.get("last").and_then(|v| v.i64().ok()).map(|n| n as usize);
-            let after = ctx.args.get("after").and_then(|v| v.string().ok());
-            let before = ctx.args.get("before").and_then(|v| v.string().ok());
+            let count_query = CompiledQuery {
+                sort: Vec::new(),
+                limit: None,
+                offset: None,
+                ..scoped.clone()
+            };
+            let total_count = ash
+                .data
+                .run_query(resource, &count_query)
+                .await
+                .map_err(|e| async_graphql::Error::new(e.to_string()))?
+                .len();
 
-            let limit = first.or(last).unwrap_or(20);
-            let is_before = before.is_some() && after.is_none();
-            let target_cursor_str = if is_before { before } else { after };
-
-            // Apply keyset cursor if present
+            let mut page_filter = scoped.filter.clone();
             if let Some(c_str) = target_cursor_str
                 && let Some(mut cursor) = KeysetCursor::decode(c_str)
             {
@@ -323,32 +334,14 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
                 }
 
                 if let Some(keyset_filter) = build_keyset_filter(&sort_tuples, !is_before) {
-                    base_filter = match base_filter {
-                        Some(f) => Some(Filter::And(vec![f, keyset_filter])),
-                        None => Some(keyset_filter),
-                    };
+                    page_filter = Some(match page_filter {
+                        Some(f) => Filter::And(vec![f, keyset_filter]),
+                        None => keyset_filter,
+                    });
                 }
             }
 
-            // Total count
-            let count_query = CompiledQuery {
-                filter: base_filter.clone(),
-                sort: Vec::new(),
-                calculations: Vec::new(),
-                calculation_args: Default::default(),
-                aggregates: Vec::new(),
-                limit: None,
-                offset: None,
-                tenant: ctx_ash.tenant.clone(),
-            };
-            let all_rows = ctx_ash
-                .data
-                .run_query(resource, &count_query)
-                .await
-                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-            let total_count = all_rows.len();
-
-            // Sort direction adjustments for backward pagination
+            // Backward pages read in reverse, then flip.
             let mut query_sort = sort.clone();
             if is_before {
                 for s in &mut query_sort {
@@ -357,17 +350,11 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
             }
 
             let query = CompiledQuery {
-                filter: base_filter,
+                filter: page_filter,
                 sort: query_sort,
-                calculations: Vec::new(),
-                calculation_args: Default::default(),
-                aggregates: Vec::new(),
-                limit: Some(limit + 1),
-                offset: None,
-                tenant: ctx_ash.tenant.clone(),
+                ..scoped
             };
-
-            let mut records = ctx_ash
+            let mut records = ash
                 .data
                 .run_query(resource, &query)
                 .await
@@ -383,7 +370,7 @@ pub fn build_resource_connection_query<D: DataLayer + Clone + 'static>(
 
             // Redact fields
             for r in &mut records {
-                let _ = redact_fields(resource, ctx_ash.actor.as_ref(), r);
+                let _ = redact_fields(resource, ash.actor.as_ref(), r);
             }
 
             let mut edges = Vec::with_capacity(records.len());

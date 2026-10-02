@@ -7,7 +7,8 @@ pub use ticket::{TICKET_DEF, Ticket, TicketActions, TicketStatus};
 use ash_core::{Context, domain};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
-use ash_pubsub::PubSub;
+use ash_pubsub::{ContextPubSubExt, PubSub};
+use std::sync::Arc;
 use ash_typescript::{TypeScriptConfig, TypeScriptGenerator};
 use axum::Router;
 use axum::extract::Request;
@@ -94,7 +95,8 @@ async fn health_check() -> impl IntoResponse {
 pub async fn build_app() -> Result<Router, Box<dyn std::error::Error>> {
     let mem = Memory::new();
     let pubsub = PubSub::new();
-    let ctx = Context::new(mem);
+    // Writes publish their changes to subscriptions through the context's notifier.
+    let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));
 
     // 1. Seed Representatives using Resource / Context DSL
     let rep1 = Representative::create(&ctx)

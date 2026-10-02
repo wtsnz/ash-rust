@@ -21,7 +21,7 @@ pub fn attr_type_to_type_ref(
         | AttrType::CiString
         | AttrType::Date
         | AttrType::Binary
-        | AttrType::UtcDatetime
+        | AttrType::UtcDatetime { .. }
         | AttrType::Inet
         | AttrType::Decimal => {
             if allow_nil {
@@ -228,11 +228,12 @@ pub fn parse_input_val(
             let s = acc.string()?;
             Ok(AshValue::String(s.to_string()))
         }
-        AttrType::UtcDatetime => {
+        AttrType::UtcDatetime { precision } => {
             let s = acc.string()?;
-            ash_core::UtcDateTime::parse(s)
+            let normalized = precision
+                .normalize(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(AshValue::String(s.to_string()))
+            Ok(AshValue::String(normalized))
         }
         AttrType::Binary => {
             let s = acc.string()?;

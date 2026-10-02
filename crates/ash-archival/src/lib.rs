@@ -15,7 +15,7 @@
 //!         attributes {
 //!             id: Uuid [pk];
 //!             title: String;
-//!             // `archived_at: Option<UtcDateTime>` is added for you.
+//!             // `archived_at: Option<UtcDateTimeUsec>` is added for you.
 //!         }
 //!
 //!         archive {
@@ -36,7 +36,7 @@
 //! ```
 //!
 //! The transformer:
-//! 1. Adds `archived_at: Option<UtcDateTime>` unless the resource declares it.
+//! 1. Adds `archived_at: Option<UtcDateTimeUsec>` unless the resource declares it.
 //! 2. Adds `prepare filter(archived_at.is_nil())` to every read action except
 //!    `exclude_read_actions`. Relationship loads use the primary read, so they skip
 //!    archived records too, as do aggregates and filters through a relationship.
@@ -118,7 +118,7 @@ impl CustomChange for ArchiveChange {
     fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()> {
         ctx.fields.insert(
             self.attribute.to_string(),
-            Value::String(ash_core::utc_now_iso8601()),
+            ash_core::AshType::to_value(&ash_core::UtcDateTimeUsec::now()),
         );
         Ok(())
     }

@@ -1,0 +1,196 @@
+{
+  "format_version": 1,
+  "table": "voyages",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "ship_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "captain_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "origin_port_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "destination_port_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "launch_window",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "distance_au",
+      "sql_type": "REAL",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "transit_hours",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "reservation_id",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "departed_at",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "arrived_at",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "version",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "status",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [],
+  "indexes": [
+    {
+      "name": "idx_voyages_in_flight",
+      "columns": [
+        "ship_id"
+      ],
+      "predicate": "status = 'in_transit'",
+      "method": null
+    },
+    {
+      "name": "idx_voyages_by_window",
+      "columns": [
+        "launch_window"
+      ],
+      "predicate": null,
+      "method": null
+    }
+  ],
+  "checks": [
+    {
+      "name": "ck_voyages_distinct_ports",
+      "expression": "origin_port_id <> destination_port_id"
+    },
+    {
+      "name": "ck_voyages_arrives_after_departure",
+      "expression": "arrived_at IS NULL OR departed_at IS NULL OR arrived_at > departed_at"
+    }
+  ],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_voyages_ship",
+      "column": "ship_id",
+      "columns": [
+        "ship_id"
+      ],
+      "target_table": "ships",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    },
+    {
+      "name": "fk_voyages_origin",
+      "column": "origin_port_id",
+      "columns": [
+        "origin_port_id"
+      ],
+      "target_table": "ports",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    },
+    {
+      "name": "fk_voyages_destination",
+      "column": "destination_port_id",
+      "columns": [
+        "destination_port_id"
+      ],
+      "target_table": "ports",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    }
+  ]
+}

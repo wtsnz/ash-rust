@@ -329,6 +329,27 @@ impl ResourceDef {
         }
     }
 
+    /// Limits a read in `tenant` to that tenant's rows of an attribute-tenant resource,
+    /// whether it reads the resource directly or through a relationship. Context-tenant
+    /// resources are kept apart by the data layer instead.
+    pub fn tenant_filter(&self, tenant: Option<&str>) -> Option<crate::filter::Filter> {
+        match (self.multitenancy?.strategy, tenant) {
+            (MultitenancyStrategy::Attribute(attribute), Some(tenant)) => Some(
+                crate::filter::Filter::eq(attribute, crate::value::Value::String(tenant.to_string())),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The read this resource is read through when no action is named: typed queries,
+    /// relationship loads and GraphQL all use it. That's its primary read, or for a
+    /// resource that declares no read action, an implicit `read` without preparations,
+    /// through which its read policies still apply.
+    pub fn default_read(&self) -> &ActionDef {
+        static IMPLICIT_READ: ActionDef = ActionDef::read("read");
+        self.primary_read().unwrap_or(&IMPLICIT_READ)
+    }
+
     pub fn primary_read(&self) -> Option<&ActionDef> {
         self.actions
             .iter()
@@ -439,7 +460,7 @@ pub enum AttrType {
     Atom { one_of: &'static [&'static str] },
     Map,
     Array,
-    UtcDatetime,
+    UtcDatetime { precision: crate::types::TimePrecision },
     Decimal,
     Float,
     Date,
@@ -450,6 +471,15 @@ pub enum AttrType {
 }
 
 impl AttrType {
+    /// A UTC datetime to the second, as Ash's `:utc_datetime`.
+    pub const UTC_DATETIME: Self = Self::UtcDatetime {
+        precision: crate::types::TimePrecision::Second,
+    };
+    /// A UTC datetime to the microsecond, as Ash's `:utc_datetime_usec`.
+    pub const UTC_DATETIME_USEC: Self = Self::UtcDatetime {
+        precision: crate::types::TimePrecision::Microsecond,
+    };
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::Uuid => "uuid",
@@ -459,7 +489,12 @@ impl AttrType {
             Self::Atom { .. } => "atom",
             Self::Map => "map",
             Self::Array => "array",
-            Self::UtcDatetime => "utc_datetime",
+            Self::UtcDatetime {
+                precision: crate::types::TimePrecision::Second,
+            } => "utc_datetime",
+            Self::UtcDatetime {
+                precision: crate::types::TimePrecision::Microsecond,
+            } => "utc_datetime_usec",
             Self::Decimal => "decimal",
             Self::Float => "float",
             Self::Date => "date",

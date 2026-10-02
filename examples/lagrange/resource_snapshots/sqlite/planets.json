@@ -1,0 +1,79 @@
+{
+  "format_version": 1,
+  "table": "planets",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "name",
+      "sql_type": "TEXT COLLATE NOCASE",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "surface_gravity",
+      "sql_type": "REAL",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "position",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "atmosphere",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_planets_unique_name",
+      "columns": [
+        "name"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [
+    {
+      "name": "ck_planets_atmosphere_one_of",
+      "expression": "\"atmosphere\" IN ('vacuum', 'thin', 'breathable', 'toxic')"
+    }
+  ],
+  "statements": [],
+  "references": []
+}

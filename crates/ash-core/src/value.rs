@@ -180,6 +180,26 @@ impl Ord for Value {
     }
 }
 
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Null => {}
+            Self::Bool(b) => b.hash(state),
+            Self::Int(n) => n.hash(state),
+            Self::Uuid(u) => u.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Array(items) => items.hash(state),
+            // Maps compare equal whatever their iteration order, so hash them sorted.
+            Self::Map(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by_key(|(k, _)| *k);
+                entries.hash(state);
+            }
+        }
+    }
+}
+
 impl From<FieldMap> for Value {
     fn from(value: FieldMap) -> Self {
         Self::Map(value)
@@ -312,8 +332,10 @@ impl<T> IntoOption<T> for Option<T> {
     }
 }
 
-impl IntoOption<String> for String {
-    fn into_option(self) -> Option<String> {
+/// Any value is a present value of its own type, so a setter for an optional field of
+/// a new type works without an impl of its own.
+impl<T> IntoOption<T> for T {
+    fn into_option(self) -> Option<T> {
         Some(self)
     }
 }
@@ -321,38 +343,6 @@ impl IntoOption<String> for String {
 impl IntoOption<String> for &str {
     fn into_option(self) -> Option<String> {
         Some(self.to_string())
-    }
-}
-
-impl IntoOption<i64> for i64 {
-    fn into_option(self) -> Option<i64> {
-        Some(self)
-    }
-}
-
-macro_rules! impl_into_option_int {
-    ($($t:ty),*) => {
-        $(
-            impl IntoOption<$t> for $t {
-                fn into_option(self) -> Option<$t> {
-                    Some(self)
-                }
-            }
-        )*
-    };
-}
-
-impl_into_option_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
-
-impl IntoOption<bool> for bool {
-    fn into_option(self) -> Option<bool> {
-        Some(self)
-    }
-}
-
-impl IntoOption<Uuid> for Uuid {
-    fn into_option(self) -> Option<Uuid> {
-        Some(self)
     }
 }
 
@@ -426,5 +416,31 @@ pub fn optional_uuid(fields: &FieldMap, key: &str) -> Result<Option<Uuid>> {
             expected: "uuid".into(),
             got: value.type_name().into(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::{BuildHasher, RandomState};
+
+    #[test]
+    fn equal_maps_hash_alike_whatever_their_order() {
+        let mut forward = FieldMap::new();
+        let mut backward = FieldMap::new();
+        for n in 0..32 {
+            forward.insert(format!("k{n}"), Value::Int(n));
+        }
+        for n in (0..32).rev() {
+            backward.insert(format!("k{n}"), Value::Int(n));
+        }
+        let (forward, backward) = (Value::Map(forward), Value::Map(backward));
+        assert_eq!(forward, backward);
+        let hasher = RandomState::new();
+        assert_eq!(hasher.hash_one(&forward), hasher.hash_one(&backward));
+        assert_ne!(
+            hasher.hash_one(Value::Int(1)),
+            hasher.hash_one(Value::Bool(true))
+        );
     }
 }

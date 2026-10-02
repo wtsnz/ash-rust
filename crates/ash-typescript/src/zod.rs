@@ -11,7 +11,7 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
         | AttrType::CiString
         | AttrType::Date
         | AttrType::Binary
-        | AttrType::UtcDatetime
+        | AttrType::UtcDatetime { .. }
         | AttrType::Inet
         | AttrType::Decimal => "z.string()".to_string(),
         AttrType::Float => "z.number()".to_string(),
@@ -139,7 +139,7 @@ fn build_field_zod_schema(
             | AttrType::CiString
             | AttrType::Date
             | AttrType::Binary
-            | AttrType::UtcDatetime
+            | AttrType::UtcDatetime { .. }
             | AttrType::Inet
             | AttrType::Decimal => {
                 "z.string()".to_string()

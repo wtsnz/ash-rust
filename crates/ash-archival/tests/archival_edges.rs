@@ -219,7 +219,7 @@ async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>
     // Timestamps have one-second resolution, so start from an old one.
     let mut old = ash_core::FieldMap::new();
     old.insert("updated_at".into(), Value::String("2000-01-01T00:00:00Z".into()));
-    ctx.data.update(&Ledger::DEF, ledger.id, old).await.unwrap();
+    ctx.data.update(&Ledger::DEF, None, ledger.id, old).await.unwrap();
 
     ledger.destroy(&ctx).await.expect("a locked record can be archived");
 

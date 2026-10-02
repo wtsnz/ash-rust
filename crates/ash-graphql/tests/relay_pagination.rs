@@ -41,7 +41,7 @@ async fn seed_tickets(data: &Memory) {
         map.insert("id".into(), Value::Uuid(id));
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
-        data.create(&TICKET_DEF, id, map).await.unwrap();
+        data.create(&TICKET_DEF, None, id, map).await.unwrap();
     }
 }
 

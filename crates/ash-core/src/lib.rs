@@ -39,8 +39,8 @@ pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
 pub use bulk::{BulkCreateOptions, BulkDestroyOptions, BulkResult, bulk_create, bulk_destroy};
 pub use changeset::{
-    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, IntoFieldMap,
-    ManagedRelationshipSpec,
+    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, DynamicChangeset,
+    DynamicChangesetHook, IntoFieldMap, ManagedRelationshipSpec,
 };
 pub use context::Context;
 pub use data_layer::{
@@ -48,8 +48,8 @@ pub use data_layer::{
 };
 pub use engine::{
     KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
-    get, handle_managed_relationships, insert, manual_create, query, run, update, update_dynamic,
-    update_existing,
+    get, handle_managed_relationships, insert, load_related, manual_create, query, record_visible,
+    run, scope_read, update, update_dynamic, update_existing,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
@@ -78,7 +78,7 @@ pub use store::{
     default_store_type_id,
 };
 pub use types::{
-    AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, UtcDateTime, Vector,
+    AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, TimePrecision, UtcDateTime, UtcDateTimeUsec, Vector,
     canonical_text, check_vector, compare_decimal, compare_typed, format_inet, format_vector,
     parse_vector,
 };

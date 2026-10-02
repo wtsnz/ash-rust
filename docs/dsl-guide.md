@@ -797,7 +797,7 @@ resource! {
 }
 ```
 
-`strategy: attribute` (the default if omitted) stamps and filters `attribute` from `ctx.tenant()`. `strategy: context` requires a tenant on the context without writing a column, which pairs with schema/`search_path` tenancy in `ash-postgres`. `global: true` skips the tenant requirement. `attribute` may be an identifier or a string.
+`strategy: attribute` (the default if omitted) stamps and filters `attribute` from `ctx.tenant()`. `strategy: context` leaves the tenant to the data layer, as Ash does: Postgres keeps each tenant's rows in its own schema, memory keeps a table per tenant, and SQLite, which has no schemas, refuses (use `strategy: attribute` there). `global: true` skips the tenant requirement. `attribute` may be an identifier or a string.
 
 ```rust
 let ctx = Context::new(data_layer)

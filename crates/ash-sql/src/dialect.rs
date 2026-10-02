@@ -54,12 +54,24 @@ pub trait SqlDialect: Send + Sync + 'static {
         format!("\"{}\"", ident.replace('"', "\"\""))
     }
 
+    /// `table` in the quoted `schema`, where a context-tenant resource keeps a tenant's
+    /// rows, or `None` for a database without schemas, which can't keep tenants apart.
+    fn qualify_table(&self, _schema: &str, _table: &str) -> Option<String> {
+        None
+    }
+
     /// SQL parameter placeholder (e.g. `$1` for Postgres, `?` for SQLite).
     fn placeholder(&self, index: usize) -> String;
 
     /// Cast a bound placeholder when the column rejects an untyped string parameter.
     fn cast_param(&self, _ty: AttrType, placeholder: &str) -> String {
         placeholder.to_string()
+    }
+
+    /// Cast a computed expression to the column type of `ty`, for SQL whose result type
+    /// differs from what was declared (Postgres sums `bigint` as `numeric`).
+    fn cast_expression(&self, _ty: AttrType, expression: &str) -> String {
+        expression.to_string()
     }
 
     /// SQL literal for a standard-base64 binary value.
@@ -150,7 +162,7 @@ impl SqlDialect for SqliteDialect {
             AttrType::Uuid
             | AttrType::String
             | AttrType::Date
-            | AttrType::UtcDatetime
+            | AttrType::UtcDatetime { .. }
             | AttrType::Inet
             | AttrType::Vector { .. }
             | AttrType::Atom { .. }
@@ -226,6 +238,10 @@ impl SqlDialect for SqliteDialect {
 pub struct PostgresDialect;
 
 impl SqlDialect for PostgresDialect {
+    fn qualify_table(&self, schema: &str, table: &str) -> Option<String> {
+        Some(format!("{schema}.{table}"))
+    }
+
     fn name(&self) -> &'static str {
         "postgres"
     }
@@ -234,9 +250,14 @@ impl SqlDialect for PostgresDialect {
         format!("${index}")
     }
 
+    fn cast_expression(&self, ty: AttrType, expression: &str) -> String {
+        let column = self.column_type(&AttributeDef::required("", ty));
+        format!("CAST({expression} AS {column})")
+    }
+
     fn cast_param(&self, ty: AttrType, placeholder: &str) -> String {
         match ty {
-            AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
+            AttrType::UtcDatetime { .. } => format!("{placeholder}::timestamptz"),
             AttrType::Decimal => format!("{placeholder}::numeric"),
             AttrType::Float => format!("{placeholder}::float8"),
             AttrType::Date => format!("{placeholder}::date"),
@@ -255,7 +276,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Atom { .. } => "VARCHAR(255)".to_string(),
             AttrType::Integer => "BIGINT".to_string(),
             AttrType::Boolean => "BOOLEAN".to_string(),
-            AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
+            AttrType::UtcDatetime { .. } => "TIMESTAMPTZ".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
             AttrType::Float => "DOUBLE PRECISION".to_string(),
             AttrType::Date => "DATE".to_string(),
@@ -332,7 +353,7 @@ impl SqlDialect for PostgresDialect {
     fn cast_list_param(&self, ty: AttrType, placeholder: &str) -> String {
         match ty {
             AttrType::Boolean => format!("{placeholder}::boolean[]"),
-            AttrType::UtcDatetime => format!("{placeholder}::timestamptz[]"),
+            AttrType::UtcDatetime { .. } => format!("{placeholder}::timestamptz[]"),
             AttrType::Decimal => format!("{placeholder}::numeric[]"),
             AttrType::Float => format!("{placeholder}::float8[]"),
             AttrType::Date => format!("{placeholder}::date[]"),

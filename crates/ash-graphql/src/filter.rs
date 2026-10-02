@@ -88,7 +88,7 @@ pub fn register_resource_filter_inputs(
             AttrType::String | AttrType::CiString => "TextFilterInput".to_string(),
             AttrType::Date
             | AttrType::Binary
-            | AttrType::UtcDatetime
+            | AttrType::UtcDatetime { .. }
             | AttrType::Decimal
             | AttrType::Inet => "StringFilterInput".to_string(),
             AttrType::Float => "FloatFilterInput".to_string(),
@@ -280,11 +280,12 @@ fn parse_scalar_value(
             let s = acc.string()?;
             Ok(Value::String(s.to_string()))
         }
-        AttrType::UtcDatetime => {
+        AttrType::UtcDatetime { precision } => {
             let s = acc.string()?;
-            ash_core::UtcDateTime::parse(s)
+            let normalized = precision
+                .normalize(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(s.to_string()))
+            Ok(Value::String(normalized))
         }
         AttrType::Binary => {
             let s = acc.string()?;

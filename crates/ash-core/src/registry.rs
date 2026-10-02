@@ -18,6 +18,7 @@ pub trait DynDataLayer: Send + Sync {
     fn create_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>>;
@@ -25,6 +26,7 @@ pub trait DynDataLayer: Send + Sync {
     fn update_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>>;
@@ -32,6 +34,7 @@ pub trait DynDataLayer: Send + Sync {
     fn destroy_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
     ) -> BoxFuture<'a, Result<()>>;
 
@@ -44,6 +47,7 @@ pub trait DynDataLayer: Send + Sync {
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
         fields: FieldMap,
         identity: &'a IdentityDef,
@@ -53,12 +57,14 @@ pub trait DynDataLayer: Send + Sync {
     fn bulk_create_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
     fn bulk_destroy_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         ids: &'a [Uuid],
     ) -> BoxFuture<'a, Result<()>>;
 }
@@ -67,27 +73,30 @@ impl<T: DataLayer> DynDataLayer for T {
     fn create_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>> {
-        Box::pin(self.create(resource, id, fields))
+        Box::pin(self.create(resource, tenant, id, fields))
     }
 
     fn update_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>> {
-        Box::pin(self.update(resource, id, fields))
+        Box::pin(self.update(resource, tenant, id, fields))
     }
 
     fn destroy_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
     ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.destroy(resource, id))
+        Box::pin(self.destroy(resource, tenant, id))
     }
 
     fn run_query_dyn<'a>(
@@ -101,28 +110,31 @@ impl<T: DataLayer> DynDataLayer for T {
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         id: Uuid,
         fields: FieldMap,
         identity: &'a IdentityDef,
         update_fields: &'a [String],
     ) -> BoxFuture<'a, Result<FieldMap>> {
-        Box::pin(self.upsert(resource, id, fields, identity, update_fields))
+        Box::pin(self.upsert(resource, tenant, id, fields, identity, update_fields))
     }
 
     fn bulk_create_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
-        Box::pin(self.bulk_create(resource, rows))
+        Box::pin(self.bulk_create(resource, tenant, rows))
     }
 
     fn bulk_destroy_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
         ids: &'a [Uuid],
     ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.bulk_destroy(resource, ids))
+        Box::pin(self.bulk_destroy(resource, tenant, ids))
     }
 }
 
@@ -263,19 +275,31 @@ impl std::fmt::Debug for StoreRegistry {
 }
 
 impl DataLayer for StoreRegistry {
-    async fn create(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn create(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         let layer = self.get_layer(resource)?;
-        layer.create_dyn(resource, id, fields).await
+        layer.create_dyn(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         let layer = self.get_layer(resource)?;
-        layer.update_dyn(resource, id, fields).await
+        layer.update_dyn(resource, tenant, id, fields).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
         let layer = self.get_layer(resource)?;
-        layer.destroy_dyn(resource, id).await
+        layer.destroy_dyn(resource, tenant, id).await
     }
 
     async fn run_query(
@@ -290,6 +314,7 @@ impl DataLayer for StoreRegistry {
     async fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
         identity: &IdentityDef,
@@ -297,22 +322,23 @@ impl DataLayer for StoreRegistry {
     ) -> Result<FieldMap> {
         let layer = self.get_layer(resource)?;
         layer
-            .upsert_dyn(resource, id, fields, identity, update_fields)
+            .upsert_dyn(resource, tenant, id, fields, identity, update_fields)
             .await
     }
 
     async fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         let layer = self.get_layer(resource)?;
-        layer.bulk_create_dyn(resource, rows).await
+        layer.bulk_create_dyn(resource, tenant, rows).await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
         let layer = self.get_layer(resource)?;
-        layer.bulk_destroy_dyn(resource, ids).await
+        layer.bulk_destroy_dyn(resource, tenant, ids).await
     }
 }
 

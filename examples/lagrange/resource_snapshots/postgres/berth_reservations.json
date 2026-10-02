@@ -1,0 +1,158 @@
+{
+  "format_version": 1,
+  "table": "berth_reservations",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "port_id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "berth_code",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "ship_id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "starts_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "ends_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "status",
+      "sql_type": "VARCHAR(255)",
+      "nullable": false,
+      "default": "'active'",
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TIMESTAMPTZ",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [],
+  "indexes": [
+    {
+      "name": "idx_berth_reservations_active_by_berth",
+      "columns": [
+        "port_id",
+        "berth_code"
+      ],
+      "predicate": "status = 'active'",
+      "method": null,
+      "include": [
+        "starts_at",
+        "ends_at"
+      ]
+    },
+    {
+      "name": "idx_berth_reservations_by_ship",
+      "columns": [
+        "ship_id"
+      ],
+      "predicate": null,
+      "method": null
+    }
+  ],
+  "checks": [
+    {
+      "name": "ck_berth_reservations_window",
+      "expression": "ends_at > starts_at"
+    },
+    {
+      "name": "ck_berth_reservations_status_one_of",
+      "expression": "\"status\" IN ('active', 'released')"
+    }
+  ],
+  "statements": [
+    {
+      "name": "btree_gist",
+      "up": "CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public",
+      "down": ""
+    },
+    {
+      "name": "no_overlap",
+      "up": "ALTER TABLE berth_reservations ADD CONSTRAINT berth_reservations_no_overlap EXCLUDE USING gist (port_id WITH =, berth_code WITH =, tstzrange(starts_at, ends_at) WITH &&) WHERE (status = 'active')",
+      "down": "ALTER TABLE berth_reservations DROP CONSTRAINT IF EXISTS berth_reservations_no_overlap"
+    }
+  ],
+  "references": [
+    {
+      "name": "fk_berth_reservations_berth",
+      "column": "port_id",
+      "columns": [
+        "port_id",
+        "berth_code"
+      ],
+      "target_table": "berths",
+      "target_column": "port_id",
+      "target_columns": [
+        "port_id",
+        "code"
+      ],
+      "on_delete": "RESTRICT",
+      "on_update": "CASCADE"
+    },
+    {
+      "name": "fk_berth_reservations_ship",
+      "column": "ship_id",
+      "columns": [
+        "ship_id"
+      ],
+      "target_table": "ships",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    }
+  ]
+}

@@ -264,13 +264,13 @@ struct MockKeyValueLayer {
 }
 
 impl DataLayer for MockKeyValueLayer {
-    async fn create(&self, _res: &ResourceDef, id: Uuid, fields: FieldMap) -> ash_core::Result<FieldMap> {
+    async fn create(&self, _res: &ResourceDef, _tenant: Option<&str>, id: Uuid, fields: FieldMap) -> ash_core::Result<FieldMap> {
         let mut map = self.storage.lock().unwrap();
         map.insert(id, fields.clone());
         Ok(fields)
     }
 
-    async fn update(&self, _res: &ResourceDef, id: Uuid, fields: FieldMap) -> ash_core::Result<FieldMap> {
+    async fn update(&self, _res: &ResourceDef, _tenant: Option<&str>, id: Uuid, fields: FieldMap) -> ash_core::Result<FieldMap> {
         let mut map = self.storage.lock().unwrap();
         if let Some(existing) = map.get_mut(&id) {
             for (k, v) in fields.clone() {
@@ -282,7 +282,7 @@ impl DataLayer for MockKeyValueLayer {
         }
     }
 
-    async fn destroy(&self, _res: &ResourceDef, id: Uuid) -> ash_core::Result<()> {
+    async fn destroy(&self, _res: &ResourceDef, _tenant: Option<&str>, id: Uuid) -> ash_core::Result<()> {
         let mut map = self.storage.lock().unwrap();
         map.remove(&id);
         Ok(())
@@ -296,12 +296,13 @@ impl DataLayer for MockKeyValueLayer {
     async fn upsert(
         &self,
         res: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
         _id_def: &IdentityDef,
         _update_fields: &[String],
     ) -> ash_core::Result<FieldMap> {
-        self.create(res, id, fields).await
+        self.create(res, tenant, id, fields).await
     }
 }
 

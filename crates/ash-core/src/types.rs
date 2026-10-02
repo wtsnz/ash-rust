@@ -109,42 +109,104 @@ impl AshType for bool {
     }
 }
 
-/// UTC instant stored as an RFC3339 string.
-///
-/// Postgres columns use `timestamptz`. SQLite has no timestamp type, so the column is `TEXT`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UtcDateTime(String);
+/// How finely a UTC datetime keeps time, as Ash's `precision` constraint does:
+/// `Second` truncates to whole seconds, `Microsecond` keeps six fractional digits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TimePrecision {
+    Second,
+    Microsecond,
+}
 
-impl UtcDateTime {
-    pub fn parse(raw: &str) -> Result<Self> {
-        if is_rfc3339(raw) {
-            Ok(Self(raw.to_string()))
-        } else {
-            Err(Error::Invalid(format!(
+impl TimePrecision {
+    /// `raw`, any RFC3339 timestamp, as this precision stores it: shifted to UTC,
+    /// truncated, and written in one fixed-width form, so that text order is time
+    /// order and every data layer stores the same instant the same way.
+    pub fn normalize(self, raw: &str) -> Result<String> {
+        let parsed = chrono::DateTime::parse_from_rfc3339(raw).map_err(|_| {
+            Error::Invalid(format!(
                 "invalid UTC datetime `{raw}`: expected an RFC3339 timestamp"
-            )))
-        }
+            ))
+        })?;
+        Ok(self.format(parsed.with_timezone(&chrono::Utc)))
     }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AshType for UtcDateTime {
-    const ATTR_TYPE: AttrType = AttrType::UtcDatetime;
-
-    fn to_value(&self) -> Value {
-        Value::String(self.0.clone())
-    }
-
-    fn from_value(value: &Value) -> Result<Self> {
-        match value {
-            Value::String(s) => Self::parse(s),
-            _ => Err(Error::Invalid("expected UTC datetime".into())),
+    /// `instant` in this precision's stored form.
+    pub fn format(self, instant: chrono::DateTime<chrono::Utc>) -> String {
+        match self {
+            Self::Second => instant.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            Self::Microsecond => {
+                let micros = instant.timestamp_subsec_micros().min(999_999);
+                format!("{}.{micros:06}Z", instant.format("%Y-%m-%dT%H:%M:%S"))
+            }
         }
     }
 }
+
+macro_rules! utc_datetime_type {
+    ($(#[$doc:meta])* $name:ident, $precision:expr) => {
+        $(#[$doc])*
+        ///
+        /// Parsing accepts any RFC3339 timestamp and keeps the instant in UTC, so
+        /// `10:00:00+02:00` is stored, compared and returned as `08:00:00Z`. Postgres
+        /// columns use `timestamptz`; SQLite has no timestamp type, so the column is
+        /// `TEXT`, which sorts correctly because the stored form has a fixed width.
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $name(String);
+
+        impl $name {
+            pub const PRECISION: TimePrecision = $precision;
+
+            pub fn parse(raw: &str) -> Result<Self> {
+                Self::PRECISION.normalize(raw).map(Self)
+            }
+
+            /// The current time, at this type's precision.
+            pub fn now() -> Self {
+                Self(Self::PRECISION.format(chrono::Utc::now()))
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl AshType for $name {
+            const ATTR_TYPE: AttrType = AttrType::UtcDatetime {
+                precision: $precision,
+            };
+
+            fn to_value(&self) -> Value {
+                Value::String(self.0.clone())
+            }
+
+            fn from_value(value: &Value) -> Result<Self> {
+                match value {
+                    Value::String(s) => Self::parse(s),
+                    _ => Err(Error::Invalid("expected UTC datetime".into())),
+                }
+            }
+        }
+
+        impl From<$name> for Value {
+            fn from(value: $name) -> Self {
+                value.to_value()
+            }
+        }
+    };
+}
+
+utc_datetime_type!(
+    /// A UTC instant to the second, as Ash's `:utc_datetime`. Fractional seconds are
+    /// truncated.
+    UtcDateTime,
+    TimePrecision::Second
+);
+
+utc_datetime_type!(
+    /// A UTC instant to the microsecond, as Ash's `:utc_datetime_usec`.
+    UtcDateTimeUsec,
+    TimePrecision::Microsecond
+);
 
 /// Base-10 number stored as a string so trailing zeros survive a round trip.
 ///
@@ -223,12 +285,6 @@ impl Binary {
     }
 }
 
-impl From<UtcDateTime> for Value {
-    fn from(value: UtcDateTime) -> Self {
-        value.to_value()
-    }
-}
-
 impl From<Decimal> for Value {
     fn from(value: Decimal) -> Self {
         value.to_value()
@@ -241,11 +297,19 @@ impl From<Binary> for Value {
     }
 }
 
-impl crate::value::IntoOption<Binary> for Binary {
-    fn into_option(self) -> Option<Binary> {
-        Some(self)
-    }
+/// The text-backed types display as their stored text, so they can be formatted and
+/// used in `concat(...)` calculations.
+macro_rules! display_as_str {
+    ($($ty:ty),*) => {$(
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    )*};
 }
+
+display_as_str!(UtcDateTime, UtcDateTimeUsec, Decimal, Float, CiString, Inet, Date);
 
 impl AshType for Binary {
     const ATTR_TYPE: AttrType = AttrType::Binary;
@@ -284,12 +348,6 @@ impl CiString {
 impl From<CiString> for Value {
     fn from(value: CiString) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<CiString> for CiString {
-    fn into_option(self) -> Option<CiString> {
-        Some(self)
     }
 }
 
@@ -355,12 +413,6 @@ pub fn format_inet(addr: std::net::IpAddr, prefix: u8) -> String {
 impl From<Inet> for Value {
     fn from(value: Inet) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<Inet> for Inet {
-    fn into_option(self) -> Option<Inet> {
-        Some(self)
     }
 }
 
@@ -457,12 +509,6 @@ impl<const N: usize> From<Vector<N>> for Value {
     }
 }
 
-impl<const N: usize> crate::value::IntoOption<Vector<N>> for Vector<N> {
-    fn into_option(self) -> Option<Vector<N>> {
-        Some(self)
-    }
-}
-
 impl<const N: usize> AshType for Vector<N> {
     const ATTR_TYPE: AttrType = AttrType::Vector {
         dimensions: N as u32,
@@ -505,12 +551,6 @@ impl Date {
 impl From<Date> for Value {
     fn from(value: Date) -> Self {
         value.to_value()
-    }
-}
-
-impl crate::value::IntoOption<Date> for Date {
-    fn into_option(self) -> Option<Date> {
-        Some(self)
     }
 }
 
@@ -570,12 +610,6 @@ impl From<Float> for Value {
     }
 }
 
-impl crate::value::IntoOption<Float> for Float {
-    fn into_option(self) -> Option<Float> {
-        Some(self)
-    }
-}
-
 impl AshType for Float {
     const ATTR_TYPE: AttrType = AttrType::Float;
 
@@ -604,72 +638,6 @@ impl AshType for Decimal {
             _ => Err(Error::Invalid("expected decimal".into())),
         }
     }
-}
-
-fn is_rfc3339(raw: &str) -> bool {
-    let (body, offset) = if let Some(body) = raw.strip_suffix('Z') {
-        (body, true)
-    } else if raw.len() >= 6 {
-        let split = raw.len() - 6;
-        let (body, off) = raw.split_at(split);
-        let bytes = off.as_bytes();
-        let signed = bytes[0] == b'+' || bytes[0] == b'-';
-        let hours = off[1..3].parse::<u8>().ok();
-        let minutes = off[4..6].parse::<u8>().ok();
-        (
-            body,
-            signed
-                && bytes[3] == b':'
-                && hours.is_some_and(|h| h <= 23)
-                && minutes.is_some_and(|m| m <= 59),
-        )
-    } else {
-        ("", false)
-    };
-    if !offset {
-        return false;
-    }
-    let (date, fraction) = match body.split_once('.') {
-        Some((date, fraction)) => {
-            if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
-                return false;
-            }
-            (date, true)
-        }
-        None => (body, false),
-    };
-    let _ = fraction;
-    let bytes = date.as_bytes();
-    if bytes.len() != 19
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || bytes[10] != b'T'
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-    {
-        return false;
-    }
-    let year = date[..4].parse::<u16>().is_ok();
-    let month = date[5..7]
-        .parse::<u8>()
-        .ok()
-        .is_some_and(|n| (1..=12).contains(&n));
-    let day = date[8..10]
-        .parse::<u8>()
-        .ok()
-        .is_some_and(|n| (1..=31).contains(&n));
-    let hour = date[11..13].parse::<u8>().ok().is_some_and(|n| n <= 23);
-    let minute = date[14..16].parse::<u8>().ok().is_some_and(|n| n <= 59);
-    let second = date[17..19].parse::<u8>().ok().is_some_and(|n| n <= 60);
-    year && month
-        && day
-        && hour
-        && minute
-        && second
-        && date.bytes().enumerate().all(|(i, b)| match i {
-            4 | 7 | 10 | 13 | 16 => true,
-            _ => b.is_ascii_digit(),
-        })
 }
 
 /// Compares two decimal strings exactly, or `None` if either is not a decimal.
@@ -711,6 +679,7 @@ pub fn compare_decimal(a: &str, b: &str) -> Option<std::cmp::Ordering> {
 /// itself, so storing and comparing the canonical text keeps the other stores in step.
 pub fn canonical_text(ty: AttrType, raw: &str) -> Option<String> {
     match ty {
+        AttrType::UtcDatetime { precision } => precision.normalize(raw).ok(),
         AttrType::Inet => Inet::parse(raw).ok().map(|inet| inet.as_str().to_string()),
         AttrType::Vector { .. } => parse_vector(raw).ok().map(|values| format_vector(&values)),
         AttrType::Float => Float::parse(raw).ok().map(|float| float.as_str().to_string()),
@@ -721,7 +690,7 @@ pub fn canonical_text(ty: AttrType, raw: &str) -> Option<String> {
 pub fn compare_typed(ty: Option<AttrType>, a: &Value, b: &Value) -> std::cmp::Ordering {
     if let (Value::String(x), Value::String(y)) = (a, b) {
         match ty {
-            Some(ty @ (AttrType::Inet | AttrType::Vector { .. })) => {
+            Some(ty @ (AttrType::Inet | AttrType::Vector { .. } | AttrType::UtcDatetime { .. })) => {
                 let canonical = |raw: &str| canonical_text(ty, raw).unwrap_or_else(|| raw.to_string());
                 return canonical(x).cmp(&canonical(y));
             }
@@ -828,6 +797,32 @@ mod tests {
         assert!(UtcDateTime::parse("2024-01-02").is_err());
         assert!(UtcDateTime::parse("2024-01-02T03:04:05").is_err());
         assert!(UtcDateTime::parse("nope").is_err());
+    }
+
+    #[test]
+    fn utc_datetimes_are_stored_in_utc_at_their_precision() {
+        let at = |raw: &str| UtcDateTime::parse(raw).unwrap().as_str().to_string();
+        let at_usec = |raw: &str| UtcDateTimeUsec::parse(raw).unwrap().as_str().to_string();
+        // Offsets shift to UTC, across a day boundary too.
+        assert_eq!(at("2187-02-12T01:30:00+02:00"), "2187-02-11T23:30:00Z");
+        assert_eq!(at("2187-02-11T20:00:00-05:00"), "2187-02-12T01:00:00Z");
+        // Seconds truncate; microseconds keep six digits, padded or truncated.
+        assert_eq!(at("2187-02-12T08:00:00.987Z"), "2187-02-12T08:00:00Z");
+        assert_eq!(at_usec("2187-02-12T08:00:00.5Z"), "2187-02-12T08:00:00.500000Z");
+        assert_eq!(at_usec("2187-02-12T08:00:00Z"), "2187-02-12T08:00:00.000000Z");
+        assert_eq!(at_usec("2187-02-12T08:00:00.1234567Z"), "2187-02-12T08:00:00.123456Z");
+        // The stored form sorts as time does.
+        let mut instants = ["2187-02-12T08:00:00.5Z", "2187-02-12T09:00:00+02:00", "2187-02-12T08:00:00Z"]
+            .map(|raw| UtcDateTimeUsec::parse(raw).unwrap());
+        instants.sort();
+        assert_eq!(
+            instants.map(|instant| instant.as_str().to_string()),
+            [
+                "2187-02-12T07:00:00.000000Z",
+                "2187-02-12T08:00:00.000000Z",
+                "2187-02-12T08:00:00.500000Z",
+            ]
+        );
     }
 
     #[test]
