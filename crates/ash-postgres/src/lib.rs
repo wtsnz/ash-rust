@@ -575,6 +575,69 @@ impl DataLayer for Postgres {
             .collect()
     }
 
+    /// Writes each group of rows that change the same columns in one
+    /// `UPDATE … FROM (VALUES …)`. Rows that change nothing, and resources with optimistic
+    /// locking, which checks each row's version, go one at a time.
+    async fn bulk_update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> Result<Vec<Result<FieldMap>>> {
+        let mut results: Vec<Option<Result<FieldMap>>> = (0..rows.len()).map(|_| None).collect();
+        let pk = resource
+            .primary_key()
+            .ok_or(Error::NoPrimaryKey(resource.name))?
+            .name;
+        let mut groups: std::collections::BTreeMap<Vec<&str>, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (i, (id, fields)) in rows.iter().enumerate() {
+            let columns: Vec<&str> = resource
+                .attributes
+                .iter()
+                .filter(|attr| !attr.primary_key && fields.contains_key(attr.name))
+                .map(|attr| attr.name)
+                .collect();
+            if columns.is_empty() || resource.optimistic_lock_attribute().is_some() {
+                results[i] = Some(self.update(resource, tenant, *id, fields.clone()).await);
+            } else {
+                groups.entry(columns).or_default().push(i);
+            }
+        }
+        let dialect = PostgresDialect;
+        for (columns, indices) in groups {
+            // Postgres binds at most 65,535 parameters to a statement.
+            let per_statement = (65_535 / (columns.len() + 1)).max(1);
+            for batch in indices.chunks(per_statement) {
+                let batch_rows: Vec<(Uuid, &FieldMap)> =
+                    batch.iter().map(|&i| (rows[i].0, &rows[i].1)).collect();
+                let compiled = QueryCompiler::new(&dialect)
+                    .with_tenant(tenant)
+                    .compile_bulk_update(resource, &columns, &batch_rows)?;
+                let mut stored: std::collections::HashMap<Uuid, FieldMap> = self
+                    .fetch_all_resource(&compiled, resource)
+                    .await?
+                    .iter()
+                    .map(|row| {
+                        let fields = row_to_fields(row, resource, &[], &[])?;
+                        let id = match fields.get(pk) {
+                            Some(Value::Uuid(id)) => *id,
+                            _ => return Err(Error::DataLayer(format!("{} row without its key", resource.name))),
+                        };
+                        Ok((id, fields))
+                    })
+                    .collect::<Result<_>>()?;
+                for &i in batch {
+                    results[i] = Some(stored.remove(&rows[i].0).ok_or(Error::NotFound));
+                }
+            }
+        }
+        Ok(results
+            .into_iter()
+            .map(|result| result.expect("every row has a result"))
+            .collect())
+    }
+
     async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());

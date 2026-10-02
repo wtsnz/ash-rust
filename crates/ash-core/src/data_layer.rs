@@ -104,6 +104,25 @@ pub trait DataLayer: Send + Sync {
             Ok(())
         }
     }
+
+    /// Writes several updates together: each row's id and the attributes it changes, as
+    /// [`update`](Self::update) takes them. Each row has its own result, in order, so a
+    /// row that's gone fails alone; the outer error is for the batch as a whole. A data
+    /// layer that can write the batch at once (one statement, one round trip) should.
+    fn bulk_update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> impl Future<Output = Result<Vec<Result<FieldMap>>>> + Send {
+        async move {
+            let mut results = Vec::with_capacity(rows.len());
+            for (id, fields) in rows {
+                results.push(self.update(resource, tenant, id, fields).await);
+            }
+            Ok(results)
+        }
+    }
 }
 
 /// A data layer that stores nothing; every operation fails.

@@ -1065,6 +1065,50 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
+    /// Updates `rows`, which all set `columns`, in one statement:
+    /// `UPDATE t SET c = v.c, … FROM (VALUES …) AS v(…) WHERE t.pk = v.pk RETURNING t.*`.
+    /// For dialects with `VALUES` column aliases and `RETURNING` (Postgres).
+    pub fn compile_bulk_update(
+        &mut self,
+        resource: &ResourceDef,
+        columns: &[&str],
+        rows: &[(Uuid, &FieldMap)],
+    ) -> Result<CompiledSql> {
+        let pk = resource
+            .primary_key()
+            .ok_or(Error::NoPrimaryKey(resource.name))?;
+        let table = self.table(resource)?;
+        let pk_col = ident(self.dialect, pk.name)?;
+        let mut aliases = vec![pk_col.clone()];
+        let mut set_clauses = Vec::with_capacity(columns.len());
+        let mut types = Vec::with_capacity(columns.len());
+        for column in columns {
+            let attr = resource
+                .attribute(column)
+                .ok_or_else(|| Error::Invalid(format!("{} has no attribute {column}", resource.name)))?;
+            let col = ident(self.dialect, attr.name)?;
+            set_clauses.push(format!("{col} = \"v\".{col}"));
+            aliases.push(col);
+            types.push((attr.name, attr.ty));
+        }
+        let mut values = Vec::with_capacity(rows.len());
+        for (id, fields) in rows {
+            let mut tuple = vec![self.bind_typed(pk.ty, Value::Uuid(*id))];
+            for (name, ty) in &types {
+                let value = fields.get(*name).cloned().unwrap_or(Value::Null);
+                tuple.push(self.bind_typed(*ty, value));
+            }
+            values.push(format!("({})", tuple.join(", ")));
+        }
+        let sql = format!(
+            "UPDATE {table} SET {} FROM (VALUES {}) AS \"v\" ({}) WHERE {table}.{pk_col} = \"v\".{pk_col} RETURNING {table}.*",
+            set_clauses.join(", "),
+            values.join(", "),
+            aliases.join(", "),
+        );
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
     pub fn compile_delete(&mut self, resource: &ResourceDef, id: Uuid) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()

@@ -37,7 +37,10 @@ pub use action::{
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
-pub use bulk::{BulkCreateOptions, BulkDestroyOptions, BulkResult, bulk_create, bulk_destroy};
+pub use bulk::{
+    BulkCreateOptions, BulkDestroyOptions, BulkResult, BulkUpdateOptions, bulk_create,
+    bulk_destroy, bulk_update,
+};
 pub use changeset::{
     AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, DynamicChangeset,
     DynamicChangesetHook, IntoFieldMap, ManagedRelationshipSpec,

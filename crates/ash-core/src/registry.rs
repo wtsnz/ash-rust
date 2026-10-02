@@ -67,6 +67,13 @@ pub trait DynDataLayer: Send + Sync {
         tenant: Option<&'a str>,
         ids: &'a [Uuid],
     ) -> BoxFuture<'a, Result<()>>;
+
+    fn bulk_update_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>>;
 }
 
 impl<T: DataLayer> DynDataLayer for T {
@@ -135,6 +142,15 @@ impl<T: DataLayer> DynDataLayer for T {
         ids: &'a [Uuid],
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(self.bulk_destroy(resource, tenant, ids))
+    }
+
+    fn bulk_update_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>> {
+        Box::pin(self.bulk_update(resource, tenant, rows))
     }
 }
 
@@ -339,6 +355,16 @@ impl DataLayer for StoreRegistry {
     async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
         let layer = self.get_layer(resource)?;
         layer.bulk_destroy_dyn(resource, tenant, ids).await
+    }
+
+    async fn bulk_update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> Result<Vec<Result<FieldMap>>> {
+        let layer = self.get_layer(resource)?;
+        layer.bulk_update_dyn(resource, tenant, rows).await
     }
 }
 

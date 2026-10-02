@@ -1054,3 +1054,96 @@ async fn test_postgres_installs_tables_that_refer_to_each_other() {
     assert!(PgCar::create(&ctx).plate("GHOST".to_string()).driver_id(missing).await.is_err());
     assert!(PgDriver::create(&ctx).name("Nobody".to_string()).car_id(missing).await.is_err());
 }
+
+mod pg_fleet {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        PgVehicle {
+            table "pg_vehicles";
+
+            attributes {
+                id: Uuid [pk];
+                call_sign: String;
+                lng: f64;
+                speed_kph: i64;
+                status: String;
+            }
+
+            actions {
+                create create { primary; accept [call_sign, lng, speed_kph, status]; }
+                read read { primary; }
+                update report { accept [lng, speed_kph, status]; }
+                destroy destroy { primary; }
+            }
+        }
+    }
+}
+
+/// A bulk update writes each row's own changes, grouping rows that change the same
+/// columns into one statement, and a row that's gone fails alone.
+#[tokio::test]
+async fn test_postgres_bulk_update_writes_each_rows_changes() {
+    use ash_core::{BulkUpdateOptions, Context, DataLayer, FieldMap, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().simple().to_string();
+    let mut fleet = Vec::new();
+    for i in 0..5 {
+        fleet.push(
+            PgVehicle::create(&ctx)
+                .call_sign(format!("{run}-{i}"))
+                .lng(-97.7)
+                .speed_kph(0)
+                .status("available".to_string())
+                .await
+                .unwrap(),
+        );
+    }
+    // One is gone before the batch lands.
+    ctx.data.destroy(&PgVehicle::DEF, None, fleet[4].id).await.unwrap();
+
+    let updates = fleet.iter().cloned().enumerate().map(|(i, vehicle)| {
+        let mut input = FieldMap::new();
+        input.insert("lng".into(), Value::from(-97.7 + i as f64 / 100.0));
+        input.insert("speed_kph".into(), Value::from(10 * i as i64));
+        // Two of them also change status: a second group of columns.
+        if i % 2 == 1 {
+            input.insert("status".into(), Value::from("on_trip"));
+        }
+        (vehicle, input)
+    });
+    let result = PgVehicle::bulk_update_with_opts(
+        &ctx,
+        "report",
+        updates,
+        BulkUpdateOptions::new().stop_on_error(false),
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.count, result.error_count), (4, 1), "{:?}", result.errors);
+
+    let mut stored: Vec<(String, f64, i64, String)> = PgVehicle::query(&ctx)
+        .load()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|v| v.call_sign.starts_with(&run))
+        .map(|v| (v.call_sign, v.lng, v.speed_kph, v.status))
+        .collect();
+    stored.sort_by(|a, b| a.0.cmp(&b.0));
+    let expected: Vec<(String, f64, i64, String)> = (0..4)
+        .map(|i| {
+            let status = if i % 2 == 1 { "on_trip" } else { "available" };
+            (format!("{run}-{i}"), -97.7 + i as f64 / 100.0, 10 * i as i64, status.to_string())
+        })
+        .collect();
+    assert_eq!(stored, expected);
+}
