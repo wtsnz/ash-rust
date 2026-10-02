@@ -45,6 +45,9 @@ struct Args {
     json: Option<String>,
     /// Runs on Postgres at this URL instead of in memory.
     postgres: Option<String>,
+    /// Events the pubsub buffers per topic in the fan-out runs. Large enough, no subscriber
+    /// falls behind, which measures what delivering costs rather than what buffering drops.
+    pubsub_capacity: Option<usize>,
 }
 
 fn args() -> Args {
@@ -58,6 +61,7 @@ fn args() -> Args {
         budget: Duration::from_secs(300),
         json: None,
         postgres: None,
+        pubsub_capacity: None,
     };
     let list = |v: String| {
         v.split(',')
@@ -77,6 +81,9 @@ fn args() -> Args {
             "--budget" => args.budget = Duration::from_secs(value().parse().expect("seconds")),
             "--json" => args.json = Some(value()),
             "--postgres" => args.postgres = Some(value()),
+            "--pubsub-capacity" => {
+                args.pubsub_capacity = Some(value().parse().expect("a number"));
+            }
             // `cargo bench` passes `--bench`; anything else is cargo's too.
             _ => {}
         }
@@ -372,8 +379,9 @@ async fn fanout<D: Store>(
     fleet: usize,
     subscribers: usize,
     rounds: usize,
+    capacity: Option<usize>,
 ) -> FanoutReport {
-    let pubsub = PubSub::new();
+    let pubsub = capacity.map_or_else(PubSub::new, PubSub::with_capacity);
     let (ctx, _, _) = seeded(data, fleet, &pubsub).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -577,8 +585,11 @@ async fn main() {
     for &size in &args.fanout_fleets {
         for &subs in &args.subscribers {
             let r = match &args.postgres {
-                Some(url) => fanout(postgres(url).await, size, subs, args.rounds).await,
-                None => fanout(Memory::new(), size, subs, args.rounds).await,
+                Some(url) => {
+                    let data = postgres(url).await;
+                    fanout(data, size, subs, args.rounds, args.pubsub_capacity).await
+                }
+                None => fanout(Memory::new(), size, subs, args.rounds, args.pubsub_capacity).await,
             };
             print_fanout(&r);
             report.fanout.push(r);

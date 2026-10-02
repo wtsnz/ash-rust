@@ -242,6 +242,61 @@ deliveries, 3.6 ms p99 with durable commits). In memory, where a round publishes
 30 ms, 93 of the 100 subscribers fall behind (all told, none silently). That's the next
 limit: fix 4.
 
+## After fix 4: each event resolved once for all its subscribers
+
+A profile of fan-out at 1,000 cabs and 100 subscribers (with a buffer deep enough that
+none fell behind) found where delivery went:
+
+| Where | Share |
+| --- | ---: |
+| async-graphql resolving each subscriber's selection set | ~23% |
+| Receiving from the broadcast channel, mostly cloning the whole notification per receiver | ~23% |
+| Allocation (`malloc`), mostly those clones | ~20% (self time) |
+| Writing frames to sockets | ~8% |
+
+Two changes:
+- **The pubsub shares one notification across its subscribers** (`Arc<Notification>`),
+  and buffers 8,192 events per topic by default instead of 256, since a slot now holds a
+  reference rather than a copy.
+- **`graphql_router` shares subscriptions, as Absinthe does for AshGraphql.** Subscribers
+  to the same subscription share one execution: each event is resolved and serialized
+  once, and every subscriber gets the same text.
+
+| 100 subscribers | Delivered | Latency p50 | p99 |
+| --- | ---: | ---: | ---: |
+| 1,000 cabs, before (256-event buffer) | 1.4% (99 fell behind) | – | – |
+| 1,000 cabs, before (deep buffer) | 100% | ~50 ms | ~120 ms |
+| 1,000 cabs, after | **100%** | **29 ms** | **67 ms** |
+| 5,000 cabs, after | **100%** (2.5 million deliveries) | 117 ms | 271 ms |
+
+`--pubsub-capacity` sets the benchmark's buffer, to separate what delivery costs from what
+a shallow buffer drops.
+
+## The browser, under real load
+
+With fan-out complete, the browser gets the whole stream. Measured as before, on the
+in-memory store:
+
+| Fleet | Mode | FPS | Frame p95 | Main thread blocked | WS msgs/s | Missed/min | Re-reads | Re-read traffic |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | console | 59 | 16.8 ms | 0 | 640 | 0 | – | – |
+| 1,000 | wall | 60 | 16.8 ms | 0 | 439 | 0 | – | – |
+| 4,000 | console | **4** | **383 ms** | **707 ms/s** | 897 | 3 | 3.6/s | 3.2 MB/s |
+| 4,000 | wall | 55 | 33 ms | 0 | 519 | 0 | 15/s | **13 MB/s** |
+
+At 1,000 cabs the console takes 640 messages a second (up from 26 at the start) at a
+steady 60 fps. At 4,000 the browser is the limit, and it isn't the map: wall mode draws
+1,753 moving cabs at 55 fps. Three things are left, all in the front end:
+
+- **React work.** Every live update sets React state on its own, about 900 times a
+  second. The console's trip feed renders every active trip (about 800 rows) on each
+  update. The main thread is blocked 70% of the time. A browser profile hasn't
+  confirmed which of these dominates.
+- **Each live update copies its list.** Patching a list finds and replaces the record in
+  a new array, at 900 updates a second over a list of 4,000.
+- **Filtered lists re-read in full.** A filtered, sorted or limited live query re-reads
+  itself after changes. At 4,000 cabs that's 13 MB/s in wall mode.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a

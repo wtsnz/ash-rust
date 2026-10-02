@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ash_core::{
-    BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, DataLayer, Error,
-    FieldMap, Filter, Resource, Result, UtcDateTimeUsec, Value,
+    BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, DataLayer, Error, FieldMap,
+    Filter, Resource, Result, UtcDateTimeUsec, Value,
 };
 use uuid::Uuid;
 

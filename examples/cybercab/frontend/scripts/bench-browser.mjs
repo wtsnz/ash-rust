@@ -49,8 +49,20 @@ await page.evaluateOnNewDocument(() => {
   };
 });
 
-await page.goto(url.toString(), { waitUntil: "networkidle2", timeout: 120_000 });
+// Count the page's HTTP requests: live queries that re-read themselves make them.
+let requests = 0;
+let requestBytes = 0;
+page.on("requestfinished", async (request) => {
+  if (request.resourceType() !== "fetch" && request.resourceType() !== "xhr") return;
+  requests += 1;
+  requestBytes += Number((await request.response()?.headers())?.["content-length"] ?? 0);
+});
+
+// A busy live connection never lets the network go idle, so wait for the page to load.
+await page.goto(url.toString(), { waitUntil: "load", timeout: 120_000 });
 await new Promise((resolve) => setTimeout(resolve, warmup * 1000));
+const requestsBefore = requests;
+const bytesBefore = requestBytes;
 
 const result = await page.evaluate(async (seconds) => {
   const renderer = (() => {
@@ -100,5 +112,9 @@ const result = await page.evaluate(async (seconds) => {
   };
 }, seconds);
 
+const fetches = {
+  fetchesPerS: (requests - requestsBefore) / seconds,
+  fetchKbPerS: (requestBytes - bytesBefore) / 1024 / seconds,
+};
 await browser.close();
-console.log(JSON.stringify({ url: url.toString(), seconds, ...result }, null, 2));
+console.log(JSON.stringify({ url: url.toString(), seconds, ...result, ...fetches }, null, 2));
