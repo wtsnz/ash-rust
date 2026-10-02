@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-const AUSTIN: &str = include_str!("../data/austin.json");
-const ROUTES: &str = include_str!("../data/routes.json");
+const AUSTIN: &str = include_str!("../../../shared/cybercab/austin.json");
+const ROUTES: &str = include_str!("../../../shared/cybercab/routes.json");
 
 /// `[lng, lat]`, as GeoJSON orders them.
 pub type Point = [f64; 2];

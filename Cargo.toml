@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "crates/*",
     "examples/*",
+    "examples/benchmarks/cybercab",
 ]
-# The Elixir counterparts of the examples are Mix projects.
-exclude = ["examples/elixir"]
+# The Elixir counterparts of the examples are Mix projects, and `shared` holds data both
+# use.
+exclude = ["examples/elixir", "examples/shared", "examples/benchmarks"]
 
 [workspace.package]
 edition = "2024"

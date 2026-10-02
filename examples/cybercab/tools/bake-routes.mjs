@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Bakes driving routes between every pair of places and depots in `server/data/austin.json`
-// into `server/data/routes.json`, so the simulation drives real Austin streets without
+// Bakes driving routes between every pair of places and depots in `examples/shared/cybercab/austin.json`
+// into `examples/shared/cybercab/routes.json`, so the simulation drives real Austin streets without
 // calling a routing service at runtime.
 //
 //   node tools/bake-routes.mjs [--osrm https://router.project-osrm.org]
@@ -17,7 +17,7 @@ const osrm = process.argv.includes("--osrm")
   ? process.argv[process.argv.indexOf("--osrm") + 1]
   : "https://router.project-osrm.org";
 
-const city = JSON.parse(await readFile(join(root, "server/data/austin.json"), "utf8"));
+const city = JSON.parse(await readFile(join(root, "../shared/cybercab/austin.json"), "utf8"));
 const stops = [...city.places, ...city.depots];
 
 /** Decodes a precision-5 encoded polyline into [lng, lat] pairs. */
@@ -127,7 +127,7 @@ for (let i = 0; i < stops.length; i++) {
 }
 
 await writeFile(
-  join(root, "server/data/routes.json"),
+  join(root, "../shared/cybercab/routes.json"),
   JSON.stringify({ source: "OSRM over OpenStreetMap (© OpenStreetMap contributors, ODbL)", routes }, null, 0) + "\n",
 );
-console.log(`wrote server/data/routes.json (${Object.keys(routes).length} routes)`);
+console.log(`wrote examples/shared/cybercab/routes.json (${Object.keys(routes).length} routes)`);

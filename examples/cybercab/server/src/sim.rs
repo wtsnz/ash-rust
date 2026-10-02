@@ -9,8 +9,8 @@
 //! reads the domain every tick and does what it says.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ash_core::{
     BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, DataLayer, Error, FieldMap,
@@ -40,6 +40,45 @@ impl Default for SimConfig {
             demand: 1.0,
             seed: 0xCAB5,
         }
+    }
+}
+
+/// How the simulation's ticks are going, for `/metrics`: how many have run, how many
+/// failed, and how long the most recent took.
+#[derive(Clone, Default)]
+pub struct TickMetrics(Arc<Mutex<TickLog>>);
+
+#[derive(Default)]
+struct TickLog {
+    ticks: u64,
+    errors: u64,
+    recent_ms: VecDeque<f64>,
+}
+
+/// Ticks `/metrics` reports the durations of.
+const RECENT_TICKS: usize = 120;
+
+impl TickMetrics {
+    fn record(&self, elapsed: Duration, ok: bool) {
+        let mut log = self.0.lock().expect("tick metrics");
+        log.ticks += 1;
+        if !ok {
+            log.errors += 1;
+        }
+        if log.recent_ms.len() == RECENT_TICKS {
+            log.recent_ms.pop_front();
+        }
+        log.recent_ms.push_back(elapsed.as_secs_f64() * 1000.0);
+    }
+
+    /// `{ ticks, errors, recent_tick_ms }`, as both Cybercab servers report them.
+    pub fn to_json(&self) -> serde_json::Value {
+        let log = self.0.lock().expect("tick metrics");
+        serde_json::json!({
+            "ticks": log.ticks,
+            "errors": log.errors,
+            "recent_tick_ms": log.recent_ms.iter().collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -108,6 +147,7 @@ pub struct Simulation<D: DataLayer> {
     reports: Vec<(Cab, FieldMap)>,
     /// This tick's telemetry samples, recorded together likewise.
     samples: Vec<FieldMap>,
+    metrics: TickMetrics,
 }
 
 impl<D: DataLayer> Simulation<D> {
@@ -164,7 +204,13 @@ impl<D: DataLayer> Simulation<D> {
             recent_waits: VecDeque::new(),
             reports: Vec::new(),
             samples: Vec::new(),
+            metrics: TickMetrics::default(),
         })
+    }
+
+    /// How the ticks are going, shared with whoever reports it.
+    pub fn metrics(&self) -> TickMetrics {
+        self.metrics.clone()
     }
 
     /// Runs forever, one tick a second.
@@ -173,7 +219,10 @@ impl<D: DataLayer> Simulation<D> {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            if let Err(err) = self.step().await {
+            let started = Instant::now();
+            let result = self.step().await;
+            self.metrics.record(started.elapsed(), result.is_ok());
+            if let Err(err) = result {
                 eprintln!("simulation tick {}: {err}", self.tick);
             }
         }

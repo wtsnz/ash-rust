@@ -126,6 +126,44 @@ defmodule Cybercab.Fleet.Cab do
       ]
     end
 
+    # The heartbeat for the whole fleet at once, for `HEARTBEAT=upsert`: an upsert on the
+    # call sign that writes only what a report does. `Ash.bulk_create` runs a batch of
+    # them as one `INSERT ... ON CONFLICT` statement. Being a create, it notifies as one.
+    create :heartbeat do
+      accept [
+        :call_sign,
+        :nickname,
+        :vin,
+        :software,
+        :depot_id,
+        :lng,
+        :lat,
+        :heading_deg,
+        :speed_kph,
+        :battery_pct,
+        :range_km,
+        :odometer_km,
+        :cabin_temp_c,
+        :last_seen_at
+      ]
+
+      upsert? true
+      upsert_identity :unique_call_sign
+
+      upsert_fields [
+        :lng,
+        :lat,
+        :heading_deg,
+        :speed_kph,
+        :battery_pct,
+        :range_km,
+        :odometer_km,
+        :cabin_temp_c,
+        :last_seen_at,
+        :updated_at
+      ]
+    end
+
     update :dispatch do
       accept [:trip_id]
       change transition_state(:dispatched)

@@ -36,6 +36,26 @@ pub fn router<D: DataLayer + Clone + Send + Sync + 'static>(
         .layer(CorsLayer::permissive()))
 }
 
+/// `GET /metrics`: the fleet's size and the simulation's ticks, as both Cybercab servers
+/// report them for the benchmark. `metrics` is `None` when the simulation isn't running.
+pub fn metrics_router(metrics: Option<crate::sim::TickMetrics>, fleet: usize) -> Router {
+    Router::new().route(
+        "/metrics",
+        get(move || {
+            let metrics = metrics.clone();
+            async move {
+                let simulating = metrics.is_some();
+                let mut body = metrics.map(|m| m.to_json()).unwrap_or_else(|| {
+                    serde_json::json!({ "ticks": 0, "errors": 0, "recent_tick_ms": [] })
+                });
+                body["fleet"] = fleet.into();
+                body["simulating"] = simulating.into();
+                axum::Json(body)
+            }
+        }),
+    )
+}
+
 /// The frontend's SDK: types, Zod schemas, the client with live queries, and React hooks.
 pub fn typescript_sdk() -> Result<String, ash_typescript::CodegenError> {
     let mut generator = TypeScriptGenerator::new().config(
