@@ -564,3 +564,38 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
         }
     }
 }
+
+/// A count is `COUNT(*)` over the filtered table, or over the page when the query has a
+/// limit or offset, and never sorts.
+#[test]
+fn test_count_compilation() {
+    let dialect = PostgresDialect;
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("status", "open")),
+        sort: vec![Sort {
+            field: "priority".into(),
+            descending: true,
+        }],
+        ..CompiledQuery::default()
+    };
+    let compiled = QueryCompiler::new(&dialect).compile_count(&TICKET_DEF, &query).unwrap();
+    assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM "tickets" WHERE "status" = $1"#);
+
+    let page = CompiledQuery {
+        limit: Some(10),
+        offset: Some(20),
+        ..query
+    };
+    let compiled = QueryCompiler::new(&dialect).compile_count(&TICKET_DEF, &page).unwrap();
+    assert_eq!(
+        compiled.sql(),
+        r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" WHERE "status" = $1 LIMIT $2 OFFSET $3) AS counted"#
+    );
+
+    let offset_only = CompiledQuery {
+        offset: Some(5),
+        ..CompiledQuery::default()
+    };
+    let compiled = QueryCompiler::new(&SqliteDialect).compile_count(&TICKET_DEF, &offset_only).unwrap();
+    assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" LIMIT ? OFFSET ?) AS counted"#);
+}

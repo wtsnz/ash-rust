@@ -965,6 +965,38 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
+    /// `SELECT COUNT(*)` of the records `query` would return: its filter, and its limit
+    /// and offset if it has them. Sort, calculations and aggregates don't change how many.
+    pub fn compile_count(&mut self, resource: &ResourceDef, query: &CompiledQuery) -> Result<CompiledSql> {
+        self.calc_args = query.calculation_args.clone();
+        self.tenant = query.tenant.clone();
+        let mut from = self.table(resource)?;
+        if let Some(filter) = &query.filter {
+            from.push_str(" WHERE ");
+            from.push_str(&self.compile_filter(resource, filter)?);
+        }
+        let sql = if query.limit.is_none() && query.offset.is_none() {
+            format!("SELECT COUNT(*) FROM {from}")
+        } else {
+            let mut page = format!("SELECT 1 FROM {from}");
+            if let Some(limit) = query.limit {
+                let p = self.push_param(Value::Int(limit as i64));
+                page.push_str(&format!(" LIMIT {p}"));
+            }
+            if let Some(offset) = query.offset {
+                if query.limit.is_none() {
+                    // SQLite takes an offset only after a limit; -1 is no limit.
+                    let p = self.push_param(Value::Int(-1));
+                    page.push_str(&format!(" LIMIT {p}"));
+                }
+                let p = self.push_param(Value::Int(offset as i64));
+                page.push_str(&format!(" OFFSET {p}"));
+            }
+            format!("SELECT COUNT(*) FROM ({page}) AS counted")
+        };
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
     pub fn compile_insert(
         &mut self,
         resource: &ResourceDef,

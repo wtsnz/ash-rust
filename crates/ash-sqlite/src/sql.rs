@@ -29,6 +29,11 @@ pub fn select_query(resource: &ResourceDef, query: &CompiledQuery) -> Result<Com
     compiler.compile_select(resource, query)
 }
 
+pub fn count_query(resource: &ResourceDef, query: &CompiledQuery) -> Result<CompiledSql> {
+    let mut compiler = QueryCompiler::new(&SqliteDialect);
+    compiler.compile_count(resource, query)
+}
+
 pub fn insert_query(resource: &ResourceDef, fields: &FieldMap) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_insert(resource, fields)

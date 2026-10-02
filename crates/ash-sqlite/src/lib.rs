@@ -499,6 +499,18 @@ impl DataLayer for Sqlite {
             .collect()
     }
 
+    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        use sqlx::Row;
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
+        let rows = self.fetch_all(&sql::count_query(resource, query)?).await?;
+        let count: i64 = rows
+            .first()
+            .ok_or_else(|| Error::DataLayer("COUNT returned no row".into()))?
+            .try_get(0)
+            .map_err(|e| Error::DataLayer(e.to_string()))?;
+        Ok(count as usize)
+    }
+
     async fn upsert(
         &self,
         resource: &ResourceDef,

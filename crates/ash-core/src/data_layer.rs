@@ -61,6 +61,17 @@ pub trait DataLayer: Send + Sync {
         query: &CompiledQuery,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send;
 
+    /// How many records `query` would return, as Ash's data layers count with an
+    /// aggregate query. A data layer that can count without reading the records (a SQL
+    /// `COUNT(*)`) should; by default it reads them.
+    fn count(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+    ) -> impl Future<Output = Result<usize>> + Send {
+        async move { Ok(self.run_query(resource, query).await?.len()) }
+    }
+
     fn upsert(
         &self,
         resource: &ResourceDef,

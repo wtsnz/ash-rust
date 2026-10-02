@@ -1191,3 +1191,41 @@ async fn test_postgres_like_and_ilike() {
     assert_eq!(signs(Filter::like("call_sign", "%A\\_1")).await, ["LIKE-A_1"]);
     assert_eq!(signs(Filter::like("call_sign", "%LIKE-__")).await, ["LIKE-B2"]);
 }
+
+/// Counts run in the database, as `COUNT(*)`: of a filter, and of a page.
+#[tokio::test]
+async fn test_postgres_counts_in_the_database() {
+    use ash_core::{CompiledQuery, Context, DataLayer, Filter, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg.clone());
+    let run = Uuid::new_v4().simple().to_string();
+    for (i, status) in ["available", "available", "charging"].into_iter().enumerate() {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}-{i}"))
+            .lng(0.0)
+            .speed_kph(0)
+            .status(status.to_string())
+            .await
+            .unwrap();
+    }
+    let ours = Filter::starts_with("call_sign", run.clone());
+    let count = |filter: Filter| PgVehicle::query(&ctx).filter(filter).count();
+    assert_eq!(count(ours.clone()).await.unwrap(), 3);
+    assert_eq!(
+        count(Filter::And(vec![ours.clone(), Filter::eq("status", "available")])).await.unwrap(),
+        2
+    );
+    let page = CompiledQuery {
+        filter: Some(ours),
+        limit: Some(2),
+        offset: Some(2),
+        ..CompiledQuery::default()
+    };
+    assert_eq!(pg.count(&PgVehicle::DEF, &page).await.unwrap(), 1);
+}

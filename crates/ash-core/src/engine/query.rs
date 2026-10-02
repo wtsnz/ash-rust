@@ -248,8 +248,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         query.limit = None;
         query.offset = None;
         query.sort.clear();
-        let rows = self.ctx.data.run_query(&R::DEF, &query).await?;
-        Ok(rows.len())
+        self.ctx.data.count(&R::DEF, &query).await
     }
 
     pub async fn page_offset(

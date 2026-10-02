@@ -193,12 +193,12 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     offset: None,
                     ..scoped.clone()
                 };
-                let rows = ash
+                let count = ash
                     .data
-                    .run_query(resource, &query)
+                    .count(resource, &query)
                     .await
                     .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-                Some(rows.len())
+                Some(count)
             } else {
                 None
             };

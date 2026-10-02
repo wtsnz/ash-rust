@@ -538,6 +538,18 @@ impl DataLayer for Postgres {
             .collect()
     }
 
+    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let rows = self.fetch_all(&compiler.compile_count(resource, query)?).await?;
+        let count: i64 = rows
+            .first()
+            .ok_or_else(|| Error::DataLayer("COUNT returned no row".into()))?
+            .try_get(0)
+            .map_err(map_sqlx)?;
+        Ok(count as usize)
+    }
+
     async fn upsert(
         &self,
         resource: &ResourceDef,

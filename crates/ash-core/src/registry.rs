@@ -44,6 +44,12 @@ pub trait DynDataLayer: Send + Sync {
         query: &'a CompiledQuery,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
+    fn count_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+    ) -> BoxFuture<'a, Result<usize>>;
+
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
@@ -112,6 +118,14 @@ impl<T: DataLayer> DynDataLayer for T {
         query: &'a CompiledQuery,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
         Box::pin(self.run_query(resource, query))
+    }
+
+    fn count_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+    ) -> BoxFuture<'a, Result<usize>> {
+        Box::pin(self.count(resource, query))
     }
 
     fn upsert_dyn<'a>(
@@ -325,6 +339,11 @@ impl DataLayer for StoreRegistry {
     ) -> Result<Vec<FieldMap>> {
         let layer = self.get_layer(resource)?;
         layer.run_query_dyn(resource, query).await
+    }
+
+    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        let layer = self.get_layer(resource)?;
+        layer.count_dyn(resource, query).await
     }
 
     async fn upsert(
