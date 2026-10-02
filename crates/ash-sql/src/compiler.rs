@@ -1191,7 +1191,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         // The relationship's rows: the destination, through the join resource for a
-        // many_to_many, as the destination's primary read (and the join's) sees them.
+        // many_to_many, as the destination's primary read (and the join's) returns them to
+        // the query's actor.
         let dest_table = self.table(dest)?;
         let mut from = format!("{dest_table} AS {dest_alias}");
         let mut conditions = Vec::new();
@@ -1210,7 +1211,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     " JOIN {} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join}",
                     self.table(through)?
                 ));
-                if let Some(compiled) = self.compile_read_filter(through, &join_alias)? {
+                if let Some(compiled) = self.compile_related_read_filter(through, &join_alias)? {
                     conditions.push(compiled);
                 }
                 keys.push((ident(self.dialect, rel.source_attribute)?, format!("{join_alias}.{source_on_join}")));
@@ -1221,7 +1222,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 }
             }
         }
-        if let Some(compiled) = self.compile_read_filter(dest, &dest_alias)? {
+        if let Some(compiled) = self.compile_related_read_filter(dest, &dest_alias)? {
             conditions.push(compiled);
         }
 

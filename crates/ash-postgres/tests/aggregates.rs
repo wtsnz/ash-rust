@@ -3,8 +3,9 @@
 //! and memory computes them as Ash's ETS layer does. One scenario, the same answers.
 
 use ash_core::{
-    ActionDef, AggregateDef, AggregateFilter, AttrType, AttributeDef, CompiledQuery, ConstValue, DataLayer,
-    FieldMap, Filter, PreparationDef, RelationshipDef, ResourceDef, Sort, Value,
+    ActionDef, ActionKind, Actor, AggregateDef, AggregateFilter, AttrType, AttributeDef, Check, CompiledQuery,
+    ConstValue, DataLayer, FieldMap, Filter, PolicyDef, PolicyEffect, PolicyWhen, PreparationDef, RelationshipDef,
+    ResourceDef, Sort, Value,
 };
 use ash_memory::Memory;
 use ash_postgres::Postgres;
@@ -83,6 +84,8 @@ static READER: ResourceDef = ResourceDef {
     ..BASE
 };
 
+/// Each membership is its reader's to read, so a reader count counts only the reader
+/// reading it, as Ash authorizes an aggregate's query.
 static MEMBERSHIP: ResourceDef = ResourceDef {
     name: "AggMembership",
     table: "agg_memberships",
@@ -92,6 +95,10 @@ static MEMBERSHIP: ResourceDef = ResourceDef {
         AttributeDef::required("reader_id", AttrType::Uuid),
     ],
     actions: &[ActionDef::read("read").primary()],
+    policies: &[PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Read),
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "reader_id" })],
+    )],
     ..BASE
 };
 
@@ -128,9 +135,11 @@ async fn scenario<D: DataLayer>(data: D) {
         ];
         insert(&data, &BOOK, &fields).await;
     }
+    let mut readers = Vec::new();
     for _ in 0..2 {
         let reader = insert(&data, &READER, &[]).await;
         insert(&data, &MEMBERSHIP, &[("library_id", Value::Uuid(a)), ("reader_id", Value::Uuid(reader))]).await;
+        readers.push(reader);
     }
 
     let ours = Filter::starts_with("name", run.clone());
@@ -156,7 +165,8 @@ async fn scenario<D: DataLayer>(data: D) {
     assert_eq!(values(&rows, "long_count"), [Value::Int(2), Value::Int(0), Value::Int(0)]);
     assert_eq!(values(&rows, "pages"), [Value::Int(600), Value::Null, Value::Int(50)]);
     assert_eq!(values(&rows, "has_books"), [Value::Bool(true), Value::Bool(false), Value::Bool(true)]);
-    assert_eq!(values(&rows, "reader_count"), [Value::Int(2), Value::Int(0), Value::Int(0)]);
+    // No actor reads any membership.
+    assert_eq!(values(&rows, "reader_count"), [Value::Int(0), Value::Int(0), Value::Int(0)]);
     assert!(matches!(&values(&rows, "a_title")[0], Value::String(t) if ["A1", "A2", "A3"].contains(&t.as_str())));
     assert_eq!(values(&rows, "a_title")[1], Value::Null);
 
@@ -185,11 +195,13 @@ async fn scenario<D: DataLayer>(data: D) {
         ],
         aggregates: vec!["reader_count".into()],
         limit: Some(2),
+        actor: Some(Actor::new(readers[0])),
         ..CompiledQuery::default()
     })
     .await;
     assert_eq!(values(&rows, "id"), [Value::Uuid(a), Value::Uuid(c)]);
-    assert_eq!(values(&rows, "reader_count"), [Value::Int(2), Value::Int(0)]);
+    // The reader reads its own membership, not the other's.
+    assert_eq!(values(&rows, "reader_count"), [Value::Int(1), Value::Int(0)]);
 }
 
 #[tokio::test]
