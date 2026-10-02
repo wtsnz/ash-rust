@@ -1084,7 +1084,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let mut items = Vec::new();
         for attr in resource.attributes {
             let joins_on = groups.iter().any(|(rel, _)| rel.source_columns().contains(&attr.name));
-            if query.reads(attr) || joins_on {
+            if query.reads(resource, attr) || joins_on {
                 items.push(ident(self.dialect, attr.name)?);
             }
         }
@@ -1092,6 +1092,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let calc = resource.calculation(calc_name).ok_or_else(|| {
                 Error::Invalid(format!("unknown calculation `{calc_name}` on {}", resource.name))
             })?;
+            // Only Rust computes this, from the record once it's read.
+            if calc.expr.is_custom() {
+                continue;
+            }
             let expr_sql = self.compile_calculation(resource, calc)?;
             items.push(format!("{expr_sql} AS {}", ident(self.dialect, calc.name)?));
         }
