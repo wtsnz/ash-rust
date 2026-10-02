@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use async_graphql::dynamic::Schema;
 use async_graphql::http::GraphiQLSource;
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::{
     extract::State,
     response::{Html, IntoResponse},
@@ -29,15 +29,20 @@ pub async fn graphiql_handler() -> impl IntoResponse {
     )
 }
 
-/// Creates a standard Axum router configured with GraphQL and GraphiQL endpoints.
+/// Creates a standard Axum router configured with GraphQL, GraphiQL and subscription
+/// endpoints.
 ///
 /// Endpoints:
 /// - `POST /graphql`: GraphQL query and mutation endpoint
 /// - `GET /graphql` (or `/graphiql`): GraphiQL playground
+/// - `GET /graphql/ws`: subscriptions over WebSocket, speaking both the
+///   `graphql-transport-ws` and the older `graphql-ws` protocols
 pub fn graphql_router(schema: Schema) -> Router {
+    let subscriptions = GraphQLSubscription::new(schema.clone());
     let shared_schema = Arc::new(schema);
 
     Router::new()
+        .route_service("/graphql/ws", subscriptions)
         .route("/graphql", post(graphql_handler))
         .route("/graphql", get(graphiql_handler))
         .route("/graphiql", get(graphiql_handler))

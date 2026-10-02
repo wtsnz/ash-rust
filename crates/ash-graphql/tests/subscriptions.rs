@@ -382,3 +382,71 @@ async fn test_phase6_axum_router_endpoints() {
     let res_json: serde_json::Value = serde_json::from_slice(&post_body).unwrap();
     assert_eq!(res_json["data"]["schema_version"], "ash-graphql-0.1.0");
 }
+
+/// The router serves subscriptions at `/graphql/ws`, the endpoint its GraphiQL points at,
+/// over the `graphql-transport-ws` protocol that generated TypeScript clients speak.
+#[cfg(feature = "axum")]
+#[tokio::test]
+async fn router_serves_subscriptions_over_websocket() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub)
+        .finish_with_context(ctx.clone())
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, ash_graphql::axum::graphql_router(schema)).await.unwrap();
+    });
+
+    let mut request = format!("ws://{addr}/graphql/ws").into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+
+    let send = |value: serde_json::Value| Message::Text(value.to_string().into());
+    socket.send(send(serde_json::json!({ "type": "connection_init" }))).await.unwrap();
+    let ack = read_message(&mut socket).await;
+    assert_eq!(ack["type"], "connection_ack");
+    socket
+        .send(send(serde_json::json!({
+            "id": "1",
+            "type": "subscribe",
+            "payload": { "query": "subscription { ticketCreated { title } }" },
+        })))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut input = ash_core::FieldMap::new();
+    input.insert("title".into(), ash_core::Value::String("Over the wire".into()));
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+
+    let next = read_message(&mut socket).await;
+    assert_eq!(next["type"], "next", "{next}");
+    assert_eq!(next["id"], "1");
+    assert_eq!(next["payload"]["data"]["ticketCreated"]["title"], "Over the wire");
+}
+
+#[cfg(feature = "axum")]
+async fn read_message<S>(socket: &mut S) -> serde_json::Value
+where
+    S: futures_util::Stream<
+            Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>,
+        > + Unpin,
+{
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), socket.next()).await.unwrap() {
+            Some(Ok(Message::Text(text))) => return serde_json::from_str(&text).unwrap(),
+            Some(Ok(_)) => continue,
+            other => panic!("socket closed: {other:?}"),
+        }
+    }
+}

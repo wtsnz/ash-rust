@@ -184,7 +184,8 @@ Enable the `axum` feature in `Cargo.toml`:
 ash-graphql = { path = "...", features = ["axum"] }
 ```
 
-Mount `graphql_router` to serve `/graphql` and `/graphiql`:
+Mount `graphql_router` to serve `/graphql`, `/graphiql`, and subscriptions over
+WebSocket at `/graphql/ws` (`graphql-transport-ws` or the older `graphql-ws` protocol):
 ```rust,ignore
 use axum::Router;
 use ash_graphql::axum::graphql_router;
