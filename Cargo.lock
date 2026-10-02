@@ -263,6 +263,7 @@ dependencies = [
  "ash-macros",
  "ash-memory",
  "ash-sql",
+ "ash-sqlite",
  "chrono",
  "criterion",
  "rust_decimal",
