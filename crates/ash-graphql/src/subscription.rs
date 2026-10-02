@@ -1,7 +1,8 @@
 use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible};
 
 use crate::redact::redact_record;
-use crate::request::request_actor;
+use crate::preload::{load_selected, preload, selected};
+use crate::request::{request_actor, request_context};
 use ash_pubsub::PubSub;
 use async_graphql::ErrorExtensions;
 use async_graphql::dynamic::*;
@@ -53,8 +54,9 @@ fn subscriber<D: DataLayer + 'static>(
     (request_actor::<D>(ctx).cloned(), tenant)
 }
 
-/// What a subscription's payload carries: the record created or updated, or the id of
-/// the one destroyed.
+/// What a subscription's payload carries: the record created or updated, as stored (its
+/// payload redacts it for the subscriber once it has loaded what it selects), or the id
+/// of the one destroyed.
 #[derive(Clone)]
 enum Event {
     Record(ash_core::FieldMap),
@@ -80,7 +82,7 @@ fn kinds(resource: &ResourceDef) -> [(String, ActionKind, &'static str); 3] {
 
 /// Registers each subscription's payload type: `<name>_result { created: <Resource> }`,
 /// `{ updated: <Resource> }` or `{ destroyed: ID }`.
-pub fn register_subscription_results(
+pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
     mut builder: SchemaBuilder,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
@@ -93,11 +95,28 @@ pub fn register_subscription_results(
         builder = builder.register(Object::new(subscription_result_name(&field)).field(Field::new(
             key,
             type_ref,
-            |ctx| {
+            move |ctx| {
                 FieldFuture::new(async move {
                     Ok(match ctx.parent_value.downcast_ref::<Event>() {
-                        // Borrowed: the event lives as long as its resolution.
-                        Some(Event::Record(record)) => Some(FieldValue::borrowed_any(record)),
+                        // What the subscriber selects of the record loads with it, as
+                        // AshGraphql loads a subscription's record with the query its
+                        // selection builds: aggregates, calculations and relationships,
+                        // as the subscriber reads them.
+                        // Loaded before it's redacted, so field policies hide what loads too.
+                        Some(Event::Record(record)) if ctx.ctx.data_opt::<Context<D>>().is_some() => {
+                            let ash = request_context::<D>(&ctx)?;
+                            let fields = selected(ctx.ctx.field(), None);
+                            let mut record = record.clone();
+                            load_selected(&ash, resource, &fields, std::slice::from_mut(&mut record)).await?;
+                            redact_record(resource, ash.actor.as_ref(), &mut record);
+                            preload(&ash, resource, fields, std::slice::from_mut(&mut record)).await?;
+                            Some(FieldValue::owned_any(record))
+                        }
+                        Some(Event::Record(record)) => {
+                            let mut record = record.clone();
+                            redact_record(resource, request_actor::<D>(&ctx), &mut record);
+                            Some(FieldValue::owned_any(record))
+                        }
                         Some(Event::Id(id)) => Some(FieldValue::value(async_graphql::Value::String(id.clone()))),
                         None => None,
                     })
@@ -157,9 +176,7 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                                     Event::Id(notif.id.to_string())
                                 } else {
                                     // Shared with every other subscriber: copy only what this one sends.
-                                    let mut record = notif.record_fields.clone();
-                                    redact_record(resource, actor.as_ref(), &mut record);
-                                    Event::Record(record)
+                                    Event::Record(notif.record_fields.clone())
                                 };
                                 yield Ok(FieldValue::owned_any(event));
                             }

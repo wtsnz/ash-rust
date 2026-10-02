@@ -155,7 +155,7 @@ impl AshGraphQLBuilder {
             builder = register_resource_filter_inputs(builder, res);
             builder = register_resource_sort_inputs(builder, res);
             if has_subscriptions {
-                builder = register_subscription_results(builder, res);
+                builder = register_subscription_results::<D>(builder, res);
             }
             for action in res.actions {
                 if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {

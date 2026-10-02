@@ -690,3 +690,98 @@ async fn mutations_over_the_socket_are_not_shared() {
         .unwrap();
     assert_eq!(stored.len(), 2);
 }
+
+static BOARD_DEF: ResourceDef = ResourceDef {
+    name: "Board",
+    table: "boards",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    relationships: &[ash_core::RelationshipDef::has_many("cards", || &CARD_DEF, "board_id")],
+    actions: &[
+        ActionDef::read("read").primary(),
+        ActionDef::create("create").accept(&["name"]),
+        ActionDef::update("rename").accept(&["name"]),
+    ],
+    aggregates: &[ash_core::AggregateDef::count("card_count", "cards")],
+    // How many cards a board has is for signed-in readers only.
+    field_policies: &[ash_core::FieldPolicyDef::new(
+        "card_count",
+        &[ash_core::PolicyEffect::AuthorizeIf(ash_core::Check::ActorPresent)],
+    )],
+    ..TICKET_DEF
+};
+
+static CARD_DEF: ResourceDef = ResourceDef {
+    name: "Card",
+    table: "cards",
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("title", AttrType::String),
+        AttributeDef::required("board_id", AttrType::Uuid),
+    ],
+    relationships: &[ash_core::RelationshipDef::belongs_to("board", || &BOARD_DEF, "board_id")],
+    actions: &[ActionDef::read("read").primary(), ActionDef::create("create").accept(&["title", "board_id"])],
+    ..TICKET_DEF
+};
+
+/// As AshGraphql loads a subscription's record with the query its selection builds, the
+/// aggregates and relationships a subscriber selects load with each event.
+#[tokio::test]
+async fn a_subscription_loads_what_it_selects() {
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&BOARD_DEF, &CARD_DEF])
+        .with_pubsub(pubsub)
+        .finish::<Memory>()
+        .unwrap();
+    let field = |map: &[(&str, ash_core::Value)]| -> ash_core::FieldMap {
+        map.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    };
+    let board = ash_core::create_dynamic(&ctx, &BOARD_DEF, &BOARD_DEF.actions[1], field(&[("name", "Todo".into())]))
+        .await
+        .unwrap();
+    let board_id = board.get("id").cloned().unwrap();
+    let card = |title: &str| field(&[("title", title.into()), ("board_id", board_id.clone())]);
+    ash_core::create_dynamic(&ctx, &CARD_DEF, &CARD_DEF.actions[1], card("one")).await.unwrap();
+
+    // Each stream subscribes when first polled.
+    let signed_in = ctx.with_actor(ash_core::Actor::new(uuid::Uuid::new_v4()));
+    let mut cards = schema.execute_stream(
+        Request::new("subscription { cardCreated { created { title board { name cardCount } } } }").data(signed_in.clone()),
+    );
+    let board_updates = "subscription { boardUpdated { updated { name cardCount } } }";
+    let mut boards = schema.execute_stream(Request::new(board_updates).data(signed_in));
+    let mut anonymous = schema.execute_stream(Request::new(board_updates).data(ctx.clone()));
+    let cards = tokio::spawn(async move { next(&mut cards).await });
+    let boards = tokio::spawn(async move { next(&mut boards).await });
+    let anonymous = tokio::spawn(async move { next(&mut anonymous).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    ash_core::create_dynamic(&ctx, &CARD_DEF, &CARD_DEF.actions[1], card("two")).await.unwrap();
+    let created = cards.await.unwrap().expect("a card event");
+    assert!(created.errors.is_empty(), "{:?}", created.errors);
+    assert_eq!(
+        created.data.into_json().unwrap(),
+        serde_json::json!({ "cardCreated": { "created": { "title": "two", "board": { "name": "Todo", "cardCount": 2 } } } })
+    );
+
+    let id = match &board_id {
+        ash_core::Value::Uuid(id) => *id,
+        other => panic!("{other:?}"),
+    };
+    ash_core::update_dynamic(&ctx, &BOARD_DEF, &BOARD_DEF.actions[2], id, field(&[("name", "Doing".into())]))
+        .await
+        .unwrap();
+    let renamed = boards.await.unwrap().expect("a board event");
+    assert!(renamed.errors.is_empty(), "{:?}", renamed.errors);
+    assert_eq!(
+        renamed.data.into_json().unwrap(),
+        serde_json::json!({ "boardUpdated": { "updated": { "name": "Doing", "cardCount": 2 } } })
+    );
+    // A field policy hides what loads, as it hides an attribute.
+    let hidden = anonymous.await.unwrap().expect("a board event");
+    assert!(hidden.errors.is_empty(), "{:?}", hidden.errors);
+    assert_eq!(
+        hidden.data.into_json().unwrap(),
+        serde_json::json!({ "boardUpdated": { "updated": { "name": "Doing", "cardCount": null } } })
+    );
+}
