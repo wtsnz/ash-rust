@@ -1,0 +1,330 @@
+//! Planning an update as one statement, as Ash's `fully_atomic_changeset` does: the
+//! values it sets as expressions over the stored record, and the conditions (the action's
+//! validations, the write policies, the lock version) under which it fails, each with its
+//! error. An update can't be planned when something in it needs the record in memory: a
+//! `before_action` hook, a change or validation function, managed relationships.
+
+use uuid::Uuid;
+
+use crate::action::{
+    ActionDef, Change, DynamicAfterActionHook, DynamicAfterTransactionHook, PersistKind, Validation,
+};
+use crate::actor::Actor;
+use crate::atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdate};
+use crate::error::{Error, Result};
+use crate::filter::Filter;
+use crate::pipeline::{check_builtin_validation, pk_name, validate_given};
+use crate::policy::{effects_to_filter, write_filter};
+use crate::resource::{AttrType, ResourceDef};
+use crate::value::{FieldMap, Value};
+
+/// An update planned as one statement, with the hooks that run after it.
+pub(crate) struct AtomicPlan {
+    pub update: AtomicUpdate,
+    pub after_actions: Vec<DynamicAfterActionHook>,
+    pub after_transactions: Vec<DynamicAfterTransactionHook>,
+}
+
+/// Runs `update` on record `id` as `ctx` sees it, as one statement: through the read
+/// `action` upgrades with (the primary read by default), in the context's tenant. `None`
+/// when there's no such record.
+pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
+    ctx: &crate::context::Context<D>,
+    resource: &'static ResourceDef,
+    action: &ActionDef,
+    id: Uuid,
+    update: &AtomicUpdate,
+) -> Result<Option<FieldMap>> {
+    let pk = pk_name(resource)?;
+    let (filter, tenant) =
+        crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
+    let read = match action.atomic_upgrade_with {
+        Some(name) => Some(resource.action(name).ok_or_else(|| Error::UnknownAction {
+            resource: resource.name,
+            name: name.to_string(),
+        })?),
+        None => resource.primary_read(),
+    };
+    let filter = crate::pipeline::and_filters(filter, read.and_then(|read| resource.read_filter(read)));
+    let query = crate::data_layer::CompiledQuery {
+        filter,
+        tenant,
+        limit: Some(1),
+        ..crate::data_layer::CompiledQuery::default()
+    };
+    Ok(ctx.data.update_atomic(resource, &query, update).await?.into_iter().next())
+}
+
+/// What a planned update starts from.
+pub(crate) struct PlanInput<'a> {
+    pub actor: Option<&'a Actor>,
+    pub tenant: Option<&'a str>,
+    /// Values set outright: the accepted input, or what a changeset already changes.
+    pub sets: FieldMap,
+    /// Fields an actor's input sets, for the field policies on writes.
+    pub written: Vec<String>,
+    pub arguments: &'a FieldMap,
+    /// The lock version the record must still have, and the record's id for the error.
+    pub expected_version: Option<(Uuid, i64)>,
+    /// Whether the action's after-action and after-transaction changes are this plan's
+    /// to run: not when a changeset already holds them.
+    pub collect_hooks: bool,
+}
+
+/// Plans `action` on `resource` as one update. `Ok(Err(reason))` when it can't be; `Err`
+/// when the update fails whatever the record (a value of the wrong type, a validation
+/// of a value it sets, a policy no record passes).
+pub(crate) fn plan_update(
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+    input: PlanInput<'_>,
+) -> Result<std::result::Result<AtomicPlan, String>> {
+    if action.persist != PersistKind::DataLayer {
+        return Ok(Err("the action is manual".into()));
+    }
+    let PlanInput { actor, tenant, mut sets, written, arguments, expected_version, collect_hooks } = input;
+    let lock = resource.optimistic_lock_attribute();
+    let updated_at = resource.timestamps.map(|(_, updated_at)| updated_at);
+    // The lock version and `updated_at` are the plan's to set, from the stored record.
+    sets.retain(|name, _| Some(name.as_str()) != lock && Some(name.as_str()) != updated_at);
+    validate_given(resource, &mut sets)?;
+
+    let mut update = AtomicUpdate::default();
+    for (name, value) in sets {
+        update.set(name, AtomicExpr::Value(value));
+    }
+    let mut after_actions = Vec::new();
+    let mut after_transactions = Vec::new();
+
+    for change in action.changes {
+        match change {
+            Change::SetAttribute { field, value } => update.set(*field, AtomicExpr::value(Value::from(*value))),
+            Change::SetAttributeFn { field, value } => update.set(*field, AtomicExpr::Value(value())),
+            Change::SetNewAttribute { field, value } => {
+                let current = update.value_of(field);
+                update.set(*field, AtomicExpr::Coalesce(vec![current, AtomicExpr::value(Value::from(*value))]));
+            }
+            Change::SetNewAttributeFn { field, value } => {
+                let current = update.value_of(field);
+                update.set(*field, AtomicExpr::Coalesce(vec![current, AtomicExpr::Value(value())]));
+            }
+            Change::RelateActor { field } => {
+                let actor = actor.ok_or(Error::Forbidden)?;
+                update.set(*field, AtomicExpr::value(actor.id));
+            }
+            Change::SetFromArgument { field, argument } => {
+                if let Some(value) = arguments.get(*argument) {
+                    update.set(*field, AtomicExpr::Value(value.clone()));
+                }
+            }
+            Change::AfterAction(hook) => {
+                if collect_hooks {
+                    after_actions.push(Box::new(*hook) as DynamicAfterActionHook);
+                }
+            }
+            Change::AfterTransaction(hook) => {
+                if collect_hooks {
+                    after_transactions.push(Box::new(*hook) as DynamicAfterTransactionHook);
+                }
+            }
+            Change::BeforeAction(_) => return Ok(Err("it has a before_action hook".into())),
+            Change::ManageRelationship { .. } => return Ok(Err("it manages relationships".into())),
+            Change::Func(_) => return Ok(Err("it has a change function".into())),
+            Change::Custom(custom) => {
+                let context = AtomicContext { resource, action, actor, tenant, arguments, update: &update };
+                match custom.atomic(&context) {
+                    Atomic::Atomic { set, conditions } => {
+                        for (field, expr) in set {
+                            update.set(field, expr);
+                        }
+                        update.conditions.extend(conditions);
+                    }
+                    Atomic::NotAtomic(reason) => return Ok(Err(reason)),
+                }
+            }
+        }
+    }
+
+    // Values the changes set outright are checked now, as those the input sets were.
+    let mut known: FieldMap = update
+        .set
+        .iter()
+        .filter_map(|(name, expr)| expr.known().map(|value| (name.clone(), value.clone())))
+        .collect();
+    validate_given(resource, &mut known)?;
+    for (name, value) in known {
+        update.set(name, AtomicExpr::Value(value));
+    }
+
+    // Written fields guarded by a field policy, as the record-by-record write checks them.
+    for policy in resource.field_policies {
+        if written.iter().any(|field| field == policy.field) {
+            match effects_to_filter(policy.checks, actor)? {
+                Filter::True => {}
+                Filter::False => return Err(Error::Forbidden),
+                allowed => update
+                    .conditions
+                    .push(AtomicCondition::failing_with(AtomicExpr::not_true(AtomicExpr::Filter(allowed)), || Error::Forbidden)),
+            }
+        }
+    }
+
+    // The write policies, against the record as stored, as Ash authorizes an atomic update.
+    match write_filter(resource, action, actor)? {
+        Filter::True => {}
+        Filter::False => return Err(Error::Forbidden),
+        allowed => update.conditions.push(AtomicCondition::failing_with(
+            AtomicExpr::not_true(AtomicExpr::Filter(allowed)),
+            || Error::Forbidden,
+        )),
+    }
+
+    for validation in action.validations {
+        let field = match validation {
+            Validation::Present { field }
+            | Validation::StringLength { field, .. }
+            | Validation::OneOf { field, .. }
+            | Validation::Numericality { field, .. } => *field,
+            Validation::Func(_) => return Ok(Err("it has a validation function".into())),
+            Validation::Custom(custom) => {
+                let context = AtomicContext { resource, action, actor, tenant, arguments, update: &update };
+                match custom.atomic(&context) {
+                    Atomic::Atomic { set, conditions } => {
+                        for (field, expr) in set {
+                            update.set(field, expr);
+                        }
+                        update.conditions.extend(conditions);
+                    }
+                    Atomic::NotAtomic(reason) => return Ok(Err(reason)),
+                }
+                continue;
+            }
+        };
+        let context = AtomicContext { resource, action, actor, tenant, arguments, update: &update };
+        let value = context.value_of(field);
+        match value.known() {
+            // The value it'll hold is known: check it now.
+            Some(value) => check_builtin_validation(validation, Some(value))?,
+            None => update.conditions.extend(builtin_conditions(resource, validation, value)),
+        }
+    }
+
+    if let Some(version) = lock {
+        if let Some((id, expected)) = expected_version {
+            let resource_name = resource.name;
+            update.conditions.push(AtomicCondition::failing_with(
+                AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
+                move || Error::StaleRecord { resource: resource_name, id },
+            ));
+        }
+        let bumped = AtomicExpr::Add(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(1i64)));
+        update.set(version, bumped);
+    }
+
+    // `updated_at` moves only when a value does, as Ash's update timestamp.
+    if let Some(updated_at) = updated_at {
+        let changed: Vec<AtomicExpr> = update
+            .set
+            .iter()
+            .filter(|(name, _)| Some(name.as_str()) != lock)
+            .map(|(name, expr)| AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(name.clone())), Box::new(expr.clone())))
+            .collect();
+        if !changed.is_empty() {
+            let now = Value::String(crate::types::UtcDateTimeUsec::now().as_str().to_string());
+            update.set(
+                updated_at,
+                AtomicExpr::If {
+                    condition: Box::new(AtomicExpr::Or(changed)),
+                    then: Box::new(AtomicExpr::Value(now)),
+                    otherwise: Box::new(AtomicExpr::field(updated_at)),
+                },
+            );
+        }
+    }
+
+    // An update that sets nothing still checks its conditions and returns the record.
+    if update.set.is_empty() {
+        let pk = pk_name(resource)?;
+        update.set(pk, AtomicExpr::field(pk));
+    }
+
+    Ok(Ok(AtomicPlan { update, after_actions, after_transactions }))
+}
+
+/// When a built-in validation of a value the statement computes fails, as Ash's
+/// validations do atomically: a condition for each way it fails, with the error the
+/// record-by-record check gives. Nil passes, as it does record by record.
+fn builtin_conditions(resource: &ResourceDef, validation: &Validation, value: AtomicExpr) -> Vec<AtomicCondition> {
+    let text = match &value {
+        AtomicExpr::Field(name) => resource
+            .attribute(name)
+            .is_some_and(|attr| matches!(attr.ty, AttrType::String | AttrType::CiString)),
+        _ => false,
+    };
+    let condition = |fails_when: AtomicExpr, field: &'static str, message: String| {
+        AtomicCondition::failing_with(fails_when, move || Error::Validation {
+            field: field.to_string(),
+            message: message.clone(),
+        })
+    };
+    let boxed = Box::new;
+    match validation {
+        Validation::Present { field } => {
+            let blank = if text {
+                AtomicExpr::Or(vec![
+                    AtomicExpr::IsNil(boxed(value.clone())),
+                    AtomicExpr::Eq(boxed(AtomicExpr::Trim(boxed(value))), boxed(AtomicExpr::value(""))),
+                ])
+            } else {
+                AtomicExpr::IsNil(boxed(value))
+            };
+            vec![condition(blank, field, "must be present".into())]
+        }
+        Validation::StringLength { field, min, max } if text => {
+            let length = || boxed(AtomicExpr::StringLength(boxed(value.clone())));
+            let mut conditions = Vec::new();
+            if let Some(min) = min {
+                conditions.push(condition(
+                    AtomicExpr::Lt(length(), boxed(AtomicExpr::value(*min as i64))),
+                    field,
+                    format!("must be at least {min} characters"),
+                ));
+            }
+            if let Some(max) = max {
+                conditions.push(condition(
+                    AtomicExpr::Gt(length(), boxed(AtomicExpr::value(*max as i64))),
+                    field,
+                    format!("must be at most {max} characters"),
+                ));
+            }
+            conditions
+        }
+        Validation::OneOf { field, allowed } => vec![condition(
+            AtomicExpr::Not(boxed(AtomicExpr::In(
+                boxed(value),
+                allowed.iter().map(|v| Value::String((*v).to_string())).collect(),
+            ))),
+            field,
+            format!("must be one of: {}", allowed.join(", ")),
+        )],
+        Validation::Numericality { field, min, max } => {
+            let mut conditions = Vec::new();
+            if let Some(min) = min {
+                conditions.push(condition(
+                    AtomicExpr::Lt(boxed(value.clone()), boxed(AtomicExpr::value(*min))),
+                    field,
+                    format!("must be at least {min}"),
+                ));
+            }
+            if let Some(max) = max {
+                conditions.push(condition(
+                    AtomicExpr::Gt(boxed(value.clone()), boxed(AtomicExpr::value(*max))),
+                    field,
+                    format!("must be at most {max}"),
+                ));
+            }
+            conditions
+        }
+        Validation::StringLength { .. } | Validation::Custom(_) | Validation::Func(_) => Vec::new(),
+    }
+}

@@ -43,6 +43,20 @@ impl DataLayer for Counting {
         self.inner.destroy(resource, tenant, id).await
     }
 
+    fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
+        self.inner.can_update_atomically(resource)
+    }
+
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &ash_core::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        self.reads.lock().unwrap().push("atomic update");
+        self.inner.update_atomic(resource, query, update).await
+    }
+
     async fn run_query(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<Vec<FieldMap>> {
         let name = [&AUTHOR_DEF, &POST_DEF, &COMMENT_DEF]
             .into_iter()
@@ -347,9 +361,9 @@ async fn a_relationship_with_arguments_is_still_shaped_by_them() {
     assert_eq!(json!(data.take().len() > 1), json!(true));
 }
 
-/// An update reads its record once, to see it as the requester may, and updates it.
+/// An update by id is one atomic statement, as AshGraphql's: no read of the record first.
 #[tokio::test]
-async fn an_update_reads_its_record_once() {
+async fn an_update_is_one_atomic_statement() {
     let (data, post) = seeded().await;
     let page = run(
         &data,
@@ -358,5 +372,5 @@ async fn an_update_reads_its_record_once() {
     )
     .await;
     assert_eq!(page["retitlePost"]["result"]["title"], "Renamed");
-    assert_eq!(data.take(), ["Post"]);
+    assert_eq!(data.take(), ["atomic update"]);
 }

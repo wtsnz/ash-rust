@@ -61,6 +61,29 @@ pub trait DataLayer: Send + Sync {
         query: &CompiledQuery,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send;
 
+    /// Whether this data layer runs updates as one statement, checking conditions and
+    /// raising their errors within it, as Ash's data layers that can `update_query` and
+    /// `expr_error`. One that can't has updates read their record first.
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// Updates the records `query` selects as `update` says, in one statement: checks
+    /// each record against the update's conditions, in order, failing with the first
+    /// that holds, then sets the update's values, every one computed from the record as
+    /// it was. Returns the updated records.
+    fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+        _update: &crate::atomic::AtomicUpdate,
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        std::future::ready(Err(Error::Invalid(format!(
+            "this data layer can't update {} atomically",
+            resource.name
+        ))))
+    }
+
     /// How many records `query` would return, as Ash's data layers count with an
     /// aggregate query. A data layer that can count without reading the records (a SQL
     /// `COUNT(*)`) should; by default it reads them.

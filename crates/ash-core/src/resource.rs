@@ -313,7 +313,11 @@ impl ResourceDef {
     /// read of the resource sees them: relationship loads, aggregates, and filters that
     /// reach it through a relationship.
     pub fn primary_read_filter(&self) -> Option<crate::filter::Filter> {
-        let read = self.primary_read()?;
+        self.read_filter(self.primary_read()?)
+    }
+
+    /// The filters `read`'s preparations add: the records it reaches.
+    pub fn read_filter(&self, read: &crate::action::ActionDef) -> Option<crate::filter::Filter> {
         let filters: Vec<crate::filter::Filter> = read
             .preparations
             .iter()

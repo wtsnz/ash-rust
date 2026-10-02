@@ -86,6 +86,8 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut preparations = Vec::new();
     let mut persist_manual = false;
     let mut soft = false;
+    let mut require_atomic = true;
+    let mut atomic_upgrade_with = None;
     let mut cascade_destroy = Vec::new();
     let mut run_expr = None;
     let mut accept_kw = None;
@@ -363,6 +365,33 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     soft = true;
                     require_semi(&body, errors, "`soft`");
                 }
+                "require_atomic" => {
+                    if kind != ActionKind::Update {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "`require_atomic` only applies to update actions",
+                        ));
+                    }
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    let value: syn::LitBool = body.parse()?;
+                    require_atomic = value.value;
+                    require_semi(&body, errors, "`require_atomic`");
+                }
+                "atomic_upgrade_with" => {
+                    if kind != ActionKind::Update {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "`atomic_upgrade_with` only applies to update actions",
+                        ));
+                    }
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    atomic_upgrade_with = Some(body.parse::<Ident>()?);
+                    require_semi(&body, errors, "`atomic_upgrade_with`");
+                }
                 "cascade_destroy" => {
                     if kind != ActionKind::Destroy {
                         errors.push(Error::new_spanned(
@@ -436,6 +465,8 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         "run",
                         "soft",
                         "cascade_destroy",
+                        "require_atomic",
+                        "atomic_upgrade_with",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &item_ident,
@@ -471,6 +502,8 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         run_kw,
         accept_span,
         soft,
+        require_atomic,
+        atomic_upgrade_with,
         cascade_destroy,
     })
 }

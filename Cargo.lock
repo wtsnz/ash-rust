@@ -261,6 +261,7 @@ version = "0.1.0"
 dependencies = [
  "ash-core",
  "ash-macros",
+ "ash-memory",
  "ash-sql",
  "chrono",
  "criterion",

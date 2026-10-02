@@ -7,6 +7,7 @@
 mod action;
 mod actor;
 mod aggregate;
+mod atomic;
 mod bulk;
 mod changeset;
 mod context;
@@ -28,6 +29,7 @@ pub mod store;
 mod types;
 mod value;
 
+pub use atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdate};
 pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
@@ -52,7 +54,7 @@ pub use data_layer::{
 pub use engine::{
     KeysetCursor, Page, Query, build_keyset_filter, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
     get, handle_managed_relationships, insert, load_related, manual_create, query, record_visible,
-    keyset_sort, run, scope_read, update, update_dynamic, update_existing, update_existing_dynamic,
+    keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_expecting, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};

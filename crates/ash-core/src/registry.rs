@@ -50,6 +50,15 @@ pub trait DynDataLayer: Send + Sync {
         query: &'a CompiledQuery,
     ) -> BoxFuture<'a, Result<usize>>;
 
+    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn update_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        update: &'a crate::atomic::AtomicUpdate,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
+
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
@@ -126,6 +135,19 @@ impl<T: DataLayer> DynDataLayer for T {
         query: &'a CompiledQuery,
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(self.count(resource, query))
+    }
+
+    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_update_atomically(resource)
+    }
+
+    fn update_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        update: &'a crate::atomic::AtomicUpdate,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.update_atomic(resource, query, update))
     }
 
     fn upsert_dyn<'a>(
@@ -344,6 +366,20 @@ impl DataLayer for StoreRegistry {
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
         let layer = self.get_layer(resource)?;
         layer.count_dyn(resource, query).await
+    }
+
+    fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
+    }
+
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &crate::atomic::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        let layer = self.get_layer(resource)?;
+        layer.update_atomic_dyn(resource, query, update).await
     }
 
     async fn upsert(

@@ -50,6 +50,12 @@ pub enum Error {
         resource: &'static str,
         id: Uuid,
     },
+    /// An update that must run atomically can't, as Ash's `MustBeAtomic`.
+    MustBeAtomic {
+        resource: &'static str,
+        action: &'static str,
+        reason: String,
+    },
     IdentityConflict {
         identity: &'static str,
         fields: Vec<String>,
@@ -128,6 +134,11 @@ impl fmt::Display for Error {
             Self::DataLayer(message) => write!(f, "{message}"),
             Self::Invalid(message) => write!(f, "{message}"),
             Self::Extension(err) => write!(f, "{err}"),
+            Self::MustBeAtomic { resource, action, reason } => write!(
+                f,
+                "{resource}.{action} must be performed atomically, but it could not be: {reason}; \
+                 set `require_atomic` to false on the action to read the record first instead"
+            ),
             Self::StaleRecord { resource, id } => {
                 write!(
                     f,

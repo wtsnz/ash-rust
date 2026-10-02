@@ -141,6 +141,13 @@ impl CustomChange for UnarchiveChange {
         ctx.fields.insert(self.attribute.to_string(), Value::Null);
         Ok(())
     }
+
+    fn atomic(&self, _ctx: &ash_core::AtomicContext<'_>) -> ash_core::Atomic {
+        ash_core::Atomic::Atomic {
+            set: vec![(self.attribute.to_string(), ash_core::AtomicExpr::Value(Value::Null))],
+            conditions: Vec::new(),
+        }
+    }
 }
 
 /// Restores an archived record with its `unarchive_action`.

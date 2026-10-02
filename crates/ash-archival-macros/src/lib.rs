@@ -202,7 +202,15 @@ fn expand(mut resource: ResourceTokens) -> Result<TokenStream2> {
         }
     }
     if let Some(unarchive) = &options.unarchive_action {
+        // An archived record is out of the primary read's reach, so unarchiving reaches it
+        // through a read that keeps archived records, as AshArchival's unarchive does with
+        // `atomic_upgrade_with`.
+        let upgrade_with = options
+            .exclude_read_actions
+            .first()
+            .map(|read| quote! { atomic_upgrade_with #read; });
         let clear = quote! {
+            #upgrade_with
             change custom(&::ash_archival::UnarchiveChange::new(#attribute_str));
         };
         match actions.iter_mut().find(|action| action.name == *unarchive) {

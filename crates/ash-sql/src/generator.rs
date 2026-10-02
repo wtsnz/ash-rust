@@ -594,10 +594,16 @@ fn extension_sql<D: SqlDialect>(dialect: &D, operations: &[SchemaOperation]) -> 
             }
         }
     }
-    names
+    let mut statements: Vec<String> = names
         .into_iter()
         .map(|name| format!("CREATE EXTENSION IF NOT EXISTS {name} WITH SCHEMA public;"))
-        .collect()
+        .collect();
+    // The functions the data layer calls come with the first tables, and `CREATE OR
+    // REPLACE` keeps them current with any later ones.
+    if operations.iter().any(|op| matches!(op, SchemaOperation::CreateTable(_))) {
+        statements.extend(dialect.database_functions().iter().map(|sql| sql.to_string()));
+    }
+    statements
 }
 
 /// Extensions `resource`'s columns need, for installing without migrations.

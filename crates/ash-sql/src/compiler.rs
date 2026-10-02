@@ -1,4 +1,5 @@
 use ash_core::{
+    AtomicExpr, AtomicUpdate,
     AggregateDef, AggregateFilter, AggregateKind, AttrType, CalculationDef, CompiledQuery, Error,
     Expr, FieldMap, Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
@@ -994,6 +995,188 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             format!("SELECT COUNT(*) FROM ({page}) AS counted")
         };
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The type a value compared with, or set to the result of, `expr` takes.
+    fn atomic_type(resource: &ResourceDef, expr: &AtomicExpr) -> Option<AttrType> {
+        match expr {
+            AtomicExpr::Field(name) => resource.attribute(name).map(|attr| attr.ty),
+            AtomicExpr::StringLength(_) => Some(AttrType::Integer),
+            AtomicExpr::Trim(inner) => Self::atomic_type(resource, inner),
+            AtomicExpr::Add(a, b) => Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b)),
+            AtomicExpr::Coalesce(items) => items.iter().find_map(|e| Self::atomic_type(resource, e)),
+            AtomicExpr::If { then, otherwise, .. } => {
+                Self::atomic_type(resource, then).or_else(|| Self::atomic_type(resource, otherwise))
+            }
+            _ => None,
+        }
+    }
+
+    /// SQL for an atomic update's expression, over the resource's table. A value takes
+    /// `ty`, the type of what it's compared with or set to.
+    pub fn compile_atomic_expr(
+        &mut self,
+        resource: &ResourceDef,
+        expr: &AtomicExpr,
+        ty: Option<AttrType>,
+    ) -> Result<String> {
+        let typed = |a: &AtomicExpr, b: &AtomicExpr| {
+            Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b))
+        };
+        Ok(match expr {
+            AtomicExpr::Value(value) => match ty {
+                Some(ty) => self.bind_typed(ty, value.clone()),
+                None => self.push_param(value.clone()),
+            },
+            AtomicExpr::Field(name) => {
+                if resource.attribute(name).is_none() {
+                    return Err(Error::Invalid(format!("unknown attribute `{name}` on {}", resource.name)));
+                }
+                ident(self.dialect, name)?
+            }
+            AtomicExpr::Add(a, b) => {
+                let ty = typed(a, b).or(ty);
+                format!("({} + {})", self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?)
+            }
+            AtomicExpr::StringLength(e) => format!("char_length({})", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Trim(e) => format!("btrim({})", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Coalesce(items) => {
+                let ty = items.iter().find_map(|e| Self::atomic_type(resource, e)).or(ty);
+                let parts = items
+                    .iter()
+                    .map(|e| self.compile_atomic_expr(resource, e, ty))
+                    .collect::<Result<Vec<_>>>()?;
+                format!("COALESCE({})", parts.join(", "))
+            }
+            AtomicExpr::If { condition, then, otherwise } => {
+                let condition = self.compile_atomic_expr(resource, condition, None)?;
+                let ty = typed(then, otherwise).or(ty);
+                let then = self.compile_atomic_expr(resource, then, ty)?;
+                let otherwise = self.compile_atomic_expr(resource, otherwise, ty)?;
+                format!("(CASE WHEN {condition} THEN {then} ELSE {otherwise} END)")
+            }
+            AtomicExpr::IsNil(e) => format!("({} IS NULL)", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Eq(a, b) | AtomicExpr::Lt(a, b) | AtomicExpr::Gt(a, b) | AtomicExpr::DistinctFrom(a, b) => {
+                let op = match expr {
+                    AtomicExpr::Eq(..) => "=",
+                    AtomicExpr::Lt(..) => "<",
+                    AtomicExpr::Gt(..) => ">",
+                    _ => "IS DISTINCT FROM",
+                };
+                let ty = typed(a, b);
+                format!("({} {op} {})", self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?)
+            }
+            AtomicExpr::In(e, values) => match e.as_ref() {
+                AtomicExpr::Field(name) => format!("({})", self.compile_filter(resource, &Filter::In(name.clone(), values.clone()))?),
+                other => {
+                    if values.is_empty() {
+                        "FALSE".to_string()
+                    } else {
+                        let ty = Self::atomic_type(resource, other);
+                        let operand = self.compile_atomic_expr(resource, other, ty)?;
+                        let items = values
+                            .iter()
+                            .map(|v| self.compile_atomic_expr(resource, &AtomicExpr::Value(v.clone()), ty))
+                            .collect::<Result<Vec<_>>>()?;
+                        format!("({operand} IN ({}))", items.join(", "))
+                    }
+                }
+            },
+            AtomicExpr::And(items) | AtomicExpr::Or(items) => {
+                if items.is_empty() {
+                    return Ok(if matches!(expr, AtomicExpr::And(_)) { "TRUE" } else { "FALSE" }.to_string());
+                }
+                let joiner = if matches!(expr, AtomicExpr::And(_)) { " AND " } else { " OR " };
+                let parts = items
+                    .iter()
+                    .map(|e| self.compile_atomic_expr(resource, e, None))
+                    .collect::<Result<Vec<_>>>()?;
+                format!("({})", parts.join(joiner))
+            }
+            AtomicExpr::Not(e) => format!("(NOT {})", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Filter(filter) => format!("({})", self.compile_filter(resource, filter)?),
+        })
+    }
+
+    /// An update as one statement, as AshPostgres runs an atomic update:
+    ///
+    /// ```sql
+    /// UPDATE t SET a = s.new_a, ...
+    /// FROM (SELECT pk, <new a> AS new_a, ...,
+    ///         CASE WHEN <condition> THEN ash_raise_error(<which, and the row>) ... END AS check
+    ///       FROM t WHERE <query> LIMIT n FOR UPDATE) AS s
+    /// WHERE t.pk = s.pk AND s.check IS NULL
+    /// RETURNING t.*
+    /// ```
+    ///
+    /// The subquery locks each record and computes everything from it as it is then, so
+    /// no write slips in between; a condition that holds raises its error from the
+    /// statement, through the database's `ash_raise_error` function.
+    pub fn compile_atomic_update(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &AtomicUpdate,
+    ) -> Result<CompiledSql> {
+        self.tenant = query.tenant.clone();
+        let pk = resource.primary_key().ok_or(Error::NoPrimaryKey(resource.name))?;
+        let pk_col = ident(self.dialect, pk.name)?;
+        let table = self.table(resource)?;
+
+        let mut items = vec![pk_col.clone()];
+        let mut sets = Vec::new();
+        for (i, (field, expr)) in update.set.iter().enumerate() {
+            let attr = resource
+                .attribute(field)
+                .ok_or_else(|| Error::Invalid(format!("unknown attribute `{field}` on {}", resource.name)))?;
+            let value = self.compile_atomic_expr(resource, expr, Some(attr.ty))?;
+            items.push(format!("{} AS \"__ash_set_{i}\"", self.dialect.cast_expression(attr.ty, &value)));
+            sets.push(format!("{} = __ash_s.\"__ash_set_{i}\"", ident(self.dialect, field)?));
+        }
+        if sets.is_empty() {
+            return Err(Error::Invalid(format!("an atomic update of {} sets nothing", resource.name)));
+        }
+        if !update.conditions.is_empty() {
+            let mut check = String::from("CASE");
+            for (i, condition) in update.conditions.iter().enumerate() {
+                let when = self.compile_atomic_expr(resource, &condition.fails_when, None)?;
+                let mut row = Vec::new();
+                for name in &condition.reports {
+                    let key = self.push_param(Value::String(name.clone()));
+                    row.push(format!("{key}::text, {}", ident(self.dialect, name)?));
+                }
+                check.push_str(&format!(
+                    " WHEN {when} THEN ash_raise_error(jsonb_build_object('condition', {i}, 'row', jsonb_build_object({})))",
+                    row.join(", ")
+                ));
+            }
+            check.push_str(" ELSE NULL END");
+            items.push(format!("{check} AS \"__ash_check\""));
+        }
+
+        let mut subquery = format!("SELECT {} FROM {table}", items.join(", "));
+        if let Some(filter) = &query.filter {
+            subquery.push_str(" WHERE ");
+            subquery.push_str(&self.compile_filter(resource, filter)?);
+        }
+        if let Some(limit) = query.limit {
+            let p = self.push_param(Value::Int(limit as i64));
+            subquery.push_str(&format!(" LIMIT {p}"));
+        }
+        subquery.push_str(" FOR UPDATE");
+
+        let mut sql = format!(
+            "UPDATE {table} AS __ash_t SET {} FROM ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}",
+            sets.join(", ")
+        );
+        if !update.conditions.is_empty() {
+            sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
+        }
+        sql.push_str(" RETURNING __ash_t.*");
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 

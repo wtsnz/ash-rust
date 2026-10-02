@@ -131,7 +131,53 @@ pub async fn update_dynamic<D: DataLayer>(
     id: Uuid,
     input: FieldMap,
 ) -> Result<FieldMap> {
+    update_dynamic_expecting(ctx, resource, action, id, input, None).await
+}
+
+/// [`update_dynamic`] of a record that must still have lock version `expected_version`,
+/// else [`Error::StaleRecord`]. As in Ash, it runs as one statement when the data layer
+/// can and the action allows: the update by id, with its validations, policies and the
+/// version checked in it, and no read first. Otherwise it reads the record, as the
+/// context sees it, and updates that.
+pub async fn update_dynamic_expecting<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+    id: Uuid,
+    input: FieldMap,
+    expected_version: Option<i64>,
+) -> Result<FieldMap> {
     expect_kind(action, ActionKind::Update)?;
+    if ctx.data.can_update_atomically(resource) {
+        let (accepted, arguments) = crate::pipeline::split_input(action, input.clone())?;
+        let written = accepted.keys().cloned().collect();
+        let planned = super::atomic::plan_update(
+            resource,
+            action,
+            super::atomic::PlanInput {
+                actor: ctx.actor.as_ref(),
+                tenant: ctx.tenant(),
+                sets: accepted,
+                written,
+                arguments: &arguments,
+                expected_version: expected_version.map(|version| (id, version)),
+                collect_hooks: true,
+            },
+        )?;
+        match planned {
+            Ok(plan) => {
+                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan).await;
+            }
+            Err(reason) if action.require_atomic => {
+                return Err(Error::MustBeAtomic {
+                    resource: resource.name,
+                    action: action.name,
+                    reason,
+                });
+            }
+            Err(_) => {}
+        }
+    }
     let pk = pk_name(resource)?;
     let (lookup_filter, tenant) = crate::pipeline::visible_scope(
         resource,
@@ -152,6 +198,11 @@ pub async fn update_dynamic<D: DataLayer>(
         .into_iter()
         .next()
         .ok_or(Error::NotFound)?;
+    if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
+        && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
+    {
+        return Err(Error::StaleRecord { resource: resource.name, id });
+    }
     update_existing_dynamic(ctx, resource, action, existing, input).await
 }
 

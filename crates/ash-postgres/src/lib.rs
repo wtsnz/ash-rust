@@ -178,15 +178,20 @@ impl Postgres {
     }
 
     async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<PgRow>> {
+        self.fetch_all_raw(compiled).await.map_err(map_sqlx)
+    }
+
+    /// [`fetch_all`](Self::fetch_all), keeping the database's error for the caller to read.
+    async fn fetch_all_raw(&self, compiled: &CompiledSql) -> std::result::Result<Vec<PgRow>, sqlx::Error> {
         match &self.source {
             PostgresSource::Pool(pool) => {
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(pool).await.map_err(map_sqlx)
+                query.fetch_all(pool).await
             }
             PostgresSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(&mut **guard).await.map_err(map_sqlx)
+                query.fetch_all(&mut **guard).await
             }
         }
     }
@@ -548,6 +553,29 @@ impl DataLayer for Postgres {
             .try_get(0)
             .map_err(map_sqlx)?;
         Ok(count as usize)
+    }
+
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The update as one statement (see [`QueryCompiler::compile_atomic_update`]). A
+    /// condition that holds raises through `ash_raise_error`, which this turns back into
+    /// the condition's error, from the record's values it reports.
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &ash_core::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_atomic_update(resource, query, update)?;
+        let rows = match self.fetch_all_raw(&compiled).await {
+            Ok(rows) => rows,
+            Err(err) => return Err(raised_error(&err, resource, update).unwrap_or_else(|| map_sqlx_resource(err, resource))),
+        };
+        rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
     }
 
     async fn upsert(
@@ -1196,6 +1224,40 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
+    }
+}
+
+/// The error an atomic update's condition raised through `ash_raise_error`, if that's
+/// what `err` is: `ash_error: {"condition": n, "row": {...}}`.
+fn raised_error(err: &sqlx::Error, resource: &ResourceDef, update: &ash_core::AtomicUpdate) -> Option<Error> {
+    let sqlx::Error::Database(db_err) = err else {
+        return None;
+    };
+    let payload: serde_json::Value = serde_json::from_str(db_err.message().strip_prefix("ash_error: ")?).ok()?;
+    let condition = update.conditions.get(payload.get("condition")?.as_u64()? as usize)?;
+    let mut row = FieldMap::new();
+    if let Some(reported) = payload.get("row").and_then(serde_json::Value::as_object) {
+        for (name, value) in reported {
+            let ty = resource.attribute(name).map(|attr| attr.ty);
+            row.insert(name.clone(), json_value(ty, value));
+        }
+    }
+    Some((condition.error)(&row))
+}
+
+/// A record's value as `jsonb_build_object` wrote it, back as the attribute's value.
+fn json_value(ty: Option<ash_core::AttrType>, json: &serde_json::Value) -> Value {
+    use ash_core::AttrType;
+    match (ty, json) {
+        (_, serde_json::Value::Null) => Value::Null,
+        (Some(AttrType::Uuid), serde_json::Value::String(text)) => {
+            Uuid::parse_str(text).map(Value::Uuid).unwrap_or_else(|_| Value::String(text.clone()))
+        }
+        (_, serde_json::Value::Bool(b)) => Value::Bool(*b),
+        (Some(AttrType::Integer), serde_json::Value::Number(n)) => n.as_i64().map(Value::Int).unwrap_or(Value::Null),
+        (_, serde_json::Value::Number(n)) => Value::String(n.to_string()),
+        (_, serde_json::Value::String(text)) => Value::String(text.clone()),
+        (_, other) => Value::String(other.to_string()),
     }
 }
 

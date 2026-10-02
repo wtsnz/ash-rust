@@ -3,7 +3,7 @@ use ash_core::destroy_dynamic;
 
 use crate::redact::redact_record;
 use crate::preload::{preload, selected};
-use ash_core::update_existing_dynamic;
+use ash_core::update_dynamic_expecting;
 use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
 use uuid::Uuid;
@@ -195,6 +195,21 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 let id = Uuid::parse_str(id_arg.string()?)
                     .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
 
+                // An update runs by id, as AshGraphql's does: as one statement where it can,
+                // the record's visibility, the action's validations and policies and the
+                // version all checked in it, else reading the record first.
+                if action.kind == ActionKind::Update {
+                    return Ok(match update_dynamic_expecting(ash, resource, action, id, input, version).await {
+                        Ok(mut updated) => {
+                            redact_record(resource, ash.actor.as_ref(), &mut updated);
+                            let fields = selected(ctx.ctx.field(), Some("result"));
+                            preload(ash, resource, fields, std::slice::from_mut(&mut updated)).await?;
+                            succeeded(Some(updated))
+                        }
+                        Err(e) => failed(&e),
+                    });
+                }
+
                 // The record as a read would see it, so an archived record or another
                 // tenant's is not found.
                 let (filter, tenant) = ash_core::visible_scope(
@@ -221,26 +236,15 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     }
                 }
 
-                Ok(match action.kind {
-                    ActionKind::Update => match update_existing_dynamic(ash, resource, action, existing, input).await {
-                        Ok(mut updated) => {
-                            redact_record(resource, ash.actor.as_ref(), &mut updated);
-                            let fields = selected(ctx.ctx.field(), Some("result"));
-                            preload(ash, resource, fields, std::slice::from_mut(&mut updated)).await?;
-                            succeeded(Some(updated))
-                        }
-                        Err(e) => failed(&e),
-                    },
-                    _ => match destroy_dynamic(ash, resource, action, id, &existing).await {
-                        Ok(_) => {
-                            let mut destroyed = existing;
-                            redact_record(resource, ash.actor.as_ref(), &mut destroyed);
-                            let fields = selected(ctx.ctx.field(), Some("result"));
-                            preload(ash, resource, fields, std::slice::from_mut(&mut destroyed)).await?;
-                            succeeded(Some(destroyed))
-                        }
-                        Err(e) => failed(&e),
-                    },
+                Ok(match destroy_dynamic(ash, resource, action, id, &existing).await {
+                    Ok(_) => {
+                        let mut destroyed = existing;
+                        redact_record(resource, ash.actor.as_ref(), &mut destroyed);
+                        let fields = selected(ctx.ctx.field(), Some("result"));
+                        preload(ash, resource, fields, std::slice::from_mut(&mut destroyed)).await?;
+                        succeeded(Some(destroyed))
+                    }
+                    Err(e) => failed(&e),
                 })
             })
         },

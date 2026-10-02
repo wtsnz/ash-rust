@@ -22,6 +22,7 @@ use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value, required_uuid};
 
 use super::managed::{ManagedRelationshipSpec, extract_managed_relationships};
+use crate::engine::atomic::{AtomicPlan, PlanInput, plan_update, run_atomic_update};
 
 /// Hook running before persistence with mutable access to the changeset.
 pub type DynamicChangesetHook =
@@ -44,6 +45,8 @@ pub struct DynamicChangeset {
     after_actions: Vec<DynamicAfterActionHook>,
     after_transactions: Vec<DynamicAfterTransactionHook>,
     managed_relationships: Vec<ManagedRelationshipSpec>,
+    /// The attributes the input writes, for the field policies on writes.
+    written: Vec<String>,
 }
 
 impl DynamicChangeset {
@@ -67,6 +70,7 @@ impl DynamicChangeset {
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
             managed_relationships: Vec::new(),
+            written: Vec::new(),
         }
     }
 
@@ -173,6 +177,7 @@ impl DynamicChangeset {
         fields.extend(forced);
         prepare_update_fields(resource, &existing, &mut fields);
         let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
+        changeset.written = accepted.keys().cloned().collect();
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
         changeset.run_validations(ctx)?;
@@ -359,12 +364,97 @@ impl DynamicChangeset {
     ) -> Result<FieldMap> {
         let after_transactions = std::mem::take(&mut self.after_transactions);
         let result = async {
+            if let Some(plan) = self.atomic_plan(ctx)? {
+                return self.persist_atomically(ctx, plan, cascade.notify).await;
+            }
             let id = self.prepare(ctx).await?;
             let stored = self.persist(ctx, id, cascade).await?;
             self.finish(ctx, id, stored, cascade.notify).await
         }
         .await;
         for hook in after_transactions {
+            hook(result.as_ref());
+        }
+        result
+    }
+
+    /// The update of the record in hand as one statement, as Ash upgrades an update of a
+    /// record to an atomic one: what this changeset changes, with the action's changes as
+    /// expressions and its validations, policies and lock version as conditions. `None`
+    /// when it runs record by record: it isn't an update, its data layer can't, or it
+    /// can't and doesn't have to (`require_atomic`, else an error).
+    fn atomic_plan<D: DataLayer>(&self, ctx: &Context<D>) -> Result<Option<AtomicPlan>> {
+        let Some(existing) = self.existing.as_ref() else {
+            return Ok(None);
+        };
+        if self.action.kind != ActionKind::Update || !ctx.data.can_update_atomically(self.resource) {
+            return Ok(None);
+        }
+        let planned = if !self.before_actions.is_empty() {
+            Err("it has a before_action hook".to_string())
+        } else if !self.managed_relationships.is_empty() {
+            Err("it manages relationships".to_string())
+        } else {
+            let id = required_uuid(existing, pk_name(self.resource)?)?;
+            let expected_version = self
+                .resource
+                .optimistic_lock_attribute()
+                .map(|version| (id, existing.get(version).and_then(Value::as_int).unwrap_or(1)));
+            plan_update(
+                self.resource,
+                self.action,
+                PlanInput {
+                    actor: ctx.actor.as_ref(),
+                    tenant: ctx.tenant(),
+                    sets: self.changes(self.fields.clone()),
+                    written: self.written.clone(),
+                    arguments: &self.arguments,
+                    expected_version,
+                    collect_hooks: false,
+                },
+            )?
+        };
+        match planned {
+            Ok(plan) => Ok(Some(plan)),
+            Err(reason) if self.action.require_atomic => Err(Error::MustBeAtomic {
+                resource: self.resource.name,
+                action: self.action.name,
+                reason,
+            }),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Runs `plan` against the record in hand. No row means it changed (or went) since it
+    /// was read: [`Error::StaleRecord`], as in Ash.
+    async fn persist_atomically<D: DataLayer>(&mut self, ctx: &Context<D>, plan: AtomicPlan, notify: bool) -> Result<FieldMap> {
+        let existing = self.existing.as_ref().ok_or(Error::NotFound)?;
+        let id = required_uuid(existing, pk_name(self.resource)?)?;
+        let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update)
+            .await?
+            .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
+        self.after_actions.extend(plan.after_actions);
+        self.finish(ctx, id, stored, notify).await
+    }
+
+    /// An update of record `id`, by id, as one statement: no read first. No row means
+    /// no such record the context may see: [`Error::NotFound`].
+    pub(crate) async fn commit_atomic_by_id<D: DataLayer>(
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        action: &'static ActionDef,
+        id: Uuid,
+        arguments: FieldMap,
+        plan: AtomicPlan,
+    ) -> Result<FieldMap> {
+        let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
+        changeset.after_actions = plan.after_actions;
+        let result = async {
+            let stored = run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?;
+            changeset.finish(ctx, id, stored, true).await
+        }
+        .await;
+        for hook in plan.after_transactions {
             hook(result.as_ref());
         }
         result

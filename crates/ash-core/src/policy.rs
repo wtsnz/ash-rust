@@ -185,10 +185,16 @@ pub fn authorize_write(
 }
 
 fn policy_to_filter(policy: &PolicyDef, actor: Option<&Actor>) -> Result<Filter> {
+    effects_to_filter(policy.checks, actor)
+}
+
+/// The records `effects` allow `actor`, as a filter: what [`eval_policy_effects`] decides
+/// record by record.
+pub fn effects_to_filter(effects: &[PolicyEffect], actor: Option<&Actor>) -> Result<Filter> {
     let mut forbids = Vec::new();
     let mut authorizes = Vec::new();
 
-    for effect in policy.checks {
+    for effect in effects {
         match effect {
             PolicyEffect::ForbidIf(check) => {
                 let f = check_to_filter(check, actor)?;
@@ -287,6 +293,39 @@ pub fn redact_fields(
         }
     }
     Ok(())
+}
+
+/// The records `actor` may run the write `action` on, as a filter: what [`authorize_write`]
+/// decides record by record, as Ash compiles a write's policies into an atomic update.
+pub fn write_filter(resource: &ResourceDef, action: &ActionDef, actor: Option<&Actor>) -> Result<Filter> {
+    if resource.policies.is_empty() {
+        return Ok(Filter::True);
+    }
+    let applicable: Vec<_> = resource.policies.iter().filter(|policy| policy.applies(action)).collect();
+    if applicable.is_empty() {
+        return Ok(Filter::False);
+    }
+    let (bypass_policies, normal_policies): (Vec<_>, Vec<_>) =
+        applicable.into_iter().partition(|p| p.bypass);
+    let bypass: Vec<Filter> = bypass_policies
+        .into_iter()
+        .map(|policy| policy_to_filter(policy, actor))
+        .collect::<Result<_>>()?;
+    let normal = if normal_policies.is_empty() {
+        Filter::False
+    } else {
+        Filter::and(
+            normal_policies
+                .into_iter()
+                .map(|policy| policy_to_filter(policy, actor))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    };
+    Ok(if bypass.is_empty() {
+        normal
+    } else {
+        Filter::or(bypass.into_iter().chain([normal]))
+    })
 }
 
 pub fn authorize_field_writes(

@@ -169,6 +169,12 @@ pub trait SqlDialect: Send + Sync + 'static {
         None
     }
 
+    /// Functions the data layer's statements call, created with the tables: on
+    /// Postgres, the `ash_raise_error` an atomic update raises its errors through.
+    fn database_functions(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Pattern to bind for a text filter, with wildcards in `needle` escaped.
     fn text_pattern(&self, kind: TextMatch, needle: &str, _case_insensitive: bool) -> String {
         like_pattern(kind, needle)
@@ -383,6 +389,10 @@ impl SqlDialect for PostgresDialect {
         format!("{op} = ANY({param})")
     }
 
+    fn database_functions(&self) -> &'static [&'static str] {
+        &[ASH_RAISE_ERROR]
+    }
+
     fn extension_for_type(&self, sql_type: &str) -> Option<&'static str> {
         let upper = sql_type.to_ascii_uppercase();
         if upper.starts_with("CITEXT") {
@@ -419,3 +429,14 @@ impl SqlDialect for PostgresDialect {
         format!("decode('{}', 'base64')", encoded.replace('\'', "''"))
     }
 }
+
+/// Raises an error carrying `json_data`, as AshPostgres's function of the same name does:
+/// the message is `ash_error: ` and the JSON, which the data layer turns back into the
+/// error. An atomic update calls it when one of its conditions holds.
+pub const ASH_RAISE_ERROR: &str = "CREATE OR REPLACE FUNCTION ash_raise_error(json_data jsonb) \
+RETURNS BOOLEAN AS $$ \
+BEGIN \
+    RAISE EXCEPTION 'ash_error: %', json_data::text; \
+    RETURN NULL; \
+END; \
+$$ LANGUAGE plpgsql STABLE SET search_path = '';";

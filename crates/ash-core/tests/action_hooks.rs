@@ -172,6 +172,7 @@ mod test_elixir_change_hooks {
             }
 
             update update {
+                require_atomic false;
                 primary;
                 accept [title, summary];
 

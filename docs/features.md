@@ -135,6 +135,56 @@ resource! {
 
 ---
 
+## 3b. Atomic Updates
+
+As in Ash, an update runs as one statement in the data layer rather than read, changed in
+memory and written back. Each part of the action says how it runs there:
+
+- **Changes** become values computed from the record as stored: `set`, `set_new`,
+  `set_from_arg`, `relate_actor`, the lock version (`version + 1`), and `updated_at`, which
+  moves only when a value does. A custom change implements `CustomChange::atomic`, as an
+  Ash change implements `atomic/3`; a state machine's transition sets the target state.
+- **Validations, write policies and transitions** become conditions checked in the same
+  statement, against the record as stored, each with the error it fails with: a built-in
+  validation's, `Forbidden`, `StaleRecord`, or the state machine's `InvalidTransition`. A
+  value the update sets outright is validated before the statement runs.
+
+On Postgres the update locks the record (`FOR UPDATE`) and raises a failed condition's
+error from the statement through an `ash_raise_error` function, created with the tables,
+as AshPostgres does:
+
+```sql
+UPDATE "cabs" AS t SET "status" = s.new_status, ...
+FROM (SELECT "id", $1 AS new_status, ...,
+        CASE WHEN NOT ("status" = ANY($2)) THEN ash_raise_error(...) END AS check
+      FROM "cabs" WHERE "id" = $3 LIMIT 1 FOR UPDATE) AS s
+WHERE t."id" = s."id" AND s.check IS NULL
+RETURNING t.*
+```
+
+The memory data layer runs it under its lock. SQLite, which can't raise an error from a
+statement, reads the record first, as AshSqlite does.
+
+An update by id (`update_dynamic`, and a GraphQL update mutation) needs no read at all;
+one of a record in hand (`update_existing`, or an instance action such as
+`cab.recall_on(&ctx)`) checks it hasn't changed
+since, failing with `StaleRecord` if it has.
+
+An update that needs the record in memory (a `before_action` hook, a change or validation
+function, managed relationships) can't run in the statement. As Ash's `require_atomic?`,
+`require_atomic` is on by default, so such an update fails with `Error::MustBeAtomic`
+unless its action opts out:
+
+```rust
+update rename {
+    accept [title];
+    change before_action(clean_title);
+    require_atomic false; // reads the record first
+}
+```
+
+---
+
 ## 4. Keyset & Offset Pagination
 
 Ash queries support two high-performance pagination strategies returning a uniform `Page<T>`:

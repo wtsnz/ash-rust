@@ -286,6 +286,67 @@ impl DataLayer for Memory {
         })())
     }
 
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The update as one step under the store's lock, as Ash's ETS layer runs an atomic
+    /// update: the records the query selects, each checked against the conditions and
+    /// set from its values as they were.
+    fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &ash_core::AtomicUpdate,
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        ready((|| {
+            let mut tables = self.write()?;
+            let tenant = query.tenant.as_deref();
+            let key = table_key(resource, tenant);
+            let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
+
+            let updated = {
+                let tables: &Tables = &tables;
+                let mut rows: Vec<FieldMap> = tables
+                    .get(&key)
+                    .map(|table| table.values().cloned().collect())
+                    .unwrap_or_default();
+                let mut computed = Vec::new();
+                let mut needed = Vec::new();
+                if let Some(filter) = &query.filter {
+                    filter.collect_fields(&mut needed);
+                }
+                compute(tables, tenant, resource, query, &mut rows, &needed, &mut computed)?;
+                if let Some(filter) = &query.filter {
+                    rows.retain(|row| row_matches_filter(tables, tenant, resource, filter, row));
+                }
+                if let Some(limit) = query.limit {
+                    rows.truncate(limit);
+                }
+                let matches = |filter: &Filter, row: &FieldMap| row_matches_filter(tables, tenant, resource, filter, row);
+                let mut updated = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut row = update.apply(resource, row, &matches)?;
+                    row.retain(|name, _| resource.attribute(name).is_some());
+                    updated.push(row);
+                }
+                updated
+            };
+
+            let table = tables.entry(key).or_default();
+            for row in &updated {
+                let id = row.get(pk).and_then(Value::as_uuid).ok_or(Error::NotFound)?;
+                check_identities(resource, table, id, row, table.get(&id))?;
+            }
+            for row in &updated {
+                if let Some(id) = row.get(pk).and_then(Value::as_uuid) {
+                    table.insert(id, row.clone());
+                }
+            }
+            Ok(updated)
+        })())
+    }
+
     fn run_query(
         &self,
         resource: &ResourceDef,
