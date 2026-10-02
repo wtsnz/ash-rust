@@ -2,7 +2,9 @@ use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visibl
 
 use crate::request::request_actor;
 use ash_pubsub::PubSub;
+use async_graphql::ErrorExtensions;
 use async_graphql::dynamic::*;
+use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
@@ -13,6 +15,30 @@ pub fn uncapitalize(s: &str) -> String {
     match chars.next() {
         None => String::new(),
         Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// The next event for a subscription, or `None` once the pubsub has shut down.
+///
+/// The pubsub buffers a bounded number of events per topic, so one slow subscriber can't
+/// grow the server's memory without limit. A subscriber that falls further behind than
+/// that misses the oldest events. It hears so as an error with code `MISSED_EVENTS` and
+/// the number missed, and the subscription ends there (async-graphql ends a subscription
+/// after any error). A client holding state built from events resubscribes and re-reads
+/// it, as the generated TypeScript client does.
+async fn next_event(
+    sub: &mut ash_pubsub::Subscription,
+) -> Option<Result<ash_core::Notification, async_graphql::Error>> {
+    match sub.recv().await {
+        Ok(notification) => Some(Ok(notification)),
+        Err(RecvError::Lagged(missed)) => Some(Err(async_graphql::Error::new(format!(
+            "Missed {missed} events: the subscriber fell behind"
+        ))
+        .extend_with(|_, extensions| {
+            extensions.set("code", "MISSED_EVENTS");
+            extensions.set("missed", missed);
+        }))),
+        Err(RecvError::Closed) => None,
     }
 }
 
@@ -56,7 +82,14 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                 let (actor, tenant) = subscriber::<D>(&ctx);
 
                 let stream = async_stream::stream! {
-                    while let Ok(notif) = sub.recv().await {
+                    while let Some(event) = next_event(&mut sub).await {
+                        let notif = match event {
+                            Ok(notif) => notif,
+                            Err(missed) => {
+                                yield Err(missed);
+                                break;
+                            }
+                        };
                         if notif.action_kind == ActionKind::Create {
                             let mut record = notif.record_fields;
                             if let Some(f) = &filter
@@ -106,7 +139,14 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                 let (actor, tenant) = subscriber::<D>(&ctx);
 
                 let stream = async_stream::stream! {
-                    while let Ok(notif) = sub.recv().await {
+                    while let Some(event) = next_event(&mut sub).await {
+                        let notif = match event {
+                            Ok(notif) => notif,
+                            Err(missed) => {
+                                yield Err(missed);
+                                break;
+                            }
+                        };
                         if notif.action_kind == ActionKind::Update {
                             if let Some(tid) = target_id
                                 && notif.id != tid
@@ -152,7 +192,14 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                 let (actor, tenant) = subscriber::<D>(&ctx);
 
                 let stream = async_stream::stream! {
-                    while let Ok(notif) = sub.recv().await {
+                    while let Some(event) = next_event(&mut sub).await {
+                        let notif = match event {
+                            Ok(notif) => notif,
+                            Err(missed) => {
+                                yield Err(missed);
+                                break;
+                            }
+                        };
                         if notif.action_kind == ActionKind::Destroy {
                             if let Some(tid) = target_id
                                 && notif.id != tid

@@ -176,6 +176,13 @@ subscription {
 }
 ```
 
+The `PubSub` buffers a bounded number of events per subscriber (`PubSub::with_capacity`),
+so a slow client can't grow the server's memory without limit. A subscriber that falls
+further behind misses the oldest events. It receives an error with
+`extensions: { code: "MISSED_EVENTS", missed: <count> }`, and the subscription ends there.
+Clients should resubscribe and re-read whatever they built from its events, as the
+`ash-typescript` client does.
+
 ### 7. Axum Web Integration
 
 Enable the `axum` feature in `Cargo.toml`:

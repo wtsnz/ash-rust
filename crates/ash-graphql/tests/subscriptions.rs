@@ -477,3 +477,60 @@ async fn null_subscription_arguments_mean_none() {
     assert!(event.errors.is_empty(), "{:?}", event.errors);
     assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["title"], "Unfiltered");
 }
+
+async fn next<S: futures_util::Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
+    tokio::time::timeout(Duration::from_secs(2), stream.next()).await.unwrap()
+}
+
+/// A subscriber that falls further behind than the pubsub buffers is told how many events
+/// it missed, rather than its subscription silently ending, so it can resubscribe and
+/// re-read what it holds.
+#[tokio::test]
+async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
+    let pubsub = PubSub::with_capacity(4);
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub)
+        .finish::<Memory>()
+        .unwrap();
+    let create = |title: String| {
+        let ctx = ctx.clone();
+        async move {
+            let mut input = ash_core::FieldMap::new();
+            input.insert("title".into(), ash_core::Value::String(title));
+            ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+        }
+    };
+    let mut stream =
+        schema.execute_stream(Request::new("subscription { ticketCreated { title } }").data(ctx.clone()));
+
+    // Subscribed: the first create is heard.
+    let first = tokio::spawn(async move {
+        let event = next(&mut stream).await;
+        (stream, event)
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    create("First".into()).await;
+    let (mut stream, event) = first.await.unwrap();
+    assert_eq!(event.unwrap().data.into_json().unwrap()["ticketCreated"]["title"], "First");
+
+    // Twenty creates while the subscriber isn't reading overflow its buffer of four.
+    for i in 0..20 {
+        create(format!("Burst {i}")).await;
+    }
+    let lagged = next(&mut stream).await.expect("told it fell behind");
+    assert_eq!(lagged.errors.len(), 1, "{:?}", lagged);
+    let error = lagged.errors[0].extensions.as_ref().expect("extensions");
+    assert_eq!(error.get("code"), Some(&async_graphql::Value::from("MISSED_EVENTS")));
+    assert_eq!(error.get("missed"), Some(&async_graphql::Value::from(16)));
+
+    // The subscription ends there; a new one hears what happens next.
+    assert!(next(&mut stream).await.is_none());
+    let mut stream =
+        schema.execute_stream(Request::new("subscription { ticketCreated { title } }").data(ctx.clone()));
+    let later = tokio::spawn(async move { next(&mut stream).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    create("Later".into()).await;
+    let event = later.await.unwrap().unwrap();
+    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["title"], "Later");
+}
