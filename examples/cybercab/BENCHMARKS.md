@@ -153,6 +153,26 @@ publishes in 30 ms instead of 129 ms, and 99 of the 100 subscribers fall behind 
 them told; none silently). The benchmark's subscribers don't resubscribe, so delivery
 drops to 1.4%. Fix 4 is aimed at this.
 
+## After writing only changes: no more refetching
+
+An update used to send the data layer the caller's whole copy of the record. One made
+from a stale copy wrote that copy's other fields back over newer values: a telemetry
+report could undo an operator's recall. As in Ash, an update now writes only the
+attributes it changes, so the simulation reports from the copy of each cab it read at
+the start of the tick, rather than fetching every cab again (a whole-table copy each).
+
+| Fleet | Tick p50 | Tick p95 before | Tick p95 after | Actions/s before | after |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 250 | 7 ms | 92 ms | **24 ms** | 3,045 | **10,584** |
+| 1,000 | 97 ms | 1,483 ms | **194 ms** | 925 | **4,771** |
+| 2,500 | 279 ms | 11,257 ms | **451 ms** | 282 | **3,597** |
+| 5,000 | 700 ms | skipped | 1,108 ms | – | 2,478 |
+| 10,000 | 2,222 ms | skipped | 3,106 ms | – | 1,475 |
+
+On the in-memory store, the simulation now keeps up in real time to about 4,000 cabs, up
+from about 500. Past that, the transitions that still fetch a cab or trip by id (arrival,
+boarding, drop-off), and the pulse's whole-fleet reads, copy whole tables.
+
 ## What to fix, in order
 
 1. **The live pipeline must never drop silently.** This is a correctness bug, not just a

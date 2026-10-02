@@ -508,9 +508,10 @@ impl<D: DataLayer> Simulation<D> {
         motion.ticks_since_report += 1;
         let changed = speed_kph != cab.speed_kph || battery != cab.battery_pct;
         if moved || arrived || changed || motion.ticks_since_report >= 10 {
+            // The tick's copy will do: an update writes only what it changes, so this
+            // doesn't undo anything done to the cab since the tick began.
             let at = position_of(&self.city, motion);
-            let latest = Cab::get(&self.ctx, cab.id).await?;
-            latest
+            cab.clone()
                 .report_on(&self.ctx)
                 .lng(at[0])
                 .lat(at[1])
