@@ -2,74 +2,44 @@ use ash_core::{AttrType, FieldMap, Value as AshValue};
 use async_graphql::dynamic::TypeRef;
 use async_graphql::{Name, Value as GqlValue};
 
+/// The GraphQL scalar or enum an Ash type is, by name, as AshGraphql maps them: UUIDs are
+/// `ID`, UTC datetimes `DateTime`, maps `Json`, and an enum type (a named atom) its own
+/// enum. An unnamed atom is constrained text, a `String`, as a plain `:atom` is.
+pub fn graphql_type_name(ty: AttrType) -> &'static str {
+    match ty {
+        AttrType::Uuid => TypeRef::ID,
+        AttrType::Integer => TypeRef::INT,
+        AttrType::Float => TypeRef::FLOAT,
+        AttrType::Boolean => TypeRef::BOOLEAN,
+        AttrType::UtcDatetime { .. } => "DateTime",
+        AttrType::Date => "Date",
+        AttrType::Decimal => "Decimal",
+        AttrType::Map => "Json",
+        AttrType::Atom { name: Some(name), .. } => name,
+        AttrType::Atom { name: None, .. }
+        | AttrType::String
+        | AttrType::CiString
+        | AttrType::Binary
+        | AttrType::Inet
+        | AttrType::Array
+        | AttrType::Vector { .. } => TypeRef::STRING,
+    }
+}
+
+/// The custom scalars the schema's types use.
+pub const CUSTOM_SCALARS: &[&str] = &["DateTime", "Date", "Decimal", "Json"];
+
 /// Converts an Ash [`AttrType`] into an `async_graphql` [`TypeRef`].
 pub fn attr_type_to_type_ref(
-    resource_name: &str,
-    field_name: &str,
+    _resource_name: &str,
+    _field_name: &str,
     ty: AttrType,
     allow_nil: bool,
 ) -> TypeRef {
     match ty {
-        AttrType::Uuid => {
-            if allow_nil {
-                TypeRef::named(TypeRef::ID)
-            } else {
-                TypeRef::named_nn(TypeRef::ID)
-            }
-        }
-        AttrType::String
-        | AttrType::CiString
-        | AttrType::Date
-        | AttrType::Binary
-        | AttrType::UtcDatetime { .. }
-        | AttrType::Inet
-        | AttrType::Decimal => {
-            if allow_nil {
-                TypeRef::named(TypeRef::STRING)
-            } else {
-                TypeRef::named_nn(TypeRef::STRING)
-            }
-        }
-        AttrType::Integer => {
-            if allow_nil {
-                TypeRef::named(TypeRef::INT)
-            } else {
-                TypeRef::named_nn(TypeRef::INT)
-            }
-        }
-        AttrType::Float => {
-            if allow_nil {
-                TypeRef::named(TypeRef::FLOAT)
-            } else {
-                TypeRef::named_nn(TypeRef::FLOAT)
-            }
-        }
-        AttrType::Boolean => {
-            if allow_nil {
-                TypeRef::named(TypeRef::BOOLEAN)
-            } else {
-                TypeRef::named_nn(TypeRef::BOOLEAN)
-            }
-        }
-        AttrType::Atom { .. } => {
-            let enum_name = enum_type_name(resource_name, field_name);
-            if allow_nil {
-                TypeRef::named(enum_name)
-            } else {
-                TypeRef::named_nn(enum_name)
-            }
-        }
-        AttrType::Map => {
-            let json_type = "JSON";
-            if allow_nil {
-                TypeRef::named(json_type)
-            } else {
-                TypeRef::named_nn(json_type)
-            }
-        }
         AttrType::Array => {
             if allow_nil {
-                TypeRef::named_list(TypeRef::STRING)
+                TypeRef::named_nn_list(TypeRef::STRING)
             } else {
                 TypeRef::named_nn_list_nn(TypeRef::STRING)
             }
@@ -81,24 +51,17 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn_list_nn(TypeRef::FLOAT)
             }
         }
+        _ if allow_nil => TypeRef::named(graphql_type_name(ty)),
+        _ => TypeRef::named_nn(graphql_type_name(ty)),
     }
 }
 
-/// Generates a standardized Enum type name for an atom field on a resource.
-pub fn enum_type_name(resource_name: &str, field_name: &str) -> String {
-    let mut capitalized_field = String::new();
-    let mut capitalize_next = true;
-    for ch in field_name.chars() {
-        if ch == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            capitalized_field.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else {
-            capitalized_field.push(ch);
-        }
+/// The enum type a named atom is, if it is one.
+pub fn enum_type_name(ty: AttrType) -> Option<&'static str> {
+    match ty {
+        AttrType::Atom { name: Some(name), .. } => Some(name),
+        _ => None,
     }
-    format!("{}{}Enum", resource_name, capitalized_field)
 }
 
 /// Converts an [`ash_core::Value`] into an `async_graphql` [`GqlValue`].
@@ -127,7 +90,9 @@ pub fn ash_value_to_graphql_value(val: &AshValue) -> GqlValue {
 pub fn ash_value_to_graphql_value_typed(val: &AshValue, ty: AttrType) -> GqlValue {
     match (val, ty) {
         (AshValue::Null, _) => GqlValue::Null,
-        (AshValue::String(s), AttrType::Atom { .. }) => GqlValue::Enum(Name::new(s.to_uppercase())),
+        (AshValue::String(s), AttrType::Atom { name: Some(_), .. }) => {
+            GqlValue::Enum(Name::new(s.to_uppercase()))
+        }
         (AshValue::String(s), AttrType::Float) => match s.parse::<f64>() {
             Ok(value) => float_value(value),
             Err(_) => GqlValue::Null,
@@ -276,8 +241,8 @@ pub fn parse_input_val(
         AttrType::Vector { dimensions } => {
             Ok(AshValue::String(parse_vector_input(acc, dimensions)?))
         }
-        AttrType::Atom { one_of, .. } => {
-            let name = acc.enum_name()?;
+        AttrType::Atom { one_of, name: type_name } => {
+            let name = if type_name.is_some() { acc.enum_name()? } else { acc.string()? };
             if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
                 Ok(AshValue::String((*matched).to_string()))
             } else {

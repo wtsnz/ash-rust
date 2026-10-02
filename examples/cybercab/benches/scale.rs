@@ -332,7 +332,7 @@ async fn watch(addr: String, watcher: Arc<Watcher>, ready: Arc<AtomicUsize>) {
         .send(send(json!({
             "id": "cabs",
             "type": "subscribe",
-            "payload": { "query": "subscription { cabUpdated { id lng lat heading_deg speed_kph battery_pct last_seen_at } }" },
+            "payload": { "query": "subscription { cabUpdated { updated { id lng lat headingDeg speedKph batteryPct lastSeenAt } } }" },
         })))
         .await
         .expect("subscribes");
@@ -354,7 +354,7 @@ async fn watch(addr: String, watcher: Arc<Watcher>, ready: Arc<AtomicUsize>) {
                 }
             }
             Some("next") => {
-                let sent = message["payload"]["data"]["cabUpdated"]["last_seen_at"]
+                let sent = message["payload"]["data"]["cabUpdated"]["updated"]["lastSeenAt"]
                     .as_str()
                     .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
                 if let Some(sent) = sent {

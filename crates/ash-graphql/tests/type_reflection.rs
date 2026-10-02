@@ -14,7 +14,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["open", "in_progress", "closed"],
-            name: None,
+            name: Some("TicketStatus"),
         },
     ),
     AttributeDef::optional("secret_notes", AttrType::String),
@@ -76,7 +76,7 @@ async fn test_phase1_type_reflection_and_schema_assembly() {
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let data_str = res.data.to_string();
     assert!(data_str.contains("Ticket"), "Schema must contain Ticket type");
-    assert!(data_str.contains("TicketStatusEnum"), "Schema must contain TicketStatusEnum");
+    assert!(data_str.contains("TicketStatus"), "Schema must contain the TicketStatus enum");
 }
 
 #[tokio::test]
@@ -97,7 +97,7 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
     }));
 
     let mut builder = Schema::build("Query", None, None).register(query);
-    builder = builder.register(Scalar::new("JSON"));
+    builder = builder.register(Scalar::new("Json"));
     builder = builder.register(ash_graphql::build_resource_object::<ash_memory::Memory>(&TICKET_DEF));
     for e in ash_graphql::collect_enums_for_resource(&TICKET_DEF) {
         builder = builder.register(e);
@@ -110,8 +110,8 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
                 id
                 title
                 status
-                upper_title
-                secret_notes
+                upperTitle
+                secretNotes
             }
         }
     "#;
@@ -123,8 +123,8 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
     let ticket_json = &val["ticket"];
     assert_eq!(ticket_json["title"], "Fix GraphQL bug");
     assert_eq!(ticket_json["status"], "OPEN");
-    assert_eq!(ticket_json["upper_title"], "FIX GRAPHQL BUG");
-    assert!(ticket_json["secret_notes"].is_null(), "secret_notes should be redacted when no actor is present");
+    assert_eq!(ticket_json["upperTitle"], "FIX GRAPHQL BUG");
+    assert!(ticket_json["secretNotes"].is_null(), "secret_notes should be redacted when no actor is present");
 
     // 2. Authenticated request (actor present) -> secret_notes must be visible
     let actor = Actor::new(Uuid::new_v4());
@@ -133,5 +133,5 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let ticket_json = &val["ticket"];
-    assert_eq!(ticket_json["secret_notes"], "Top secret diagnostics");
+    assert_eq!(ticket_json["secretNotes"], "Top secret diagnostics");
 }

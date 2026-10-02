@@ -71,24 +71,25 @@ async fn reads_carry_their_relationships() {
     let data = room
         .graphql(
             r#"{
-            listTrips(filter: { status: { eq: "completed" } }, sort: [{ field: requested_at, order: DESC }], limit: 5) {
-                code fare_cents rider { display_name tier } cab { call_sign } zone { name }
+            listTrips(filter: { status: { eq: "completed" } }, sort: [{ field: REQUESTED_AT, order: DESC }], first: 5) {
+                results { code fareCents rider { displayName tier } cab { callSign } zone { name } }
             }
-            listCabs { call_sign status battery_pct trips_completed }
+            listCabs { count results { callSign status batteryPct tripsCompleted } }
         }"#,
     )
     .await;
-    let trips = data["listTrips"].as_array().unwrap();
+    let trips = data["listTrips"]["results"].as_array().unwrap();
     assert_eq!(trips.len(), 5);
     assert!(
         trips
             .iter()
-            .all(|t| t["rider"]["display_name"].is_string() && t["cab"]["call_sign"].is_string())
+            .all(|t| t["rider"]["displayName"].is_string() && t["cab"]["callSign"].is_string())
     );
     assert_eq!(
-        data["listCabs"].as_array().unwrap().len(),
+        data["listCabs"]["results"].as_array().unwrap().len(),
         cybercab::seed::FLEET_SIZE
     );
+    assert_eq!(data["listCabs"]["count"], cybercab::seed::FLEET_SIZE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -114,7 +115,7 @@ async fn the_fleet_moves_live_over_the_websocket() {
         .send(send(json!({
             "id": "cabs",
             "type": "subscribe",
-            "payload": { "query": "subscription { cabUpdated { call_sign lng lat speed_kph } }" },
+            "payload": { "query": "subscription { cabUpdated { updated { callSign lng lat speedKph } } }" },
         })))
         .await
         .unwrap();
@@ -130,7 +131,7 @@ async fn the_fleet_moves_live_over_the_websocket() {
         {
             let message: Value = serde_json::from_str(message.unwrap().to_text().unwrap()).unwrap();
             if message["type"] == "next"
-                && message["payload"]["data"]["cabUpdated"]["speed_kph"].as_i64() > Some(0)
+                && message["payload"]["data"]["cabUpdated"]["updated"]["speedKph"].as_i64() > Some(0)
             {
                 moving += 1;
             }
@@ -143,12 +144,12 @@ async fn the_fleet_moves_live_over_the_websocket() {
 async fn operators_command_cabs_through_the_api() {
     let room = room().await;
     let cabs = room
-        .graphql(r#"{ listCabs(filter: { status: { eq: "available" } }, limit: 1) { id } }"#)
+        .graphql(r#"{ listCabs(filter: { status: { eq: "available" } }, first: 1) { results { id } } }"#)
         .await;
-    let id = cabs["listCabs"][0]["id"].as_str().unwrap();
+    let id = cabs["listCabs"]["results"][0]["id"].as_str().unwrap();
     let recalled = room
         .graphql(
-        &format!(r#"mutation {{ recallCab(input: {{ id: "{id}" }}) {{ success errors {{ message }} result {{ status }} }} }}"#),
+        &format!(r#"mutation {{ recallCab(id: "{id}") {{ errors {{ message }} result {{ status }} }} }}"#),
     )
     .await;
     assert_eq!(
@@ -158,8 +159,9 @@ async fn operators_command_cabs_through_the_api() {
     // The state machine refuses what the cab's state doesn't allow.
     let refused = room
         .graphql(
-        &format!(r#"mutation {{ beginRideCab(input: {{ id: "{id}" }}) {{ success errors {{ message }} }} }}"#),
+        &format!(r#"mutation {{ beginRideCab(id: "{id}") {{ result {{ status }} errors {{ message }} }} }}"#),
     )
     .await;
-    assert_eq!(refused["beginRideCab"]["success"], false, "{refused}");
+    assert!(refused["beginRideCab"]["result"].is_null(), "{refused}");
+    assert!(refused["beginRideCab"]["errors"][0]["message"].is_string(), "{refused}");
 }

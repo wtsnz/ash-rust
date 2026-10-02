@@ -7,7 +7,10 @@ use async_graphql::dataloader::DataLoader;
 use async_graphql::dynamic::*;
 
 use crate::dataloader::{AshBatchLoader, RelatedKey};
+use crate::filter::{parse_resource_filter, resource_filter_input_name};
+use crate::names::camel;
 use crate::request::{request_actor, request_context};
+use crate::sort::{parse_resource_sort, resource_sort_input_name};
 use crate::types::{
     ash_value_to_graphql_value, ash_value_to_graphql_value_typed, attr_type_to_type_ref,
     enum_type_name,
@@ -30,7 +33,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let allow_nil = attr.allow_nil || has_field_policy;
         let type_ref = attr_type_to_type_ref(resource.name, attr.name, attr.ty, allow_nil);
 
-        let field = Field::new(attr_name, type_ref, move |ctx| {
+        let field = Field::new(camel(attr_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
                     let actor = request_actor::<D>(&ctx);
@@ -73,7 +76,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let type_ref = attr_type_to_type_ref(resource.name, calc.name, calc.ty, true);
         let expr = calc.expr;
 
-        let field = Field::new(calc_name, type_ref, move |ctx| {
+        let field = Field::new(camel(calc_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
                     match map.get(calc_name) {
@@ -101,12 +104,17 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         obj = obj.field(field);
     }
 
-    // 3. Aggregates
+    // 3. Aggregates. A count (or exists) always has a value; a sum or first of nothing
+    // is null, as in AshGraphql.
     for agg in resource.aggregates {
         let agg_name = agg.name;
-        let type_ref = attr_type_to_type_ref(resource.name, agg.name, agg.ty, true);
+        let always = matches!(
+            agg.kind,
+            ash_core::AggregateKind::Count | ash_core::AggregateKind::Exists
+        );
+        let type_ref = attr_type_to_type_ref(resource.name, agg.name, agg.ty, !always);
 
-        let field = Field::new(agg_name, type_ref, move |ctx| {
+        let field = Field::new(camel(agg_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
                     match map.get(agg_name) {
@@ -116,30 +124,48 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                         _ => {}
                     }
                 }
-                Ok(Some(FieldValue::value(GqlValue::Number(0.into()))))
+                Ok(always.then(|| FieldValue::value(GqlValue::Number(0.into()))))
             })
         });
 
         obj = obj.field(field);
     }
 
-    // 4. Relationships, each loaded as the request's context reads it.
+    // 4. Relationships, each loaded as the request's context reads it. A belongs_to whose
+    // key can't be nil is never null, unless policies may hide what it points to; a
+    // to-many relationship takes the related resource's sort and filter, and a limit and
+    // offset, as in AshGraphql.
     for rel in resource.relationships {
         let dest_res = (rel.destination)();
         let rel_name = rel.name;
         let to_one = matches!(rel.kind, RelKind::BelongsTo | RelKind::HasOne);
-        let type_ref = if to_one {
-            TypeRef::named(dest_res.name)
-        } else {
+        // As AshGraphql's guide has it, a field a policy may hide is nullable, as if it
+        // were in `nullable_fields`: a related record behind read policies may not load.
+        let required = rel.kind == RelKind::BelongsTo
+            && dest_res.policies.is_empty()
+            && rel
+                .source_columns()
+                .iter()
+                .all(|key| resource.attribute(key).is_some_and(|attr| !attr.allow_nil));
+        let type_ref = if !to_one {
             TypeRef::named_nn_list_nn(dest_res.name)
+        } else if required {
+            TypeRef::named_nn(dest_res.name)
+        } else {
+            TypeRef::named(dest_res.name)
         };
 
-        let field = Field::new(rel_name, type_ref, move |ctx| {
+        let mut field = Field::new(camel(rel_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() else {
                     return Ok(None);
                 };
+                let shaped = !to_one
+                    && ["sort", "filter", "limit", "offset"]
+                        .iter()
+                        .any(|arg| ctx.args.get(arg).is_some_and(|value| !value.is_null()));
                 let rows = match map.get(rel_name) {
+                    _ if shaped => load_shaped::<D>(&ctx, resource, rel, map).await?,
                     // Loaded along with the parent.
                     Some(Value::Null) => Vec::new(),
                     Some(Value::Map(m)) => vec![m.clone()],
@@ -161,10 +187,101 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
             })
         });
 
+        if !to_one {
+            field = field
+                .argument(InputValue::new(
+                    "sort",
+                    TypeRef::named_list(resource_sort_input_name(dest_res.name)),
+                ))
+                .argument(InputValue::new(
+                    "filter",
+                    TypeRef::named(resource_filter_input_name(dest_res.name)),
+                ))
+                .argument(InputValue::new("limit", TypeRef::named(TypeRef::INT)))
+                .argument(InputValue::new("offset", TypeRef::named(TypeRef::INT)));
+        }
         obj = obj.field(field);
     }
 
     obj
+}
+
+/// `source`'s related rows for a to-many relationship read with a sort, filter, limit or
+/// offset: the related resource's primary read, with the user's filter and the
+/// relationship's key, so the data layer does the work.
+async fn load_shaped<D: DataLayer + Clone + 'static>(
+    ctx: &ResolverContext<'_>,
+    resource: &'static ResourceDef,
+    rel: &'static RelationshipDef,
+    source: &FieldMap,
+) -> async_graphql::Result<Vec<FieldMap>> {
+    let destination = (rel.destination)();
+    let mut filters = Vec::new();
+    if let Some(filter) = ctx.args.get("filter").filter(|value| !value.is_null()) {
+        filters.push(parse_resource_filter(destination, &filter.object()?)?);
+    }
+    let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
+        Some(sort) => parse_resource_sort(destination, &sort.list()?)?,
+        None => Vec::new(),
+    };
+    let number = |name: &str| {
+        ctx.args
+            .get(name)
+            .and_then(|value| value.i64().ok())
+            .map(|n| n.max(0) as usize)
+    };
+    let (limit, offset) = (number("limit"), number("offset"));
+
+    if rel.kind == RelKind::HasMany && rel.through.is_none() {
+        for (source_key, destination_key) in rel.key_pairs() {
+            filters.push(ash_core::Filter::eq(
+                destination_key,
+                source.get(source_key).cloned().unwrap_or(Value::Null),
+            ));
+        }
+        let ash = request_context::<D>(ctx)?;
+        let query = ash_core::CompiledQuery {
+            filter: Some(ash_core::Filter::And(filters)),
+            sort,
+            limit,
+            offset,
+            tenant: ash.tenant.clone(),
+            ..ash_core::CompiledQuery::default()
+        };
+        return crate::query::run_read(
+            &ash,
+            destination,
+            destination.default_read(),
+            &FieldMap::new(),
+            query,
+        )
+        .await;
+    }
+
+    // Through a join resource: shape the loaded rows here.
+    let mut rows = load_relationship::<D>(ctx, resource, rel, source).await?;
+    let filter = ash_core::Filter::And(filters);
+    rows.retain(|row| filter.matches_on(destination, row));
+    rows.sort_by(|a, b| {
+        for s in &sort {
+            let ty = destination.attribute(&s.field).map(|attr| attr.ty);
+            let order = ash_core::compare_typed(
+                ty,
+                a.get(&s.field).unwrap_or(&Value::Null),
+                b.get(&s.field).unwrap_or(&Value::Null),
+            );
+            let order = if s.descending { order.reverse() } else { order };
+            if order != std::cmp::Ordering::Equal {
+                return order;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+    Ok(rows
+        .into_iter()
+        .skip(offset.unwrap_or(0))
+        .take(limit.unwrap_or(usize::MAX))
+        .collect())
 }
 
 /// `source`'s `rel` rows, batched through the request's dataloader when it reads as the
@@ -192,16 +309,26 @@ async fn load_relationship<D: DataLayer + Clone + 'static>(
     Ok(related.pop().unwrap_or_default())
 }
 
-/// Collects all [`Enum`] types needed for atom attributes on a resource.
+/// The enum types a resource's attributes, aggregates and calculations use: one per
+/// named atom, with its values upper-cased.
 pub fn collect_enums_for_resource(resource: &'static ResourceDef) -> Vec<Enum> {
-    let mut enums = Vec::new();
-    for attr in resource.attributes {
-        if let AttrType::Atom { one_of, .. } = attr.ty {
-            let enum_name = enum_type_name(resource.name, attr.name);
-            let mut gql_enum = Enum::new(enum_name);
+    let types = resource
+        .attributes
+        .iter()
+        .map(|attr| attr.ty)
+        .chain(resource.aggregates.iter().map(|agg| agg.ty))
+        .chain(resource.calculations.iter().map(|calc| calc.ty))
+        .chain(resource.actions.iter().flat_map(|action| action.arguments.iter().map(|arg| arg.ty)));
+    let mut enums: Vec<Enum> = Vec::new();
+    let mut seen = Vec::new();
+    for ty in types {
+        if let (Some(name), AttrType::Atom { one_of, .. }) = (enum_type_name(ty), ty)
+            && !seen.contains(&name)
+        {
+            seen.push(name);
+            let mut gql_enum = Enum::new(name);
             for variant in one_of {
-                let item_name = variant.to_uppercase();
-                gql_enum = gql_enum.item(EnumItem::new(item_name));
+                gql_enum = gql_enum.item(EnumItem::new(variant.to_uppercase()));
             }
             enums.push(gql_enum);
         }

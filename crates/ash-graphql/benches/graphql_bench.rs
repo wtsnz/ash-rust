@@ -69,7 +69,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["OPEN", "CLOSED"],
-            name: None,
+            name: Some("TicketStatus"),
         },
     ),
     AttributeDef::required("priority", AttrType::Integer),
@@ -232,6 +232,12 @@ fn bench_graphql_schema_build(c: &mut Criterion) {
     group.finish();
 }
 
+/// Runs `query` once, so a bench never times an error response.
+fn assert_ok(rt: &tokio::runtime::Runtime, schema: &async_graphql::dynamic::Schema, query: &str) {
+    let res = rt.block_on(schema.execute(Request::new(query)));
+    assert!(res.errors.is_empty(), "{query}: {:?}", res.errors);
+}
+
 fn bench_graphql_queries(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mem = Memory::new();
@@ -243,6 +249,7 @@ fn bench_graphql_queries(c: &mut Criterion) {
         r#"query {{ getTicket(id: "{}") {{ id title status priority }} }}"#,
         sample_ticket_id
     );
+    assert_ok(&rt, &schema, &query_single);
     group.bench_function("single_record_by_id", |b| {
         b.to_async(&rt).iter(|| async {
             let res = schema.execute(Request::new(&query_single)).await;
@@ -251,7 +258,8 @@ fn bench_graphql_queries(c: &mut Criterion) {
     });
 
     // 2. Collection Query (100 items)
-    let query_collection = r#"query { listTickets(limit: 100) { id title status priority } }"#;
+    let query_collection = r#"query { listTickets(first: 100) { results { id title status priority } } }"#;
+    assert_ok(&rt, &schema, query_collection);
     group.bench_function("collection_100_records", |b| {
         b.to_async(&rt).iter(|| async {
             let res = schema.execute(Request::new(query_collection)).await;
@@ -265,14 +273,13 @@ fn bench_graphql_queries(c: &mut Criterion) {
             listTickets(
                 filter: { status: { eq: OPEN } }
                 sort: [{ field: PRIORITY, order: DESC }]
-                limit: 50
+                first: 50
             ) {
-                id
-                title
-                priority
+                results { id title priority }
             }
         }
     "#;
+    assert_ok(&rt, &schema, query_filter_sort);
     group.bench_function("filtered_and_sorted_query", |b| {
         b.to_async(&rt).iter(|| async {
             let res = schema.execute(Request::new(query_filter_sort)).await;
@@ -280,26 +287,18 @@ fn bench_graphql_queries(c: &mut Criterion) {
         });
     });
 
-    // 4. Relay Keyset Pagination
+    // 4. Keyset Pagination
     let query_relay = r#"
         query {
-            ticketsConnection(first: 20) {
-                totalCount
-                pageInfo {
-                    hasNextPage
-                    endCursor
-                }
-                edges {
-                    cursor
-                    node {
-                        id
-                        title
-                    }
-                }
+            listTickets(first: 20) {
+                count
+                endKeyset
+                results { id title }
             }
         }
     "#;
-    group.bench_function("relay_keyset_pagination_20", |b| {
+    assert_ok(&rt, &schema, query_relay);
+    group.bench_function("keyset_pagination_20", |b| {
         b.to_async(&rt).iter(|| async {
             let res = schema.execute(Request::new(query_relay)).await;
             black_box(res);
@@ -309,17 +308,12 @@ fn bench_graphql_queries(c: &mut Criterion) {
     // 5. DataLoader Nested Relationships (Resolving author for 100 tickets in 1 batched roundtrip)
     let query_nested = r#"
         query {
-            listTickets(limit: 100) {
-                id
-                title
-                author {
-                    id
-                    name
-                    email
-                }
+            listTickets(first: 100) {
+                results { id title author { id name email } }
             }
         }
     "#;
+    assert_ok(&rt, &schema, query_nested);
     group.bench_function("dataloader_nested_100_tickets", |b| {
         b.to_async(&rt).iter(|| async {
             let res = schema.execute(Request::new(query_nested)).await;
@@ -346,7 +340,7 @@ fn bench_graphql_mutations(c: &mut Criterion) {
                 title: "Benchmarked Critical Failure",
                 status: OPEN,
                 priority: 1,
-                author_id: "{author_id}"
+                authorId: "{author_id}"
             }}) {{
                 result {{
                     id
@@ -354,7 +348,7 @@ fn bench_graphql_mutations(c: &mut Criterion) {
                     status
                 }}
                 errors {{
-                    field
+                    fields
                     message
                 }}
             }}
@@ -362,6 +356,7 @@ fn bench_graphql_mutations(c: &mut Criterion) {
         "#
     );
 
+    assert_ok(&rt, &schema, &mutation);
     group.bench_function("mutation_open_ticket", |b| {
         b.to_async(&rt).iter(|| async {
             let res = schema.execute(Request::new(&mutation)).await;
@@ -380,7 +375,7 @@ fn bench_axum_http_roundtrip(c: &mut Criterion) {
     let mut group = c.benchmark_group("graphql_http");
 
     let payload = serde_json::json!({
-        "query": "query { listTickets(limit: 20) { id title status priority } }"
+        "query": "query { listTickets(first: 20) { results { id title status priority } } }"
     })
     .to_string();
 
@@ -442,8 +437,9 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
         (ctx, s)
     });
 
-    let query_100 = r#"query { listTickets(limit: 100) { id title status priority } }"#;
+    let query_100 = r#"query { listTickets(first: 100) { results { id title status priority } } }"#;
 
+    assert_ok(&rt, &sqlite_schema, query_100);
     group.bench_function("sqlite_list_100_tickets", |b| {
         b.to_async(&rt).iter(|| async {
             let res = sqlite_schema.execute(Request::new(query_100)).await;

@@ -145,7 +145,7 @@ fn role(role: &str) -> Actor {
     Actor::new(Uuid::new_v4()).with_role(role)
 }
 
-const DOCKS: &str = "{ listDocks { name notes berths { code dock { name } } } }";
+const DOCKS: &str = "{ listDocks { results { name notes berths { code dock { name } } } } }";
 
 #[tokio::test]
 async fn relationships_load_as_the_request_reads() {
@@ -154,7 +154,7 @@ async fn relationships_load_as_the_request_reads() {
     // The harbourmaster sees the notes, and only the open berth.
     let harbourmaster = h.acme.with_actor(role("harbourmaster"));
     assert_eq!(
-        h.as_(&harbourmaster, DOCKS).await["listDocks"],
+        h.as_(&harbourmaster, DOCKS).await["listDocks"]["results"],
         json!([{
             "name": "North",
             "notes": "keys under the mat",
@@ -164,19 +164,19 @@ async fn relationships_load_as_the_request_reads() {
 
     // A clerk reads the same docks without the notes.
     let clerk = h.acme.with_actor(role("clerk"));
-    assert_eq!(h.as_(&clerk, DOCKS).await["listDocks"][0]["notes"], Value::Null);
+    assert_eq!(h.as_(&clerk, DOCKS).await["listDocks"]["results"][0]["notes"], Value::Null);
 
     // Without an actor the dock's read policy hides it, through a berth too.
-    let berths = "{ listBerths { code dock { name } } }";
+    let berths = "{ listBerths { results { code dock { name } } } }";
     assert_eq!(
-        h.as_(&h.acme, berths).await["listBerths"],
+        h.as_(&h.acme, berths).await["listBerths"]["results"],
         json!([{ "code": "A", "dock": null }])
     );
 
     // Another tenant's berth can't reach acme's dock.
     let globex = h.globex.with_actor(role("harbourmaster"));
     assert_eq!(
-        h.as_(&globex, berths).await["listBerths"],
+        h.as_(&globex, berths).await["listBerths"]["results"],
         json!([{ "code": "C", "dock": null }])
     );
 }
@@ -188,8 +188,8 @@ async fn an_actor_given_alongside_the_context_acts_for_it() {
         .data(h.acme.clone())
         .data(role("harbourmaster"));
     let docks = h.run(request).await;
-    assert_eq!(docks["listDocks"][0]["notes"], "keys under the mat");
-    assert_eq!(docks["listDocks"][0]["berths"][0]["dock"]["name"], "North");
+    assert_eq!(docks["listDocks"]["results"][0]["notes"], "keys under the mat");
+    assert_eq!(docks["listDocks"]["results"][0]["berths"][0]["dock"]["name"], "North");
 }
 
 #[tokio::test]
@@ -197,24 +197,22 @@ async fn mutations_run_as_the_actor_given_alongside_the_context() {
     let h = Harbour::new().await;
     // Only the harbourmaster may write a dock's notes.
     let mutation = r#"mutation { createDock(input: { name: "South", notes: "mind the gap" }) {
-        success errors { message } result { name }
+        errors { message } result { name }
     } }"#;
     let created = h
         .run(Request::new(mutation).data(h.acme.clone()).data(role("harbourmaster")))
         .await;
-    assert_eq!(created["createDock"]["success"], true, "{created}");
+    assert_eq!(created["createDock"]["result"]["name"], "South", "{created}");
     let refused = h.run(Request::new(mutation).data(h.acme.clone()).data(role("clerk"))).await;
-    assert_eq!(refused["createDock"]["success"], false, "{refused}");
+    assert!(refused["createDock"]["result"].is_null(), "{refused}");
+    assert_eq!(refused["createDock"]["errors"].as_array().map(Vec::len), Some(1), "{refused}");
 }
 
 #[tokio::test]
-async fn connections_read_through_the_read_action() {
+async fn pages_read_through_the_read_action() {
     let h = Harbour::new().await;
     let page = h
-        .as_(&h.acme, "{ berthsConnection { totalCount edges { node { code } } } }")
+        .as_(&h.acme, "{ listBerths(first: 10) { count results { code } } }")
         .await;
-    assert_eq!(
-        page["berthsConnection"],
-        json!({ "totalCount": 1, "edges": [{ "node": { "code": "A" } }] })
-    );
+    assert_eq!(page["listBerths"], json!({ "count": 1, "results": [{ "code": "A" }] }));
 }

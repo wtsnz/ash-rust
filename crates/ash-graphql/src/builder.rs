@@ -3,17 +3,15 @@ use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 
 use crate::error::register_user_error;
-use crate::filter::{register_primitive_filter_inputs, register_resource_filter_inputs};
+use crate::filter::register_resource_filter_inputs;
 use crate::mutation::{
     build_action_mutation, register_action_input, register_action_payload,
 };
 use crate::object::{build_resource_object, collect_enums_for_resource};
-use crate::pagination::{
-    build_resource_connection_query, register_page_info, register_resource_connection_types,
-};
+use crate::pagination::register_keyset_page;
 use crate::query::{build_read_action_query, build_resource_queries};
-use crate::sort::register_resource_sort_inputs;
-use crate::subscription::build_resource_subscriptions;
+use crate::sort::{register_resource_sort_inputs, register_sort_order};
+use crate::subscription::{build_resource_subscriptions, register_subscription_results};
 
 /// High-level builder for creating an `async-graphql` [`Schema`] from Ash domains and resources.
 pub struct AshGraphQLBuilder {
@@ -77,135 +75,120 @@ impl AshGraphQLBuilder {
         self,
         default_ctx: Option<Context<D>>,
     ) -> Result<Schema, SchemaError> {
-        let mut query = Object::new("Query");
-        query = query.field(Field::new(
-            "schema_version",
-            TypeRef::named_nn(TypeRef::STRING),
-            |_ctx| {
-                FieldFuture::new(async move {
-                    Ok(Some(FieldValue::value(async_graphql::Value::from(
-                        "ash-graphql-0.1.0",
-                    ))))
-                })
-            },
-        ));
-
-        // Connect read queries and Relay connection queries for each resource
+        // Absinthe's root type names, as AshGraphql's schemas have them.
+        let mut query = Object::new(ROOT_QUERY);
         for res in &self.resources {
             let (get_field, list_field) = build_resource_queries::<D>(res);
-            let conn_field = build_resource_connection_query::<D>(res);
-            query = query.field(get_field).field(list_field).field(conn_field);
-
-            // Connect any custom read actions
+            query = query.field(get_field).field(list_field);
             for action in res.actions {
                 if action.kind == ActionKind::Read && !action.primary && action.name != "read" {
-                    let custom_field = build_read_action_query::<D>(action, res);
-                    query = query.field(custom_field);
+                    query = query.field(build_read_action_query::<D>(action, res));
                 }
             }
         }
 
-        let mut mutation = Object::new("Mutation");
+        let mut mutation = Object::new(ROOT_MUTATION);
         let mut has_mutations = false;
-
         for res in &self.resources {
             for action in res.actions {
-                if matches!(
-                    action.kind,
-                    ActionKind::Create | ActionKind::Update | ActionKind::Destroy
-                ) {
+                if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
                     has_mutations = true;
-                    let m_field = build_action_mutation::<D>(action, res);
-                    mutation = mutation.field(m_field);
+                    mutation = mutation.field(build_action_mutation::<D>(action, res));
                 }
             }
         }
 
-        let mut subscription = Subscription::new("Subscription");
+        let mut subscription = Subscription::new(ROOT_SUBSCRIPTION);
         let has_subscriptions = self.pubsub.is_some();
         if let Some(pubsub) = &self.pubsub {
             for res in &self.resources {
-                for sf in build_resource_subscriptions::<D>(res, pubsub.clone()) {
-                    subscription = subscription.field(sf);
+                for field in build_resource_subscriptions::<D>(res, pubsub.clone()) {
+                    subscription = subscription.field(field);
                 }
             }
         }
 
-        let mutation_root = if has_mutations { Some("Mutation") } else { None };
-        let subscription_root = if has_subscriptions { Some("Subscription") } else { None };
-        let mut builder = Schema::build("Query", mutation_root, subscription_root);
-
-        // Register JSON scalar for arbitrary map values
-        builder = builder.register(Scalar::new("JSON"));
-
-        // Register shared UserError and PageInfo
+        let mut builder = Schema::build(
+            ROOT_QUERY,
+            has_mutations.then_some(ROOT_MUTATION),
+            has_subscriptions.then_some(ROOT_SUBSCRIPTION),
+        );
         builder = register_user_error(builder);
-        builder = register_page_info(builder);
+        builder = register_sort_order(builder);
 
-        // Register primitive filters
-        builder = register_primitive_filter_inputs(builder);
-
-        // Compute all reachable resources (including relationship destinations)
+        // Every reachable resource: those given, and the destinations of their relationships.
         let mut all_resources = self.resources.clone();
-        let mut added = true;
-        while added {
-            added = false;
-            let mut to_add = Vec::new();
-            for res in &all_resources {
-                for rel in res.relationships {
-                    let dest = (rel.destination)();
-                    if !all_resources.iter().any(|r| r.name == dest.name)
-                        && !to_add.iter().any(|r: &&'static ResourceDef| r.name == dest.name)
-                    {
-                        to_add.push(dest);
-                    }
+        let mut i = 0;
+        while i < all_resources.len() {
+            for rel in all_resources[i].relationships {
+                let dest = (rel.destination)();
+                if !all_resources.iter().any(|r| r.name == dest.name) {
+                    all_resources.push(dest);
                 }
             }
-            if !to_add.is_empty() {
-                all_resources.extend(to_add);
-                added = true;
+            i += 1;
+        }
+
+        // The custom scalars the schema uses; `Json` always, for mutation errors' `vars`.
+        let used: Vec<&str> = all_resources
+            .iter()
+            .flat_map(|res| {
+                res.attributes
+                    .iter()
+                    .map(|attr| attr.ty)
+                    .chain(res.aggregates.iter().map(|agg| agg.ty))
+                    .chain(res.calculations.iter().map(|calc| calc.ty))
+                    .chain(res.actions.iter().flat_map(|a| a.arguments.iter().map(|arg| arg.ty)))
+            })
+            .map(crate::types::graphql_type_name)
+            .collect();
+        for scalar in crate::types::CUSTOM_SCALARS {
+            if *scalar == "Json" || used.contains(scalar) {
+                builder = builder.register(Scalar::new(*scalar));
             }
         }
 
-        // Register all resources, connections, filters, sorts, mutations, and enums
+        let mut enums = Vec::new();
         for res in &all_resources {
-            let obj = build_resource_object::<D>(res);
-            builder = builder.register(obj);
-
-            builder = register_resource_connection_types(builder, res);
+            builder = builder.register(build_resource_object::<D>(res));
+            builder = register_keyset_page(builder, res);
             builder = register_resource_filter_inputs(builder, res);
             builder = register_resource_sort_inputs(builder, res);
-
+            if has_subscriptions {
+                builder = register_subscription_results(builder, res);
+            }
             for action in res.actions {
-                if matches!(
-                    action.kind,
-                    ActionKind::Create | ActionKind::Update | ActionKind::Destroy
-                ) {
+                if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
                     builder = register_action_input(builder, action, res);
                     builder = register_action_payload(builder, action, res);
                 }
             }
-
             for e in collect_enums_for_resource(res) {
-                builder = builder.register(e);
+                let name = e.type_name().to_string();
+                if !enums.contains(&name) {
+                    enums.push(name);
+                    builder = builder.register(e);
+                }
             }
         }
 
         if has_mutations {
             builder = builder.register(mutation);
         }
-
         if has_subscriptions {
             builder = builder.register(subscription);
         }
-
         if self.dataloader_enabled {
             builder = builder.extension(crate::request::RequestDataLoader::<D>::new());
         }
         if let Some(ctx) = default_ctx {
             builder = builder.data(ctx);
         }
-
         builder.register(query).finish()
     }
 }
+
+/// The root types' names, as Absinthe gives them.
+pub const ROOT_QUERY: &str = "RootQueryType";
+pub const ROOT_MUTATION: &str = "RootMutationType";
+pub const ROOT_SUBSCRIPTION: &str = "RootSubscriptionType";

@@ -4,442 +4,246 @@ use ash_core::redact_fields;
 use ash_core::update_dynamic;
 use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
-use async_graphql::Value as GqlValue;
 use uuid::Uuid;
 
-use crate::error::UserError;
-use crate::types::attr_type_to_type_ref;
+use crate::error::{MUTATION_ERROR, UserError};
+use crate::names::{camel, pascal};
+use crate::types::{attr_type_to_type_ref, parse_input_val};
 
 #[derive(Clone)]
 pub struct MutationPayload {
     pub result: Option<FieldMap>,
     pub errors: Vec<UserError>,
-    pub success: bool,
 }
 
 pub fn capitalize_first(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = true;
-    for ch in s.chars() {
-        if ch == '_' || ch == '-' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.push(ch.to_ascii_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(ch);
-        }
-    }
-    result
+    crate::names::pascal(s)
 }
 
 pub fn to_camel_case(s: &str) -> String {
-    let pascal = capitalize_first(s);
-    let mut chars = pascal.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_ascii_lowercase().to_string() + chars.as_str(),
-    }
+    crate::names::camel(s)
 }
 
+/// `recall` on `Cab` → `recallCab`.
 pub fn mutation_name(action_name: &str, resource_name: &str) -> String {
-    format!("{}{}", to_camel_case(action_name), resource_name)
+    format!("{}{}", camel(action_name), resource_name)
 }
 
+/// `recall` on `Cab` → `RecallCabInput`.
 pub fn mutation_input_name(action_name: &str, resource_name: &str) -> String {
-    format!("{}{}Input", capitalize_first(action_name), resource_name)
+    format!("{}{}Input", pascal(action_name), resource_name)
 }
 
+/// `recall` on `Cab` → `RecallCabResult`.
 pub fn mutation_payload_name(action_name: &str, resource_name: &str) -> String {
-    format!("{}{}Payload", capitalize_first(action_name), resource_name)
+    format!("{}{}Result", pascal(action_name), resource_name)
 }
 
-/// Registers mutation payload object type for an action.
+/// What a mutation's input holds: the attributes the action accepts and its arguments,
+/// each with whether it's required. A create requires an accepted attribute that can't be
+/// nil and has no default; an update requires none.
+fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str, AttrType, bool)> {
+    let mut fields = Vec::new();
+    if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
+        for attr in resource.attributes {
+            if action.accept.contains(&attr.name) {
+                let required = action.kind == ActionKind::Create
+                    && !attr.allow_nil
+                    && attr.default_fn.is_none()
+                    && !attr.generated;
+                fields.push((attr.name, attr.ty, required));
+            }
+        }
+    }
+    for arg in action.arguments {
+        fields.push((arg.name, arg.ty, !arg.allow_nil));
+    }
+    if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
+        && let Some(version) = resource.optimistic_lock_attribute()
+    {
+        fields.push((version, AttrType::Integer, false));
+    }
+    fields
+}
+
+/// Registers `<Mutation>Result { result, errors }`. A destroy's result is the record it
+/// destroyed.
 pub fn register_action_payload(
     builder: SchemaBuilder,
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
-    let payload_name = mutation_payload_name(action.name, resource.name);
-    let res_name = resource.name;
-
-    let payload_obj = Object::new(payload_name)
-        .field(Field::new(
-            "result",
-            TypeRef::named(res_name),
-            |ctx| {
+    let payload = |ctx: &ResolverContext<'_>| ctx.parent_value.downcast_ref::<MutationPayload>().cloned();
+    builder.register(
+        Object::new(mutation_payload_name(action.name, resource.name))
+            .field(Field::new("result", TypeRef::named(resource.name), move |ctx| {
                 FieldFuture::new(async move {
-                    if let Some(payload) = ctx.parent_value.downcast_ref::<MutationPayload>() {
-                        match &payload.result {
-                            Some(res) => Ok(Some(FieldValue::owned_any(res.clone()))),
-                            None => Ok(None),
-                        }
-                    } else {
-                        Ok(None)
-                    }
+                    Ok(payload(&ctx).and_then(|p| p.result).map(FieldValue::owned_any))
                 })
-            },
-        ))
-        .field(Field::new(
-            "errors",
-            TypeRef::named_nn_list_nn("UserError"),
-            |ctx| {
-                FieldFuture::new(async move {
-                    if let Some(payload) = ctx.parent_value.downcast_ref::<MutationPayload>() {
-                        Ok(Some(FieldValue::list(
-                            payload.errors.iter().cloned().map(FieldValue::owned_any),
-                        )))
-                    } else {
-                        Ok(Some(FieldValue::list(Vec::<FieldValue>::new())))
-                    }
-                })
-            },
-        ))
-        .field(Field::new(
-            "success",
-            TypeRef::named_nn(TypeRef::BOOLEAN),
-            |ctx| {
-                FieldFuture::new(async move {
-                    if let Some(payload) = ctx.parent_value.downcast_ref::<MutationPayload>() {
-                        Ok(Some(FieldValue::value(GqlValue::Boolean(payload.success))))
-                    } else {
-                        Ok(Some(FieldValue::value(GqlValue::Boolean(false))))
-                    }
-                })
-            },
-        ));
-
-    builder.register(payload_obj)
+            }))
+            .field(Field::new(
+                "errors",
+                TypeRef::named_nn_list_nn(MUTATION_ERROR),
+                move |ctx| {
+                    FieldFuture::new(async move {
+                        let errors = payload(&ctx).map(|p| p.errors).unwrap_or_default();
+                        Ok(Some(FieldValue::list(errors.into_iter().map(FieldValue::owned_any))))
+                    })
+                },
+            )),
+    )
 }
 
-/// Registers mutation input object type for an action.
+/// Registers `<Mutation>Input`, if the action takes any input.
 pub fn register_action_input(
     builder: SchemaBuilder,
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
-    let input_name = mutation_input_name(action.name, resource.name);
-    let mut input_obj = InputObject::new(input_name);
-
-    // 1. If Update or Destroy, require ID
-    if matches!(action.kind, ActionKind::Update | ActionKind::Destroy) {
-        input_obj = input_obj.field(InputValue::new("id", TypeRef::named_nn(TypeRef::ID)));
-        if resource.optimistic_lock_attribute().is_some() {
-            input_obj = input_obj.field(InputValue::new("version", TypeRef::named(TypeRef::INT)));
-        }
+    let fields = input_fields(action, resource);
+    if fields.is_empty() {
+        return builder;
     }
-
-    // 2. Attributes accepted by the action
-    if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
-        for attr in resource.attributes {
-            if action.accept.contains(&attr.name) {
-                let type_ref = attr_type_to_type_ref(resource.name, attr.name, attr.ty, true);
-                input_obj = input_obj.field(InputValue::new(attr.name, type_ref));
-            }
-        }
+    let mut input = InputObject::new(mutation_input_name(action.name, resource.name));
+    for (name, ty, required) in fields {
+        input = input.field(InputValue::new(
+            camel(name),
+            attr_type_to_type_ref(resource.name, name, ty, !required),
+        ));
     }
-
-    // 3. Action arguments
-    for arg in action.arguments {
-        let type_ref = attr_type_to_type_ref(resource.name, arg.name, arg.ty, arg.allow_nil);
-        input_obj = input_obj.field(InputValue::new(arg.name, type_ref));
-    }
-
-    builder.register(input_obj)
+    builder.register(input)
 }
 
-/// Builds the GraphQL mutation [`Field`] for a resource action.
+fn failed(err: &AshError) -> Option<FieldValue<'static>> {
+    Some(FieldValue::owned_any(MutationPayload {
+        result: None,
+        errors: vec![UserError::from_ash_error(err)],
+    }))
+}
+
+fn succeeded(result: Option<FieldMap>) -> Option<FieldValue<'static>> {
+    Some(FieldValue::owned_any(MutationPayload {
+        result,
+        errors: Vec::new(),
+    }))
+}
+
+/// The mutation for a create, update or destroy: `<action><Resource>(input)` for a create,
+/// `<action><Resource>(id: ID!, input)` for an update or destroy, as AshGraphql's are.
 pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> Field {
-    let m_name = mutation_name(action.name, resource.name);
-    let input_name = mutation_input_name(action.name, resource.name);
-    let payload_name = mutation_payload_name(action.name, resource.name);
+    let fields = input_fields(action, resource);
+    let pk = resource
+        .attributes
+        .iter()
+        .find(|a| a.primary_key)
+        .map(|a| a.name)
+        .unwrap_or("id");
 
-    Field::new(m_name, TypeRef::named_nn(payload_name), move |ctx| {
-        FieldFuture::new(async move {
-            let ash = crate::request::request_context::<D>(&ctx)?;
-            let ctx_ash = &*ash;
+    let mut field = Field::new(
+        mutation_name(action.name, resource.name),
+        TypeRef::named_nn(mutation_payload_name(action.name, resource.name)),
+        move |ctx| {
+            FieldFuture::new(async move {
+                let ash = crate::request::request_context::<D>(&ctx)?;
+                let ash = &*ash;
 
-            let input_arg = ctx
-                .args
-                .get("input")
-                .ok_or_else(|| async_graphql::Error::new("Missing required input object"))?;
-            let input_obj = input_arg.object()?;
-
-            let mut input_map = FieldMap::new();
-
-            // Extract accepted attributes
-            for attr in resource.attributes.iter().filter(|attr| action.accept.contains(&attr.name)) {
-                if let Some(val) = input_obj.get(attr.name) {
-                    let ash_val = parse_input_val(&val, attr.ty)?;
-                    if !ash_val.is_null() {
-                        input_map.insert(attr.name.to_string(), ash_val);
-                    }
-                }
-            }
-
-            // Extract action arguments
-            for arg in action.arguments {
-                if let Some(val) = input_obj.get(arg.name) {
-                    let ash_val = parse_input_val(&val, arg.ty)?;
-                    if !ash_val.is_null() {
-                        input_map.insert(arg.name.to_string(), ash_val);
-                    }
-                }
-            }
-
-            match action.kind {
-                ActionKind::Create => {
-                    match create_dynamic(ctx_ash, resource, action, input_map).await {
-                        Ok(mut stored) => {
-                            let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut stored);
-                            Ok(Some(FieldValue::owned_any(MutationPayload {
-                                result: Some(stored),
-                                errors: Vec::new(),
-                                success: true,
-                            })))
-                        }
-                        Err(e) => Ok(Some(FieldValue::owned_any(MutationPayload {
-                            result: None,
-                            errors: vec![UserError::from_ash_error(&e)],
-                            success: false,
-                        }))),
-                    }
-                }
-                ActionKind::Update => {
-                    let id_val = input_obj
-                        .get("id")
-                        .ok_or_else(|| async_graphql::Error::new("Missing required id field in input"))?;
-                    let id_str = id_val.string()?;
-                    let id = Uuid::parse_str(id_str)
-                        .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
-
-                    // Check optimistic lock if client sent a version
-                    if let Some(client_version) = input_obj.get("version")
-                        && let Some(v_attr) = resource.optimistic_lock_attribute()
-                    {
-                        let expected_v = client_version.i64()?;
-                        let pk = resource
-                            .attributes
-                            .iter()
-                            .find(|a| a.primary_key)
-                            .map(|a| a.name)
-                            .unwrap_or("id");
-
-                        let (filter, tenant) = ash_core::visible_scope(
-                            resource,
-                            Some(Filter::eq(pk, Value::Uuid(id))),
-                            ctx_ash.tenant.clone(),
-                        )?;
-                        let query = CompiledQuery {
-                            filter,
-                            tenant,
-                            ..CompiledQuery::default()
+                let mut input = FieldMap::new();
+                let mut version = None;
+                if let Some(given) = ctx.args.get("input").filter(|value| !value.is_null()) {
+                    let given = given.object()?;
+                    for (name, ty, _) in input_fields(action, resource) {
+                        let Some(value) = given.get(&camel(name)) else {
+                            continue;
                         };
-
-                        if let Ok(records) = ctx_ash.data.run_query(resource, &query).await
-                            && let Some(existing) = records.first()
+                        if Some(name) == resource.optimistic_lock_attribute()
+                            && action.kind != ActionKind::Create
+                            && !action.accept.contains(&name)
                         {
-                            let current_v = existing
-                                .get(v_attr)
-                                .and_then(|v| v.as_int())
-                                .unwrap_or(1);
-                            if current_v != expected_v {
-                                return Ok(Some(FieldValue::owned_any(MutationPayload {
-                                    result: None,
-                                    errors: vec![UserError::from_ash_error(&AshError::StaleRecord {
-                                        resource: resource.name,
-                                        id,
-                                    })],
-                                    success: false,
-                                })));
-                            }
+                            version = value.i64().ok();
+                            continue;
                         }
+                        let value = if value.is_null() { Value::Null } else { parse_input_val(&value, ty)? };
+                        input.insert(name.to_string(), value);
                     }
+                }
 
-                    match update_dynamic(ctx_ash, resource, action, id, input_map).await {
+                if action.kind == ActionKind::Create {
+                    return Ok(match create_dynamic(ash, resource, action, input).await {
+                        Ok(mut stored) => {
+                            let _ = redact_fields(resource, ash.actor.as_ref(), &mut stored);
+                            succeeded(Some(stored))
+                        }
+                        Err(e) => failed(&e),
+                    });
+                }
+
+                let id_arg = ctx
+                    .args
+                    .get("id")
+                    .ok_or_else(|| async_graphql::Error::new("Missing required id argument"))?;
+                let id = Uuid::parse_str(id_arg.string()?)
+                    .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
+
+                // The record as a read would see it, so an archived record or another
+                // tenant's is not found.
+                let (filter, tenant) = ash_core::visible_scope(
+                    resource,
+                    Some(Filter::eq(pk, Value::Uuid(id))),
+                    ash.tenant.clone(),
+                )?;
+                let existing = ash
+                    .data
+                    .run_query(resource, &CompiledQuery { filter, tenant, ..CompiledQuery::default() })
+                    .await
+                    .ok()
+                    .and_then(|records| records.into_iter().next());
+                let Some(existing) = existing else {
+                    return Ok(failed(&AshError::NotFound));
+                };
+                if let (Some(expected), Some(v_attr)) = (version, resource.optimistic_lock_attribute()) {
+                    let current = existing.get(v_attr).and_then(|v| v.as_int()).unwrap_or(1);
+                    if current != expected {
+                        return Ok(failed(&AshError::StaleRecord {
+                            resource: resource.name,
+                            id,
+                        }));
+                    }
+                }
+
+                Ok(match action.kind {
+                    ActionKind::Update => match update_dynamic(ash, resource, action, id, input).await {
                         Ok(mut updated) => {
-                            let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut updated);
-                            Ok(Some(FieldValue::owned_any(MutationPayload {
-                                result: Some(updated),
-                                errors: Vec::new(),
-                                success: true,
-                            })))
+                            let _ = redact_fields(resource, ash.actor.as_ref(), &mut updated);
+                            succeeded(Some(updated))
                         }
-                        Err(e) => Ok(Some(FieldValue::owned_any(MutationPayload {
-                            result: None,
-                            errors: vec![UserError::from_ash_error(&e)],
-                            success: false,
-                        }))),
-                    }
-                }
-                ActionKind::Destroy => {
-                    let id_val = input_obj
-                        .get("id")
-                        .ok_or_else(|| async_graphql::Error::new("Missing required id field in input"))?;
-                    let id_str = id_val.string()?;
-                    let id = Uuid::parse_str(id_str)
-                        .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
-
-                    let pk = resource
-                        .attributes
-                        .iter()
-                        .find(|a| a.primary_key)
-                        .map(|a| a.name)
-                        .unwrap_or("id");
-
-                    // Look the record up as a read would, so archived or other tenants'
-                    // records are not found.
-                    let existing_records = match ash_core::visible_scope(
-                        resource,
-                        Some(Filter::eq(pk, Value::Uuid(id))),
-                        ctx_ash.tenant.clone(),
-                    ) {
-                        Ok((filter, tenant)) => {
-                            let query = CompiledQuery {
-                                filter,
-                                tenant,
-                                ..CompiledQuery::default()
-                            };
-                            ctx_ash.data.run_query(resource, &query).await
-                        }
-                        Err(err) => Err(err),
-                    };
-                    let existing_field_map = match existing_records {
-                        Ok(records) if !records.is_empty() => records.into_iter().next().unwrap(),
-                        _ => {
-                            return Ok(Some(FieldValue::owned_any(MutationPayload {
-                                result: None,
-                                errors: vec![UserError::from_ash_error(&AshError::NotFound)],
-                                success: false,
-                            })));
-                        }
-                    };
-
-                    // Check optimistic locking if provided
-                    if let Some(client_version) = input_obj.get("version")
-                        && let Some(v_attr) = resource.optimistic_lock_attribute()
-                    {
-                        let expected_v = client_version.i64()?;
-                        let current_v = existing_field_map
-                            .get(v_attr)
-                            .and_then(|v| v.as_int())
-                            .unwrap_or(1);
-                        if current_v != expected_v {
-                            return Ok(Some(FieldValue::owned_any(MutationPayload {
-                                result: None,
-                                errors: vec![UserError::from_ash_error(&AshError::StaleRecord {
-                                    resource: resource.name,
-                                    id,
-                                })],
-                                success: false,
-                            })));
-                        }
-                    }
-
-                    match destroy_dynamic(ctx_ash, resource, action, id, &existing_field_map).await {
+                        Err(e) => failed(&e),
+                    },
+                    _ => match destroy_dynamic(ash, resource, action, id, &existing).await {
                         Ok(_) => {
-                            Ok(Some(FieldValue::owned_any(MutationPayload {
-                                result: None,
-                                errors: Vec::new(),
-                                success: true,
-                            })))
+                            let mut destroyed = existing;
+                            let _ = redact_fields(resource, ash.actor.as_ref(), &mut destroyed);
+                            succeeded(Some(destroyed))
                         }
-                        Err(e) => Ok(Some(FieldValue::owned_any(MutationPayload {
-                            result: None,
-                            errors: vec![UserError::from_ash_error(&e)],
-                            success: false,
-                        }))),
-                    }
-                }
-                _ => Ok(Some(FieldValue::owned_any(MutationPayload {
-                    result: None,
-                    errors: vec![UserError {
-                        message: "Unsupported mutation action kind".into(),
-                        field: None,
-                        code: "UNSUPPORTED_ACTION".into(),
-                    }],
-                    success: false,
-                }))),
-            }
-        })
-    })
-    .argument(InputValue::new("input", TypeRef::named_nn(input_name)))
-}
+                        Err(e) => failed(&e),
+                    },
+                })
+            })
+        },
+    );
 
-fn parse_input_val(
-    acc: &ValueAccessor<'_>,
-    ty: AttrType,
-) -> Result<Value, async_graphql::Error> {
-    match ty {
-        AttrType::Uuid => {
-            let s = acc.string()?;
-            let u = uuid::Uuid::parse_str(s)
-                .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
-            Ok(Value::Uuid(u))
-        }
-        AttrType::String => {
-            let s = acc.string()?;
-            Ok(Value::String(s.to_string()))
-        }
-        AttrType::UtcDatetime { precision } => {
-            let s = acc.string()?;
-            let normalized = precision
-                .normalize(s)
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(normalized))
-        }
-        AttrType::Binary => {
-            let s = acc.string()?;
-            let binary =
-                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(binary.encode()))
-        }
-        AttrType::Date => {
-            let s = acc.string()?;
-            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(s.to_string()))
-        }
-        AttrType::CiString => {
-            let s = acc.string()?;
-            let value = ash_core::CiString::parse(s)
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(value.as_str().to_string()))
-        }
-        AttrType::Decimal => {
-            let s = acc.string()?;
-            ash_core::Decimal::parse(s)
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(s.to_string()))
-        }
-        AttrType::Float => {
-            let n = acc.f64()?;
-            let float = ash_core::Float::parse(&n.to_string())
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(float.as_str().to_string()))
-        }
-        AttrType::Integer => {
-            let n = acc.i64()?;
-            Ok(Value::Int(n))
-        }
-        AttrType::Boolean => {
-            let b = acc.boolean()?;
-            Ok(Value::Bool(b))
-        }
-        AttrType::Inet => Ok(Value::String(crate::types::parse_inet_input(acc)?)),
-        AttrType::Vector { dimensions } => Ok(Value::String(
-            crate::types::parse_vector_input(acc, dimensions)?,
-        )),
-        AttrType::Atom { one_of, .. } => {
-            let name = acc.enum_name()?;
-            if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
-                Ok(Value::String((*matched).to_string()))
-            } else {
-                Ok(Value::String(name.to_string()))
-            }
-        }
-        _ => Ok(Value::Null),
+    if action.kind != ActionKind::Create {
+        field = field.argument(InputValue::new("id", TypeRef::named_nn(TypeRef::ID)));
     }
+    if !fields.is_empty() {
+        let input = mutation_input_name(action.name, resource.name);
+        let required = fields.iter().any(|(_, _, required)| *required);
+        field = field.argument(InputValue::new(
+            "input",
+            if required { TypeRef::named_nn(input) } else { TypeRef::named(input) },
+        ));
+    }
+    field
 }

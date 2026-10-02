@@ -1,341 +1,246 @@
+//! Filter inputs, as AshGraphql generates them: `<Resource>FilterInput` with `and`, `or`
+//! and `not` lists, a `<Resource>Filter<Field>` input for each attribute, aggregate and
+//! calculation, and the related resource's filter input for each relationship.
+
 use ash_core::{AttrType, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
 
-use crate::types::enum_type_name;
+use crate::names::{camel, pascal};
+use crate::types::{graphql_type_name, parse_input_val};
 
-/// Registers common primitive filter input objects.
-pub fn register_primitive_filter_inputs(mut builder: SchemaBuilder) -> SchemaBuilder {
-    // StringFilterInput
-    let str_filter = InputObject::new("StringFilterInput")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("ne", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
-        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
-    builder = builder.register(str_filter);
-
-    // TextFilterInput: StringFilterInput plus substring matching for text attributes
-    let text_filter = InputObject::new("TextFilterInput")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("ne", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
-        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)))
-        .field(InputValue::new("contains", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("startsWith", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("endsWith", TypeRef::named(TypeRef::STRING)));
-    builder = builder.register(text_filter);
-
-    // IntFilterInput
-    let int_filter = InputObject::new("IntFilterInput")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::INT)))
-        .field(InputValue::new("ne", TypeRef::named(TypeRef::INT)))
-        .field(InputValue::new("gt", TypeRef::named(TypeRef::INT)))
-        .field(InputValue::new("gte", TypeRef::named(TypeRef::INT)))
-        .field(InputValue::new("lt", TypeRef::named(TypeRef::INT)))
-        .field(InputValue::new("lte", TypeRef::named(TypeRef::INT)))
-        .field(InputValue::new("in", TypeRef::named_list(TypeRef::INT)))
-        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
-    builder = builder.register(int_filter);
-
-    let float_filter = InputObject::new("FloatFilterInput")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::FLOAT)))
-        .field(InputValue::new("ne", TypeRef::named(TypeRef::FLOAT)))
-        .field(InputValue::new("gt", TypeRef::named(TypeRef::FLOAT)))
-        .field(InputValue::new("gte", TypeRef::named(TypeRef::FLOAT)))
-        .field(InputValue::new("lt", TypeRef::named(TypeRef::FLOAT)))
-        .field(InputValue::new("lte", TypeRef::named(TypeRef::FLOAT)))
-        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
-    builder = builder.register(float_filter);
-
-    // BooleanFilterInput
-    let bool_filter = InputObject::new("BooleanFilterInput")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::BOOLEAN)))
-        .field(InputValue::new("ne", TypeRef::named(TypeRef::BOOLEAN)))
-        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
-    builder = builder.register(bool_filter);
-
-    // UuidFilterInput
-    let uuid_filter = InputObject::new("UuidFilterInput")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::ID)))
-        .field(InputValue::new("ne", TypeRef::named(TypeRef::ID)))
-        .field(InputValue::new("in", TypeRef::named_list(TypeRef::ID)))
-        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
-    builder = builder.register(uuid_filter);
-
-    builder
-}
-
-/// Generates the `<Resource>FilterInput` name.
+/// `Trip` → `TripFilterInput`.
 pub fn resource_filter_input_name(resource_name: &str) -> String {
-    format!("{}FilterInput", resource_name)
+    format!("{resource_name}FilterInput")
 }
 
-/// Generates an enum filter input name.
-pub fn enum_filter_input_name(resource_name: &str, field_name: &str) -> String {
-    format!("{}{}EnumFilterInput", resource_name, field_name)
+/// `Trip`, `requested_at` → `TripFilterRequestedAt`.
+pub fn field_filter_input_name(resource_name: &str, field: &str) -> String {
+    format!("{resource_name}Filter{}", pascal(field))
 }
 
-/// Registers resource-specific filter inputs for a [`ResourceDef`].
+/// Text types also take substring and pattern operators.
+fn is_text(ty: AttrType) -> bool {
+    matches!(ty, AttrType::String | AttrType::CiString)
+}
+
+/// Whether a field of this type can be filtered at all.
+fn filterable(ty: AttrType) -> bool {
+    !matches!(ty, AttrType::Map | AttrType::Array | AttrType::Vector { .. } | AttrType::Binary)
+}
+
+/// The operators every filterable field takes, and those text fields add.
+const OPERATORS: &[&str] = &[
+    "eq",
+    "notEq",
+    "lessThan",
+    "greaterThan",
+    "lessThanOrEqual",
+    "greaterThanOrEqual",
+    "isDistinctFrom",
+    "isNotDistinctFrom",
+];
+const TEXT_OPERATORS: &[&str] = &["contains", "stringStartsWith", "stringEndsWith", "like", "ilike"];
+
+fn field_filter(name: String, ty: AttrType, items_nullable: bool) -> InputObject {
+    let scalar = graphql_type_name(ty);
+    let mut input = InputObject::new(name)
+        .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)))
+        .field(InputValue::new(
+            "in",
+            if items_nullable {
+                TypeRef::named_list(scalar)
+            } else {
+                TypeRef::named_nn_list(scalar)
+            },
+        ));
+    for op in OPERATORS {
+        input = input.field(InputValue::new(*op, TypeRef::named(scalar)));
+    }
+    if is_text(ty) {
+        for op in TEXT_OPERATORS {
+            input = input.field(InputValue::new(*op, TypeRef::named(TypeRef::STRING)));
+        }
+    }
+    input
+}
+
+/// Registers `<Resource>FilterInput` and its field inputs.
 pub fn register_resource_filter_inputs(
     mut builder: SchemaBuilder,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
-    let filter_name = resource_filter_input_name(resource.name);
-    let mut res_filter = InputObject::new(filter_name.clone());
+    let name = resource_filter_input_name(resource.name);
+    let mut filter = InputObject::new(&name)
+        .field(InputValue::new("and", TypeRef::named_nn_list(&name)))
+        .field(InputValue::new("or", TypeRef::named_nn_list(&name)))
+        .field(InputValue::new("not", TypeRef::named_nn_list(&name)));
 
+    let mut add = |builder: SchemaBuilder, field: &str, ty: AttrType, items_nullable: bool| {
+        if !filterable(ty) {
+            return builder;
+        }
+        let input = field_filter_input_name(resource.name, field);
+        filter = std::mem::replace(&mut filter, InputObject::new("_"))
+            .field(InputValue::new(camel(field), TypeRef::named(&input)));
+        builder.register(field_filter(input, ty, items_nullable))
+    };
     for attr in resource.attributes {
-        let field_filter_type = match attr.ty {
-            AttrType::Uuid => "UuidFilterInput".to_string(),
-            AttrType::String | AttrType::CiString => "TextFilterInput".to_string(),
-            AttrType::Date
-            | AttrType::Binary
-            | AttrType::UtcDatetime { .. }
-            | AttrType::Decimal
-            | AttrType::Inet => "StringFilterInput".to_string(),
-            AttrType::Float => "FloatFilterInput".to_string(),
-            AttrType::Integer => "IntFilterInput".to_string(),
-            AttrType::Boolean => "BooleanFilterInput".to_string(),
-            AttrType::Atom { .. } => {
-                let e_filter_name = enum_filter_input_name(resource.name, attr.name);
-                let e_name = enum_type_name(resource.name, attr.name);
-                let e_filter = InputObject::new(e_filter_name.clone())
-                    .field(InputValue::new("eq", TypeRef::named(&e_name)))
-                    .field(InputValue::new("ne", TypeRef::named(&e_name)))
-                    .field(InputValue::new("in", TypeRef::named_list(&e_name)))
-                    .field(InputValue::new("isNil", TypeRef::named(TypeRef::BOOLEAN)));
-                builder = builder.register(e_filter);
-                e_filter_name
-            }
-            _ => continue,
-        };
-
-        res_filter = res_filter.field(InputValue::new(
-            attr.name,
-            TypeRef::named(field_filter_type),
+        builder = add(builder, attr.name, attr.ty, attr.allow_nil);
+    }
+    for agg in resource.aggregates {
+        builder = add(builder, agg.name, agg.ty, true);
+    }
+    for calc in resource.calculations {
+        builder = add(builder, calc.name, calc.ty, false);
+    }
+    for rel in resource.relationships {
+        let destination = (rel.destination)();
+        filter = filter.field(InputValue::new(
+            camel(rel.name),
+            TypeRef::named(resource_filter_input_name(destination.name)),
         ));
     }
-
-    // Relationships (nested filters)
-    for rel in resource.relationships {
-        let dest = (rel.destination)();
-        let dest_filter_name = resource_filter_input_name(dest.name);
-        res_filter = res_filter.field(InputValue::new(rel.name, TypeRef::named(dest_filter_name)));
-    }
-
-    // Boolean combinators
-    res_filter = res_filter
-        .field(InputValue::new("and", TypeRef::named_list(&filter_name)))
-        .field(InputValue::new("or", TypeRef::named_list(&filter_name)))
-        .field(InputValue::new("not", TypeRef::named(&filter_name)));
-
-    builder.register(res_filter)
+    builder.register(filter)
 }
 
-/// Parses a dynamic [`ObjectAccessor`] representing a `<Resource>FilterInput` into an Ash [`Filter`].
+/// The type of `field` on `resource`: an attribute, aggregate or calculation.
+fn field_type(resource: &ResourceDef, field: &str) -> Option<AttrType> {
+    resource
+        .attribute(field)
+        .map(|attr| attr.ty)
+        .or_else(|| resource.aggregate(field).map(|agg| agg.ty))
+        .or_else(|| resource.calculation(field).map(|calc| calc.ty))
+}
+
+/// Parses a `<Resource>FilterInput` into a [`Filter`].
 pub fn parse_resource_filter(
     resource: &'static ResourceDef,
     obj: &ObjectAccessor<'_>,
 ) -> Result<Filter, async_graphql::Error> {
     let mut filters = Vec::new();
 
-    // 1. Attribute filters
-    for attr in resource.attributes {
-        if let Some(attr_filter_val) = obj.get(attr.name) {
-            let attr_obj = attr_filter_val.object()?;
-            let field_name = attr.name;
-
-            // eq
-            if let Some(eq_val) = attr_obj.get("eq") {
-                let val = parse_scalar_value(&eq_val, attr.ty)?;
-                filters.push(Filter::eq(field_name, val));
-            }
-
-            // ne
-            if let Some(ne_val) = attr_obj.get("ne") {
-                let val = parse_scalar_value(&ne_val, attr.ty)?;
-                filters.push(Filter::ne(field_name, val));
-            }
-
-            // gt
-            if let Some(gt_val) = attr_obj.get("gt") {
-                let val = parse_scalar_value(&gt_val, attr.ty)?;
-                filters.push(Filter::gt(field_name, val));
-            }
-
-            // gte
-            if let Some(gte_val) = attr_obj.get("gte") {
-                let val = parse_scalar_value(&gte_val, attr.ty)?;
-                filters.push(Filter::gte(field_name, val));
-            }
-
-            // lt
-            if let Some(lt_val) = attr_obj.get("lt") {
-                let val = parse_scalar_value(&lt_val, attr.ty)?;
-                filters.push(Filter::lt(field_name, val));
-            }
-
-            // lte
-            if let Some(lte_val) = attr_obj.get("lte") {
-                let val = parse_scalar_value(&lte_val, attr.ty)?;
-                filters.push(Filter::lte(field_name, val));
-            }
-
-            // in
-            if let Some(in_val) = attr_obj.get("in") {
-                let list = in_val.list()?;
-                let mut vals = Vec::new();
-                for item in list.iter() {
-                    vals.push(parse_scalar_value(&item, attr.ty)?);
-                }
-                filters.push(Filter::in_list(field_name, vals));
-            }
-
-            // contains / startsWith / endsWith
-            if let Some(val) = attr_obj.get("contains") {
-                filters.push(Filter::contains(field_name, val.string()?));
-            }
-            if let Some(val) = attr_obj.get("startsWith") {
-                filters.push(Filter::starts_with(field_name, val.string()?));
-            }
-            if let Some(val) = attr_obj.get("endsWith") {
-                filters.push(Filter::ends_with(field_name, val.string()?));
-            }
-
-            // isNil
-            if let Some(is_nil_val) = attr_obj.get("isNil") {
-                if is_nil_val.boolean()? {
-                    filters.push(Filter::is_nil(field_name));
-                } else {
-                    filters.push(Filter::Not(Box::new(Filter::is_nil(field_name))));
-                }
-            }
+    let fields = resource
+        .attributes
+        .iter()
+        .map(|attr| attr.name)
+        .chain(resource.aggregates.iter().map(|agg| agg.name))
+        .chain(resource.calculations.iter().map(|calc| calc.name));
+    for field in fields {
+        let Some(ops) = obj.get(&camel(field)) else {
+            continue;
+        };
+        if ops.is_null() {
+            continue;
         }
+        let ty = field_type(resource, field).expect("a field of the resource");
+        filters.extend(parse_field_filter(field, ty, &ops.object()?)?);
     }
 
-    // 2. Relationship filters
     for rel in resource.relationships {
-        if let Some(rel_filter_val) = obj.get(rel.name) {
-            let rel_obj = rel_filter_val.object()?;
-            let dest = (rel.destination)();
-            let dest_filter = parse_resource_filter(dest, &rel_obj)?;
-            if dest_filter != Filter::True {
-                filters.push(Filter::related(rel.name, dest_filter));
+        if let Some(nested) = obj.get(&camel(rel.name))
+            && !nested.is_null()
+        {
+            let destination = (rel.destination)();
+            let inner = parse_resource_filter(destination, &nested.object()?)?;
+            if inner != Filter::True {
+                filters.push(Filter::related(rel.name, inner));
             }
         }
     }
 
-    // 3. Boolean combinator 'and'
-    if let Some(and_val) = obj.get("and") {
-        let list = and_val.list()?;
-        let mut sub_filters = Vec::new();
-        for item in list.iter() {
-            let sub_obj = item.object()?;
-            sub_filters.push(parse_resource_filter(resource, &sub_obj)?);
+    let list = |key: &str| -> Result<Vec<Filter>, async_graphql::Error> {
+        let mut parts = Vec::new();
+        if let Some(value) = obj.get(key)
+            && !value.is_null()
+        {
+            for item in value.list()?.iter() {
+                parts.push(parse_resource_filter(resource, &item.object()?)?);
+            }
         }
-        if !sub_filters.is_empty() {
-            filters.push(Filter::And(sub_filters));
-        }
+        Ok(parts)
+    };
+    let and = list("and")?;
+    if !and.is_empty() {
+        filters.push(Filter::And(and));
+    }
+    let or = list("or")?;
+    if !or.is_empty() {
+        filters.push(Filter::Or(or));
+    }
+    // `not: [a, b]` excludes records matching all of them, as AshGraphql reads it.
+    let not = list("not")?;
+    if !not.is_empty() {
+        filters.push(Filter::Not(Box::new(Filter::And(not))));
     }
 
-    // 3. Boolean combinator 'or'
-    if let Some(or_val) = obj.get("or") {
-        let list = or_val.list()?;
-        let mut sub_filters = Vec::new();
-        for item in list.iter() {
-            let sub_obj = item.object()?;
-            sub_filters.push(parse_resource_filter(resource, &sub_obj)?);
-        }
-        if !sub_filters.is_empty() {
-            filters.push(Filter::Or(sub_filters));
-        }
-    }
-
-    // 4. Boolean combinator 'not'
-    if let Some(not_val) = obj.get("not") {
-        let sub_obj = not_val.object()?;
-        let inner = parse_resource_filter(resource, &sub_obj)?;
-        filters.push(Filter::Not(Box::new(inner)));
-    }
-
-    if filters.is_empty() {
-        Ok(Filter::True)
-    } else if filters.len() == 1 {
-        Ok(filters.remove(0))
-    } else {
-        Ok(Filter::And(filters))
-    }
+    Ok(match filters.len() {
+        0 => Filter::True,
+        1 => filters.remove(0),
+        _ => Filter::And(filters),
+    })
 }
 
-fn parse_scalar_value(
-    acc: &ValueAccessor<'_>,
+fn parse_field_filter(
+    field: &str,
     ty: AttrType,
-) -> Result<Value, async_graphql::Error> {
-    match ty {
-        AttrType::Uuid => {
-            let s = acc.string()?;
-            let u = uuid::Uuid::parse_str(s)
-                .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
-            Ok(Value::Uuid(u))
+    ops: &ObjectAccessor<'_>,
+) -> Result<Vec<Filter>, async_graphql::Error> {
+    let mut filters = Vec::new();
+    for (op, value) in ops.iter() {
+        let op = op.as_str();
+        if value.is_null() && !matches!(op, "eq" | "isDistinctFrom" | "isNotDistinctFrom") {
+            continue;
         }
-        AttrType::String => {
-            let s = acc.string()?;
-            Ok(Value::String(s.to_string()))
-        }
-        AttrType::UtcDatetime { precision } => {
-            let s = acc.string()?;
-            let normalized = precision
-                .normalize(s)
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(normalized))
-        }
-        AttrType::Binary => {
-            let s = acc.string()?;
-            let binary =
-                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(binary.encode()))
-        }
-        AttrType::Date => {
-            let s = acc.string()?;
-            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(s.to_string()))
-        }
-        AttrType::CiString => {
-            let s = acc.string()?;
-            let value = ash_core::CiString::parse(s)
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(value.as_str().to_string()))
-        }
-        AttrType::Decimal => {
-            let s = acc.string()?;
-            ash_core::Decimal::parse(s)
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(s.to_string()))
-        }
-        AttrType::Float => {
-            let n = acc.f64()?;
-            let float = ash_core::Float::parse(&n.to_string())
-                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
-            Ok(Value::String(float.as_str().to_string()))
-        }
-        AttrType::Integer => {
-            let n = acc.i64()?;
-            Ok(Value::Int(n))
-        }
-        AttrType::Boolean => {
-            let b = acc.boolean()?;
-            Ok(Value::Bool(b))
-        }
-        AttrType::Inet => Ok(Value::String(crate::types::parse_inet_input(acc)?)),
-        AttrType::Vector { dimensions } => Ok(Value::String(
-            crate::types::parse_vector_input(acc, dimensions)?,
-        )),
-        AttrType::Atom { one_of, .. } => {
-            let name = acc.enum_name()?;
-            if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
-                Ok(Value::String((*matched).to_string()))
+        let parse = |value: &ValueAccessor<'_>| -> Result<Value, async_graphql::Error> {
+            if value.is_null() {
+                Ok(Value::Null)
             } else {
-                Ok(Value::String(name.to_string()))
+                parse_input_val(value, ty)
             }
-        }
-        _ => Ok(Value::Null),
+        };
+        let text = || -> Result<String, async_graphql::Error> { Ok(value.string()?.to_string()) };
+        filters.push(match op {
+            "isNil" => {
+                if value.boolean()? {
+                    Filter::is_nil(field)
+                } else {
+                    !Filter::is_nil(field)
+                }
+            }
+            "eq" => Filter::eq(field, parse(&value)?),
+            "notEq" => Filter::ne(field, parse(&value)?),
+            "lessThan" => Filter::lt(field, parse(&value)?),
+            "greaterThan" => Filter::gt(field, parse(&value)?),
+            "lessThanOrEqual" => Filter::lte(field, parse(&value)?),
+            "greaterThanOrEqual" => Filter::gte(field, parse(&value)?),
+            "in" => {
+                let mut values = Vec::new();
+                for item in value.list()?.iter() {
+                    values.push(parse(&item)?);
+                }
+                Filter::in_list(field, values)
+            }
+            // Null-safe equality: nulls are equal to each other and to nothing else.
+            "isDistinctFrom" => match parse(&value)? {
+                Value::Null => !Filter::is_nil(field),
+                v => Filter::or([Filter::is_nil(field), Filter::ne(field, v)]),
+            },
+            "isNotDistinctFrom" => match parse(&value)? {
+                Value::Null => Filter::is_nil(field),
+                v => Filter::eq(field, v),
+            },
+            "contains" => Filter::contains(field, text()?),
+            "stringStartsWith" => Filter::starts_with(field, text()?),
+            "stringEndsWith" => Filter::ends_with(field, text()?),
+            "like" => Filter::like(field, text()?),
+            "ilike" => Filter::ilike(field, text()?),
+            other => {
+                return Err(async_graphql::Error::new(format!(
+                    "Unknown filter operator `{other}` on `{}`",
+                    camel(field)
+                )));
+            }
+        });
     }
+    Ok(filters)
 }

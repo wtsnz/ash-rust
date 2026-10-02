@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("title", AttrType::String),
-    AttributeDef::optional("status", AttrType::Atom { one_of: &["OPEN", "CLOSED"], name: None }),
+    AttributeDef::optional("status", AttrType::Atom { one_of: &["OPEN", "CLOSED"], name: Some("TicketStatus") }),
 ];
 
 static TICKET_ACTIONS: &[ActionDef] = &[
@@ -88,10 +88,10 @@ async fn test_phase6_subscription_stream_with_pubsub() {
     // 2. Start a subscription stream for ticketCreated
     let sub_query = r#"
         subscription {
-            ticketCreated {
+            ticketCreated { created {
                 title
                 status
-            }
+            } }
         }
     "#;
 
@@ -107,7 +107,7 @@ async fn test_phase6_subscription_stream_with_pubsub() {
     let mutation = r#"
         mutation {
             createTicket(input: { title: "Urgent Outage", status: OPEN }) {
-                success
+                errors { code }
                 result {
                     id
                     title
@@ -132,8 +132,8 @@ async fn test_phase6_subscription_stream_with_pubsub() {
         event.errors
     );
     let event_json = event.data.into_json().unwrap();
-    assert_eq!(event_json["ticketCreated"]["title"], "Urgent Outage");
-    assert_eq!(event_json["ticketCreated"]["status"], "OPEN");
+    assert_eq!(event_json["ticketCreated"]["created"]["title"], "Urgent Outage");
+    assert_eq!(event_json["ticketCreated"]["created"]["status"], "OPEN");
 }
 
 /// Every write is published once, through the context's notifier, whether it came
@@ -148,11 +148,11 @@ async fn each_write_is_heard_once() {
         .unwrap();
 
     let mut stream =
-        schema.execute_stream(Request::new("subscription { ticketCreated { title } }").data(ctx.clone()));
+        schema.execute_stream(Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()));
     let heard = tokio::spawn(async move {
         let mut titles = Vec::new();
         while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(300), stream.next()).await {
-            titles.push(event.data.into_json().unwrap()["ticketCreated"]["title"].clone());
+            titles.push(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"].clone());
         }
         titles
     });
@@ -160,7 +160,7 @@ async fn each_write_is_heard_once() {
 
     // A `PubSub` in the request data, which mutations used to publish to themselves,
     // doesn't publish the change again.
-    let mutation = r#"mutation { createTicket(input: { title: "From GraphQL" }) { success } }"#;
+    let mutation = r#"mutation { createTicket(input: { title: "From GraphQL" }) { errors { code } } }"#;
     let res = schema.execute(Request::new(mutation).data(ctx.clone()).data(pubsub.clone())).await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     let mut input = ash_core::FieldMap::new();
@@ -185,10 +185,10 @@ async fn test_phase6_subscription_filtered() {
     // Subscription looking ONLY for CLOSED tickets
     let sub_query = r#"
         subscription {
-            ticketCreated(filter: { status: { eq: CLOSED } }) {
+            ticketCreated(filter: { status: { eq: CLOSED } }) { created {
                 title
                 status
-            }
+            } }
         }
     "#;
 
@@ -203,7 +203,7 @@ async fn test_phase6_subscription_filtered() {
     let open_mutation = r#"
         mutation {
             createTicket(input: { title: "Open Ticket", status: OPEN }) {
-                success
+                errors { code }
             }
         }
     "#;
@@ -215,7 +215,7 @@ async fn test_phase6_subscription_filtered() {
     let closed_mutation = r#"
         mutation {
             createTicket(input: { title: "Resolved Ticket", status: CLOSED }) {
-                success
+                errors { code }
             }
         }
     "#;
@@ -231,8 +231,8 @@ async fn test_phase6_subscription_filtered() {
         .expect("Stream ended unexpectedly");
 
     let event_json = event.data.into_json().unwrap();
-    assert_eq!(event_json["ticketCreated"]["title"], "Resolved Ticket");
-    assert_eq!(event_json["ticketCreated"]["status"], "CLOSED");
+    assert_eq!(event_json["ticketCreated"]["created"]["title"], "Resolved Ticket");
+    assert_eq!(event_json["ticketCreated"]["created"]["status"], "CLOSED");
 }
 
 #[tokio::test]
@@ -251,7 +251,7 @@ async fn test_phase6_subscription_updated_and_destroyed() {
     let create_mutation = r#"
         mutation {
             createTicket(input: { title: "Original Title", status: OPEN }) {
-                success
+                errors { code }
                 result {
                     id
                 }
@@ -268,10 +268,10 @@ async fn test_phase6_subscription_updated_and_destroyed() {
     let update_sub = format!(
         r#"
         subscription {{
-            ticketUpdated(id: "{ticket_id}") {{
+            ticketUpdated(filter: {{ id: {{ eq: "{ticket_id}" }} }}) {{ updated {{
                 title
                 status
-            }}
+            }} }}
         }}
     "#
     );
@@ -284,8 +284,8 @@ async fn test_phase6_subscription_updated_and_destroyed() {
     let update_mut = format!(
         r#"
         mutation {{
-            updateTicket(input: {{ id: "{ticket_id}", title: "Updated Title", status: CLOSED }}) {{
-                success
+            updateTicket(id: "{ticket_id}", input: {{ title: "Updated Title", status: CLOSED }}) {{
+                errors {{ code }}
             }}
         }}
     "#
@@ -299,14 +299,14 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         .expect("Join error")
         .expect("Stream ended unexpectedly");
     let event_up_json = event_up.data.into_json().unwrap();
-    assert_eq!(event_up_json["ticketUpdated"]["title"], "Updated Title");
-    assert_eq!(event_up_json["ticketUpdated"]["status"], "CLOSED");
+    assert_eq!(event_up_json["ticketUpdated"]["updated"]["title"], "Updated Title");
+    assert_eq!(event_up_json["ticketUpdated"]["updated"]["status"], "CLOSED");
 
     // Subscribe to ticketDestroyed
     let destroy_sub = format!(
         r#"
         subscription {{
-            ticketDestroyed(id: "{ticket_id}")
+            ticketDestroyed(filter: {{ id: {{ eq: "{ticket_id}" }} }}) {{ destroyed }}
         }}
     "#
     );
@@ -319,8 +319,8 @@ async fn test_phase6_subscription_updated_and_destroyed() {
     let destroy_mut = format!(
         r#"
         mutation {{
-            destroyTicket(input: {{ id: "{ticket_id}" }}) {{
-                success
+            destroyTicket(id: "{ticket_id}") {{
+                errors {{ code }}
             }}
         }}
     "#
@@ -334,7 +334,7 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         .expect("Join error")
         .expect("Stream ended unexpectedly");
     let event_del_json = event_del.data.into_json().unwrap();
-    assert_eq!(event_del_json["ticketDestroyed"], ticket_id);
+    assert_eq!(event_del_json["ticketDestroyed"]["destroyed"], ticket_id);
 }
 
 #[cfg(feature = "axum")]
@@ -366,7 +366,7 @@ async fn test_phase6_axum_router_endpoints() {
 
     // 2. POST /graphql executes query
     let query_payload = serde_json::json!({
-        "query": "{ schema_version }"
+        "query": "{ __typename }"
     });
 
     let req_post = HttpRequest::builder()
@@ -380,7 +380,7 @@ async fn test_phase6_axum_router_endpoints() {
     assert_eq!(res_post.status(), StatusCode::OK);
     let post_body = res_post.into_body().collect().await.unwrap().to_bytes();
     let res_json: serde_json::Value = serde_json::from_slice(&post_body).unwrap();
-    assert_eq!(res_json["data"]["schema_version"], "ash-graphql-0.1.0");
+    assert_eq!(res_json["data"]["__typename"], "RootQueryType", "{res_json}");
 }
 
 /// The router serves subscriptions at `/graphql/ws`, the endpoint its GraphiQL points at,
@@ -417,7 +417,7 @@ async fn router_serves_subscriptions_over_websocket() {
         .send(send(serde_json::json!({
             "id": "1",
             "type": "subscribe",
-            "payload": { "query": "subscription { ticketCreated { title } }" },
+            "payload": { "query": "subscription { ticketCreated { created { title } } }" },
         })))
         .await
         .unwrap();
@@ -430,7 +430,7 @@ async fn router_serves_subscriptions_over_websocket() {
     let next = read_message(&mut socket).await;
     assert_eq!(next["type"], "next", "{next}");
     assert_eq!(next["id"], "1");
-    assert_eq!(next["payload"]["data"]["ticketCreated"]["title"], "Over the wire");
+    assert_eq!(next["payload"]["data"]["ticketCreated"]["created"]["title"], "Over the wire");
 }
 
 #[cfg(feature = "axum")]
@@ -461,7 +461,7 @@ async fn null_subscription_arguments_mean_none() {
         .finish::<Memory>()
         .unwrap();
     let request = Request::new(
-        "subscription ($filter: TicketFilterInput) { ticketCreated(filter: $filter) { title } }",
+        "subscription ($filter: TicketFilterInput) { ticketCreated(filter: $filter) { created { title } } }",
     )
     .variables(async_graphql::Variables::from_json(serde_json::json!({ "filter": null })))
     .data(ctx.clone());
@@ -475,7 +475,7 @@ async fn null_subscription_arguments_mean_none() {
 
     let event = tokio::time::timeout(Duration::from_secs(2), heard).await.unwrap().unwrap().unwrap();
     assert!(event.errors.is_empty(), "{:?}", event.errors);
-    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["title"], "Unfiltered");
+    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"], "Unfiltered");
 }
 
 async fn next<S: futures_util::Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
@@ -502,7 +502,7 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
         }
     };
     let mut stream =
-        schema.execute_stream(Request::new("subscription { ticketCreated { title } }").data(ctx.clone()));
+        schema.execute_stream(Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()));
 
     // Subscribed: the first create is heard.
     let first = tokio::spawn(async move {
@@ -512,7 +512,7 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     create("First".into()).await;
     let (mut stream, event) = first.await.unwrap();
-    assert_eq!(event.unwrap().data.into_json().unwrap()["ticketCreated"]["title"], "First");
+    assert_eq!(event.unwrap().data.into_json().unwrap()["ticketCreated"]["created"]["title"], "First");
 
     // Twenty creates while the subscriber isn't reading overflow its buffer of four.
     for i in 0..20 {
@@ -527,12 +527,12 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
     // The subscription ends there; a new one hears what happens next.
     assert!(next(&mut stream).await.is_none());
     let mut stream =
-        schema.execute_stream(Request::new("subscription { ticketCreated { title } }").data(ctx.clone()));
+        schema.execute_stream(Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()));
     let later = tokio::spawn(async move { next(&mut stream).await });
     tokio::time::sleep(Duration::from_millis(50)).await;
     create("Later".into()).await;
     let event = later.await.unwrap().unwrap();
-    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["title"], "Later");
+    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"], "Later");
 }
 
 #[cfg(feature = "axum")]
@@ -603,7 +603,7 @@ async fn subscribers_to_the_same_subscription_share_one_execution() {
         .unwrap();
     let (addr, hub) = serve_shared(schema).await;
 
-    let created = "subscription { ticketCreated { title } }";
+    let created = "subscription { ticketCreated { created { title } } }";
     let mut sockets = Vec::new();
     for i in 0..20 {
         let mut socket = connect(addr, "graphql-transport-ws").await;
@@ -614,7 +614,7 @@ async fn subscribers_to_the_same_subscription_share_one_execution() {
     let mut other = connect(addr, "graphql-transport-ws").await;
     send_json(
         &mut other,
-        serde_json::json!({ "id": "statuses", "type": "subscribe", "payload": { "query": "subscription { ticketCreated { status } }" } }),
+        serde_json::json!({ "id": "statuses", "type": "subscribe", "payload": { "query": "subscription { ticketCreated { created { status } } }" } }),
     )
     .await;
     streams(&hub, 2).await;
@@ -625,9 +625,9 @@ async fn subscribers_to_the_same_subscription_share_one_execution() {
     for (i, socket) in sockets.iter_mut().enumerate() {
         let next = read_message(socket).await;
         assert_eq!(next["id"], format!("watch-{i}"));
-        assert_eq!(next["payload"]["data"]["ticketCreated"]["title"], "Shared", "{next}");
+        assert_eq!(next["payload"]["data"]["ticketCreated"]["created"]["title"], "Shared", "{next}");
     }
-    assert_eq!(read_message(&mut other).await["payload"]["data"]["ticketCreated"]["status"], serde_json::Value::Null);
+    assert_eq!(read_message(&mut other).await["payload"]["data"]["ticketCreated"]["created"]["status"], serde_json::Value::Null);
 
     // Completing one subscriber leaves the stream to the rest; the last one stops it.
     let mut last = sockets.pop().unwrap();
@@ -651,7 +651,7 @@ async fn the_older_graphql_ws_protocol_still_works() {
         .unwrap();
     let (addr, hub) = serve_shared(schema).await;
     let mut socket = connect(addr, "graphql-ws").await;
-    send_json(&mut socket, serde_json::json!({ "id": "1", "type": "start", "payload": { "query": "subscription { ticketCreated { title } }" } })).await;
+    send_json(&mut socket, serde_json::json!({ "id": "1", "type": "start", "payload": { "query": "subscription { ticketCreated { created { title } } }" } })).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(hub.streams(), 0, "graphql-ws isn't shared");
 
@@ -660,7 +660,7 @@ async fn the_older_graphql_ws_protocol_still_works() {
     ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
     let data = read_message(&mut socket).await;
     assert_eq!(data["type"], "data", "{data}");
-    assert_eq!(data["payload"]["data"]["ticketCreated"]["title"], "Legacy");
+    assert_eq!(data["payload"]["data"]["ticketCreated"]["created"]["title"], "Legacy");
 }
 
 /// A mutation sent over the socket runs for each sender: only subscriptions are shared.
@@ -674,12 +674,12 @@ async fn mutations_over_the_socket_are_not_shared() {
         .finish_with_context(ctx.clone())
         .unwrap();
     let (addr, _) = serve_shared(schema).await;
-    let mutation = r#"mutation { createTicket(input: { title: "Twice" }) { success } }"#;
+    let mutation = r#"mutation { createTicket(input: { title: "Twice" }) { errors { code } } }"#;
     for _ in 0..2 {
         let mut socket = connect(addr, "graphql-transport-ws").await;
         send_json(&mut socket, serde_json::json!({ "id": "m", "type": "subscribe", "payload": { "query": mutation } })).await;
         let next = read_message(&mut socket).await;
-        assert_eq!(next["payload"]["data"]["createTicket"]["success"], true, "{next}");
+        assert_eq!(next["payload"]["data"]["createTicket"]["errors"], serde_json::json!([]), "{next}");
         assert_eq!(read_message(&mut socket).await["type"], "complete");
     }
     use ash_core::DataLayer;

@@ -1,85 +1,89 @@
+//! Sort inputs, as AshGraphql generates them: `<Resource>SortInput { order: SortOrder,
+//! field: <Resource>SortField! }`, sortable by any attribute, aggregate or calculation.
+
 use ash_core::{ResourceDef, Sort};
 use async_graphql::dynamic::*;
 
-/// Generates the `<Resource>SortFieldEnum` name.
+use crate::names::upper_snake;
+
+/// `Trip` → `TripSortField`.
 pub fn resource_sort_field_enum_name(resource_name: &str) -> String {
-    format!("{}SortFieldEnum", resource_name)
+    format!("{resource_name}SortField")
 }
 
-/// Generates the `<Resource>SortInput` name.
+/// `Trip` → `TripSortInput`.
 pub fn resource_sort_input_name(resource_name: &str) -> String {
-    format!("{}SortInput", resource_name)
+    format!("{resource_name}SortInput")
 }
 
-/// Registers the global `SortOrderEnum` and resource-specific sort inputs.
+/// The shared `SortOrder` enum. ash-core doesn't place nulls, so the `*_NULLS_*` orders
+/// sort as their direction does.
+pub fn register_sort_order(builder: SchemaBuilder) -> SchemaBuilder {
+    let mut order = Enum::new("SortOrder");
+    for item in ["DESC", "DESC_NULLS_FIRST", "DESC_NULLS_LAST", "ASC", "ASC_NULLS_FIRST", "ASC_NULLS_LAST"] {
+        order = order.item(EnumItem::new(item));
+    }
+    builder.register(order)
+}
+
+/// The fields a resource sorts by: its attributes, aggregates, and calculations that
+/// take no arguments.
+fn sort_fields(resource: &ResourceDef) -> impl Iterator<Item = &'static str> + '_ {
+    resource
+        .attributes
+        .iter()
+        .map(|attr| attr.name)
+        .chain(resource.aggregates.iter().map(|agg| agg.name))
+        .chain(
+            resource
+                .calculations
+                .iter()
+                .filter(|calc| calc.arguments.is_empty())
+                .map(|calc| calc.name),
+        )
+}
+
+/// Registers `<Resource>SortField` and `<Resource>SortInput`.
 pub fn register_resource_sort_inputs(
     mut builder: SchemaBuilder,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
-    // 1. SortOrderEnum
-    let order_enum = Enum::new("SortOrderEnum")
-        .item(EnumItem::new("ASC"))
-        .item(EnumItem::new("DESC"))
-        .item(EnumItem::new("asc"))
-        .item(EnumItem::new("desc"));
-    builder = builder.register(order_enum);
-
-    // 2. <Resource>SortFieldEnum
-    let field_enum_name = resource_sort_field_enum_name(resource.name);
-    let mut field_enum = Enum::new(field_enum_name.clone());
-    for attr in resource.attributes {
-        field_enum = field_enum.item(EnumItem::new(attr.name.to_uppercase()));
-        if attr.name != attr.name.to_uppercase() {
-            field_enum = field_enum.item(EnumItem::new(attr.name));
-        }
+    let enum_name = resource_sort_field_enum_name(resource.name);
+    let mut fields = Enum::new(&enum_name);
+    for field in sort_fields(resource) {
+        fields = fields.item(EnumItem::new(upper_snake(field)));
     }
-    builder = builder.register(field_enum);
-
-    // 3. <Resource>SortInput
-    let sort_input_name = resource_sort_input_name(resource.name);
-    let sort_input = InputObject::new(sort_input_name)
-        .field(InputValue::new("field", TypeRef::named_nn(field_enum_name)))
-        .field(InputValue::new("order", TypeRef::named("SortOrderEnum")));
-    builder = builder.register(sort_input);
-
-    builder
+    builder = builder.register(fields);
+    builder.register(
+        InputObject::new(resource_sort_input_name(resource.name))
+            .field(InputValue::new("order", TypeRef::named("SortOrder")))
+            .field(InputValue::new("field", TypeRef::named_nn(enum_name))),
+    )
 }
 
-/// Parses a dynamic [`ListAccessor`] of `<Resource>SortInput` into a `Vec<ash_core::Sort>`.
+/// Parses a `[<Resource>SortInput]` into sorts.
 pub fn parse_resource_sort(
     resource: &'static ResourceDef,
     list: &ListAccessor<'_>,
 ) -> Result<Vec<Sort>, async_graphql::Error> {
     let mut sorts = Vec::new();
-
     for item in list.iter() {
         let obj = item.object()?;
-        let field_enum_val = obj
+        let wanted = obj
             .get("field")
             .ok_or_else(|| async_graphql::Error::new("Missing required sort field"))?;
-        let field_name_upper = field_enum_val.enum_name()?;
-
-        // Match against attributes
-        let attr = resource
-            .attributes
-            .iter()
-            .find(|a| a.name.eq_ignore_ascii_case(field_name_upper))
-            .ok_or_else(|| {
-                async_graphql::Error::new(format!("Unknown sort field `{field_name_upper}`"))
-            })?;
-
-        let descending = if let Some(order_val) = obj.get("order") {
-            let order = order_val.enum_name()?;
-            order.eq_ignore_ascii_case("DESC")
-        } else {
-            false
+        let wanted = wanted.enum_name()?;
+        let field = sort_fields(resource)
+            .find(|field| upper_snake(field) == wanted)
+            .ok_or_else(|| async_graphql::Error::new(format!("Unknown sort field `{wanted}`")))?;
+        let descending = match obj.get("order") {
+            Some(order) if !order.is_null() => order.enum_name()?.starts_with("DESC"),
+            _ => false,
         };
-
         sorts.push(Sort {
-            field: attr.name.to_string(),
+            field: field.to_string(),
             descending,
         });
     }
-
     Ok(sorts)
 }

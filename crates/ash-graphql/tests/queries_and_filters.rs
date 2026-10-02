@@ -15,7 +15,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["open", "in_progress", "closed"],
-            name: None,
+            name: Some("TicketStatus"),
         },
     ),
     AttributeDef::required("is_published", AttrType::Boolean),
@@ -110,7 +110,7 @@ async fn test_phase2_get_query_by_id() {
                 title
                 priority
                 status
-                is_published
+                isPublished
             }}
         }}
     "#,
@@ -125,7 +125,7 @@ async fn test_phase2_get_query_by_id() {
     assert_eq!(ticket["title"], "Fix memory leak");
     assert_eq!(ticket["priority"], 1);
     assert_eq!(ticket["status"], "OPEN");
-    assert_eq!(ticket["is_published"], true);
+    assert_eq!(ticket["isPublished"], true);
 }
 
 #[tokio::test]
@@ -142,31 +142,29 @@ async fn test_phase2_list_query_with_filters() {
     let query_enum = r#"
         query {
             listTickets(filter: { status: { eq: OPEN } }) {
-                title
-                status
+                results { title status }
             }
         }
     "#;
     let res = schema.execute(Request::new(query_enum).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let tickets = val["listTickets"].as_array().unwrap();
+    let tickets = val["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 1);
     assert_eq!(tickets[0]["title"], "Fix memory leak");
 
     // 2. Filter by numeric priority >= 5
     let query_priority = r#"
         query {
-            listTickets(filter: { priority: { gte: 5 } }) {
-                title
-                priority
+            listTickets(filter: { priority: { greaterThanOrEqual: 5 } }) {
+                results { title priority }
             }
         }
     "#;
     let res = schema.execute(Request::new(query_priority).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let tickets = val["listTickets"].as_array().unwrap();
+    let tickets = val["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 2);
 
     // 3. Complex boolean filter: (priority >= 5 AND is_published == true)
@@ -174,18 +172,18 @@ async fn test_phase2_list_query_with_filters() {
         query {
             listTickets(filter: {
                 and: [
-                    { priority: { gte: 5 } },
-                    { is_published: { eq: true } }
+                    { priority: { greaterThanOrEqual: 5 } },
+                    { isPublished: { eq: true } }
                 ]
             }) {
-                title
+                results { title }
             }
         }
     "#;
     let res = schema.execute(Request::new(query_complex).data(ctx)).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let tickets = val["listTickets"].as_array().unwrap();
+    let tickets = val["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 1);
     assert_eq!(tickets[0]["title"], "Improve docs");
 }
@@ -202,18 +200,22 @@ async fn test_list_query_with_text_filters() {
     for (filter, expected) in [
         (r#"{ title: { contains: "dark" } }"#, vec!["Add dark mode"]),
         (r#"{ title: { contains: "DARK" } }"#, vec![]),
-        (r#"{ title: { startsWith: "Fix" } }"#, vec!["Fix memory leak"]),
-        (r#"{ title: { endsWith: "docs" } }"#, vec!["Improve docs"]),
+        (r#"{ title: { stringStartsWith: "Fix" } }"#, vec!["Fix memory leak"]),
+        (r#"{ title: { stringEndsWith: "docs" } }"#, vec!["Improve docs"]),
+        (r#"{ title: { like: "%dark%" } }"#, vec!["Add dark mode"]),
+        (r#"{ title: { ilike: "%DARK%" } }"#, vec!["Add dark mode"]),
+        (r#"{ priority: { notEq: 5 } }"#, vec!["Fix memory leak", "Improve docs"]),
+        (r#"{ priority: { isDistinctFrom: 5 } }"#, vec!["Fix memory leak", "Improve docs"]),
         (
-            r#"{ not: { title: { contains: "dark" } } }"#,
+            r#"{ not: [{ title: { contains: "dark" } }] }"#,
             vec!["Fix memory leak", "Improve docs"],
         ),
     ] {
-        let query = format!("query {{ listTickets(filter: {filter}) {{ title }} }}");
+        let query = format!("query {{ listTickets(filter: {filter}) {{ results {{ title }} }} }}");
         let res = schema.execute(Request::new(query).data(ctx.clone())).await;
         assert!(res.errors.is_empty(), "{filter}: {:?}", res.errors);
         let val = res.data.into_json().unwrap();
-        let mut titles: Vec<&str> = val["listTickets"]
+        let mut titles: Vec<&str> = val["listTickets"]["results"]
             .as_array()
             .unwrap()
             .iter()
@@ -238,15 +240,14 @@ async fn test_phase2_list_query_with_sorting_and_pagination() {
     let query_sort = r#"
         query {
             listTickets(sort: [{ field: PRIORITY, order: DESC }]) {
-                title
-                priority
+                results { title priority }
             }
         }
     "#;
     let res = schema.execute(Request::new(query_sort).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let tickets = val["listTickets"].as_array().unwrap();
+    let tickets = val["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 3);
     assert_eq!(tickets[0]["title"], "Improve docs");
     assert_eq!(tickets[0]["priority"], 10);
@@ -255,23 +256,23 @@ async fn test_phase2_list_query_with_sorting_and_pagination() {
     assert_eq!(tickets[2]["title"], "Fix memory leak");
     assert_eq!(tickets[2]["priority"], 1);
 
-    // Limit and offset
-    let query_limit_offset = r#"
-        query {
-            listTickets(
-                sort: [{ field: PRIORITY, order: DESC }],
-                limit: 1,
-                offset: 1
-            ) {
-                title
-                priority
-            }
-        }
-    "#;
-    let res = schema.execute(Request::new(query_limit_offset).data(ctx)).await;
+    // Keyset pages: the first page, then the one after it.
+    let page = |after: Option<String>| {
+        let after = after.map(|k| format!(r#", after: "{k}""#)).unwrap_or_default();
+        format!(
+            "query {{ listTickets(sort: [{{ field: PRIORITY, order: DESC }}], first: 1{after}) {{ results {{ title priority }} endKeyset count }} }}"
+        )
+    };
+    let res = schema.execute(Request::new(page(None)).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let tickets = val["listTickets"].as_array().unwrap();
+    assert_eq!(val["listTickets"]["results"][0]["title"], "Improve docs");
+    assert_eq!(val["listTickets"]["count"], 3);
+    let next = val["listTickets"]["endKeyset"].as_str().unwrap().to_string();
+    let res = schema.execute(Request::new(page(Some(next))).data(ctx)).await;
+    assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
+    let val = res.data.into_json().unwrap();
+    let tickets = val["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 1);
     assert_eq!(tickets[0]["title"], "Add dark mode");
     assert_eq!(tickets[0]["priority"], 5);
@@ -291,15 +292,14 @@ async fn test_phase2_read_query_with_action_arguments() {
     let query_with_arg = r#"
         query {
             listTickets(priority: 5) {
-                title
-                priority
+                results { title priority }
             }
         }
     "#;
     let res = schema.execute(Request::new(query_with_arg).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let tickets = val["listTickets"].as_array().unwrap();
+    let tickets = val["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 1);
     assert_eq!(tickets[0]["title"], "Add dark mode");
     assert_eq!(tickets[0]["priority"], 5);

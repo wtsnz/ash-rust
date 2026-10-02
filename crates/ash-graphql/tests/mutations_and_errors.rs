@@ -12,7 +12,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["open", "closed"],
-            name: None,
+            name: Some("TicketStatus"),
         },
     ),
     AttributeDef {
@@ -73,11 +73,10 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     let create_mutation = r#"
         mutation {
             createTicket(input: { title: "Implement Phase 4 Mutations" }) {
-                success
                 errors {
                     code
                     message
-                    field
+                    fields
                 }
                 result {
                     id
@@ -92,7 +91,6 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let create_payload = &val["createTicket"];
-    assert_eq!(create_payload["success"], true);
     assert_eq!(create_payload["errors"].as_array().unwrap().len(), 0);
 
     let ticket = &create_payload["result"];
@@ -100,42 +98,27 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     assert_eq!(ticket["title"], "Implement Phase 4 Mutations");
     assert_eq!(ticket["version"], 1);
 
-    // 2. Validation failure: missing required field
+    // 2. A required field left out: the input type requires it, as AshGraphql's does.
     let invalid_create = r#"
         mutation {
             createTicket(input: {}) {
-                success
-                errors {
-                    code
-                    field
-                }
-                result {
-                    id
-                }
+                errors { code }
             }
         }
     "#;
     let res = schema.execute(Request::new(invalid_create).data(ctx.clone())).await;
-    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-    let val = res.data.into_json().unwrap();
-    let invalid_payload = &val["createTicket"];
-    assert_eq!(invalid_payload["success"], false);
-    let errors = invalid_payload["errors"].as_array().unwrap();
-    assert!(!errors.is_empty());
-    assert_eq!(errors[0]["code"], "REQUIRED_FIELD_MISSING");
-    assert_eq!(errors[0]["field"], "title");
+    assert_eq!(res.errors.len(), 1, "{:?}", res.errors);
+    assert!(res.errors[0].message.contains("title"), "{:?}", res.errors);
 
     // 3. Update ticket with optimistic locking and action arguments
     let update_mutation = format!(
         r#"
         mutation {{
-            closeTicket(input: {{
-                id: "{ticket_id}",
+            closeTicket(id: "{ticket_id}", input: {{
                 status: CLOSED,
                 reason: "All tests passing",
                 version: 1
             }}) {{
-                success
                 errors {{
                     code
                     message
@@ -154,7 +137,7 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let update_payload = &val["closeTicket"];
-    assert_eq!(update_payload["success"], true);
+    assert_eq!(update_payload["errors"].as_array().unwrap().len(), 0);
     assert_eq!(update_payload["result"]["status"], "CLOSED");
     assert_eq!(update_payload["result"]["version"], 2);
 
@@ -162,15 +145,13 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     let stale_update = format!(
         r#"
         mutation {{
-            closeTicket(input: {{
-                id: "{ticket_id}",
+            closeTicket(id: "{ticket_id}", input: {{
                 status: OPEN,
                 version: 1
             }}) {{
-                success
                 errors {{
                     code
-                    field
+                    fields
                 }}
                 result {{
                     id
@@ -183,20 +164,20 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let stale_payload = &val["closeTicket"];
-    assert_eq!(stale_payload["success"], false);
+    assert!(stale_payload["result"].is_null());
     let errors = stale_payload["errors"].as_array().unwrap();
-    assert_eq!(errors[0]["code"], "STALE_RECORD");
-    assert_eq!(errors[0]["field"], "version");
+    assert_eq!(errors[0]["code"], "stale_record");
+    assert_eq!(errors[0]["fields"], serde_json::json!(["version"]));
 
     // 5. Destroy ticket mutation
     let destroy_mutation = format!(
         r#"
         mutation {{
-            destroyTicket(input: {{ id: "{ticket_id}", version: 2 }}) {{
-                success
+            destroyTicket(id: "{ticket_id}", input: {{ version: 2 }}) {{
                 errors {{
                     code
                 }}
+                result {{ id }}
             }}
         }}
     "#
@@ -205,7 +186,9 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let destroy_payload = &val["destroyTicket"];
-    assert_eq!(destroy_payload["success"], true);
+    assert_eq!(destroy_payload["errors"].as_array().unwrap().len(), 0);
+    // A destroy's result is the record it destroyed.
+    assert_eq!(destroy_payload["result"]["id"], ticket_id);
 
     // Verify record is destroyed
     let verify_query = format!(

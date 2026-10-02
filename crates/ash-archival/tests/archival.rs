@@ -244,19 +244,19 @@ async fn graphql_destroy_archives_and_lists_hide_archived() {
         .expect("Failed to build schema");
 
     let destroy = format!(
-        r#"mutation {{ destroyPost(input: {{ id: "{}" }}) {{ success errors {{ message }} }} }}"#,
+        r#"mutation {{ destroyPost(id: "{}") {{ errors {{ message code }} }} }}"#,
         post.id
     );
     let res = schema.execute(Request::new(destroy).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     let data = res.data.into_json().unwrap();
-    assert_eq!(data["destroyPost"]["success"], true, "{data}");
+    assert_eq!(data["destroyPost"]["errors"], serde_json::json!([]), "{data}");
 
     let res = schema
-        .execute(Request::new("query { listPosts { id archived_at } }").data(ctx.clone()))
+        .execute(Request::new("query { listPosts { results { id archivedAt } } }").data(ctx.clone()))
         .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
-    assert_eq!(res.data.into_json().unwrap()["listPosts"], serde_json::json!([]));
+    assert_eq!(res.data.into_json().unwrap()["listPosts"]["results"], serde_json::json!([]));
     assert_eq!(stored_rows(&ctx, &Post::DEF).await, 1);
     assert!(Post::query(&ctx).action("archived").one().await.unwrap().is_archived());
 }

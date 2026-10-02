@@ -5,7 +5,6 @@ use ash_pubsub::PubSub;
 use async_graphql::ErrorExtensions;
 use async_graphql::dynamic::*;
 use tokio::sync::broadcast::error::RecvError;
-use uuid::Uuid;
 
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
 
@@ -53,175 +52,124 @@ fn subscriber<D: DataLayer + 'static>(
     (request_actor::<D>(ctx).cloned(), tenant)
 }
 
+/// What a subscription's payload carries: the record created or updated, or the id of
+/// the one destroyed.
+#[derive(Clone)]
+enum Event {
+    Record(ash_core::FieldMap),
+    Id(String),
+}
+
+/// `cabCreated` → `cab_created_result`, as AshGraphql names a subscription's payload.
+pub fn subscription_result_name(field: &str) -> String {
+    format!("{}_result", crate::names::snake(field))
+}
+
+/// The three subscriptions a resource has, as AshGraphql declares them with
+/// `action_types`: `<resource>Created`, `Updated` and `Destroyed`, each kind and the key
+/// its payload carries the record under.
+fn kinds(resource: &ResourceDef) -> [(String, ActionKind, &'static str); 3] {
+    let lower = uncapitalize(resource.name);
+    [
+        (format!("{lower}Created"), ActionKind::Create, "created"),
+        (format!("{lower}Updated"), ActionKind::Update, "updated"),
+        (format!("{lower}Destroyed"), ActionKind::Destroy, "destroyed"),
+    ]
+}
+
+/// Registers each subscription's payload type: `<name>_result { created: <Resource> }`,
+/// `{ updated: <Resource> }` or `{ destroyed: ID }`.
+pub fn register_subscription_results(
+    mut builder: SchemaBuilder,
+    resource: &'static ResourceDef,
+) -> SchemaBuilder {
+    for (field, kind, key) in kinds(resource) {
+        let type_ref = if kind == ActionKind::Destroy {
+            TypeRef::named(TypeRef::ID)
+        } else {
+            TypeRef::named(resource.name)
+        };
+        builder = builder.register(Object::new(subscription_result_name(&field)).field(Field::new(
+            key,
+            type_ref,
+            |ctx| {
+                FieldFuture::new(async move {
+                    Ok(match ctx.parent_value.downcast_ref::<Event>() {
+                        Some(Event::Record(record)) => Some(FieldValue::owned_any(record.clone())),
+                        Some(Event::Id(id)) => Some(FieldValue::value(async_graphql::Value::String(id.clone()))),
+                        None => None,
+                    })
+                })
+            },
+        )));
+    }
+    builder
+}
+
+/// `<resource>Created(filter)`, `<resource>Updated(filter)` and
+/// `<resource>Destroyed(filter)`: every change of that kind to a record the subscriber
+/// can read, in its tenant, that matches the filter.
 pub fn build_resource_subscriptions<D: DataLayer + 'static>(
     resource: &'static ResourceDef,
     pubsub: PubSub,
 ) -> Vec<SubscriptionField> {
-    let mut fields = Vec::new();
-    let lower_res = uncapitalize(resource.name);
-
-    // 1. <resource>Created(filter: <Resource>FilterInput): <Resource>!
-    let created_field_name = format!("{lower_res}Created");
-    let pubsub_clone = pubsub.clone();
-    let mut created_sub = SubscriptionField::new(
-        created_field_name,
-        TypeRef::named_nn(resource.name),
-        move |ctx| {
-            let pubsub = pubsub_clone.clone();
-            SubscriptionFieldFuture::new(async move {
-                // An argument given as `null`, as an unset variable is, means none.
-                let filter_arg = ctx.args.get("filter").filter(|arg| !arg.is_null());
-                let filter = if let Some(f_acc) = filter_arg {
-                    let obj = f_acc.object()?;
-                    Some(parse_resource_filter(resource, &obj)?)
-                } else {
-                    None
-                };
-
-                let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
-                let (actor, tenant) = subscriber::<D>(&ctx);
-
-                let stream = async_stream::stream! {
-                    while let Some(event) = next_event(&mut sub).await {
-                        let notif = match event {
-                            Ok(notif) => notif,
-                            Err(missed) => {
-                                yield Err(missed);
-                                break;
-                            }
-                        };
-                        if notif.action_kind == ActionKind::Create {
-                            if let Some(f) = &filter
-                                && !f.matches_on(resource, &notif.record_fields)
-                            {
-                                continue;
-                            }
-                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
-                                continue;
-                            }
-                            // Shared with every other subscriber: copy only what this one sends.
-                            let mut record = notif.record_fields.clone();
-                            let _ = redact_fields(resource, actor.as_ref(), &mut record);
-                            yield Ok(FieldValue::owned_any(record));
-                        }
-                    }
-                };
-
-                Ok(stream)
-            })
-        },
-    );
-    created_sub = created_sub.argument(InputValue::new(
-        "filter",
-        TypeRef::named(resource_filter_input_name(resource.name)),
-    ));
-    fields.push(created_sub);
-
-    // 2. <resource>Updated(id: ID): <Resource>!
-    let updated_field_name = format!("{lower_res}Updated");
-    let pubsub_clone2 = pubsub.clone();
-    let mut updated_sub = SubscriptionField::new(
-        updated_field_name,
-        TypeRef::named_nn(resource.name),
-        move |ctx| {
-            let pubsub = pubsub_clone2.clone();
-            SubscriptionFieldFuture::new(async move {
-                let target_id = if let Some(id_arg) = ctx.args.get("id").filter(|arg| !arg.is_null()) {
-                    let s = id_arg.string()?;
-                    Some(
-                        Uuid::parse_str(s)
-                            .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?,
-                    )
-                } else {
-                    None
-                };
-
-                let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
-                let (actor, tenant) = subscriber::<D>(&ctx);
-
-                let stream = async_stream::stream! {
-                    while let Some(event) = next_event(&mut sub).await {
-                        let notif = match event {
-                            Ok(notif) => notif,
-                            Err(missed) => {
-                                yield Err(missed);
-                                break;
-                            }
-                        };
-                        if notif.action_kind == ActionKind::Update {
-                            if let Some(tid) = target_id
-                                && notif.id != tid
-                            {
-                                continue;
-                            }
-                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
-                                continue;
-                            }
-                            // Shared with every other subscriber: copy only what this one sends.
-                            let mut record = notif.record_fields.clone();
-                            let _ = redact_fields(resource, actor.as_ref(), &mut record);
-                            yield Ok(FieldValue::owned_any(record));
-                        }
-                    }
-                };
-
-                Ok(stream)
-            })
-        },
-    );
-    updated_sub = updated_sub.argument(InputValue::new("id", TypeRef::named(TypeRef::ID)));
-    fields.push(updated_sub);
-
-    // 3. <resource>Destroyed(id: ID): ID!
-    let destroyed_field_name = format!("{lower_res}Destroyed");
-    let mut destroyed_sub = SubscriptionField::new(
-        destroyed_field_name,
-        TypeRef::named_nn(TypeRef::ID),
-        move |ctx| {
+    kinds(resource)
+        .into_iter()
+        .map(|(field, kind, _)| {
             let pubsub = pubsub.clone();
-            SubscriptionFieldFuture::new(async move {
-                let target_id = if let Some(id_arg) = ctx.args.get("id").filter(|arg| !arg.is_null()) {
-                    let s = id_arg.string()?;
-                    Some(
-                        Uuid::parse_str(s)
-                            .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?,
-                    )
-                } else {
-                    None
-                };
+            SubscriptionField::new(
+                field.clone(),
+                TypeRef::named(subscription_result_name(&field)),
+                move |ctx| {
+                    let pubsub = pubsub.clone();
+                    SubscriptionFieldFuture::new(async move {
+                        // An argument given as `null`, as an unset variable is, means none.
+                        let filter = match ctx.args.get("filter").filter(|arg| !arg.is_null()) {
+                            Some(filter) => Some(parse_resource_filter(resource, &filter.object()?)?),
+                            None => None,
+                        };
+                        let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
+                        let (actor, tenant) = subscriber::<D>(&ctx);
 
-                let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
-                let (actor, tenant) = subscriber::<D>(&ctx);
-
-                let stream = async_stream::stream! {
-                    while let Some(event) = next_event(&mut sub).await {
-                        let notif = match event {
-                            Ok(notif) => notif,
-                            Err(missed) => {
-                                yield Err(missed);
-                                break;
+                        let stream = async_stream::stream! {
+                            while let Some(event) = next_event(&mut sub).await {
+                                let notif = match event {
+                                    Ok(notif) => notif,
+                                    Err(missed) => {
+                                        yield Err(missed);
+                                        break;
+                                    }
+                                };
+                                if notif.action_kind != kind {
+                                    continue;
+                                }
+                                if let Some(f) = &filter
+                                    && !f.matches_on(resource, &notif.record_fields)
+                                {
+                                    continue;
+                                }
+                                if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
+                                    continue;
+                                }
+                                let event = if kind == ActionKind::Destroy {
+                                    Event::Id(notif.id.to_string())
+                                } else {
+                                    // Shared with every other subscriber: copy only what this one sends.
+                                    let mut record = notif.record_fields.clone();
+                                    let _ = redact_fields(resource, actor.as_ref(), &mut record);
+                                    Event::Record(record)
+                                };
+                                yield Ok(FieldValue::owned_any(event));
                             }
                         };
-                        if notif.action_kind == ActionKind::Destroy {
-                            if let Some(tid) = target_id
-                                && notif.id != tid
-                            {
-                                continue;
-                            }
-                            if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
-                                continue;
-                            }
-                            yield Ok(FieldValue::value(async_graphql::Value::String(notif.id.to_string())));
-                        }
-                    }
-                };
-
-                Ok(stream)
-            })
-        },
-    );
-    destroyed_sub = destroyed_sub.argument(InputValue::new("id", TypeRef::named(TypeRef::ID)));
-    fields.push(destroyed_sub);
-
-    fields
+                        Ok(stream)
+                    })
+                },
+            )
+            .argument(InputValue::new(
+                "filter",
+                TypeRef::named(resource_filter_input_name(resource.name)),
+            ))
+        })
+        .collect()
 }

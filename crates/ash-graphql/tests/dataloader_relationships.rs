@@ -145,12 +145,12 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
 
     let query_authors = r#"
         query {
-            listAuthors {
+            listAuthors { results {
                 name
                 posts {
                     title
                 }
-            }
+            } }
         }
     "#;
 
@@ -159,7 +159,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors in listAuthors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let authors = val["listAuthors"].as_array().unwrap();
+    let authors = val["listAuthors"]["results"].as_array().unwrap();
     assert_eq!(authors.len(), 2);
 
     for author in authors {
@@ -172,15 +172,15 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         }
     }
 
-    // 2. Query belongs_to relationship: listPosts { title, author { name } }
+    // 2. Query belongs_to relationship: listPosts { results { title, author { name } } }
     let query_posts = r#"
         query {
-            listPosts {
+            listPosts { results {
                 title
                 author {
                     name
                 }
-            }
+            } }
         }
     "#;
 
@@ -189,7 +189,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors in listPosts: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let posts = val["listPosts"].as_array().unwrap();
+    let posts = val["listPosts"]["results"].as_array().unwrap();
     assert_eq!(posts.len(), 4);
 
     for post in posts {
@@ -213,19 +213,19 @@ async fn test_nested_relationship_filtering() {
     // Filter Posts by related Author name == "Alice"
     let query_posts_by_author = r#"
         query {
-            listPosts(filter: { author: { name: { eq: "Alice" } } }) {
+            listPosts(filter: { author: { name: { eq: "Alice" } } }) { results {
                 title
                 author {
                     name
                 }
-            }
+            } }
         }
     "#;
 
     let res = schema.execute(Request::new(query_posts_by_author).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let posts = val["listPosts"].as_array().unwrap();
+    let posts = val["listPosts"]["results"].as_array().unwrap();
     assert_eq!(posts.len(), 2);
     for post in posts {
         assert_eq!(post["author"]["name"], "Alice");
@@ -234,16 +234,16 @@ async fn test_nested_relationship_filtering() {
     // Filter Authors by related Posts title == "Bob Post #1"
     let query_authors_by_post = r#"
         query {
-            listAuthors(filter: { posts: { title: { eq: "Bob Post #1" } } }) {
+            listAuthors(filter: { posts: { title: { eq: "Bob Post #1" } } }) { results {
                 name
-            }
+            } }
         }
     "#;
 
     let res = schema.execute(Request::new(query_authors_by_post).data(ctx)).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
-    let authors = val["listAuthors"].as_array().unwrap();
+    let authors = val["listAuthors"]["results"].as_array().unwrap();
     assert_eq!(authors.len(), 1);
     assert_eq!(authors[0]["name"], "Bob");
 }
