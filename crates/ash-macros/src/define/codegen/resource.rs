@@ -243,7 +243,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             attr_defs.push(quote! {
                 ::ash_core::AttributeDef::required(
                     #name_str,
-                    ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*] }
+                    ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*], name: None }
                 )
             });
         } else if is_uuid(ty) {

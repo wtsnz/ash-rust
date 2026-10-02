@@ -37,7 +37,7 @@ static USER_DEST: ResourceDef = ResourceDef {
 static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("title", AttrType::String),
-    AttributeDef::required("status", AttrType::Atom { one_of: &["open", "closed"] }),
+    AttributeDef::required("status", AttrType::Atom { one_of: &["open", "closed"], name: None }),
     AttributeDef::required("priority", AttrType::Integer),
     AttributeDef::optional("author_id", AttrType::Uuid),
 ];

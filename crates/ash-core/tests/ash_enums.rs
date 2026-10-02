@@ -79,7 +79,9 @@ async fn test_ash_enum_traits_and_conversions() {
     assert_eq!(
         attr_type,
         ash_core::AttrType::Atom {
-            one_of: &["draft", "in_progress", "published", "archived"]
+            one_of: &["draft", "in_progress", "published", "archived"],
+            // Named after its type, as GraphQL names the enum.
+            name: Some("PostStatus"),
         }
     );
 }

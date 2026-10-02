@@ -12,6 +12,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["open", "closed"],
+            name: None,
         },
     ),
     AttributeDef::optional("representative_id", AttrType::Uuid),

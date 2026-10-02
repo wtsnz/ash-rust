@@ -69,6 +69,7 @@ static ISSUE_ATTRS: &[AttributeDef] = &[
         "kind",
         AttrType::Atom {
             one_of: &["bug", "feature", "chore"],
+            name: None,
         },
     ),
 ];

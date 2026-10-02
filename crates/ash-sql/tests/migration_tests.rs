@@ -299,6 +299,7 @@ fn atom_one_of_becomes_a_named_check() {
             "status",
             AttrType::Atom {
                 one_of: &["open", "closed"],
+                name: None,
             },
         ),
     ];

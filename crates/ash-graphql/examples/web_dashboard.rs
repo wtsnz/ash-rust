@@ -28,6 +28,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["OPEN", "IN_PROGRESS", "CLOSED"],
+            name: None,
         },
     ),
     AttributeDef::required("priority", AttrType::Integer),

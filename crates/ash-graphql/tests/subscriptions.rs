@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("title", AttrType::String),
-    AttributeDef::optional("status", AttrType::Atom { one_of: &["OPEN", "CLOSED"] }),
+    AttributeDef::optional("status", AttrType::Atom { one_of: &["OPEN", "CLOSED"], name: None }),
 ];
 
 static TICKET_ACTIONS: &[ActionDef] = &[

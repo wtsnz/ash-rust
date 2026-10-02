@@ -550,7 +550,7 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 });
             }
         },
-        (AttrType::Atom { one_of }, Value::String(got)) => {
+        (AttrType::Atom { one_of, .. }, Value::String(got)) => {
             if one_of.contains(&got.as_str()) {
                 true
             } else {

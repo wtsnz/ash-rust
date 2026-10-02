@@ -5,6 +5,7 @@ use syn::{Data, DeriveInput, Error, Fields, Lit, Result};
 
 pub fn expand_ash_enum(input: DeriveInput) -> Result<TokenStream> {
     let name = &input.ident;
+    let type_name = name.to_string();
     let Data::Enum(data) = &input.data else {
         return Err(Error::new_spanned(
             &input,
@@ -78,6 +79,7 @@ pub fn expand_ash_enum(input: DeriveInput) -> Result<TokenStream> {
         impl ::ash_core::AshType for #name {
             const ATTR_TYPE: ::ash_core::AttrType = ::ash_core::AttrType::Atom {
                 one_of: <Self as ::ash_core::AshEnum>::VARIANTS,
+                name: ::core::option::Option::Some(#type_name),
             };
 
             fn to_value(&self) -> ::ash_core::Value {

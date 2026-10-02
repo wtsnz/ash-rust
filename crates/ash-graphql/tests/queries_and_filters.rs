@@ -15,6 +15,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["open", "in_progress", "closed"],
+            name: None,
         },
     ),
     AttributeDef::required("is_published", AttrType::Boolean),

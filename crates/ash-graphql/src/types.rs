@@ -276,7 +276,7 @@ pub fn parse_input_val(
         AttrType::Vector { dimensions } => {
             Ok(AshValue::String(parse_vector_input(acc, dimensions)?))
         }
-        AttrType::Atom { one_of } => {
+        AttrType::Atom { one_of, .. } => {
             let name = acc.enum_name()?;
             if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
                 Ok(AshValue::String((*matched).to_string()))

@@ -55,7 +55,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         AttrType::Float | AttrType::Integer => "number".to_string(),
         AttrType::Vector { .. } => "number[]".to_string(),
         AttrType::Boolean => "boolean".to_string(),
-        AttrType::Atom { one_of } => {
+        AttrType::Atom { one_of, .. } => {
             if one_of.is_empty() {
                 "string".to_string()
             } else {
@@ -265,7 +265,7 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     let name = res.name;
 
     for attr in res.attributes {
-        if let AttrType::Atom { one_of } = attr.ty
+        if let AttrType::Atom { one_of, .. } = attr.ty
             && !one_of.is_empty()
         {
             let values = attr_type_to_ts(&attr.ty);
@@ -279,7 +279,7 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     out.push_str(&format!("export interface {name}FilterInput {{\n"));
     for attr in res.attributes {
         let filter_type = match attr.ty {
-            AttrType::Atom { one_of } if !one_of.is_empty() => {
+            AttrType::Atom { one_of, .. } if !one_of.is_empty() => {
                 Some(enum_filter_name(name, attr.name))
             }
             _ => attr_type_to_filter_type(&attr.ty).map(str::to_string),

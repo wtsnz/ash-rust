@@ -83,7 +83,7 @@ impl FieldSpec {
                     let inner = option_inner(&self.ty).unwrap_or(&self.ty);
                     quote! { <#inner as ::ash_core::AshType>::ATTR_TYPE }
                 } else if let Some(atoms) = atom {
-                    quote! { ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*] } }
+                    quote! { ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*], name: None } }
                 } else if is_uuid(&self.ty) || option_inner(&self.ty).is_some_and(is_uuid) {
                     quote! { ::ash_core::AttrType::Uuid }
                 } else if is_integer(&self.ty) || option_inner(&self.ty).is_some_and(is_integer) {

@@ -196,7 +196,7 @@ async fn load_relationship<D: DataLayer + Clone + 'static>(
 pub fn collect_enums_for_resource(resource: &'static ResourceDef) -> Vec<Enum> {
     let mut enums = Vec::new();
     for attr in resource.attributes {
-        if let AttrType::Atom { one_of } = attr.ty {
+        if let AttrType::Atom { one_of, .. } = attr.ty {
             let enum_name = enum_type_name(resource.name, attr.name);
             let mut gql_enum = Enum::new(enum_name);
             for variant in one_of {

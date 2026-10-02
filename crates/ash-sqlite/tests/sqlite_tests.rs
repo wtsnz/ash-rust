@@ -13,6 +13,7 @@ const TICKET: ResourceDef = ResourceDef {
             "status",
             AttrType::Atom {
                 one_of: &["open", "closed"],
+                name: None,
             },
         ),
         AttributeDef::optional("priority", AttrType::Integer),

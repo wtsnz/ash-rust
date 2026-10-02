@@ -242,7 +242,7 @@ fn enum_check<D: SqlDialect>(
     table: &str,
     attr: &AttributeDef,
 ) -> Option<CheckSnapshot> {
-    let AttrType::Atom { one_of } = attr.ty else {
+    let AttrType::Atom { one_of, .. } = attr.ty else {
         return None;
     };
     if one_of.is_empty() {

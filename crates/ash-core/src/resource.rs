@@ -457,7 +457,13 @@ pub enum AttrType {
     String,
     Integer,
     Boolean,
-    Atom { one_of: &'static [&'static str] },
+    /// One of a fixed set of values. A named atom is an enum type of its own (an
+    /// `AshEnum`, as an `Ash.Type.Enum` in Elixir): GraphQL gives it an enum type of that
+    /// name. An unnamed one is just constrained text there, as Ash's `:atom` is.
+    Atom {
+        one_of: &'static [&'static str],
+        name: Option<&'static str>,
+    },
     Map,
     Array,
     UtcDatetime { precision: crate::types::TimePrecision },

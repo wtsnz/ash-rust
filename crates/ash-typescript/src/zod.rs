@@ -18,7 +18,7 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
         AttrType::Vector { dimensions } => format!("z.array(z.number()).length({dimensions})"),
         AttrType::Integer => "z.number().int()".to_string(),
         AttrType::Boolean => "z.boolean()".to_string(),
-        AttrType::Atom { one_of } => {
+        AttrType::Atom { one_of, .. } => {
             if one_of.is_empty() {
                 "z.string()".to_string()
             } else {
@@ -150,7 +150,7 @@ fn build_field_zod_schema(
             }
             AttrType::Integer => "z.number().int()".to_string(),
             AttrType::Boolean => "z.boolean()".to_string(),
-            AttrType::Atom { one_of } => {
+            AttrType::Atom { one_of, .. } => {
                 if one_of.is_empty() {
                     "z.string()".to_string()
                 } else {
