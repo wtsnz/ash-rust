@@ -580,6 +580,23 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = id.to_string();
         let ty = &a.ty;
 
+        // A timestamp not yet stored reads as now, in the field's own type.
+        if let Some(ts) = &def.timestamps
+            && (id == &ts.created_at || id == &ts.updated_at)
+        {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(val) if !val.is_null() => {
+                        <#ty as ::ash_core::AshType>::from_value(val)?
+                    }
+                    _ => <#ty as ::ash_core::AshType>::from_value(
+                        &::ash_core::AshType::to_value(&::ash_core::UtcDateTimeUsec::now()),
+                    )?,
+                }
+            });
+            continue;
+        }
+
         if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if option_inner(ty).is_some() {
@@ -621,18 +638,6 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     }
                 });
             }
-            continue;
-        }
-
-        if let Some(ts) = &def.timestamps
-            && (id == &ts.created_at || id == &ts.updated_at)
-        {
-            from_inits.push(quote! {
-                #id: match fields.get(#name_str) {
-                    ::std::option::Option::Some(::ash_core::Value::String(s)) => s.clone(),
-                    _ => ::ash_core::utc_now_iso8601(),
-                }
-            });
             continue;
         }
 

@@ -61,10 +61,11 @@ async fn test_timestamps_and_defaults_in_memory() {
     // Invariant: dynamic default_fn applied
     assert_eq!(created.tracking_code, "TRK-9999");
 
-    // Invariant: timestamps automatically injected as valid ISO-8601 strings
-    assert!(!created.created_at.is_empty());
-    assert!(!created.updated_at.is_empty());
-    assert!(created.created_at.contains('T') && created.created_at.ends_with('Z'));
+    // Invariant: timestamps are UTC datetimes to the microsecond, as Ash's are
+    assert!(!created.created_at.as_str().is_empty());
+    assert!(!created.updated_at.as_str().is_empty());
+    let (_, fraction) = created.created_at.as_str().split_once('.').unwrap();
+    assert_eq!(fraction.len(), "123456Z".len(), "{}", created.created_at);
     assert_eq!(created.created_at, created.updated_at);
 
     let initial_created_at = created.created_at.clone();
@@ -95,7 +96,7 @@ async fn test_timestamps_and_defaults_in_memory() {
     assert_eq!(updated.status, "published");
     assert_eq!(updated.created_at, initial_created_at, "created_at must never be mutated on update");
     // updated_at is recalculated on update
-    assert!(!updated.updated_at.is_empty());
+    assert!(!updated.updated_at.as_str().is_empty());
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -114,7 +115,7 @@ async fn test_timestamps_and_defaults_in_sqlite() {
     assert_eq!(created.status, "draft");
     assert_eq!(created.views, 0);
     assert_eq!(created.tracking_code, "TRK-9999");
-    assert!(!created.created_at.is_empty());
+    assert!(!created.created_at.as_str().is_empty());
     assert_eq!(created.created_at, created.updated_at);
 
     // 2. Fetch directly from SQLite to verify columns were persisted
@@ -175,6 +176,6 @@ fn test_embedded_resource_timestamps_and_defaults() {
 
     assert_eq!(log.action, "user_login");
     assert_eq!(log.severity, "info");
-    assert!(!log.created_at.is_empty());
+    assert!(!log.created_at.as_str().is_empty());
     assert_eq!(log.created_at, log.updated_at);
 }

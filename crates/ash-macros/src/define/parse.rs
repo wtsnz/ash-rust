@@ -558,9 +558,10 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     });
 
     if let Some(ref ts) = timestamps {
+        // As in Ash, timestamps are UTC datetimes to the microsecond.
         if !attributes.iter().any(|a| a.ident == ts.created_at) {
             let c_ident = ts.created_at.clone();
-            let str_ty: Type = syn::parse_str("String").unwrap();
+            let str_ty: Type = syn::parse_str("::ash_core::UtcDateTimeUsec").unwrap();
             attributes.push(AttributeSpec {
                 outer_attrs: Vec::new(),
                 ident: c_ident,
@@ -576,7 +577,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         }
         if !attributes.iter().any(|a| a.ident == ts.updated_at) {
             let u_ident = ts.updated_at.clone();
-            let str_ty: Type = syn::parse_str("String").unwrap();
+            let str_ty: Type = syn::parse_str("::ash_core::UtcDateTimeUsec").unwrap();
             attributes.push(AttributeSpec {
                 outer_attrs: Vec::new(),
                 ident: u_ident,

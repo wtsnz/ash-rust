@@ -572,7 +572,7 @@ pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
         }
     }
     if let Some((created_at, updated_at)) = def.timestamps {
-        let now = crate::resource::utc_now_iso8601();
+        let now = crate::types::UtcDateTimeUsec::now().as_str().to_string();
         for name in [created_at, updated_at] {
             if missing(fields, name) {
                 fields.insert(name.to_string(), Value::String(now.clone()));
@@ -594,7 +594,7 @@ pub(crate) fn prepare_update_fields(def: &ResourceDef, existing: &FieldMap, fiel
     if let Some((_created_at, updated_at)) = def.timestamps {
         fields.insert(
             updated_at.to_string(),
-            Value::String(crate::resource::utc_now_iso8601()),
+            Value::String(crate::types::UtcDateTimeUsec::now().as_str().to_string()),
         );
     }
 }

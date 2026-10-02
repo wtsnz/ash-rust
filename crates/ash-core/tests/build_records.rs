@@ -38,7 +38,7 @@ fn build_fills_in_what_saving_would() {
     assert_ne!(account.id, Uuid::nil());
     assert_eq!(account.plan, "free");
     assert_eq!(account.version, 1);
-    assert!(!account.created_at.is_empty());
+    assert!(!account.created_at.as_str().is_empty());
     assert_eq!(account.created_at, account.updated_at);
 
     let other = Account::build_register().name("Grace").build().unwrap();
