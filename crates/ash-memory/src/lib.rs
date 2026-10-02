@@ -809,7 +809,16 @@ fn actor_reads(
     match policy {
         Ok(None) => true,
         Ok(Some(filter)) => {
-            let row = with_calculations(resource, filter, row);
+            // A calculation the policy checks that fails to compute denies the row, rather
+            // than reading as nil.
+            let mut names = Vec::new();
+            filter.collect_fields(&mut names);
+            let mut row = row.clone();
+            for name in names.into_iter().filter(|name| resource.calculation(name).is_some()) {
+                if !row.contains_key(name) && apply_named_with_args(resource, &mut row, name, &FieldMap::new()).is_err() {
+                    return false;
+                }
+            }
             eval_filter(tables, tenant, resource, filter, &row, None) == Some(true)
         }
         Err(()) => false,

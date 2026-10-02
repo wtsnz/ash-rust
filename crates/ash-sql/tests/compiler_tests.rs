@@ -599,3 +599,45 @@ fn test_count_compilation() {
     let compiled = QueryCompiler::new(&SqliteDialect).compile_count(&TICKET_DEF, &offset_only).unwrap();
     assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" LIMIT ? OFFSET ?) AS counted"#);
 }
+
+static ITEM_NAME: Expr = Expr::Field("name");
+
+static BIN_DEF: ResourceDef = ResourceDef {
+    name: "Bin",
+    table: "bins",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    relationships: &[ash_core::RelationshipDef::has_many("items", || &ITEM_DEF, "bin_id")],
+    actions: &[ActionDef::read("read").primary()],
+    aggregates: &[],
+    calculations: &[],
+    ..FOLDER_DEF
+};
+
+static ITEM_DEF: ResourceDef = ResourceDef {
+    name: "Item",
+    table: "items",
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("bin_id", AttrType::Uuid),
+        AttributeDef::required("name", AttrType::String),
+    ],
+    relationships: &[],
+    actions: &[ActionDef::read("read").primary()],
+    aggregates: &[],
+    calculations: &[CalculationDef::new("loud_name", AttrType::String, Expr::Upper(&ITEM_NAME))],
+    ..FOLDER_DEF
+};
+
+/// A calculation in a filter on related records reads that subquery's table, by its
+/// alias, as the filter's fields do: both tables have a `name`.
+#[test]
+fn a_related_calculation_reads_its_own_table() {
+    let query = CompiledQuery {
+        filter: Some(Filter::related("items", Filter::eq("loud_name", "BOLT"))),
+        ..CompiledQuery::default()
+    };
+    let mut compiler = QueryCompiler::new(&PostgresDialect);
+    let sql = compiler.compile_select(&BIN_DEF, &query).unwrap().sql;
+    let alias = sql.split("\"items\" AS ").nth(1).and_then(|rest| rest.split_whitespace().next()).expect("an alias");
+    assert!(sql.contains(&format!("upper({alias}.\"name\")")), "{sql}");
+}

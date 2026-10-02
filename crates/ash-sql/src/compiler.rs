@@ -98,6 +98,9 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     tenant: Option<String>,
     /// The query's actor, whose read policies limit the related rows aggregates count.
     actor: Option<ash_core::Actor>,
+    /// The alias a calculation's fields are qualified with, inside a subquery that names
+    /// its table so.
+    expr_scope: Option<String>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -114,6 +117,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             applying_read_filters: Vec::new(),
             tenant: None,
             actor: None,
+            expr_scope: None,
         }
     }
 
@@ -246,7 +250,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         scope_alias: Option<&str>,
     ) -> Result<String> {
         if let Some(calc) = resource.calculation(field) {
-            self.compile_calculation(resource, calc)
+            // Its fields are the scoped table's, as a filter's are.
+            let outer = std::mem::replace(&mut self.expr_scope, scope_alias.map(str::to_string));
+            let compiled = self.compile_calculation(resource, calc);
+            self.expr_scope = outer;
+            compiled
         } else if let Some(agg) = resource.aggregate(field) {
             // An aggregate is its subquery wherever a filter, sort or keyset refers to it,
             // as AshPostgres writes it: there's no column of that name to refer to.
@@ -265,9 +273,18 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// `name`'s column, qualified by the calculation's scope if it has one.
+    fn scoped_column(&self, resource: &ResourceDef, name: &str) -> Result<String> {
+        let col = column(self.dialect, resource, name)?;
+        Ok(match &self.expr_scope {
+            Some(alias) => format!("{alias}.{col}"),
+            None => col,
+        })
+    }
+
     pub fn compile_expr(&mut self, resource: &ResourceDef, expr: &Expr) -> Result<String> {
         match expr {
-            Expr::Field(name) => column(self.dialect, resource, name),
+            Expr::Field(name) => self.scoped_column(resource, name),
             Expr::Arg(name) => {
                 let val = self
                     .current_calc_args
@@ -290,7 +307,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Expr::LitBool(b) => Ok(self.dialect.boolean_literal(*b).to_string()),
             Expr::Null => Ok("NULL".to_string()),
             Expr::StringLength(name) => {
-                let col = column(self.dialect, resource, name)?;
+                let col = self.scoped_column(resource, name)?;
                 Ok(format!("length({col})"))
             }
             Expr::Length(inner) => {
