@@ -186,7 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         u.insert("id".into(), Value::Uuid(u_id));
         u.insert("name".into(), Value::String(format!("Staff Engineer #{i}")));
         u.insert("email".into(), Value::String(format!("staff{i}@company.com")));
-        pg.create(&USER_DEF, u_id, u).await?;
+        pg.create(&USER_DEF, None, u_id, u).await?;
         user_ids.push(u_id);
     }
     let first_user_id = user_ids[0];
@@ -208,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("user_id".into(), Value::Uuid(user_id));
-        pg.create(&TICKET_DEF, t_id, t).await?;
+        pg.create(&TICKET_DEF, None, t_id, t).await?;
     }
 
     let warmup = Duration::from_millis(500);
@@ -227,7 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             t.insert("status".into(), Value::String("open".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("user_id".into(), Value::Uuid(first_user_id));
-            let res = pg.create(&TICKET_DEF, t_id, t).await.unwrap();
+            let res = pg.create(&TICKET_DEF, None, t_id, t).await.unwrap();
             assert_eq!(res.get("id"), Some(&Value::Uuid(t_id)));
         },
     )
@@ -308,7 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 f.insert("user_id".into(), Value::Uuid(first_user_id));
                 batch.push((id, f));
             }
-            let res = pg.bulk_create(&TICKET_DEF, batch).await.unwrap();
+            let res = pg.bulk_create(&TICKET_DEF, None, batch).await.unwrap();
             assert_eq!(res.len(), 100);
         },
     )
@@ -328,7 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     u.insert("id".into(), Value::Uuid(u_id));
                     u.insert("name".into(), Value::String("Tx User".into()));
                     u.insert("email".into(), Value::String("tx@company.com".into()));
-                    tx.create(&USER_DEF, u_id, u).await?;
+                    tx.create(&USER_DEF, None, u_id, u).await?;
 
                     let t_id = Uuid::new_v4();
                     let mut t = FieldMap::new();
@@ -337,7 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     t.insert("status".into(), Value::String("open".into()));
                     t.insert("priority".into(), Value::Int(1));
                     t.insert("user_id".into(), Value::Uuid(u_id));
-                    tx.create(&TICKET_DEF, t_id, t).await?;
+                    tx.create(&TICKET_DEF, None, t_id, t).await?;
 
                     Ok((u_id, t_id))
                 }

@@ -78,16 +78,29 @@ fn check_identities(
     Ok(())
 }
 
+/// The table holding `resource`'s rows for `tenant`. A context-tenant resource keeps a
+/// table per tenant, as Ash's ETS data layer does, and its rows with no tenant (a global
+/// resource's) in the shared table; every other resource has one table.
+fn table_key(resource: &ResourceDef, tenant: Option<&str>) -> String {
+    match (resource.multitenancy, tenant) {
+        (Some(mt), Some(tenant)) if mt.strategy == ash_core::MultitenancyStrategy::Context => {
+            format!("{}@{tenant}", resource.name)
+        }
+        _ => resource.name.to_string(),
+    }
+}
+
 impl DataLayer for Memory {
     fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.entry(resource.name.to_string()).or_default();
+            let table = tables.entry(table_key(resource, tenant)).or_default();
             if table.contains_key(&id) {
                 return Err(Error::DataLayer(format!(
                     "duplicate id {id} in {}",
@@ -103,12 +116,13 @@ impl DataLayer for Memory {
     fn update(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             let mut current_row = table.get(&id).ok_or(Error::NotFound)?.clone();
 
             if let Some(v_attr) = resource.optimistic_lock_attribute()
@@ -140,6 +154,7 @@ impl DataLayer for Memory {
     fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
@@ -155,7 +170,7 @@ impl DataLayer for Memory {
                 )));
             }
             let mut tables = self.lock()?;
-            let table = tables.entry(resource.name.to_string()).or_default();
+            let table = tables.entry(table_key(resource, tenant)).or_default();
             let existing_entry = table
                 .iter()
                 .find(|(_, row)| {
@@ -196,10 +211,15 @@ impl DataLayer for Memory {
         })())
     }
 
-    fn destroy(&self, resource: &ResourceDef, id: Uuid) -> impl Future<Output = Result<()>> + Send {
+    fn destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+    ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             table.remove(&id).ok_or(Error::NotFound)?;
             Ok(())
         })())
@@ -208,11 +228,12 @@ impl DataLayer for Memory {
     fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.entry(resource.name.to_string()).or_default();
+            let table = tables.entry(table_key(resource, tenant)).or_default();
             let mut results = Vec::with_capacity(rows.len());
             for (id, fields) in rows {
                 if table.contains_key(&id) {
@@ -232,11 +253,12 @@ impl DataLayer for Memory {
     fn bulk_destroy(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         ids: &[Uuid],
     ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             for id in ids {
                 table.remove(id);
             }
@@ -251,8 +273,9 @@ impl DataLayer for Memory {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let tables = self.lock()?;
+            let tenant = query.tenant.as_deref();
             let mut rows: Vec<FieldMap> = tables
-                .get(resource.name)
+                .get(&table_key(resource, tenant))
                 .map(|table| table.values().cloned().collect())
                 .unwrap_or_default();
 
@@ -266,7 +289,6 @@ impl DataLayer for Memory {
             }
 
             let needed_aggs = needed_aggregates(resource, query);
-            let tenant = query.tenant.as_deref();
             apply_aggregates(&tables, tenant, resource, &mut rows, &needed_aggs)?;
 
             if let Some(filter) = &query.filter {
@@ -469,7 +491,7 @@ fn eval_filter(
                 return false;
             };
             let dest_res = (rel.destination)();
-            let dest_table = tables.get(dest_res.name);
+            let dest_table = tables.get(&table_key(dest_res, tenant));
             let Some(dest_table) = dest_table else {
                 return false;
             };
@@ -495,7 +517,7 @@ fn eval_filter(
                         return false;
                     };
                     let through_res = through_fn();
-                    let through_table = tables.get(through_res.name);
+                    let through_table = tables.get(&table_key(through_res, tenant));
                     let Some(through_table) = through_table else {
                         return false;
                     };
@@ -629,7 +651,7 @@ fn apply_aggregates(
         })?;
         let dest = (rel.destination)();
         let dest_rows: Vec<&FieldMap> = tables
-            .get(dest.name)
+            .get(&table_key(dest, tenant))
             .map(|t| {
                 t.values()
                     .filter(|dest_row| passes_read_filter(tables, tenant, dest, dest_row, None))
@@ -662,7 +684,7 @@ fn apply_aggregates(
                     .destination_attribute_on_join_resource
                     .unwrap_or(rel.destination_attribute);
                 let join_rows: Vec<&FieldMap> = tables
-                    .get(through_def.name)
+                    .get(&table_key(through_def, tenant))
                     .map(|t| {
                         t.values()
                             .filter(|jr| passes_read_filter(tables, tenant, through_def, jr, None))

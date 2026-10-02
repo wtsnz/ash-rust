@@ -460,7 +460,7 @@ impl DynamicChangeset {
             } else {
                 generate_pk(dest_def, &mut child_fields);
                 let cid = required_uuid(&child_fields, dest_pk)?;
-                ctx.data.create(dest_def, cid, child_fields).await?
+                ctx.data.create(dest_def, ctx.tenant.as_deref(), cid, child_fields).await?
             };
             for (source, destination) in rel.key_pairs() {
                 let value = related.get(destination).cloned().unwrap_or(Value::Null);
@@ -488,12 +488,12 @@ impl DynamicChangeset {
                 Some((identity_name, update_fields)) => {
                     let identity = upsert_identity(self.resource, identity_name)?;
                     ctx.data
-                        .upsert(self.resource, id, fields, identity, update_fields)
+                        .upsert(self.resource, ctx.tenant.as_deref(), id, fields, identity, update_fields)
                         .await
                 }
-                None => ctx.data.create(self.resource, id, fields).await,
+                None => ctx.data.create(self.resource, ctx.tenant.as_deref(), id, fields).await,
             },
-            ActionKind::Update => ctx.data.update(self.resource, id, fields).await,
+            ActionKind::Update => ctx.data.update(self.resource, ctx.tenant.as_deref(), id, fields).await,
             ActionKind::Destroy => {
                 let existing = self.existing.clone().unwrap_or_else(|| fields.clone());
                 crate::engine::persist_destroy(
@@ -530,7 +530,7 @@ impl DynamicChangeset {
                 .await
         {
             if self.action.kind == ActionKind::Create {
-                let _ = ctx.data.destroy(self.resource, id).await;
+                let _ = ctx.data.destroy(self.resource, ctx.tenant.as_deref(), id).await;
             }
             return Err(err);
         }

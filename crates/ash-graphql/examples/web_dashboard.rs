@@ -248,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f1.insert("title".into(), Value::String("Network printer unreachable on 3rd floor".into()));
     f1.insert("status".into(), Value::String("OPEN".into()));
     f1.insert("priority".into(), Value::Int(2));
-    mem.create(&TICKET_DEF, id1, f1).await?;
+    mem.create(&TICKET_DEF, None, id1, f1).await?;
 
     let id2 = Uuid::new_v4();
     let mut f2 = FieldMap::new();
@@ -256,14 +256,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f2.insert("title".into(), Value::String("Postgres replication lag investigation".into()));
     f2.insert("status".into(), Value::String("IN_PROGRESS".into()));
     f2.insert("priority".into(), Value::Int(1));
-    mem.create(&TICKET_DEF, id2, f2).await?;
+    mem.create(&TICKET_DEF, None, id2, f2).await?;
 
     let rep_id = Uuid::new_v4();
     let mut f_rep = HashMap::new();
     f_rep.insert("id".into(), Value::Uuid(rep_id));
     f_rep.insert("name".into(), Value::String("Alex Mercer".into()));
     f_rep.insert("email".into(), Value::String("alex@example.com".into()));
-    mem.create(&REP_DEF, rep_id, f_rep).await?;
+    mem.create(&REP_DEF, None, rep_id, f_rep).await?;
 
     // Writes publish their changes to subscriptions through the context's notifier.
     let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));

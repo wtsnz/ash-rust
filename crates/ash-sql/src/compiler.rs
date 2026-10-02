@@ -128,6 +128,35 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         compiled
     }
 
+    /// The compiler with `tenant` set, for a write. Reads take the query's tenant.
+    pub fn with_tenant(mut self, tenant: Option<&str>) -> Self {
+        self.tenant = tenant.map(str::to_string);
+        self
+    }
+
+    /// `resource`'s table as this statement reaches it: in the tenant's schema for a
+    /// context-tenant resource, as AshPostgres prefixes it, or unqualified. Every table a
+    /// statement touches goes through here, subqueries included, so none reads the wrong
+    /// tenant's rows.
+    fn table(&self, resource: &ResourceDef) -> Result<String> {
+        let table = ident(self.dialect, resource.table_name())?;
+        let schema_tenant = match (resource.multitenancy, self.tenant.as_deref()) {
+            (Some(mt), Some(tenant)) if mt.strategy == ash_core::MultitenancyStrategy::Context => {
+                tenant
+            }
+            _ => return Ok(table),
+        };
+        let schema = ident(self.dialect, schema_tenant)?;
+        self.dialect.qualify_table(&schema, &table).ok_or_else(|| {
+            Error::Invalid(format!(
+                "{} has no schemas to keep the tenants of `{}` apart; use attribute \
+                 multitenancy",
+                self.dialect.name(),
+                resource.name
+            ))
+        })
+    }
+
     /// What a read of `resource` through a relationship sees, compiled against `alias`:
     /// the query's tenant, and the primary-read filter unless it is already being
     /// compiled further out.
@@ -500,7 +529,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let dest_res = (rel.destination)();
                 self.alias_counter += 1;
                 let dest_alias = format!("rel_{}_{}", dest_res.table_name(), self.alias_counter);
-                let dest_table = ident(self.dialect, dest_res.table_name())?;
+                let dest_table = self.table(dest_res)?;
                 let outer_scope = scope_alias
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| ident(self.dialect, resource.table_name()).unwrap());
@@ -532,7 +561,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                             through_res.table_name(),
                             self.alias_counter
                         );
-                        let through_table = ident(self.dialect, through_res.table_name())?;
+                        let through_table = self.table(through_res)?;
                         let outer_col = column(self.dialect, resource, rel.source_attribute)?;
                         let dest_col = column(self.dialect, dest_res, rel.destination_attribute)?;
                         let source_on_join = column(
@@ -613,7 +642,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
         })?;
         let dest = (rel.destination)();
-        let dest_table = ident(self.dialect, dest.table_name())?;
+        let dest_table = self.table(dest)?;
         let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
         let source_table = ident(self.dialect, resource.table_name())?;
         let join_sql = relationship_equalities(
@@ -674,7 +703,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     ))
                 })?;
                 let through_def = through_fn();
-                let join_table = ident(self.dialect, through_def.table_name())?;
+                let join_table = self.table(through_def)?;
                 let join_alias = ident(self.dialect, &format!("_ash_join_{}", agg.name))?;
                 let join = Some((through_def, join_alias.as_str()));
                 let source_on_join = ident(
@@ -867,7 +896,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         sql.push_str(&select_items.join(", "));
         sql.push_str(" FROM ");
-        sql.push_str(&ident(self.dialect, resource.table_name())?);
+        sql.push_str(&self.table(resource)?);
 
         let mut where_clauses = Vec::new();
 
@@ -916,7 +945,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         fields: &FieldMap,
     ) -> Result<CompiledSql> {
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
         let mut col_names = Vec::new();
         let mut placeholders = Vec::new();
 
@@ -948,7 +977,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if rows.is_empty() {
             return Ok(CompiledSql::new(String::new(), Vec::new()));
         }
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
 
         let mut col_names = Vec::new();
         let mut attrs = Vec::new();
@@ -993,7 +1022,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
 
         let mut set_clauses = Vec::new();
         for attr in resource.attributes {
@@ -1040,7 +1069,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
         let p = self.push_param(Value::Uuid(id));
 
@@ -1056,7 +1085,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
 
         if ids.is_empty() {

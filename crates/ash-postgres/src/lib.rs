@@ -218,6 +218,38 @@ impl Postgres {
         .await
     }
 
+    /// Creates `tenant`'s schema if needed and installs its tables, as [`install`](Self::install)
+    /// does for the default schema. As with AshPostgres's tenant migrations, only resources
+    /// with context multitenancy get a table per tenant; the others stay shared. Schema
+    /// names must match `[A-Za-z_][A-Za-z0-9_]*`. With migrations, use
+    /// [`migrate_schemas`](Self::migrate_schemas) instead.
+    pub async fn install_tenant(&self, tenant: &str, resources: &[&ResourceDef]) -> Result<()> {
+        validate_schema_name(tenant)?;
+        let schema = quote_schema_name(tenant);
+        let tenant_resources: Vec<&ResourceDef> = resources
+            .iter()
+            .copied()
+            .filter(|res| {
+                res.multitenancy
+                    .is_some_and(|mt| mt.strategy == ash_core::MultitenancyStrategy::Context)
+            })
+            .collect();
+        self.transaction(|tx| {
+            let tx = tx.clone();
+            async move {
+                tx.execute_raw(&format!("SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"))
+                    .await?;
+                tx.execute_raw(&format!("CREATE SCHEMA IF NOT EXISTS {schema}")).await?;
+                // New tables land in the first schema on the path, for this transaction
+                // only; `public` keeps extension types such as `citext` visible.
+                tx.execute_raw(&format!("SET LOCAL search_path TO {schema}, public"))
+                    .await?;
+                tx.install_unlocked(&tenant_resources).await
+            }
+        })
+        .await
+    }
+
     async fn install_unlocked(&self, resources: &[&ResourceDef]) -> Result<()> {
         let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
@@ -392,11 +424,12 @@ impl DataLayer for Postgres {
     async fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_insert(resource, &fields)?;
 
         // Postgres supports RETURNING * for single-roundtrip writes!
@@ -404,9 +437,15 @@ impl DataLayer for Postgres {
         row_to_fields(&row, resource, &[], &[])
     }
 
-    async fn update(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_update(resource, id, &fields)?;
 
         // Postgres RETURNING * executes update and returns the new row
@@ -419,13 +458,14 @@ impl DataLayer for Postgres {
                     let pk = resource
                         .primary_key()
                         .ok_or(Error::NoPrimaryKey(resource.name))?;
-                    let check_sql = format!(
-                        "SELECT 1 FROM \"{}\" WHERE \"{}\" = $1",
-                        resource.table_name(),
-                        pk.name
-                    );
-                    let check_compiled =
-                        CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
+                    // Whether the row is there at all, read in the same tenant.
+                    let exists = CompiledQuery {
+                        filter: Some(ash_core::Filter::eq(pk.name, Value::Uuid(id))),
+                        tenant: tenant.map(str::to_string),
+                        limit: Some(1),
+                        ..CompiledQuery::default()
+                    };
+                    let check_compiled = QueryCompiler::new(&dialect).compile_select(resource, &exists)?;
                     let rows = self.fetch_all(&check_compiled).await?;
                     if rows.is_empty() {
                         Err(Error::NotFound)
@@ -442,9 +482,9 @@ impl DataLayer for Postgres {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_delete(resource, id)?;
         let result = self.execute_compiled(&compiled).await?;
         if result.rows_affected() == 0 {
@@ -458,23 +498,8 @@ impl DataLayer for Postgres {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
-        // Schema multitenancy: a `strategy: context` resource lives in the tenant's
-        // schema. Attribute tenancy filters rows instead, so its search_path must stay;
-        // switching it inside a transaction would hide tables outside `public`.
-        let schema_tenant = match resource.multitenancy {
-            Some(mt) if matches!(mt.strategy, ash_core::MultitenancyStrategy::Context) => {
-                query.tenant.as_ref()
-            }
-            _ => None,
-        };
-        if let Some(tenant) = schema_tenant {
-            let set_search_path = format!(
-                "SET LOCAL search_path TO \"{}\", \"public\"",
-                tenant.replace('"', "\"\"")
-            );
-            let _ = self.execute_raw(&set_search_path).await;
-        }
-
+        // A context-tenant resource's tables are qualified by the tenant's schema, as
+        // AshPostgres prefixes them, so the session's `search_path` is never changed.
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_select(resource, query)?;
@@ -487,13 +512,14 @@ impl DataLayer for Postgres {
     async fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
     ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_upsert(resource, &fields, identity, update_fields)?;
 
         // Single-roundtrip write with RETURNING *
@@ -504,13 +530,14 @@ impl DataLayer for Postgres {
     async fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_bulk_insert(resource, &rows)?;
         let pg_rows = self.fetch_all_resource(&compiled, resource).await?;
         pg_rows
@@ -519,12 +546,12 @@ impl DataLayer for Postgres {
             .collect()
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_bulk_delete(resource, ids)?;
         self.execute_compiled_resource(&compiled, resource).await?;
         Ok(())

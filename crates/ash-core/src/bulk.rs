@@ -251,7 +251,7 @@ where
                 .iter_mut()
                 .map(|row| (row.id, row.changeset.take_fields()))
                 .collect();
-            match ctx.data.bulk_create(&R::DEF, tuples).await {
+            match ctx.data.bulk_create(&R::DEF, ctx.tenant.as_deref(), tuples).await {
                 Ok(stored) => stored.into_iter().map(Ok).collect(),
                 Err(err) => {
                     let failed = chunk.len();
@@ -393,7 +393,7 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
     while rows.peek().is_some() {
         let chunk: Vec<(PreparedRow, FieldMap)> = rows.by_ref().take(chunk_size).collect();
         let ids: Vec<Uuid> = chunk.iter().map(|(row, _)| row.id).collect();
-        if let Err(err) = ctx.data.bulk_destroy(&R::DEF, &ids).await {
+        if let Err(err) = ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await {
             let failed = chunk.len();
             for (row, _) in chunk {
                 conclude(row.after_transactions, Err(&err));

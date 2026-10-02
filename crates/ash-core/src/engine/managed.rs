@@ -70,7 +70,7 @@ async fn destroy_child<D: DataLayer>(
         None => {
             if cascade.enter(dest_def, child_id) {
                 Box::pin(cascade_deletes(ctx, dest_def, child_id, child_row, cascade)).await?;
-                ctx.data.destroy(dest_def, child_id).await?;
+                ctx.data.destroy(dest_def, ctx.tenant.as_deref(), child_id).await?;
             }
         }
     }
@@ -152,13 +152,13 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
     }
     if action.soft {
         let changes = soft_destroy_changes(resource, existing_fields, fields);
-        let stored = ctx.data.update(resource, id, changes).await?;
+        let stored = ctx.data.update(resource, ctx.tenant.as_deref(), id, changes).await?;
         cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
         return Ok(stored);
     }
     cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
     cascade_deletes(ctx, resource, id, existing_fields, cascade).await?;
-    ctx.data.destroy(resource, id).await?;
+    ctx.data.destroy(resource, ctx.tenant.as_deref(), id).await?;
     Ok(existing_fields.clone())
 }
 
@@ -284,7 +284,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                             for column in rel.destination_columns() {
                                 patch.insert(column.to_string(), Value::Null);
                             }
-                            ctx.data.update(dest_def, child_id, patch).await?;
+                            ctx.data.update(dest_def, ctx.tenant.as_deref(), child_id, patch).await?;
                         }
                     }
                 }
@@ -433,7 +433,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                 child_fields.extend(link.iter().cloned());
                                 generate_pk(dest_def, &mut child_fields);
                                 let child_id = required_uuid(&child_fields, child_pk)?;
-                                ctx.data.create(dest_def, child_id, child_fields).await?;
+                                ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
                             }
                         }
                     }
@@ -478,7 +478,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                         .await?;
                                 } else {
                                     child_fields.extend(link.iter().cloned());
-                                    ctx.data.update(dest_def, child_id, child_fields).await?;
+                                    ctx.data.update(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
                                 }
                             } else {
                                 // An id that names no child of this parent doesn't pick the new one's.
@@ -491,7 +491,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     child_fields.extend(link.iter().cloned());
                                     generate_pk(dest_def, &mut child_fields);
                                     let child_id = required_uuid(&child_fields, child_pk)?;
-                                    ctx.data.create(dest_def, child_id, child_fields).await?;
+                                    ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
                                     child_id
                                 };
                                 kept_ids.insert(new_id);
@@ -514,12 +514,12 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                         for (column, _) in &link {
                                             updated.insert(column.clone(), Value::Null);
                                         }
-                                        ctx.data.update(dest_def, existing_id, updated).await?;
+                                        ctx.data.update(dest_def, ctx.tenant.as_deref(), existing_id, updated).await?;
                                     }
                                 } else if let Some(destroy_act) = child_destroy_action {
                                     Box::pin(destroy_dynamic(ctx, dest_def, destroy_act, existing_id, &existing_fields)).await?;
                                 } else {
-                                    ctx.data.destroy(dest_def, existing_id).await?;
+                                    ctx.data.destroy(dest_def, ctx.tenant.as_deref(), existing_id).await?;
                                 }
                             }
                         }
@@ -580,7 +580,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
                                         let child_id = required_uuid(&child_fields, dest_pk)?;
-                                        ctx.data.create(dest_def, child_id, child_fields).await?;
+                                        ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
                                         child_id
                                     }
                                 };
@@ -592,7 +592,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     join_fields.insert(dest_fk.to_string(), Value::from(target_id));
                                     generate_pk(through_def, &mut join_fields);
                                     let join_id = required_uuid(&join_fields, join_pk)?;
-                                    ctx.data.create(through_def, join_id, join_fields).await?;
+                                    ctx.data.create(through_def, ctx.tenant.as_deref(), join_id, join_fields).await?;
                                 }
                             }
 
@@ -608,7 +608,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     if let Some(destroy_act) = join_destroy_action {
                                         Box::pin(destroy_dynamic(ctx, through_def, destroy_act, join_id, &join_row)).await?;
                                     } else {
-                                        ctx.data.destroy(through_def, join_id).await?;
+                                        ctx.data.destroy(through_def, ctx.tenant.as_deref(), join_id).await?;
                                     }
                                 }
                             }
@@ -629,7 +629,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
                                         let child_id = required_uuid(&child_fields, dest_pk)?;
-                                        ctx.data.create(dest_def, child_id, child_fields).await?;
+                                        ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
                                         child_id
                                     }
                                 };
@@ -639,7 +639,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                 join_fields.insert(dest_fk.to_string(), Value::from(target_id));
                                 generate_pk(through_def, &mut join_fields);
                                 let join_id = required_uuid(&join_fields, join_pk)?;
-                                ctx.data.create(through_def, join_id, join_fields).await?;
+                                ctx.data.create(through_def, ctx.tenant.as_deref(), join_id, join_fields).await?;
                             }
                         }
                     }

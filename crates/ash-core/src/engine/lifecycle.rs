@@ -181,6 +181,6 @@ where
 pub async fn insert<R: Resource, D: DataLayer>(ctx: &Context<D>, record: &R) -> Result<R> {
     let fields = record.to_fields();
     let id = required_uuid(&fields, pk_name(&R::DEF)?)?;
-    let stored = ctx.data.create(&R::DEF, id, fields).await?;
+    let stored = ctx.data.create(&R::DEF, ctx.tenant.as_deref(), id, fields).await?;
     R::from_fields(&stored)
 }

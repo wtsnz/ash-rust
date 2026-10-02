@@ -77,7 +77,7 @@ Dashboards frequently require summaries alongside rows (e.g. a list of categorie
 SaaS applications require strict tenant isolation so data from tenant A never leaks to tenant B.
 
 * **Pattern**:
-  * **Schema-based Multi-Tenancy (PostgreSQL)**: Setting the schema search path: `SET LOCAL search_path TO "tenant_1", "public"` or qualifying tables (`"tenant_1"."tickets"`).
+  * **Schema-based Multi-Tenancy (PostgreSQL)**: A context-tenant resource's tables are qualified by the tenant's schema in every statement (`"tenant_1"."tickets"`), subqueries included, as AshPostgres prefixes them. The session's `search_path` is never changed.
   * **Row-based Multi-Tenancy**: Appending `WHERE tenant_id = $tenant` to all queries.
 * **Ash-Rust Solution**:
   * Every `Context` and `CompiledQuery` carries `tenant: Option<String>`.

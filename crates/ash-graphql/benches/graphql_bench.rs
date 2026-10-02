@@ -182,7 +182,7 @@ async fn setup_memory_benchmark_data(
         u.insert("id".into(), Value::Uuid(author_id));
         u.insert("name".into(), Value::String(format!("Engineer #{i}")));
         u.insert("email".into(), Value::String(format!("engineer{i}@example.com")));
-        mem.create(&USER_DEF, author_id, u).await.unwrap();
+        mem.create(&USER_DEF, None, author_id, u).await.unwrap();
         author_ids.push(author_id);
     }
 
@@ -205,7 +205,7 @@ async fn setup_memory_benchmark_data(
         t.insert("priority".into(), Value::Int(priority));
         t.insert("author_id".into(), Value::Uuid(author_id));
 
-        mem.create(&TICKET_DEF, t_id, t).await.unwrap();
+        mem.create(&TICKET_DEF, None, t_id, t).await.unwrap();
     }
 
     let schema = AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF])
@@ -420,7 +420,7 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
         u.insert("id".into(), Value::Uuid(author_id));
         u.insert("name".into(), Value::String("SQLite Engineer".into()));
         u.insert("email".into(), Value::String("sqlite@example.com".into()));
-        db.create(&SQLITE_USER_DEF, author_id, u).await.unwrap();
+        db.create(&SQLITE_USER_DEF, None, author_id, u).await.unwrap();
 
         for i in 1..=100 {
             let t_id = Uuid::new_v4();
@@ -430,7 +430,7 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
             t.insert("status".into(), Value::String("OPEN".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("author_id".into(), Value::Uuid(author_id));
-            db.create(&SQLITE_TICKET_DEF, t_id, t).await.unwrap();
+            db.create(&SQLITE_TICKET_DEF, None, t_id, t).await.unwrap();
         }
 
         let ctx = Context::new(db);

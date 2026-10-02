@@ -29,9 +29,13 @@ pub struct CompiledQuery {
     note = "use Memory, Sqlite, Postgres, or implement DataLayer"
 )]
 pub trait DataLayer: Send + Sync {
+    /// Writes a new record. `tenant` is the context's: a data layer that keeps
+    /// context-tenant resources apart (a Postgres schema, a memory table per tenant) writes
+    /// it there, as Ash's data layers do with a changeset's tenant.
     fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send;
@@ -39,11 +43,17 @@ pub trait DataLayer: Send + Sync {
     fn update(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send;
 
-    fn destroy(&self, resource: &ResourceDef, id: Uuid) -> impl Future<Output = Result<()>> + Send;
+    fn destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     fn run_query(
         &self,
@@ -54,6 +64,7 @@ pub trait DataLayer: Send + Sync {
     fn upsert(
         &self,
         resource: &ResourceDef,
+        _tenant: Option<&str>,
         _id: Uuid,
         _fields: FieldMap,
         _identity: &IdentityDef,
@@ -68,12 +79,13 @@ pub trait DataLayer: Send + Sync {
     fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         async move {
             let mut results = Vec::with_capacity(rows.len());
             for (id, fields) in rows {
-                results.push(self.create(resource, id, fields).await?);
+                results.push(self.create(resource, tenant, id, fields).await?);
             }
             Ok(results)
         }
@@ -82,11 +94,12 @@ pub trait DataLayer: Send + Sync {
     fn bulk_destroy(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         ids: &[Uuid],
     ) -> impl Future<Output = Result<()>> + Send {
         async move {
             for id in ids {
-                self.destroy(resource, *id).await?;
+                self.destroy(resource, tenant, *id).await?;
             }
             Ok(())
         }
@@ -111,6 +124,7 @@ impl DataLayer for NoDataLayer {
     fn create(
         &self,
         resource: &ResourceDef,
+        _tenant: Option<&str>,
         _id: Uuid,
         _fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
@@ -120,13 +134,19 @@ impl DataLayer for NoDataLayer {
     fn update(
         &self,
         resource: &ResourceDef,
+        _tenant: Option<&str>,
         _id: Uuid,
         _fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         no_data_layer(resource)
     }
 
-    fn destroy(&self, resource: &ResourceDef, _id: Uuid) -> impl Future<Output = Result<()>> + Send {
+    fn destroy(
+        &self,
+        resource: &ResourceDef,
+        _tenant: Option<&str>,
+        _id: Uuid,
+    ) -> impl Future<Output = Result<()>> + Send {
         no_data_layer(resource)
     }
 
@@ -141,6 +161,7 @@ impl DataLayer for NoDataLayer {
     fn upsert(
         &self,
         resource: &ResourceDef,
+        _tenant: Option<&str>,
         _id: Uuid,
         _fields: FieldMap,
         _identity: &IdentityDef,

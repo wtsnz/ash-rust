@@ -395,19 +395,43 @@ impl SchemaSupport for Sqlite {
     }
 }
 
+/// SQLite has no schemas, so like AshSqlite it can't keep a context-tenant resource's
+/// tenants apart. It refuses such reads and writes rather than mix the tenants' rows.
+fn refuse_tenant_schema(resource: &ResourceDef, tenant: Option<&str>) -> Result<()> {
+    match (resource.multitenancy, tenant) {
+        (Some(mt), Some(_)) if mt.strategy == ash_core::MultitenancyStrategy::Context => {
+            Err(Error::Invalid(format!(
+                "sqlite has no schemas to keep the tenants of `{}` apart; use attribute \
+                 multitenancy",
+                resource.name
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 impl DataLayer for Sqlite {
     async fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
     ) -> Result<FieldMap> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::insert_query(resource, &fields)?;
         self.execute_query_resource(&qb, resource).await?;
         Ok(fields)
     }
 
-    async fn update(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::update_query(resource, id, &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
@@ -452,7 +476,8 @@ impl DataLayer for Sqlite {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::delete_query(resource, id)?;
         let result = self.execute_query(&qb).await?;
         if result.rows_affected() == 0 {
@@ -466,6 +491,7 @@ impl DataLayer for Sqlite {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
         let qb = sql::select_query(resource, query)?;
         let rows = self.fetch_all(&qb).await?;
         rows.iter()
@@ -476,11 +502,13 @@ impl DataLayer for Sqlite {
     async fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
     ) -> Result<FieldMap> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::upsert_query(resource, &fields, identity, update_fields)?;
         self.execute_query_resource(&qb, resource).await?;
 
@@ -521,6 +549,7 @@ impl DataLayer for Sqlite {
     async fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
@@ -531,7 +560,7 @@ impl DataLayer for Sqlite {
             async move {
                 let mut results = Vec::with_capacity(rows.len());
                 for (id, fields) in rows {
-                    results.push(tx.create(resource, id, fields).await?);
+                    results.push(tx.create(resource, tenant, id, fields).await?);
                 }
                 Ok(results)
             }
@@ -539,7 +568,8 @@ impl DataLayer for Sqlite {
         .await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
+        refuse_tenant_schema(resource, tenant)?;
         if ids.is_empty() {
             return Ok(());
         }

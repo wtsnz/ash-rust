@@ -1723,12 +1723,12 @@ async fn codegen_creates_timestamptz_and_numeric_columns(db: TestDb) {
     match &db.db {
         crate::support::Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::invoice::Invoice::DEF, written_id, fields)
+                .create(&fixtures::invoice::Invoice::DEF, None, written_id, fields)
                 .await
                 .unwrap();
         }
         crate::support::Db::Postgres(pg) => {
-            pg.create(&fixtures::invoice::Invoice::DEF, written_id, fields)
+            pg.create(&fixtures::invoice::Invoice::DEF, None, written_id, fields)
                 .await
                 .unwrap();
         }
@@ -2386,12 +2386,12 @@ async fn codegen_creates_a_float_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::gauge::Gauge::DEF, id, fields)
+                .create(&fixtures::gauge::Gauge::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::gauge::Gauge::DEF, id, fields)
+            pg.create(&fixtures::gauge::Gauge::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
@@ -2452,12 +2452,12 @@ async fn codegen_creates_a_date_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::deadline::Deadline::DEF, id, fields)
+                .create(&fixtures::deadline::Deadline::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::deadline::Deadline::DEF, id, fields)
+            pg.create(&fixtures::deadline::Deadline::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
@@ -2538,10 +2538,10 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
         );
         match &db.db {
             Db::Sqlite(sqlite) => {
-                sqlite.create(&fixtures::device::Device::DEF, id, fields).await.unwrap();
+                sqlite.create(&fixtures::device::Device::DEF, None, id, fields).await.unwrap();
             }
             Db::Postgres(pg) => {
-                pg.create(&fixtures::device::Device::DEF, id, fields).await.unwrap();
+                pg.create(&fixtures::device::Device::DEF, None, id, fields).await.unwrap();
             }
         }
     }
@@ -2629,12 +2629,12 @@ async fn codegen_creates_a_binary_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::file_blob::FileBlob::DEF, id, fields)
+                .create(&fixtures::file_blob::FileBlob::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::file_blob::FileBlob::DEF, id, fields)
+            pg.create(&fixtures::file_blob::FileBlob::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
@@ -2844,12 +2844,12 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::contact::Contact::DEF, id, fields)
+                .create(&fixtures::contact::Contact::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::contact::Contact::DEF, id, fields)
+            pg.create(&fixtures::contact::Contact::DEF, None, id, fields)
                 .await
                 .unwrap();
         }
@@ -2962,8 +2962,8 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
         let fields = insert(id, weight, due_on, payload, email, amount);
         let id = uuid::Uuid::parse_str(id).unwrap();
         match &db.db {
-            Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, id, fields).await.unwrap(),
-            Db::Postgres(pg) => pg.create(&TypedValue::DEF, id, fields).await.unwrap(),
+            Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, None, id, fields).await.unwrap(),
+            Db::Postgres(pg) => pg.create(&TypedValue::DEF, None, id, fields).await.unwrap(),
         };
     }
 
@@ -3050,8 +3050,8 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
     );
     let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000a4").unwrap();
     let result = match &db.db {
-        Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, id, duplicate).await,
-        Db::Postgres(pg) => pg.create(&TypedValue::DEF, id, duplicate).await,
+        Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, None, id, duplicate).await,
+        Db::Postgres(pg) => pg.create(&TypedValue::DEF, None, id, duplicate).await,
     };
     assert!(
         matches!(result, Err(Error::IdentityConflict { .. })),
@@ -3413,8 +3413,8 @@ async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
         let fields = row(n, deleted_at);
         let id = uuid::Uuid::from_u128(n);
         let result = match &db.db {
-            Db::Sqlite(sqlite) => sqlite.upsert(&LiveAccount::DEF, id, fields, identity, &[]).await,
-            Db::Postgres(pg) => pg.upsert(&LiveAccount::DEF, id, fields, identity, &[]).await,
+            Db::Sqlite(sqlite) => sqlite.upsert(&LiveAccount::DEF, None, id, fields, identity, &[]).await,
+            Db::Postgres(pg) => pg.upsert(&LiveAccount::DEF, None, id, fields, identity, &[]).await,
         };
         let record = result.unwrap_or_else(|err| panic!("upsert {n} failed: {err}"));
         assert_eq!(
@@ -3481,8 +3481,8 @@ async fn json_columns_hold_plain_json(db: TestDb) {
     fields.insert("id".into(), Value::Uuid(written));
     fields.insert("address".into(), address("221B Baker Street", "London"));
     match &db.db {
-        Db::Sqlite(sqlite) => sqlite.create(&Profile::DEF, written, fields).await.unwrap(),
-        Db::Postgres(pg) => pg.create(&Profile::DEF, written, fields).await.unwrap(),
+        Db::Sqlite(sqlite) => sqlite.create(&Profile::DEF, None, written, fields).await.unwrap(),
+        Db::Postgres(pg) => pg.create(&Profile::DEF, None, written, fields).await.unwrap(),
     };
 
     // The database's own JSON functions see the fields, not a tagged encoding.

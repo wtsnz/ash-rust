@@ -152,7 +152,7 @@ async fn insert<D: DataLayer>(data: &D, def: &ResourceDef, n: u128, values: &[(&
     for (name, value) in values {
         fields.insert((*name).into(), value.clone());
     }
-    data.create(def, id(n), fields).await.unwrap();
+    data.create(def, None, id(n), fields).await.unwrap();
 }
 
 async fn seed<D: DataLayer>(data: &D) {

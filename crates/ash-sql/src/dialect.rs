@@ -54,6 +54,12 @@ pub trait SqlDialect: Send + Sync + 'static {
         format!("\"{}\"", ident.replace('"', "\"\""))
     }
 
+    /// `table` in the quoted `schema`, where a context-tenant resource keeps a tenant's
+    /// rows, or `None` for a database without schemas, which can't keep tenants apart.
+    fn qualify_table(&self, _schema: &str, _table: &str) -> Option<String> {
+        None
+    }
+
     /// SQL parameter placeholder (e.g. `$1` for Postgres, `?` for SQLite).
     fn placeholder(&self, index: usize) -> String;
 
@@ -232,6 +238,10 @@ impl SqlDialect for SqliteDialect {
 pub struct PostgresDialect;
 
 impl SqlDialect for PostgresDialect {
+    fn qualify_table(&self, schema: &str, table: &str) -> Option<String> {
+        Some(format!("{schema}.{table}"))
+    }
+
     fn name(&self) -> &'static str {
         "postgres"
     }

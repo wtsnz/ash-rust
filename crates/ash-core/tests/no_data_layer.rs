@@ -75,12 +75,12 @@ async fn every_operation_reports_the_missing_data_layer() {
     let identity = def.identity("unique_name").unwrap();
     let id = Uuid::new_v4();
 
-    assert_no_data_layer(data.create(def, id, FieldMap::new()).await.unwrap_err());
-    assert_no_data_layer(data.update(def, id, FieldMap::new()).await.unwrap_err());
-    assert_no_data_layer(data.destroy(def, id).await.unwrap_err());
+    assert_no_data_layer(data.create(def, None, id, FieldMap::new()).await.unwrap_err());
+    assert_no_data_layer(data.update(def, None, id, FieldMap::new()).await.unwrap_err());
+    assert_no_data_layer(data.destroy(def, None, id).await.unwrap_err());
     assert_no_data_layer(data.run_query(def, &Default::default()).await.unwrap_err());
     assert_no_data_layer(
-        data.upsert(def, id, FieldMap::new(), identity, &[])
+        data.upsert(def, None, id, FieldMap::new(), identity, &[])
             .await
             .unwrap_err(),
     );
