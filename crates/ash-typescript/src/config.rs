@@ -25,6 +25,11 @@ pub struct TypeScriptConfig {
     pub graphql_endpoint: String,
     /// Target module type (defaults to ESM).
     pub module_type: ModuleType,
+    /// Whether to generate live data: subscriptions over WebSocket, live queries, and
+    /// (with React) live hooks.
+    pub generate_subscriptions: bool,
+    /// WebSocket endpoint for subscriptions on the backend (defaults to `/graphql/ws`).
+    pub subscription_endpoint: String,
 }
 
 impl Default for TypeScriptConfig {
@@ -36,6 +41,8 @@ impl Default for TypeScriptConfig {
             client_class_name: "AshClient".to_string(),
             graphql_endpoint: "/graphql".to_string(),
             module_type: ModuleType::Esm,
+            generate_subscriptions: false,
+            subscription_endpoint: "/graphql/ws".to_string(),
         }
     }
 }
@@ -73,6 +80,20 @@ impl TypeScriptConfig {
     /// Set the GraphQL endpoint.
     pub fn with_graphql_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.graphql_endpoint = endpoint.into();
+        self
+    }
+
+    /// Enable or disable live data: `onCreated`/`onUpdated`/`onDestroyed` subscriptions
+    /// on each resource client, `live()` queries kept in sync with the server, and with
+    /// React, `use<Resource>Live` and `useAshConnectionStatus` hooks.
+    pub fn with_subscriptions(mut self, enabled: bool) -> Self {
+        self.generate_subscriptions = enabled;
+        self
+    }
+
+    /// Set the WebSocket endpoint subscriptions connect to.
+    pub fn with_subscription_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.subscription_endpoint = endpoint.into();
         self
     }
 }

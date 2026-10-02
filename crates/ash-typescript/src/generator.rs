@@ -8,6 +8,9 @@ use crate::client::{
     generate_root_client, generate_selection_set_builder, generate_transport_runtime,
 };
 use crate::config::TypeScriptConfig;
+use crate::live::{
+    generate_connection_status_hook, generate_resource_live_hook, generate_subscription_runtime,
+};
 use crate::react::generate_resource_react_hooks;
 use crate::types::{generate_common_types, generate_resource_types};
 use crate::zod::generate_resource_zod;
@@ -75,6 +78,16 @@ impl TypeScriptGenerator {
         self
     }
 
+    /// Whether the client gets live data: subscriptions and live queries.
+    fn live(&self) -> bool {
+        self.config.generate_client && self.config.generate_subscriptions
+    }
+
+    /// Whether React gets live hooks, which import React's own hooks.
+    fn live_hooks(&self) -> bool {
+        self.live() && self.config.generate_react
+    }
+
     /// Generate a single consolidated TypeScript file containing types, Zod schemas, client SDK, and hooks.
     pub fn generate_consolidated(&self) -> Result<String, CodegenError> {
         if self.resources.is_empty() && self.domains.is_empty() {
@@ -89,6 +102,9 @@ impl TypeScriptGenerator {
 
         if self.config.generate_zod {
             out.push_str("import { z } from \"zod\";\n\n");
+        }
+        if self.live_hooks() {
+            out.push_str("import { useEffect, useState } from \"react\";\n\n");
         }
 
         // 1. Common types (PageInfo, SortOrder, Filters)
@@ -115,8 +131,12 @@ impl TypeScriptGenerator {
         // 4. Client SDK & Transport
         if self.config.generate_client {
             out.push_str("// --- Section 4: Isomorphic Client SDK & Transport ---\n");
-            out.push_str(&generate_transport_runtime(&self.config.graphql_endpoint));
+            out.push_str(&generate_transport_runtime(&self.config.graphql_endpoint, self.live()));
             out.push('\n');
+            if self.live() {
+                out.push_str(&generate_subscription_runtime(&self.config.subscription_endpoint));
+                out.push('\n');
+            }
 
             // Selection set builders
             for res in &self.resources {
@@ -125,17 +145,17 @@ impl TypeScriptGenerator {
 
             // Query builders
             for res in &self.resources {
-                out.push_str(&generate_resource_query_builder(res));
+                out.push_str(&generate_resource_query_builder(res, self.live()));
             }
 
             // Resource clients
             for res in &self.resources {
-                out.push_str(&generate_resource_client(res));
+                out.push_str(&generate_resource_client(res, self.live()));
             }
 
             // Domain clients
             for domain in &self.domains {
-                out.push_str(&generate_domain_client(domain));
+                out.push_str(&generate_domain_client(domain, self.live()));
             }
 
             // Root client
@@ -143,6 +163,7 @@ impl TypeScriptGenerator {
                 &self.config.client_class_name,
                 &self.resources,
                 &self.domains,
+                self.live(),
             ));
             out.push('\n');
         }
@@ -152,6 +173,12 @@ impl TypeScriptGenerator {
             out.push_str("// --- Section 5: React & TanStack Query Helpers ---\n");
             for res in &self.resources {
                 out.push_str(&generate_resource_react_hooks(res, &self.config.client_class_name));
+            }
+            if self.live_hooks() {
+                out.push_str(&generate_connection_status_hook(&self.config.client_class_name));
+                for res in &self.resources {
+                    out.push_str(&generate_resource_live_hook(res, &self.config.client_class_name));
+                }
             }
         }
 
@@ -206,32 +233,47 @@ impl TypeScriptGenerator {
                     }
                 }
             }
-            c.push_str("} from \"./types\";\n\n");
-
-            c.push_str(&generate_transport_runtime(&self.config.graphql_endpoint));
+            c.push_str("} from \"./types\";\n");
+            if self.live_hooks() {
+                c.push_str("import { useEffect, useState } from \"react\";\n");
+            }
             c.push('\n');
+
+            c.push_str(&generate_transport_runtime(&self.config.graphql_endpoint, self.live()));
+            c.push('\n');
+            if self.live() {
+                c.push_str(&generate_subscription_runtime(&self.config.subscription_endpoint));
+                c.push('\n');
+            }
 
             for res in &self.resources {
                 c.push_str(&generate_selection_set_builder(res));
             }
             for res in &self.resources {
-                c.push_str(&generate_resource_query_builder(res));
+                c.push_str(&generate_resource_query_builder(res, self.live()));
             }
             for res in &self.resources {
-                c.push_str(&generate_resource_client(res));
+                c.push_str(&generate_resource_client(res, self.live()));
             }
             for domain in &self.domains {
-                c.push_str(&generate_domain_client(domain));
+                c.push_str(&generate_domain_client(domain, self.live()));
             }
             c.push_str(&generate_root_client(
                 &self.config.client_class_name,
                 &self.resources,
                 &self.domains,
+                self.live(),
             ));
 
             if self.config.generate_react {
                 for res in &self.resources {
                     c.push_str(&generate_resource_react_hooks(res, &self.config.client_class_name));
+                }
+                if self.live_hooks() {
+                    c.push_str(&generate_connection_status_hook(&self.config.client_class_name));
+                    for res in &self.resources {
+                        c.push_str(&generate_resource_live_hook(res, &self.config.client_class_name));
+                    }
                 }
             }
 

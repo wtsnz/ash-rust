@@ -199,7 +199,7 @@ pub fn generate_from_snapshots(
     // 4. Client SDK & Selection Set Builders
     if config.generate_client {
         out.push_str("// --- Section 4: Isomorphic Client SDK ---\n");
-        out.push_str(&crate::client::generate_transport_runtime(&config.graphql_endpoint));
+        out.push_str(&crate::client::generate_transport_runtime(&config.graphql_endpoint, false));
         out.push('\n');
 
         for s in snapshots {

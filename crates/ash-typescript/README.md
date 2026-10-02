@@ -236,6 +236,40 @@ export function TicketList() {
 
 ---
 
+## Live Data
+
+With `.with_subscriptions(true)`, the SDK also keeps data live over the WebSocket endpoint
+`ash-graphql`'s `graphql_router` serves at `/graphql/ws` (`graphql-transport-ws`). Changes
+reach subscribers through notifiers, so give the server's contexts a `PubSubNotifier`.
+
+```typescript
+const client = createAshClient({ baseUrl: "http://127.0.0.1:4000" });
+
+// Every change to a resource, as it happens.
+const stop = client.ticket.onUpdated((ticket) => console.log("updated", ticket.id));
+
+// A query kept in sync with the server: creates, updates and destroys apply as they
+// arrive, and filtered, sorted or paged lists re-read themselves to stay exact.
+const urgent = client.ticket
+  .query()
+  .filter({ priority: { gte: 4 } })
+  .sort("priority", "desc")
+  .live((tickets) => render(tickets));
+urgent.stop();
+```
+
+With React, `use<Resource>Live` wraps a live query and `useAshConnectionStatus` reports the
+connection for a "live" indicator:
+
+```tsx
+const { data: tickets, loading } = useTicketLive(client, { sort: [{ field: "priority", order: "desc" }] });
+const status = useAshConnectionStatus(client); // "connecting" | "connected" | "reconnecting" | ...
+```
+
+One WebSocket serves every subscription of a client. It connects on first use, reconnects
+with backoff, and live queries re-read themselves once it's back, so nothing missed while
+it was down stays missing.
+
 ## Relay Keyset Pagination
 
 Ash provides built-in keyset pagination matching Relay specifications:

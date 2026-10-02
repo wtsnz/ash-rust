@@ -38,15 +38,31 @@ pub fn mutation_name(action: &ActionDef, res: &ResourceDef) -> String {
     format!("{}{}", to_camel_case(action.name), res.name)
 }
 
-/// Generate the isomorphic transport and base client runtime classes.
-pub fn generate_transport_runtime(default_endpoint: &str) -> String {
+/// Generate the isomorphic transport and base client runtime classes. With `live`, the
+/// client config also takes the subscription connection's settings.
+pub fn generate_transport_runtime(default_endpoint: &str, live: bool) -> String {
+    let live_config = if live {
+        r#"
+  /** WebSocket endpoint for subscriptions, relative to `baseUrl` (defaults to `/graphql/ws`). */
+  subscriptionEndpoint?: string;
+  /** Full WebSocket URL for subscriptions, overriding `baseUrl` and `subscriptionEndpoint`. */
+  subscriptionUrl?: string;
+  /** WebSocket implementation, where there is no global `WebSocket`. */
+  webSocket?: typeof WebSocket;
+  /** Sent as the `connection_init` payload when the subscription connection opens. */
+  connectionParams?:
+    | Record<string, unknown>
+    | (() => Record<string, unknown> | Promise<Record<string, unknown>>);"#
+    } else {
+        ""
+    };
     format!(
         r#"// Ash Client Runtime & Transport
 export interface AshClientConfig {{
   baseUrl: string;
   graphqlEndpoint?: string;
   fetch?: typeof fetch;
-  headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
+  headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);{live_config}
 }}
 
 export interface AshUserError {{
@@ -153,12 +169,19 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     out
 }
 
-/// Generate resource query builder class (e.g. `TicketQueryBuilder`).
-pub fn generate_resource_query_builder(res: &ResourceDef) -> String {
+/// Generate resource query builder class (e.g. `TicketQueryBuilder`). With `live`, it
+/// also has `live()`.
+pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String {
     let mut out = String::new();
     let name = res.name;
     let list_q = list_query_name(name);
     let conn_q = connection_query_name(name);
+    let (constructor_params, _) = client_constructor(live);
+    let live_method = if live {
+        crate::live::generate_query_builder_live(res)
+    } else {
+        String::new()
+    };
 
     out.push_str(&format!(
         r#"export class {name}QueryBuilder {{
@@ -168,7 +191,7 @@ pub fn generate_resource_query_builder(res: &ResourceDef) -> String {
   private _offset?: number;
   private _include?: {name}Include;
 
-  constructor(private readonly transport: AshTransport) {{}}
+  constructor({constructor_params}) {{}}
 
   public filter(filter?: {name}FilterInput): this {{
     this._filter = filter;
@@ -293,7 +316,7 @@ pub fn generate_resource_query_builder(res: &ResourceDef) -> String {
       queryFn: () => this.page(first, after),
     }};
   }}
-}}
+{live_method}}}
 
 "#
     ));
@@ -301,18 +324,20 @@ pub fn generate_resource_query_builder(res: &ResourceDef) -> String {
     out
 }
 
-/// Generate individual resource client (e.g. `TicketClient`).
-pub fn generate_resource_client(res: &ResourceDef) -> String {
+/// Generate individual resource client (e.g. `TicketClient`). With `live`, it also has
+/// `onCreated`, `onUpdated` and `onDestroyed`.
+pub fn generate_resource_client(res: &ResourceDef, live: bool) -> String {
     let mut out = String::new();
     let name = res.name;
     let get_q = get_query_name(name);
+    let (constructor_params, builder_args) = client_constructor(live);
 
     out.push_str(&format!(
         r#"export class {name}Client {{
-  constructor(private readonly transport: AshTransport) {{}}
+  constructor({constructor_params}) {{}}
 
   public query(): {name}QueryBuilder {{
-    return new {name}QueryBuilder(this.transport);
+    return new {name}QueryBuilder({builder_args});
   }}
 
   public async get(id: string, include?: {name}Include): Promise<{name} | null> {{
@@ -487,12 +512,28 @@ pub fn generate_resource_client(res: &ResourceDef) -> String {
         }
     }
 
+    if live {
+        out.push_str(&crate::live::generate_resource_subscription_methods(res));
+    }
     out.push_str("}\n\n");
     out
 }
 
+/// Constructor parameters for a resource client or query builder, and the arguments that
+/// pass them on.
+fn client_constructor(live: bool) -> (&'static str, &'static str) {
+    if live {
+        (
+            "private readonly transport: AshTransport, private readonly subscriptions: AshSubscriptionClient",
+            "this.transport, this.subscriptions",
+        )
+    } else {
+        ("private readonly transport: AshTransport", "this.transport")
+    }
+}
+
 /// Generate domain client if multiple resources are grouped into a domain.
-pub fn generate_domain_client(domain: &DomainDef) -> String {
+pub fn generate_domain_client(domain: &DomainDef, live: bool) -> String {
     let domain_pascal = to_pascal_case(domain.name);
 
     let mut out = String::new();
@@ -504,11 +545,16 @@ pub fn generate_domain_client(domain: &DomainDef) -> String {
         out.push_str(&format!("  public readonly {res_prop}: {res_client};\n"));
     }
 
-    out.push_str("\n  constructor(transport: AshTransport) {\n");
+    let (params, args) = if live {
+        ("transport: AshTransport, subscriptions: AshSubscriptionClient", "transport, subscriptions")
+    } else {
+        ("transport: AshTransport", "transport")
+    };
+    out.push_str(&format!("\n  constructor({params}) {{\n"));
     for res in domain.resources {
         let res_prop = to_camel_case(res.name);
         let res_client = format!("{}Client", res.name);
-        out.push_str(&format!("    this.{res_prop} = new {res_client}(transport);\n"));
+        out.push_str(&format!("    this.{res_prop} = new {res_client}({args});\n"));
     }
     out.push_str("  }\n}\n\n");
 
@@ -520,11 +566,17 @@ pub fn generate_root_client(
     client_name: &str,
     resources: &[&'static ResourceDef],
     domains: &[&DomainDef],
+    live: bool,
 ) -> String {
     let mut out = String::new();
+    let args = if live { "this.transport, this.subscriptions" } else { "this.transport" };
 
     out.push_str(&format!("export class {client_name} {{\n"));
     out.push_str("  public readonly transport: AshTransport;\n");
+    if live {
+        out.push_str("  /** The live connection every subscription and live query shares. */\n");
+        out.push_str("  public readonly subscriptions: AshSubscriptionClient;\n");
+    }
 
     // Direct resource properties
     for res in resources {
@@ -542,17 +594,20 @@ pub fn generate_root_client(
 
     out.push_str("\n  constructor(config: AshClientConfig) {\n");
     out.push_str("    this.transport = new AshTransport(config);\n");
+    if live {
+        out.push_str("    this.subscriptions = new AshSubscriptionClient(config);\n");
+    }
 
     for res in resources {
         let prop = to_camel_case(res.name);
         let client_ty = format!("{}Client", res.name);
-        out.push_str(&format!("    this.{prop} = new {client_ty}(this.transport);\n"));
+        out.push_str(&format!("    this.{prop} = new {client_ty}({args});\n"));
     }
 
     for domain in domains {
         let prop = to_camel_case(domain.name);
         let client_ty = format!("{}DomainClient", to_pascal_case(domain.name));
-        out.push_str(&format!("    this.{prop} = new {client_ty}(this.transport);\n"));
+        out.push_str(&format!("    this.{prop} = new {client_ty}({args});\n"));
     }
 
     out.push_str("  }\n}\n\n");
