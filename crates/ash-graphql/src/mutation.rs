@@ -1,6 +1,8 @@
 use ash_core::create_dynamic;
 use ash_core::destroy_dynamic;
-use ash_core::redact_fields;
+
+use crate::redact::redact_record;
+use crate::preload::{preload, selected};
 use ash_core::update_dynamic;
 use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
@@ -177,7 +179,9 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 if action.kind == ActionKind::Create {
                     return Ok(match create_dynamic(ash, resource, action, input).await {
                         Ok(mut stored) => {
-                            let _ = redact_fields(resource, ash.actor.as_ref(), &mut stored);
+                            redact_record(resource, ash.actor.as_ref(), &mut stored);
+                            let fields = selected(ctx.ctx.field(), Some("result"));
+                            preload(ash, resource, fields, std::slice::from_mut(&mut stored)).await?;
                             succeeded(Some(stored))
                         }
                         Err(e) => failed(&e),
@@ -220,7 +224,9 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 Ok(match action.kind {
                     ActionKind::Update => match update_dynamic(ash, resource, action, id, input).await {
                         Ok(mut updated) => {
-                            let _ = redact_fields(resource, ash.actor.as_ref(), &mut updated);
+                            redact_record(resource, ash.actor.as_ref(), &mut updated);
+                            let fields = selected(ctx.ctx.field(), Some("result"));
+                            preload(ash, resource, fields, std::slice::from_mut(&mut updated)).await?;
                             succeeded(Some(updated))
                         }
                         Err(e) => failed(&e),
@@ -228,7 +234,9 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     _ => match destroy_dynamic(ash, resource, action, id, &existing).await {
                         Ok(_) => {
                             let mut destroyed = existing;
-                            let _ = redact_fields(resource, ash.actor.as_ref(), &mut destroyed);
+                            redact_record(resource, ash.actor.as_ref(), &mut destroyed);
+                            let fields = selected(ctx.ctx.field(), Some("result"));
+                            preload(ash, resource, fields, std::slice::from_mut(&mut destroyed)).await?;
                             succeeded(Some(destroyed))
                         }
                         Err(e) => failed(&e),

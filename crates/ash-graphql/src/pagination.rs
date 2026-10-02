@@ -3,13 +3,15 @@
 
 use ash_core::{
     ActionDef, CompiledQuery, DataLayer, FieldMap, Filter, KeysetCursor, ResourceDef, Sort, Value,
-    build_keyset_filter, keyset_sort, redact_fields, scope_read,
+    build_keyset_filter, keyset_sort, scope_read,
 };
 use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::*;
 
+use crate::redact::redact_record;
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
 use crate::names::camel;
+use crate::preload::{preload, selected};
 use crate::request::request_context;
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
 use crate::types::{attr_type_to_type_ref, parse_input_val};
@@ -251,8 +253,9 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 records.reverse();
             }
             for record in &mut records {
-                let _ = redact_fields(resource, ash.actor.as_ref(), record);
+                redact_record(resource, ash.actor.as_ref(), record);
             }
+            preload(&ash, resource, selected(ctx.ctx.field(), Some("results")), &mut records).await?;
             let keyset = |record: Option<&FieldMap>| record.filter(|_| paged).map(|r| keyset_of(r, &sort, pk_name));
             Ok(Some(FieldValue::owned_any(KeysetPage {
                 start_keyset: keyset(records.first()),

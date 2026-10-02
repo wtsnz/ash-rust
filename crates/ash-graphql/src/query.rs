@@ -1,13 +1,15 @@
 use ash_core::{
     ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, Value,
-    redact_fields, scope_read,
+    scope_read,
 };
 use async_graphql::dynamic::*;
 use uuid::Uuid;
 
+use crate::redact::redact_record;
 use crate::filter::parse_resource_filter;
 use crate::names::{camel, plural};
 use crate::pagination::{build_keyset_query, calculation_arguments, read_arguments, read_field_arguments};
+use crate::preload::{preload, selected};
 use crate::request::request_context;
 use crate::sort::parse_resource_sort;
 
@@ -77,10 +79,13 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                     ..CompiledQuery::default()
                 };
                 let records = run_read(&ash, resource, read_action, &FieldMap::new(), query).await?;
-                Ok(records.into_iter().next().map(|mut record| {
-                    let _ = redact_fields(resource, ash.actor.as_ref(), &mut record);
-                    FieldValue::owned_any(record)
-                }))
+                let Some(mut record) = records.into_iter().next() else {
+                    return Ok(None);
+                };
+                redact_record(resource, ash.actor.as_ref(), &mut record);
+                let fields = selected(ctx.ctx.field(), None);
+                preload(&ash, resource, fields, std::slice::from_mut(&mut record)).await?;
+                Ok(Some(FieldValue::owned_any(record)))
             })
         },
     )
@@ -120,8 +125,9 @@ pub fn build_read_action_query<D: DataLayer + Clone + 'static>(
                 };
                 let mut records = run_read(&ash, resource, action, &arguments, query).await?;
                 for record in &mut records {
-                    let _ = redact_fields(resource, ash.actor.as_ref(), record);
+                    redact_record(resource, ash.actor.as_ref(), record);
                 }
+                preload(&ash, resource, selected(ctx.ctx.field(), None), &mut records).await?;
                 Ok(Some(FieldValue::list(records.into_iter().map(FieldValue::owned_any))))
             })
         },

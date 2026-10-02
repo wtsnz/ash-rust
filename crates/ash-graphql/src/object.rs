@@ -9,6 +9,8 @@ use async_graphql::dynamic::*;
 use crate::dataloader::{AshBatchLoader, RelatedKey};
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
 use crate::names::camel;
+use crate::preload::{has_arguments, preloaded_key};
+use crate::redact::{key_value, redact_record, relationship_source};
 use crate::request::{request_actor, request_context};
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
 use crate::types::{
@@ -160,6 +162,23 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                 let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() else {
                     return Ok(None);
                 };
+                // Loaded ahead with its record, and already as the requester may see it.
+                let field = ctx.ctx.field();
+                let preloaded = if has_arguments(&field)? {
+                    None
+                } else {
+                    map.get(&preloaded_key(rel_name, field.alias().unwrap_or(field.name())))
+                };
+                if let Some(preloaded) = preloaded {
+                    return Ok(match preloaded {
+                        Value::Map(row) => Some(FieldValue::borrowed_any(row)),
+                        Value::Array(rows) => Some(FieldValue::list(
+                            rows.iter().filter_map(Value::as_map).map(|row| FieldValue::borrowed_any(row)),
+                        )),
+                        _ if to_one => None,
+                        _ => Some(FieldValue::list(std::iter::empty::<FieldValue>())),
+                    });
+                }
                 let shaped = !to_one
                     && ["sort", "filter", "limit", "offset"]
                         .iter()
@@ -176,7 +195,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                 };
                 let actor = request_actor::<D>(&ctx);
                 let mut items = rows.into_iter().map(|mut row| {
-                    let _ = redact_fields(dest_res, actor, &mut row);
+                    redact_record(dest_res, actor, &mut row);
                     FieldValue::owned_any(row)
                 });
                 if to_one {
@@ -236,7 +255,7 @@ async fn load_shaped<D: DataLayer + Clone + 'static>(
         for (source_key, destination_key) in rel.key_pairs() {
             filters.push(ash_core::Filter::eq(
                 destination_key,
-                source.get(source_key).cloned().unwrap_or(Value::Null),
+                key_value(source, source_key),
             ));
         }
         let ash = request_context::<D>(ctx)?;
@@ -303,7 +322,7 @@ async fn load_relationship<D: DataLayer + Clone + 'static>(
         return Ok(rows.unwrap_or_default());
     }
     let mut related =
-        ash_core::load_related(&*ash, resource, rel.name, std::slice::from_ref(source))
+        ash_core::load_related(&*ash, resource, rel.name, &[relationship_source(rel, source)])
             .await
             .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     Ok(related.pop().unwrap_or_default())

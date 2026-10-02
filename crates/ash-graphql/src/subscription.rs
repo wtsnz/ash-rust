@@ -1,5 +1,6 @@
-use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible, redact_fields};
+use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible};
 
+use crate::redact::redact_record;
 use crate::request::request_actor;
 use ash_pubsub::PubSub;
 use async_graphql::ErrorExtensions;
@@ -157,7 +158,7 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                                 } else {
                                     // Shared with every other subscriber: copy only what this one sends.
                                     let mut record = notif.record_fields.clone();
-                                    let _ = redact_fields(resource, actor.as_ref(), &mut record);
+                                    redact_record(resource, actor.as_ref(), &mut record);
                                     Event::Record(record)
                                 };
                                 yield Ok(FieldValue::owned_any(event));
