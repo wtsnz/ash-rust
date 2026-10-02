@@ -2,7 +2,7 @@ use ash_core::create_dynamic;
 use ash_core::destroy_dynamic;
 use ash_core::redact_fields;
 use ash_core::update_dynamic;
-use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, Context, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
+use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
 use async_graphql::Value as GqlValue;
 use uuid::Uuid;
@@ -165,7 +165,8 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
 
     Field::new(m_name, TypeRef::named_nn(payload_name), move |ctx| {
         FieldFuture::new(async move {
-            let ctx_ash = ctx.data::<Context<D>>()?;
+            let ash = crate::request::request_context::<D>(&ctx)?;
+            let ctx_ash = &*ash;
 
             let input_arg = ctx
                 .args

@@ -193,6 +193,21 @@ async fn an_actor_given_alongside_the_context_acts_for_it() {
 }
 
 #[tokio::test]
+async fn mutations_run_as_the_actor_given_alongside_the_context() {
+    let h = Harbour::new().await;
+    // Only the harbourmaster may write a dock's notes.
+    let mutation = r#"mutation { createDock(input: { name: "South", notes: "mind the gap" }) {
+        success errors { message } result { name }
+    } }"#;
+    let created = h
+        .run(Request::new(mutation).data(h.acme.clone()).data(role("harbourmaster")))
+        .await;
+    assert_eq!(created["createDock"]["success"], true, "{created}");
+    let refused = h.run(Request::new(mutation).data(h.acme.clone()).data(role("clerk"))).await;
+    assert_eq!(refused["createDock"]["success"], false, "{refused}");
+}
+
+#[tokio::test]
 async fn connections_read_through_the_read_action() {
     let h = Harbour::new().await;
     let page = h
