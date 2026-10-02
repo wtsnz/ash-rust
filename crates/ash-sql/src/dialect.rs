@@ -6,10 +6,15 @@ pub enum TextMatch {
     Contains,
     StartsWith,
     EndsWith,
+    /// The needle is a `LIKE` pattern of its own, used as given.
+    Like,
 }
 
 /// `LIKE` pattern with `\`, `%`, and `_` in `needle` escaped by a backslash.
 pub fn like_pattern(kind: TextMatch, needle: &str) -> String {
+    if kind == TextMatch::Like {
+        return needle.to_string();
+    }
     let mut escaped = String::with_capacity(needle.len());
     for ch in needle.chars() {
         if matches!(ch, '\\' | '%' | '_') {
@@ -20,8 +25,35 @@ pub fn like_pattern(kind: TextMatch, needle: &str) -> String {
     wrap_pattern(kind, &escaped, "%")
 }
 
+/// The `GLOB` pattern matching what the `LIKE` `pattern` does, case for case.
+fn like_to_glob(pattern: &str) -> String {
+    let mut glob = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    let literal = |glob: &mut String, ch: char| {
+        if matches!(ch, '*' | '?' | '[') {
+            glob.push('[');
+            glob.push(ch);
+            glob.push(']');
+        } else {
+            glob.push(ch);
+        }
+    };
+    while let Some(ch) = chars.next() {
+        match ch {
+            '%' => glob.push('*'),
+            '_' => glob.push('?'),
+            '\\' => literal(&mut glob, chars.next().unwrap_or('\\')),
+            other => literal(&mut glob, other),
+        }
+    }
+    glob
+}
+
 /// SQLite `GLOB` pattern with `*`, `?`, and `[` in `needle` matched literally.
 pub fn glob_pattern(kind: TextMatch, needle: &str) -> String {
+    if kind == TextMatch::Like {
+        return like_to_glob(needle);
+    }
     let mut escaped = String::with_capacity(needle.len());
     for ch in needle.chars() {
         match ch {
@@ -41,6 +73,7 @@ fn wrap_pattern(kind: TextMatch, escaped: &str, any: &str) -> String {
         TextMatch::Contains => format!("{any}{escaped}{any}"),
         TextMatch::StartsWith => format!("{escaped}{any}"),
         TextMatch::EndsWith => format!("{any}{escaped}"),
+        TextMatch::Like => escaped.to_string(),
     }
 }
 
@@ -374,8 +407,12 @@ impl SqlDialect for PostgresDialect {
     }
 
     /// `LIKE` on a `citext` column already ignores case, so one form covers both.
-    fn render_text_match(&self, op: &str, pattern: &str, _case_insensitive: bool) -> String {
-        format!("{op} LIKE {pattern}")
+    fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String {
+        if case_insensitive {
+            format!("{op} ILIKE {pattern}")
+        } else {
+            format!("{op} LIKE {pattern}")
+        }
     }
 
     fn binary_literal(&self, encoded: &str) -> String {

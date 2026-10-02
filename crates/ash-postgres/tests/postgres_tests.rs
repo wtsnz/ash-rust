@@ -1147,3 +1147,47 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
         .collect();
     assert_eq!(stored, expected);
 }
+
+/// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.
+#[tokio::test]
+async fn test_postgres_like_and_ilike() {
+    use ash_core::{Context, Filter, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().simple().to_string();
+    for sign in ["LIKE-A_1", "LIKE-B2", "like-c3"] {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}{sign}"))
+            .lng(0.0)
+            .speed_kph(0)
+            .status("available".to_string())
+            .await
+            .unwrap();
+    }
+    let signs = |filter: Filter| {
+        let ctx = ctx.clone();
+        let run = run.clone();
+        async move {
+            let mut signs: Vec<String> = PgVehicle::query(&ctx)
+                .filter(Filter::And(vec![Filter::starts_with("call_sign", run.clone()), filter]))
+                .load()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| v.call_sign.trim_start_matches(&run).to_string())
+                .collect();
+            signs.sort();
+            signs
+        }
+    };
+    assert_eq!(signs(Filter::like("call_sign", "%LIKE-%")).await, ["LIKE-A_1", "LIKE-B2"]);
+    assert_eq!(signs(Filter::ilike("call_sign", "%like-%")).await, ["LIKE-A_1", "LIKE-B2", "like-c3"]);
+    assert_eq!(signs(Filter::like("call_sign", "%A\\_1")).await, ["LIKE-A_1"]);
+    assert_eq!(signs(Filter::like("call_sign", "%LIKE-__")).await, ["LIKE-B2"]);
+}

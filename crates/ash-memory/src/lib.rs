@@ -503,6 +503,10 @@ fn eval_filter(
             text(field, needle, |text, needle| text.starts_with(needle))
         }
         Filter::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+        Filter::Like(field, pattern) => text(field, pattern, ash_core::like_matches),
+        Filter::ILike(field, pattern) => {
+            present(field).map(|got| text_matches(Some(got), pattern, true, ash_core::like_matches))
+        }
         Filter::And(parts) => {
             all_of(parts.iter().map(|part| eval_filter(tables, tenant, resource, part, row, scope)))
         }

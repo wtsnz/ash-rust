@@ -376,6 +376,19 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         needle: &str,
         scope_alias: Option<&str>,
     ) -> Result<String> {
+        self.compile_text_match_with(resource, field, kind, needle, scope_alias, false)
+    }
+
+    /// A text filter; `ignore_case` makes it case-insensitive whatever the field's type.
+    fn compile_text_match_with(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        kind: TextMatch,
+        needle: &str,
+        scope_alias: Option<&str>,
+        ignore_case: bool,
+    ) -> Result<String> {
         let ty = resource
             .attribute(field)
             .map(|attr| attr.ty)
@@ -390,6 +403,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 )));
             }
         };
+        let case_insensitive = case_insensitive || ignore_case;
         let op = self.compile_operand_scoped(resource, field, scope_alias)?;
         let pattern = self.dialect.text_pattern(kind, needle, case_insensitive);
         let p = self.bind_field(resource, field, Value::String(pattern));
@@ -473,6 +487,17 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Filter::EndsWith(field, needle) => {
                 self.compile_text_match(resource, field, TextMatch::EndsWith, needle, scope_alias)
             }
+            Filter::Like(field, pattern) => {
+                self.compile_text_match(resource, field, TextMatch::Like, pattern, scope_alias)
+            }
+            Filter::ILike(field, pattern) => self.compile_text_match_with(
+                resource,
+                field,
+                TextMatch::Like,
+                pattern,
+                scope_alias,
+                true,
+            ),
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
