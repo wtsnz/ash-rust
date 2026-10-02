@@ -1,12 +1,13 @@
-//! Updates as one statement, as Ash runs them atomically, in Postgres and in memory: what
-//! they set, computed from the record as stored; their validations, policies and lock
-//! version checked in the statement; and the errors they fail with.
+//! Updates and destroys as one statement, as Ash runs them atomically, in Postgres and in
+//! memory: what they set, computed from the record as stored; their validations, policies
+//! and lock version checked in the statement; and the errors they fail with.
 
 use ash_core::{
     ActionDef, ActionKind, Actor, Atomic, AtomicCondition, AtomicContext, AtomicExpr, AttrType,
     AttributeDef, Change, ChangeContext, Check, Context, CustomChange, CustomValidation, DataLayer,
     Error, FieldMap, PolicyDef, PolicyEffect, PolicyWhen, ResourceDef, Result, Validation,
-    ValidationContext, Value, update_dynamic, update_dynamic_expecting, update_existing_dynamic,
+    ValidationContext, Value, destroy_dynamic_by_id, update_dynamic, update_dynamic_expecting,
+    update_existing_dynamic,
 };
 use ash_memory::Memory;
 use ash_postgres::Postgres;
@@ -79,14 +80,33 @@ static ACTIONS: &[ActionDef] = &[
         .validations(&[Validation::Custom(&MUST_BE_OPEN)]),
     ActionDef::update("shout").changes(&[Change::Func(shout)]),
     ActionDef::update("shout_reading_first").changes(&[Change::Func(shout)]).require_atomic(false),
+    // Only an open counter goes.
+    ActionDef::destroy("remove").validations(&[Validation::Custom(&MUST_BE_OPEN)]),
+    ActionDef::destroy("shout_and_remove").changes(&[Change::Func(shout)]),
+    ActionDef::destroy("archive")
+        .soft()
+        .changes(&[Change::SetAttributeFn { field: "archived_at", value: now }]),
+    ActionDef::destroy("shout_and_archive").soft().changes(&[Change::Func(shout)]),
+    ActionDef::destroy("shout_and_archive_reading_first")
+        .soft()
+        .changes(&[Change::Func(shout)])
+        .require_atomic(false),
 ];
+
+fn now() -> Value {
+    ash_core::AshType::to_value(&ash_core::UtcDateTimeUsec::now())
+}
 
 static POLICIES: &[PolicyDef] = &[
     PolicyDef::when(PolicyWhen::ActionType(ActionKind::Create), &[PolicyEffect::AuthorizeIf(Check::Always)]),
     PolicyDef::when(PolicyWhen::ActionType(ActionKind::Read), &[PolicyEffect::AuthorizeIf(Check::Always)]),
-    // Only its owner updates a counter.
+    // Only its owner updates a counter, or destroys it.
     PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Update),
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+    ),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Destroy),
         &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
     ),
 ];
@@ -103,6 +123,7 @@ static COUNTER: ResourceDef = ResourceDef {
         AttributeDef::version("version"),
         AttributeDef::optional("created_at", AttrType::UTC_DATETIME_USEC),
         AttributeDef::optional("updated_at", AttrType::UTC_DATETIME_USEC),
+        AttributeDef::optional("archived_at", AttrType::UTC_DATETIME_USEC),
     ],
     relationships: &[],
     actions: ACTIONS,
@@ -242,6 +263,69 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert_eq!(shouted.get("name"), Some(&Value::from("DONE")));
 }
 
+/// Destroys by id: a hard destroy as one delete, a soft one as one update.
+async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
+    assert!(data.can_destroy_atomically(&COUNTER));
+    let owner = Uuid::new_v4();
+    let ctx = Context::new(data).with_actor(Actor::new(owner));
+    let removable = counter(&ctx, owner).await;
+    let id = id_of(&removable);
+
+    // Policies are checked against the stored record: only the owner destroys it.
+    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let forbidden = destroy_dynamic_by_id(&stranger, &COUNTER, action("remove"), id, None).await;
+    assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
+    // Another version: stale.
+    let stale = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id, Some(2)).await;
+    assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
+
+    // It returns the record as it was deleted, and then there's none.
+    let removed = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id, Some(1)).await.unwrap();
+    assert_eq!(removed.get("name"), Some(&Value::from("first")));
+    let missing = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id, None).await;
+    assert!(matches!(missing, Err(Error::NotFound)), "{missing:?}");
+
+    // A condition on the stored record fails in the statement, and nothing goes.
+    let closing = counter(&ctx, owner).await;
+    let closing_id = id_of(&closing);
+    update_dynamic(&ctx, &COUNTER, action("close"), closing_id, FieldMap::new()).await.unwrap();
+    let refused = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id, None).await;
+    match refused {
+        Err(Error::Validation { message, .. }) => assert_eq!(message, "is closed, not open"),
+        other => panic!("expected the closed error, got {other:?}"),
+    }
+    let still_there = update_dynamic(&ctx, &COUNTER, action("bump"), closing_id, FieldMap::new()).await;
+    assert!(still_there.is_ok(), "{still_there:?}");
+
+    // A hard destroy that can't be one statement reads first, as in Ash.
+    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_remove"), closing_id, None).await;
+    assert!(shouted.is_ok(), "{shouted:?}");
+    let gone = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id, None).await;
+    assert!(matches!(gone, Err(Error::NotFound)), "{gone:?}");
+
+    // A soft destroy is an update: the version bumped, the change made.
+    let archivable = counter(&ctx, owner).await;
+    let archivable_id = id_of(&archivable);
+    let archived = destroy_dynamic_by_id(&ctx, &COUNTER, action("archive"), archivable_id, Some(1)).await.unwrap();
+    assert!(!archived.get("archived_at").is_none_or(Value::is_null), "{archived:?}");
+    assert_eq!(archived.get("version"), Some(&Value::Int(2)));
+
+    // A soft destroy that can't be one statement must be atomic, unless it reads first.
+    let must = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive"), archivable_id, None).await;
+    assert!(matches!(must, Err(Error::MustBeAtomic { action: "shout_and_archive", .. })), "{must:?}");
+    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive_reading_first"), archivable_id, None)
+        .await
+        .unwrap();
+    assert_eq!(shouted.get("name"), Some(&Value::from("FIRST")));
+
+    // A soft destroy of the record in hand runs as one update too: from a stale copy, stale.
+    let stale = ash_core::DynamicChangeset::for_destroy(&ctx, &COUNTER, action("archive"), archivable)
+        .unwrap()
+        .commit(&ctx)
+        .await;
+    assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
+}
+
 #[tokio::test]
 async fn updates_run_atomically_in_postgres() {
     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
@@ -257,4 +341,21 @@ async fn updates_run_atomically_in_postgres() {
 #[tokio::test]
 async fn updates_run_atomically_in_memory() {
     scenario(Memory::new()).await;
+}
+
+#[tokio::test]
+async fn destroys_run_atomically_in_postgres() {
+    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let Ok(pg) = Postgres::connect(&url).await else {
+        assert!(std::env::var("CI").is_err(), "CI runs Postgres");
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&COUNTER]).await.unwrap();
+    destroy_scenario(pg).await;
+}
+
+#[tokio::test]
+async fn destroys_run_atomically_in_memory() {
+    destroy_scenario(Memory::new()).await;
 }

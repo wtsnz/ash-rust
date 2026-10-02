@@ -122,6 +122,17 @@ impl CustomChange for ArchiveChange {
         );
         Ok(())
     }
+
+    /// The time now, as AshArchival sets it atomically.
+    fn atomic(&self, _ctx: &ash_core::AtomicContext<'_>) -> ash_core::Atomic {
+        ash_core::Atomic::Atomic {
+            set: vec![(
+                self.attribute.to_string(),
+                ash_core::AtomicExpr::Value(ash_core::AshType::to_value(&ash_core::UtcDateTimeUsec::now())),
+            )],
+            conditions: Vec::new(),
+        }
+    }
 }
 
 /// Clears the archive attribute.

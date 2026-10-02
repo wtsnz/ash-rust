@@ -122,7 +122,9 @@ Actions generate mutations that report failures in `errors` (`MutationError`, wi
 codes such as `invalid_attribute`, `required`, `not_found`, `forbidden` and
 `stale_record`) instead of raising them. An update or destroy takes the record's `id`; the
 `input` is required only when the action requires some of it, and absent when the action
-takes none. A destroy's `result` is the record it destroyed:
+takes none. A destroy's `result` is the record it destroyed. As AshGraphql runs them, an
+update or destroy runs by id, as one statement where the data layer can (see
+[Atomic updates](../../docs/features.md#3b-atomic-updates)), with no read first:
 ```graphql
 mutation {
   createTicket(input: { title: "Network down", status: OPEN }) {

@@ -573,7 +573,31 @@ impl DataLayer for Postgres {
         let compiled = compiler.compile_atomic_update(resource, query, update)?;
         let rows = match self.fetch_all_raw(&compiled).await {
             Ok(rows) => rows,
-            Err(err) => return Err(raised_error(&err, resource, update).unwrap_or_else(|| map_sqlx_resource(err, resource))),
+            Err(err) => {
+                return Err(raised_error(&err, resource, &update.conditions).unwrap_or_else(|| map_sqlx_resource(err, resource)));
+            }
+        };
+        rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
+    }
+
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The destroy as one statement (see [`QueryCompiler::compile_atomic_destroy`]), its
+    /// conditions raised as an atomic update's are.
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[ash_core::AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_atomic_destroy(resource, query, conditions)?;
+        let rows = match self.fetch_all_raw(&compiled).await {
+            Ok(rows) => rows,
+            Err(err) => return Err(raised_error(&err, resource, conditions).unwrap_or_else(|| map_sqlx_resource(err, resource))),
         };
         rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
     }
@@ -1227,14 +1251,14 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
     }
 }
 
-/// The error an atomic update's condition raised through `ash_raise_error`, if that's
+/// The error an atomic statement's condition raised through `ash_raise_error`, if that's
 /// what `err` is: `ash_error: {"condition": n, "row": {...}}`.
-fn raised_error(err: &sqlx::Error, resource: &ResourceDef, update: &ash_core::AtomicUpdate) -> Option<Error> {
+fn raised_error(err: &sqlx::Error, resource: &ResourceDef, conditions: &[ash_core::AtomicCondition]) -> Option<Error> {
     let sqlx::Error::Database(db_err) = err else {
         return None;
     };
     let payload: serde_json::Value = serde_json::from_str(db_err.message().strip_prefix("ash_error: ")?).ok()?;
-    let condition = update.conditions.get(payload.get("condition")?.as_u64()? as usize)?;
+    let condition = conditions.get(payload.get("condition")?.as_u64()? as usize)?;
     let mut row = FieldMap::new();
     if let Some(reported) = payload.get("row").and_then(serde_json::Value::as_object) {
         for (name, value) in reported {

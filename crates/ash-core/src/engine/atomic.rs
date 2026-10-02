@@ -1,13 +1,14 @@
-//! Planning an update as one statement, as Ash's `fully_atomic_changeset` does: the
-//! values it sets as expressions over the stored record, and the conditions (the action's
-//! validations, the write policies, the lock version) under which it fails, each with its
-//! error. An update can't be planned when something in it needs the record in memory: a
-//! `before_action` hook, a change or validation function, managed relationships.
+//! Planning an update or destroy as one statement, as Ash's `fully_atomic_changeset`
+//! does: the values an update sets as expressions over the stored record, and the
+//! conditions (the action's validations, the write policies, the lock version) under
+//! which it fails, each with its error. It can't be planned when something in it needs
+//! the record in memory: a `before_action` hook, a change or validation function,
+//! managed relationships, or a hard destroy's cascades.
 
 use uuid::Uuid;
 
 use crate::action::{
-    ActionDef, Change, DynamicAfterActionHook, DynamicAfterTransactionHook, PersistKind, Validation,
+    ActionDef, ActionKind, Change, DynamicAfterActionHook, DynamicAfterTransactionHook, PersistKind, Validation,
 };
 use crate::actor::Actor;
 use crate::atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdate};
@@ -15,7 +16,7 @@ use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{check_builtin_validation, pk_name, validate_given};
 use crate::policy::{effects_to_filter, write_filter};
-use crate::resource::{AttrType, ResourceDef};
+use crate::resource::{AttrType, OnDelete, RelKind, ResourceDef};
 use crate::value::{FieldMap, Value};
 
 /// An update planned as one statement, with the hooks that run after it.
@@ -35,6 +36,32 @@ pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
     id: Uuid,
     update: &AtomicUpdate,
 ) -> Result<Option<FieldMap>> {
+    let query = atomic_query(ctx, resource, action, id)?;
+    Ok(ctx.data.update_atomic(resource, &query, update).await?.into_iter().next())
+}
+
+/// Deletes record `id` as `ctx` sees it, as one statement, as [`run_atomic_update`]
+/// updates it: when none of `conditions` holds. Returns what it held, or `None` when
+/// there's no such record.
+pub(crate) async fn run_atomic_destroy<D: crate::data_layer::DataLayer>(
+    ctx: &crate::context::Context<D>,
+    resource: &'static ResourceDef,
+    action: &ActionDef,
+    id: Uuid,
+    conditions: &[AtomicCondition],
+) -> Result<Option<FieldMap>> {
+    let query = atomic_query(ctx, resource, action, id)?;
+    Ok(ctx.data.destroy_atomic(resource, &query, conditions).await?.into_iter().next())
+}
+
+/// The query selecting record `id` for an atomic statement of `action`: by its primary
+/// key, through the read `action` upgrades with, in the context's tenant.
+fn atomic_query<D>(
+    ctx: &crate::context::Context<D>,
+    resource: &'static ResourceDef,
+    action: &ActionDef,
+    id: Uuid,
+) -> Result<crate::data_layer::CompiledQuery> {
     let pk = pk_name(resource)?;
     let (filter, tenant) =
         crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
@@ -46,13 +73,12 @@ pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
         None => resource.primary_read(),
     };
     let filter = crate::pipeline::and_filters(filter, read.and_then(|read| resource.read_filter(read)));
-    let query = crate::data_layer::CompiledQuery {
+    Ok(crate::data_layer::CompiledQuery {
         filter,
         tenant,
         limit: Some(1),
         ..crate::data_layer::CompiledQuery::default()
-    };
-    Ok(ctx.data.update_atomic(resource, &query, update).await?.into_iter().next())
+    })
 }
 
 /// What a planned update starts from.
@@ -71,9 +97,11 @@ pub(crate) struct PlanInput<'a> {
     pub collect_hooks: bool,
 }
 
-/// Plans `action` on `resource` as one update. `Ok(Err(reason))` when it can't be; `Err`
-/// when the update fails whatever the record (a value of the wrong type, a validation
-/// of a value it sets, a policy no record passes).
+/// Plans `action` on `resource` as one statement: an update, or a soft destroy, which
+/// Ash runs as an update. A hard destroy's plan sets nothing: it deletes when none of
+/// its conditions holds. `Ok(Err(reason))` when it can't be planned; `Err` when it fails
+/// whatever the record (a value of the wrong type, a validation of a value it sets, a
+/// policy no record passes).
 pub(crate) fn plan_update(
     resource: &'static ResourceDef,
     action: &'static ActionDef,
@@ -81,6 +109,19 @@ pub(crate) fn plan_update(
 ) -> Result<std::result::Result<AtomicPlan, String>> {
     if action.persist != PersistKind::DataLayer {
         return Ok(Err("the action is manual".into()));
+    }
+    let hard_destroy = action.kind == ActionKind::Destroy && !action.soft;
+    if hard_destroy {
+        // Cascades read the record's related records, and destroy them, before it goes.
+        if !action.cascade_destroy.is_empty() {
+            return Ok(Err("it cascades to related records".into()));
+        }
+        let deletes_related = resource.relationships.iter().any(|rel| {
+            matches!(rel.kind, RelKind::HasMany | RelKind::HasOne) && rel.on_delete != OnDelete::Nothing
+        });
+        if deletes_related {
+            return Ok(Err("its relationships act on related records when it's deleted".into()));
+        }
     }
     let PlanInput { actor, tenant, mut sets, written, arguments, expected_version, collect_hooks } = input;
     let lock = resource.optimistic_lock_attribute();
@@ -209,14 +250,21 @@ pub(crate) fn plan_update(
         }
     }
 
+    if let (Some(version), Some((id, expected))) = (lock, expected_version) {
+        let resource_name = resource.name;
+        update.conditions.push(AtomicCondition::failing_with(
+            AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
+            move || Error::StaleRecord { resource: resource_name, id },
+        ));
+    }
+
+    if hard_destroy {
+        // Nothing to set: the conditions decide whether it deletes.
+        update.set.clear();
+        return Ok(Ok(AtomicPlan { update, after_actions, after_transactions }));
+    }
+
     if let Some(version) = lock {
-        if let Some((id, expected)) = expected_version {
-            let resource_name = resource.name;
-            update.conditions.push(AtomicCondition::failing_with(
-                AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
-                move || Error::StaleRecord { resource: resource_name, id },
-            ));
-        }
         let bumped = AtomicExpr::Add(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(1i64)));
         update.set(version, bumped);
     }

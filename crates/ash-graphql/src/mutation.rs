@@ -1,10 +1,10 @@
 use ash_core::create_dynamic;
-use ash_core::destroy_dynamic;
+use ash_core::destroy_dynamic_by_id;
 
 use crate::redact::redact_record;
 use crate::preload::{preload, selected};
 use ash_core::update_dynamic_expecting;
-use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
+use ash_core::{ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value};
 use async_graphql::dynamic::*;
 use uuid::Uuid;
 
@@ -141,13 +141,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
     resource: &'static ResourceDef,
 ) -> Field {
     let fields = input_fields(action, resource);
-    let pk = resource
-        .attributes
-        .iter()
-        .find(|a| a.primary_key)
-        .map(|a| a.name)
-        .unwrap_or("id");
-
     let mut field = Field::new(
         mutation_name(action.name, resource.name),
         TypeRef::named_nn(mutation_payload_name(action.name, resource.name)),
@@ -210,35 +203,11 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     });
                 }
 
-                // The record as a read would see it, so an archived record or another
-                // tenant's is not found.
-                let (filter, tenant) = ash_core::visible_scope(
-                    resource,
-                    Some(Filter::eq(pk, Value::Uuid(id))),
-                    ash.tenant.clone(),
-                )?;
-                let existing = ash
-                    .data
-                    .run_query(resource, &CompiledQuery { filter, tenant, ..CompiledQuery::default() })
-                    .await
-                    .ok()
-                    .and_then(|records| records.into_iter().next());
-                let Some(existing) = existing else {
-                    return Ok(failed(&AshError::NotFound));
-                };
-                if let (Some(expected), Some(v_attr)) = (version, resource.optimistic_lock_attribute()) {
-                    let current = existing.get(v_attr).and_then(|v| v.as_int()).unwrap_or(1);
-                    if current != expected {
-                        return Ok(failed(&AshError::StaleRecord {
-                            resource: resource.name,
-                            id,
-                        }));
-                    }
-                }
-
-                Ok(match destroy_dynamic(ash, resource, action, id, &existing).await {
-                    Ok(_) => {
-                        let mut destroyed = existing;
+                // A destroy runs by id too, as AshGraphql's bulk destroy does: as one
+                // statement where it can, else reading the record first. Either way an
+                // archived record or another tenant's is not found.
+                Ok(match destroy_dynamic_by_id(ash, resource, action, id, version).await {
+                    Ok(mut destroyed) => {
                         redact_record(resource, ash.actor.as_ref(), &mut destroyed);
                         let fields = selected(ctx.ctx.field(), Some("result"));
                         preload(ash, resource, fields, std::slice::from_mut(&mut destroyed)).await?;

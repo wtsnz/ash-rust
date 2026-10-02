@@ -366,10 +366,10 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "`soft`");
                 }
                 "require_atomic" => {
-                    if kind != ActionKind::Update {
+                    if !matches!(kind, ActionKind::Update | ActionKind::Destroy) {
                         errors.push(Error::new_spanned(
                             &item_ident,
-                            "`require_atomic` only applies to update actions",
+                            "`require_atomic` only applies to update and destroy actions",
                         ));
                     }
                     if body.peek(Token![:]) {
@@ -380,10 +380,10 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     require_semi(&body, errors, "`require_atomic`");
                 }
                 "atomic_upgrade_with" => {
-                    if kind != ActionKind::Update {
+                    if !matches!(kind, ActionKind::Update | ActionKind::Destroy) {
                         errors.push(Error::new_spanned(
                             &item_ident,
-                            "`atomic_upgrade_with` only applies to update actions",
+                            "`atomic_upgrade_with` only applies to update and destroy actions",
                         ));
                     }
                     if body.peek(Token![:]) {

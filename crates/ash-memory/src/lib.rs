@@ -347,6 +347,67 @@ impl DataLayer for Memory {
         })())
     }
 
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The destroy as one step under the store's lock, as Ash's ETS layer runs an atomic
+    /// destroy: the records the query selects, each checked against the conditions, then
+    /// removed.
+    fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[ash_core::AtomicCondition],
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        ready((|| {
+            let mut tables = self.write()?;
+            let tenant = query.tenant.as_deref();
+            let key = table_key(resource, tenant);
+            let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
+
+            let destroyed = {
+                let tables: &Tables = &tables;
+                let mut rows: Vec<FieldMap> = tables
+                    .get(&key)
+                    .map(|table| table.values().cloned().collect())
+                    .unwrap_or_default();
+                let mut computed = Vec::new();
+                let mut needed = Vec::new();
+                if let Some(filter) = &query.filter {
+                    filter.collect_fields(&mut needed);
+                }
+                compute(tables, tenant, resource, query, &mut rows, &needed, &mut computed)?;
+                if let Some(filter) = &query.filter {
+                    rows.retain(|row| row_matches_filter(tables, tenant, resource, filter, row));
+                }
+                if let Some(limit) = query.limit {
+                    rows.truncate(limit);
+                }
+                let matches = |filter: &Filter, row: &FieldMap| row_matches_filter(tables, tenant, resource, filter, row);
+                for row in &rows {
+                    for condition in conditions {
+                        if condition.fails_when.eval(resource, row, &matches) == Value::Bool(true) {
+                            return Err((condition.error)(row));
+                        }
+                    }
+                }
+                rows
+            };
+
+            let Some(table) = tables.get_mut(&key) else {
+                return Ok(Vec::new());
+            };
+            let mut removed = Vec::with_capacity(destroyed.len());
+            for row in destroyed {
+                if let Some(stored) = row.get(pk).and_then(Value::as_uuid).and_then(|id| table.remove(&id)) {
+                    removed.push(stored);
+                }
+            }
+            Ok(removed)
+        })())
+    }
+
     fn run_query(
         &self,
         resource: &ResourceDef,

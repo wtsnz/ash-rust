@@ -183,6 +183,30 @@ update rename {
 }
 ```
 
+## 3c. Atomic Destroys
+
+Destroys follow Ash too. A soft destroy is an update, so it runs as one, atomically, with
+`require_atomic` and `atomic_upgrade_with` as an update has them, and archives its
+`cascade_destroy` children after.
+
+A hard destroy by id (`destroy_dynamic_by_id`, and a GraphQL destroy mutation, which runs
+as AshGraphql's bulk destroy does) is one delete: its validations, write policies and lock
+version are conditions checked in the statement, as an update's are, and it returns the
+record as it was deleted. On Postgres:
+
+```sql
+DELETE FROM "cabs" AS t
+USING (SELECT "id", CASE WHEN ... THEN ash_raise_error(...) END AS check
+       FROM "cabs" WHERE "id" = $1 LIMIT 1 FOR UPDATE) AS s
+WHERE t."id" = s."id" AND s.check IS NULL
+RETURNING t.*
+```
+
+A hard destroy that needs the record (a change or validation function, a `before_action`
+hook, `cascade_destroy`, or a relationship's `on_delete`) reads it first instead. As in
+Ash, `require_atomic` doesn't apply to hard destroys, and one of a record in hand isn't
+made atomic.
+
 ---
 
 ## 4. Keyset & Offset Pagination

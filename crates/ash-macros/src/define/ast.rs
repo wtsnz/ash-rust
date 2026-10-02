@@ -263,7 +263,7 @@ pub struct ActionSpec {
     pub run_kw: Option<Ident>,
     pub accept_span: Option<proc_macro2::Span>,
     pub soft: bool,
-    /// `require_atomic false;`: an update that reads its record first.
+    /// `require_atomic false;`: an update or soft destroy that reads its record first.
     pub require_atomic: bool,
     /// `atomic_upgrade_with <read>;`: the read an atomic update reaches records through.
     pub atomic_upgrade_with: Option<Ident>,

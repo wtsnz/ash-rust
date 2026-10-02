@@ -1,5 +1,5 @@
 use ash_core::{
-    AtomicExpr, AtomicUpdate,
+    AtomicCondition, AtomicExpr, AtomicUpdate,
     AggregateDef, AggregateFilter, AggregateKind, AttrType, CalculationDef, CompiledQuery, Error,
     Expr, FieldMap, Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
@@ -1137,34 +1137,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if sets.is_empty() {
             return Err(Error::Invalid(format!("an atomic update of {} sets nothing", resource.name)));
         }
-        if !update.conditions.is_empty() {
-            let mut check = String::from("CASE");
-            for (i, condition) in update.conditions.iter().enumerate() {
-                let when = self.compile_atomic_expr(resource, &condition.fails_when, None)?;
-                let mut row = Vec::new();
-                for name in &condition.reports {
-                    let key = self.push_param(Value::String(name.clone()));
-                    row.push(format!("{key}::text, {}", ident(self.dialect, name)?));
-                }
-                check.push_str(&format!(
-                    " WHEN {when} THEN ash_raise_error(jsonb_build_object('condition', {i}, 'row', jsonb_build_object({})))",
-                    row.join(", ")
-                ));
-            }
-            check.push_str(" ELSE NULL END");
-            items.push(format!("{check} AS \"__ash_check\""));
-        }
-
-        let mut subquery = format!("SELECT {} FROM {table}", items.join(", "));
-        if let Some(filter) = &query.filter {
-            subquery.push_str(" WHERE ");
-            subquery.push_str(&self.compile_filter(resource, filter)?);
-        }
-        if let Some(limit) = query.limit {
-            let p = self.push_param(Value::Int(limit as i64));
-            subquery.push_str(&format!(" LIMIT {p}"));
-        }
-        subquery.push_str(" FOR UPDATE");
+        items.extend(self.atomic_check(resource, &update.conditions)?);
+        let subquery = self.atomic_subquery(resource, query, &table, &items)?;
 
         let mut sql = format!(
             "UPDATE {table} AS __ash_t SET {} FROM ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}",
@@ -1178,6 +1152,92 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             return Err(err);
         }
         Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// A destroy as one statement, as AshPostgres runs `destroy_query`: like
+    /// [`compile_atomic_update`](Self::compile_atomic_update), the records `query` selects
+    /// locked and checked against `conditions` in a subquery, then deleted, returning
+    /// what they held.
+    ///
+    /// ```sql
+    /// DELETE FROM t AS __ash_t
+    /// USING (SELECT pk, CASE WHEN <fails> THEN ash_raise_error(..) ELSE NULL END AS "__ash_check"
+    ///        FROM t WHERE <filter> LIMIT n FOR UPDATE) AS __ash_s
+    /// WHERE __ash_t.pk = __ash_s.pk AND __ash_s."__ash_check" IS NULL
+    /// RETURNING __ash_t.*
+    /// ```
+    pub fn compile_atomic_destroy(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[AtomicCondition],
+    ) -> Result<CompiledSql> {
+        self.tenant = query.tenant.clone();
+        let pk = resource.primary_key().ok_or(Error::NoPrimaryKey(resource.name))?;
+        let pk_col = ident(self.dialect, pk.name)?;
+        let table = self.table(resource)?;
+
+        let mut items = vec![pk_col.clone()];
+        items.extend(self.atomic_check(resource, conditions)?);
+        let subquery = self.atomic_subquery(resource, query, &table, &items)?;
+
+        let mut sql = format!(
+            "DELETE FROM {table} AS __ash_t USING ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}"
+        );
+        if !conditions.is_empty() {
+            sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
+        }
+        sql.push_str(" RETURNING __ash_t.*");
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The `"__ash_check"` column of an atomic statement's subquery: null when no condition
+    /// holds, else raised through `ash_raise_error` with the first that does, by index,
+    /// and the record's values it reports. `None` without conditions.
+    fn atomic_check(&mut self, resource: &ResourceDef, conditions: &[AtomicCondition]) -> Result<Option<String>> {
+        if conditions.is_empty() {
+            return Ok(None);
+        }
+        let mut check = String::from("CASE");
+        for (i, condition) in conditions.iter().enumerate() {
+            let when = self.compile_atomic_expr(resource, &condition.fails_when, None)?;
+            let mut row = Vec::new();
+            for name in &condition.reports {
+                let key = self.push_param(Value::String(name.clone()));
+                row.push(format!("{key}::text, {}", ident(self.dialect, name)?));
+            }
+            check.push_str(&format!(
+                " WHEN {when} THEN ash_raise_error(jsonb_build_object('condition', {i}, 'row', jsonb_build_object({})))",
+                row.join(", ")
+            ));
+        }
+        check.push_str(" ELSE NULL END");
+        Ok(Some(format!("{check} AS \"__ash_check\"")))
+    }
+
+    /// The subquery an atomic statement runs over: `items` from the records `query`
+    /// selects, locked.
+    fn atomic_subquery(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        table: &str,
+        items: &[String],
+    ) -> Result<String> {
+        let mut subquery = format!("SELECT {} FROM {table}", items.join(", "));
+        if let Some(filter) = &query.filter {
+            subquery.push_str(" WHERE ");
+            subquery.push_str(&self.compile_filter(resource, filter)?);
+        }
+        if let Some(limit) = query.limit {
+            let p = self.push_param(Value::Int(limit as i64));
+            subquery.push_str(&format!(" LIMIT {p}"));
+        }
+        subquery.push_str(" FOR UPDATE");
+        Ok(subquery)
     }
 
     pub fn compile_insert(

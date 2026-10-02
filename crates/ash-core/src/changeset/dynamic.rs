@@ -22,7 +22,7 @@ use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value, required_uuid};
 
 use super::managed::{ManagedRelationshipSpec, extract_managed_relationships};
-use crate::engine::atomic::{AtomicPlan, PlanInput, plan_update, run_atomic_update};
+use crate::engine::atomic::{AtomicPlan, PlanInput, plan_update, run_atomic_destroy, run_atomic_update};
 
 /// Hook running before persistence with mutable access to the changeset.
 pub type DynamicChangesetHook =
@@ -365,7 +365,7 @@ impl DynamicChangeset {
         let after_transactions = std::mem::take(&mut self.after_transactions);
         let result = async {
             if let Some(plan) = self.atomic_plan(ctx)? {
-                return self.persist_atomically(ctx, plan, cascade.notify).await;
+                return self.persist_atomically(ctx, plan, cascade).await;
             }
             let id = self.prepare(ctx).await?;
             let stored = self.persist(ctx, id, cascade).await?;
@@ -380,14 +380,20 @@ impl DynamicChangeset {
 
     /// The update of the record in hand as one statement, as Ash upgrades an update of a
     /// record to an atomic one: what this changeset changes, with the action's changes as
-    /// expressions and its validations, policies and lock version as conditions. `None`
-    /// when it runs record by record: it isn't an update, its data layer can't, or it
-    /// can't and doesn't have to (`require_atomic`, else an error).
+    /// expressions and its validations, policies and lock version as conditions. A soft
+    /// destroy is an update here, as in Ash; a hard destroy of a record in hand isn't
+    /// upgraded, as in Ash. `None` when it runs record by record: it isn't an update, its
+    /// data layer can't, or it can't and doesn't have to (`require_atomic`, else an error).
     fn atomic_plan<D: DataLayer>(&self, ctx: &Context<D>) -> Result<Option<AtomicPlan>> {
         let Some(existing) = self.existing.as_ref() else {
             return Ok(None);
         };
-        if self.action.kind != ActionKind::Update || !ctx.data.can_update_atomically(self.resource) {
+        let updates = match self.action.kind {
+            ActionKind::Update => true,
+            ActionKind::Destroy => self.action.soft,
+            _ => false,
+        };
+        if !updates || !ctx.data.can_update_atomically(self.resource) {
             return Ok(None);
         }
         let planned = if !self.before_actions.is_empty() {
@@ -426,19 +432,32 @@ impl DynamicChangeset {
     }
 
     /// Runs `plan` against the record in hand. No row means it changed (or went) since it
-    /// was read: [`Error::StaleRecord`], as in Ash.
-    async fn persist_atomically<D: DataLayer>(&mut self, ctx: &Context<D>, plan: AtomicPlan, notify: bool) -> Result<FieldMap> {
+    /// was read: [`Error::StaleRecord`], as in Ash. A soft destroy archives its children
+    /// after, as one run record by record does.
+    async fn persist_atomically<D: DataLayer>(&mut self, ctx: &Context<D>, plan: AtomicPlan, cascade: &Cascade) -> Result<FieldMap> {
         let existing = self.existing.as_ref().ok_or(Error::NotFound)?;
         let id = required_uuid(existing, pk_name(self.resource)?)?;
-        let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update)
-            .await?
-            .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
+        let destroy = self.action.kind == ActionKind::Destroy;
+        let stored = if destroy && !cascade.enter(self.resource, id) {
+            // Already being destroyed further up a cascade.
+            existing.clone()
+        } else {
+            let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update)
+                .await?
+                .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
+            if destroy {
+                crate::engine::cascade_destroy_related(ctx, self.resource, self.action, id, &stored, cascade).await?;
+            }
+            stored
+        };
         self.after_actions.extend(plan.after_actions);
-        self.finish(ctx, id, stored, notify).await
+        self.finish(ctx, id, stored, cascade.notify).await
     }
 
-    /// An update of record `id`, by id, as one statement: no read first. No row means
-    /// no such record the context may see: [`Error::NotFound`].
+    /// An update or destroy of record `id`, by id, as one statement: no read first. A
+    /// hard destroy deletes it, returning what it held; a soft destroy updates it and
+    /// archives its children after. No row means no such record the context may see:
+    /// [`Error::NotFound`].
     pub(crate) async fn commit_atomic_by_id<D: DataLayer>(
         ctx: &Context<D>,
         resource: &'static ResourceDef,
@@ -450,7 +469,24 @@ impl DynamicChangeset {
         let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
         changeset.after_actions = plan.after_actions;
         let result = async {
-            let stored = run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?;
+            let stored = match action.kind {
+                ActionKind::Destroy if !action.soft => {
+                    let destroyed = run_atomic_destroy(ctx, resource, action, id, &plan.update.conditions)
+                        .await?
+                        .ok_or(Error::NotFound)?;
+                    // The record a destroy's notification carries, as one read first does.
+                    changeset.existing = Some(destroyed.clone());
+                    destroyed
+                }
+                ActionKind::Destroy => {
+                    let cascade = Cascade::new(true);
+                    cascade.enter(resource, id);
+                    let stored = run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?;
+                    crate::engine::cascade_destroy_related(ctx, resource, action, id, &stored, &cascade).await?;
+                    stored
+                }
+                _ => run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?,
+            };
             changeset.finish(ctx, id, stored, true).await
         }
         .await;

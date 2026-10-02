@@ -31,7 +31,7 @@ impl Cascade {
     }
 
     /// Marks the record as being destroyed, returning false if it already is.
-    fn enter(&self, resource: &'static ResourceDef, id: Uuid) -> bool {
+    pub(crate) fn enter(&self, resource: &'static ResourceDef, id: Uuid) -> bool {
         self.visited
             .lock()
             .map(|mut visited| visited.insert((resource.name, id)))

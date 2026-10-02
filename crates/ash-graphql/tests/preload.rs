@@ -57,6 +57,20 @@ impl DataLayer for Counting {
         self.inner.update_atomic(resource, query, update).await
     }
 
+    fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
+        self.inner.can_destroy_atomically(resource)
+    }
+
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[ash_core::AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
+        self.reads.lock().unwrap().push("atomic destroy");
+        self.inner.destroy_atomic(resource, query, conditions).await
+    }
+
     async fn run_query(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<Vec<FieldMap>> {
         let name = [&AUTHOR_DEF, &POST_DEF, &COMMENT_DEF]
             .into_iter()
@@ -141,6 +155,7 @@ static POST_DEF: ResourceDef = ResourceDef {
         ActionDef::read("read").primary(),
         ActionDef::create("create").accept(&["title", "author_id"]),
         ActionDef::update("retitle").accept(&["title"]),
+        ActionDef::destroy("destroy"),
     ],
     field_policies: POST_FIELD_POLICIES,
     ..AUTHOR_DEF
@@ -373,4 +388,18 @@ async fn an_update_is_one_atomic_statement() {
     .await;
     assert_eq!(page["retitlePost"]["result"]["title"], "Renamed");
     assert_eq!(data.take(), ["atomic update"]);
+}
+
+#[tokio::test]
+async fn a_destroy_is_one_atomic_statement() {
+    let (data, post) = seeded().await;
+    let mutation = format!(r#"mutation {{ destroyPost(id: "{post}") {{ result {{ title }} errors {{ message }} }} }}"#);
+    let page = run(&data, &mutation, Some(Actor::new(Uuid::new_v4()))).await;
+    assert_eq!(page["destroyPost"]["result"]["title"], "A0P0");
+    assert_eq!(data.take(), ["atomic destroy"]);
+
+    // It's gone: the same statement deletes nothing.
+    let page = run(&data, &mutation, Some(Actor::new(Uuid::new_v4()))).await;
+    assert_eq!(page["destroyPost"]["result"], Json::Null);
+    assert_eq!(data.take(), ["atomic destroy"]);
 }

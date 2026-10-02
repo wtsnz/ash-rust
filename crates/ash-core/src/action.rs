@@ -264,12 +264,15 @@ pub struct ActionDef {
     /// Relationships whose related records are destroyed first, with their primary
     /// destroy action.
     pub cascade_destroy: &'static [&'static str],
-    /// For an update: run as one statement in the data layer, or fail, as Ash's
-    /// `require_atomic?` (true by default). An update whose changes or validations can't
-    /// run in the data layer must set this to false to read the record first instead.
+    /// For an update or a soft destroy: run as one statement in the data layer, or fail,
+    /// as Ash's `require_atomic?` (true by default). One whose changes or validations
+    /// can't run in the data layer must set this to false to read the record first
+    /// instead. A hard destroy runs as one statement when it can, and reads first when it
+    /// can't, whatever this says, as in Ash.
     pub require_atomic: bool,
-    /// For an update run atomically: the read action whose filters decide which records
-    /// it reaches, as Ash's `atomic_upgrade_with`; the primary read when `None`.
+    /// For an update or destroy run atomically: the read action whose filters decide
+    /// which records it reaches, as Ash's `atomic_upgrade_with`; the primary read when
+    /// `None`.
     pub atomic_upgrade_with: Option<&'static str>,
 }
 
@@ -409,7 +412,7 @@ impl ActionDef {
         self
     }
 
-    /// Whether an update must run atomically: see [`require_atomic`](Self::require_atomic).
+    /// Whether an update or soft destroy must run atomically, as Ash's `require_atomic?`.
     pub const fn require_atomic(mut self, require: bool) -> Self {
         self.require_atomic = require;
         self

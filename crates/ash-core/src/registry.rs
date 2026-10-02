@@ -59,6 +59,15 @@ pub trait DynDataLayer: Send + Sync {
         update: &'a crate::atomic::AtomicUpdate,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
+    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn destroy_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        conditions: &'a [crate::atomic::AtomicCondition],
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
+
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
@@ -148,6 +157,19 @@ impl<T: DataLayer> DynDataLayer for T {
         update: &'a crate::atomic::AtomicUpdate,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
         Box::pin(self.update_atomic(resource, query, update))
+    }
+
+    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_destroy_atomically(resource)
+    }
+
+    fn destroy_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        conditions: &'a [crate::atomic::AtomicCondition],
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.destroy_atomic(resource, query, conditions))
     }
 
     fn upsert_dyn<'a>(
@@ -380,6 +402,20 @@ impl DataLayer for StoreRegistry {
     ) -> Result<Vec<FieldMap>> {
         let layer = self.get_layer(resource)?;
         layer.update_atomic_dyn(resource, query, update).await
+    }
+
+    fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_destroy_atomically_dyn(resource))
+    }
+
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[crate::atomic::AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
+        let layer = self.get_layer(resource)?;
+        layer.destroy_atomic_dyn(resource, query, conditions).await
     }
 
     async fn upsert(

@@ -84,6 +84,28 @@ pub trait DataLayer: Send + Sync {
         ))))
     }
 
+    /// Whether this data layer runs destroys as one statement, checking conditions and
+    /// raising their errors within it, as Ash's data layers that can `destroy_query` and
+    /// `expr_error`. One that can't has destroys read their record first.
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// Deletes the records `query` selects in one statement: checks each record against
+    /// `conditions`, in order, failing with the first that holds, then deletes them all.
+    /// Returns the deleted records.
+    fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+        _conditions: &[crate::atomic::AtomicCondition],
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        std::future::ready(Err(Error::Invalid(format!(
+            "this data layer can't destroy {} atomically",
+            resource.name
+        ))))
+    }
+
     /// How many records `query` would return, as Ash's data layers count with an
     /// aggregate query. A data layer that can count without reading the records (a SQL
     /// `COUNT(*)`) should; by default it reads them.

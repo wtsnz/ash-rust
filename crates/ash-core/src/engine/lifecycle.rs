@@ -110,6 +110,80 @@ pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
         .await
 }
 
+/// A destroy through `action` of the record `id` as the context reads it, which must
+/// still have lock version `expected_version` if given, else [`Error::StaleRecord`]. As
+/// AshGraphql's destroy runs a bulk destroy over the record's query, it runs as one
+/// statement when the data layer can and the action allows, with no read first: a hard
+/// destroy as a delete, its validations, policies and the version checked in it; a soft
+/// destroy as an update (failing when it must be atomic and can't be). Otherwise it reads
+/// the record and destroys that. Returns the record as it was deleted, or as a soft
+/// destroy stored it.
+pub async fn destroy_dynamic_by_id<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+    id: Uuid,
+    expected_version: Option<i64>,
+) -> Result<FieldMap> {
+    expect_kind(action, ActionKind::Destroy)?;
+    let atomic = if action.soft {
+        ctx.data.can_update_atomically(resource)
+    } else {
+        ctx.data.can_destroy_atomically(resource)
+    };
+    if atomic {
+        let arguments = FieldMap::new();
+        let planned = super::atomic::plan_update(
+            resource,
+            action,
+            super::atomic::PlanInput {
+                actor: ctx.actor.as_ref(),
+                tenant: ctx.tenant(),
+                sets: FieldMap::new(),
+                written: Vec::new(),
+                arguments: &arguments,
+                expected_version: expected_version.map(|version| (id, version)),
+                collect_hooks: true,
+            },
+        )?;
+        match planned {
+            Ok(plan) => {
+                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan).await;
+            }
+            // Only a soft destroy must be atomic, as in Ash: a hard one reads first.
+            Err(reason) if action.soft && action.require_atomic => {
+                return Err(Error::MustBeAtomic {
+                    resource: resource.name,
+                    action: action.name,
+                    reason,
+                });
+            }
+            Err(_) => {}
+        }
+    }
+    let existing = read_visible(ctx, resource, id).await?;
+    if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
+        && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
+    {
+        return Err(Error::StaleRecord { resource: resource.name, id });
+    }
+    let cascade = super::managed::Cascade::new(true);
+    destroy_dynamic_with(ctx, resource, action, id, &existing, &cascade).await
+}
+
+/// Record `id` as a read in `ctx` would see it: not another tenant's, nor one its
+/// primary read hides.
+async fn read_visible<D: DataLayer>(ctx: &Context<D>, resource: &'static ResourceDef, id: Uuid) -> Result<FieldMap> {
+    let pk = pk_name(resource)?;
+    let (filter, tenant) = crate::pipeline::visible_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
+    ctx.data
+        .run_query(resource, &CompiledQuery { filter, tenant, ..CompiledQuery::default() })
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(Error::NotFound)
+}
+
 /// Runs a create through `action` on any resource, as a typed create would.
 pub async fn create_dynamic<D: DataLayer>(
     ctx: &Context<D>,
@@ -178,26 +252,7 @@ pub async fn update_dynamic_expecting<D: DataLayer>(
             Err(_) => {}
         }
     }
-    let pk = pk_name(resource)?;
-    let (lookup_filter, tenant) = crate::pipeline::visible_scope(
-        resource,
-        Some(Filter::eq(pk, Value::Uuid(id))),
-        ctx.tenant.clone(),
-    )?;
-    let existing = ctx
-        .data
-        .run_query(
-            resource,
-            &CompiledQuery {
-                filter: lookup_filter,
-                tenant,
-                ..CompiledQuery::default()
-            },
-        )
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(Error::NotFound)?;
+    let existing = read_visible(ctx, resource, id).await?;
     if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
         && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
     {
