@@ -936,7 +936,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 
-        for attr in resource.attributes.iter().filter(|attr| query.reads(attr)) {
+        for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
             select_items.push(ident(self.dialect, attr.name)?);
         }
 
@@ -947,6 +947,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     resource.name
                 ))
             })?;
+            // Only Rust computes this, from the record once it's read.
+            if calc.expr.is_custom() {
+                continue;
+            }
             let expr_sql = self.compile_calculation(resource, calc)?;
             let alias = ident(self.dialect, calc.name)?;
             select_items.push(format!("{expr_sql} AS {alias}"));

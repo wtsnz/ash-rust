@@ -1079,13 +1079,13 @@ fn read_row(
 ) -> Result<FieldMap> {
     let mut map = FieldMap::with_capacity(resource.attributes.len() + calculations.len() + aggregates.len());
 
-    for attr in resource.attributes.iter().filter(|attr| query.reads(attr)) {
+    for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
         let val = extract_column_value(row, attr.name, &attr.ty);
         map.insert(attr.name.to_string(), val);
     }
 
     for calc_name in calculations {
-        if let Some(calc) = resource.calculation(calc_name) {
+        if let Some(calc) = resource.calculation(calc_name).filter(|calc| !calc.expr.is_custom()) {
             let val = extract_column_value(row, calc.name, &calc.ty);
             map.insert(calc.name.to_string(), val);
         }
@@ -1096,6 +1096,12 @@ fn read_row(
             let val = extract_column_value(row, agg.name, &agg.ty);
             map.insert(agg.name.to_string(), val);
         }
+    }
+
+    // What only Rust computes, from the record as read.
+    for calc in query.custom_calculations(resource) {
+        let args = query.calculation_args.get(calc.name).cloned().unwrap_or_default();
+        ash_core::apply_named_with_args(resource, &mut map, calc.name, &args)?;
     }
 
     Ok(map)

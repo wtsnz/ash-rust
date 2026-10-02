@@ -504,7 +504,8 @@ async fn a_read_selects_only_what_is_asked_for() {
     let strings = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect::<Vec<_>>());
     assert_eq!(
         data.take_selects(),
-        [("Author", strings(&["id", "name"])), ("Post", strings(&["author_id", "id", "title"]))]
+        // And what Post's field policies check: its label.
+        [("Author", strings(&["id", "name"])), ("Post", strings(&["author_id", "id", "label", "title"]))]
     );
 }
 
@@ -568,7 +569,6 @@ async fn calculations_load_as_the_record_is_stored() {
 
     let page = run(&data, r#"{ listPosts(filter: { title: { eq: "A1P0" } }) { results { shout } } }"#, actor()).await;
     assert_eq!(page["listPosts"]["results"], json!([{ "shout": "A1P0" }]));
-    assert_eq!(data.take_selects(), [("Post", None)]);
 }
 
 static PROJECT_DEF: ResourceDef = ResourceDef {

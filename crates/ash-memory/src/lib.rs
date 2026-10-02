@@ -482,7 +482,7 @@ impl DataLayer for Memory {
                 strip_unrequested_calculations(resource, query, row);
                 strip_unrequested_aggregates(resource, query, row);
                 if query.select.is_some() {
-                    row.retain(|name, _| resource.attribute(name).is_none_or(|attr| query.reads(attr)));
+                    row.retain(|name, _| resource.attribute(name).is_none_or(|attr| query.reads(resource, attr)));
                 }
             }
 

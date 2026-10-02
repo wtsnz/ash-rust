@@ -30,14 +30,25 @@ pub struct CompiledQuery {
 }
 
 impl CompiledQuery {
-    /// Whether the query reads `attribute`: it's selected, or the primary key, or the
-    /// query selects everything.
-    pub fn reads(&self, attribute: &crate::resource::AttributeDef) -> bool {
+    /// Whether the query reads `attribute` of `resource`: it's selected, or the primary
+    /// key, or the query selects everything, or it asks for a calculation only Rust can
+    /// compute, which reads whatever of the record it likes.
+    pub fn reads(&self, resource: &ResourceDef, attribute: &crate::resource::AttributeDef) -> bool {
         attribute.primary_key
             || self
                 .select
                 .as_ref()
                 .is_none_or(|select| select.iter().any(|name| name == attribute.name))
+            || self.custom_calculations(resource).next().is_some()
+    }
+
+    /// The calculations the query asks for that only Rust can compute: a SQL data layer
+    /// computes them from the record it reads, after reading it.
+    pub fn custom_calculations<'a>(&'a self, resource: &'a ResourceDef) -> impl Iterator<Item = &'a crate::expr::CalculationDef> + 'a {
+        self.calculations
+            .iter()
+            .filter_map(|name| resource.calculation(name))
+            .filter(|calc| calc.expr.is_custom())
     }
 }
 

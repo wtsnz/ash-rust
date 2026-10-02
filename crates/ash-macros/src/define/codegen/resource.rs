@@ -560,6 +560,18 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             });
         }
     }
+    for calc in &def.calculations {
+        let id = &calc.ident;
+        let name_str = id.to_string();
+        to_inserts.push(quote! {
+            if let ::std::option::Option::Some(val) = &self.#id {
+                map.insert(
+                    ::std::string::String::from(#name_str),
+                    ::ash_core::Value::from(val.clone()),
+                );
+            }
+        });
+    }
     for agg in &def.aggregates {
         let id = &agg.ident;
         let name_str = id.to_string();

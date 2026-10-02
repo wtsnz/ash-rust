@@ -193,6 +193,24 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
         }
 
+        // The calculations and aggregates the field policies check load too, so the
+        // policies see them, and go once they've decided.
+        let mut calculations = this.calculations.clone();
+        let mut aggregates = this.aggregates.clone();
+        let mut operands = Vec::new();
+        for field in crate::policy::field_policy_fields(&R::DEF) {
+            let list = if R::DEF.calculation(field).is_some() {
+                &mut calculations
+            } else if R::DEF.aggregate(field).is_some() {
+                &mut aggregates
+            } else {
+                continue;
+            };
+            if !list.iter().any(|name| name == field) {
+                list.push(field.to_string());
+                operands.push(field);
+            }
+        }
         let query = this.scoped(
             action,
             CompiledQuery {
@@ -201,9 +219,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 // A typed record holds every attribute.
                 select: None,
                 actor: None,
-                calculations: this.calculations.clone(),
+                calculations,
                 calculation_args: this.calculation_args.clone(),
-                aggregates: this.aggregates.clone(),
+                aggregates,
                 limit: this.limit,
                 offset: this.offset,
                 tenant: None,
@@ -214,6 +232,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let mut records = Vec::with_capacity(rows.len());
         for mut row in rows {
             crate::policy::redact_fields(&R::DEF, this.ctx.actor.as_ref(), &mut row)?;
+            for operand in &operands {
+                row.remove(*operand);
+            }
             records.push(R::from_fields(&row)?);
         }
         attach_relationships(this.ctx, &mut records, &this.loads).await?;

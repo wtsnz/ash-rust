@@ -84,9 +84,6 @@ pub(crate) struct Load {
     pub select: Vec<String>,
     pub aggregates: Vec<String>,
     pub calculations: Vec<String>,
-    /// A calculation only Rust can compute is selected, which reads whatever of the
-    /// record it likes: every attribute is read.
-    pub every_attribute: bool,
 }
 
 impl Load {
@@ -120,19 +117,14 @@ impl Load {
         load
     }
 
-    /// Loads `field` of `resource`: an attribute, aggregate or calculation. A calculation
-    /// only Rust can compute isn't the data layer's to load: every attribute is read, for
-    /// Rust to compute it from.
+    /// Loads `field` of `resource`: an attribute, aggregate or calculation. (A data layer
+    /// that can't compute a calculation itself reads the record and computes it in Rust.)
     fn add(&mut self, resource: &ResourceDef, field: &str) {
         let list = if resource.attribute(field).is_some() {
             &mut self.select
         } else if resource.aggregate(field).is_some() {
             &mut self.aggregates
-        } else if let Some(calc) = resource.calculation(field) {
-            if calc.expr.is_custom() {
-                self.every_attribute = true;
-                return;
-            }
+        } else if resource.calculation(field).is_some() {
             &mut self.calculations
         } else {
             return;
@@ -145,7 +137,7 @@ impl Load {
     /// `query`, reading only this.
     pub(crate) fn onto(self, query: CompiledQuery) -> CompiledQuery {
         let mut query = query;
-        query.select = (!self.every_attribute).then_some(self.select);
+        query.select = Some(self.select);
         query.aggregates.extend(self.aggregates);
         query.calculations.extend(self.calculations);
         query
@@ -154,7 +146,7 @@ impl Load {
     /// `query`, loading only this of the related rows.
     fn onto_related(self, query: RelatedQuery) -> RelatedQuery {
         RelatedQuery {
-            select: (!self.every_attribute).then_some(self.select),
+            select: Some(self.select),
             aggregates: self.aggregates,
             calculations: self.calculations,
             ..query
@@ -173,24 +165,25 @@ pub(crate) async fn load_selected<D: DataLayer>(
     fields: &[SelectionField<'_>],
     records: &mut [FieldMap],
 ) -> async_graphql::Result<()> {
-    let Load { aggregates, calculations, .. } = Load::of(resource, fields, []);
-    if records.is_empty() || (aggregates.is_empty() && calculations.is_empty()) {
+    let wanted = Load::of(resource, fields, []);
+    if records.is_empty() || (wanted.aggregates.is_empty() && wanted.calculations.is_empty()) {
         return Ok(());
     }
     let Some(pk) = resource.primary_key().map(|attr| attr.name) else {
         return Ok(());
     };
     let ids: Vec<Value> = records.iter().filter_map(|record| record.get(pk).cloned()).collect();
-    let mut policy_inputs = Load::default();
-    for field in field_policy_fields(resource) {
-        policy_inputs.add(resource, field);
+    let loaded_names: Vec<String> = wanted.aggregates.iter().chain(&wanted.calculations).cloned().collect();
+    // What's selected, and what the field policies check, each once.
+    let mut load = Load::default();
+    for field in loaded_names.iter().map(String::as_str).chain(field_policy_fields(resource)) {
+        load.add(resource, field);
     }
-    let loaded_names: Vec<String> = aggregates.iter().chain(&calculations).cloned().collect();
     let query = CompiledQuery {
         filter: Some(Filter::In(pk.to_string(), ids)),
-        select: (!policy_inputs.every_attribute).then_some(policy_inputs.select),
-        aggregates: aggregates.into_iter().chain(policy_inputs.aggregates).collect(),
-        calculations: calculations.into_iter().chain(policy_inputs.calculations).collect(),
+        select: Some(load.select),
+        aggregates: load.aggregates,
+        calculations: load.calculations,
         tenant: ash.tenant.clone(),
         actor: ash.actor.clone(),
         ..CompiledQuery::default()

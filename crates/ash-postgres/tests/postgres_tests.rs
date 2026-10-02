@@ -851,6 +851,40 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
     assert_eq!(pg.run_query(&OWNED_ORDER_DEF, &query).await.unwrap().len(), 1);
 }
 
+fn shout(fields: &FieldMap) -> ash_core::Result<Value> {
+    Ok(fields.get("label").and_then(Value::as_str).map(|t| Value::String(t.to_uppercase())).unwrap_or(Value::Null))
+}
+
+static SHOUTING_DEF: ResourceDef = ResourceDef {
+    name: "Shouting",
+    table: "shoutings",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("label", AttrType::String)],
+    calculations: &[ash_core::CalculationDef::new("shout", AttrType::String, ash_core::Expr::Custom(shout))],
+    ..NULLABLE_DEF
+};
+
+/// A calculation only Rust can compute loads from Postgres too: computed from the record
+/// once it's read, every attribute read for it, whatever the query selects.
+#[tokio::test]
+async fn test_postgres_computes_rust_only_calculations() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&SHOUTING_DEF]).await.unwrap();
+    let id = Uuid::new_v4();
+    let fields = FieldMap::from([("id".into(), Value::Uuid(id)), ("label".into(), Value::from("quiet"))]);
+    pg.create(&SHOUTING_DEF, None, id, fields).await.unwrap();
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("id", Value::Uuid(id))),
+        select: Some(Vec::new()),
+        calculations: vec!["shout".into()],
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SHOUTING_DEF, &query).await.unwrap();
+    assert_eq!(rows[0].get("shout"), Some(&Value::from("QUIET")));
+}
+
 mod pg_shift {
     use ash_core::{UtcDateTime, UtcDateTimeUsec, resource};
     use uuid::Uuid;

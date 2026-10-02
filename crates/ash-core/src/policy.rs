@@ -313,11 +313,16 @@ pub fn redact_fields(
     actor: Option<&Actor>,
     fields: &mut FieldMap,
 ) -> Result<()> {
+    // Every policy checks the record as it was read, then the fields they hide go: one
+    // hidden first mustn't read as nil to a policy checking it after.
+    let mut hidden = Vec::new();
     for fp in resource.field_policies {
-        let is_allowed = eval_policy_effects(fp.checks, actor, Some(fields))?;
-        if !is_allowed {
-            fields.insert(fp.field.to_string(), crate::value::Value::Null);
+        if !eval_policy_effects(fp.checks, actor, Some(fields))? {
+            hidden.push(fp.field);
         }
+    }
+    for field in hidden {
+        fields.insert(field.to_string(), crate::value::Value::Null);
     }
     Ok(())
 }
