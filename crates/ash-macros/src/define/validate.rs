@@ -192,6 +192,19 @@ fn check_name_collisions(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             ));
         }
     }
+    // An identity names a constant on the resource, as an attribute does.
+    for identity in &def.identities {
+        let name = identity.name.to_string();
+        if attr_names.contains(&name) {
+            errors.push(Error::new_spanned(
+                &identity.name,
+                format!(
+                    "name collision: `{name}` is both an attribute and an identity; name the \
+                     identity for what it keeps unique, such as `unique_{name}`"
+                ),
+            ));
+        }
+    }
 }
 
 fn validate_policy_check(
@@ -1221,6 +1234,24 @@ mod tests {
             }
         }});
         assert!(msg.contains("duplicate attribute `title`"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_identity_named_like_an_attribute_fails() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+                code: String;
+            }
+            identities {
+                identity code: [code];
+            }
+        }});
+        assert!(
+            msg.contains("`code` is both an attribute and an identity") && msg.contains("unique_code"),
+            "got: {msg}"
+        );
     }
 
     #[test]
