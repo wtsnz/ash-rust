@@ -15,7 +15,8 @@ use ash_core::{
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
-use ash_pubsub::PubSub;
+use ash_pubsub::{ContextPubSubExt, PubSub};
+use std::sync::Arc;
 use axum::response::Html;
 use axum::routing::get;
 use uuid::Uuid;
@@ -264,7 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f_rep.insert("email".into(), Value::String("alex@example.com".into()));
     mem.create(&REP_DEF, rep_id, f_rep).await?;
 
-    let ctx = Context::new(mem);
+    // Writes publish their changes to subscriptions through the context's notifier.
+    let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF, &REP_DEF])
         .with_pubsub(pubsub)

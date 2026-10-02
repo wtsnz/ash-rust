@@ -19,16 +19,18 @@ Automatic GraphQL server engine for `ash-rust` powered by `async-graphql`.
 
 ```rust,ignore
 use ash_graphql::AshGraphQL;
-use ash_pubsub::PubSub;
+use ash_pubsub::{ContextPubSubExt, PubSub};
 use ash_memory::Memory;
 
 let pubsub = PubSub::new();
+// Writes publish their changes through the context's notifier.
+let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
 
 // Build schema from an Ash Domain definition
 let schema = AshGraphQL::builder(&Helpdesk::DEF)
     .with_pubsub(pubsub.clone())
     .with_dataloader()
-    .finish::<Memory>()
+    .finish_with_context(ctx)
     .expect("Failed to build GraphQL schema");
 
 // Mount directly onto an Axum router
@@ -150,6 +152,11 @@ isn't reachable over GraphQL either. An `Actor` given in the request data acts f
 context that carries none.
 
 ### 6. Realtime Subscriptions
+
+Subscriptions listen on the `PubSub` given to `with_pubsub`. Changes are published to it
+only by notifiers: a `PubSubNotifier` on the context a write runs in publishes it once,
+after its transaction commits, whether the write came through GraphQL or not. Each
+subscriber hears only the records its own read would return, in its tenant.
 
 Subscribe to resource changes with optional in-memory filter matching:
 ```graphql

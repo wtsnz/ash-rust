@@ -41,7 +41,13 @@ impl AshGraphQLBuilder {
         }
     }
 
-    /// Attaches an `ash-pubsub` [`PubSub`] instance for live GraphQL subscriptions.
+    /// Adds live subscriptions (`<resource>Created`, `Updated`, `Destroyed`) fed by
+    /// `pubsub`.
+    ///
+    /// Changes reach it only through notifiers, as every other notification does: give
+    /// the contexts your writes run in a `PubSubNotifier` on the same `PubSub` (for
+    /// example with `ash_pubsub::ContextPubSubExt::with_pubsub`). Then every write,
+    /// through GraphQL or not, is published once, after its transaction commits.
     pub fn with_pubsub(mut self, pubsub: PubSub) -> Self {
         self.pubsub = Some(pubsub);
         self

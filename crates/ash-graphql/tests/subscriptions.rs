@@ -2,7 +2,8 @@ use std::time::Duration;
 use ash_core::{ActionDef, AttrType, AttributeDef, Context, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
-use ash_pubsub::PubSub;
+use ash_pubsub::{ContextPubSubExt, PubSub};
+use std::sync::Arc;
 use async_graphql::Request;
 use futures_util::StreamExt;
 
@@ -46,7 +47,8 @@ static TICKET_DEF: ResourceDef = ResourceDef {
 async fn test_phase6_subscription_stream_with_pubsub() {
     let pubsub = PubSub::new();
     let memory = Memory::new();
-    let ctx = Context::new(memory);
+    // Writes publish through the context's notifier.
+    let ctx = Context::new(memory).with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
@@ -114,9 +116,7 @@ async fn test_phase6_subscription_stream_with_pubsub() {
         }
     "#;
 
-    let mut mut_req = Request::new(mutation).data(ctx.clone());
-    mut_req = mut_req.data(pubsub.clone());
-    let res = schema.execute(mut_req).await;
+    let res = schema.execute(Request::new(mutation).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "Mutation errors: {:?}", res.errors);
 
     // Receive from subscription stream
@@ -136,11 +136,46 @@ async fn test_phase6_subscription_stream_with_pubsub() {
     assert_eq!(event_json["ticketCreated"]["status"], "OPEN");
 }
 
+/// Every write is published once, through the context's notifier, whether it came
+/// through GraphQL or not.
+#[tokio::test]
+async fn each_write_is_heard_once() {
+    let pubsub = PubSub::new();
+    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .with_pubsub(pubsub.clone())
+        .finish::<Memory>()
+        .unwrap();
+
+    let mut stream =
+        schema.execute_stream(Request::new("subscription { ticketCreated { title } }").data(ctx.clone()));
+    let heard = tokio::spawn(async move {
+        let mut titles = Vec::new();
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(300), stream.next()).await {
+            titles.push(event.data.into_json().unwrap()["ticketCreated"]["title"].clone());
+        }
+        titles
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // A `PubSub` in the request data, which mutations used to publish to themselves,
+    // doesn't publish the change again.
+    let mutation = r#"mutation { createTicket(input: { title: "From GraphQL" }) { success } }"#;
+    let res = schema.execute(Request::new(mutation).data(ctx.clone()).data(pubsub.clone())).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let mut input = ash_core::FieldMap::new();
+    input.insert("title".into(), ash_core::Value::String("From Rust".into()));
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+
+    assert_eq!(heard.await.unwrap(), ["From GraphQL", "From Rust"]);
+}
+
 #[tokio::test]
 async fn test_phase6_subscription_filtered() {
     let pubsub = PubSub::new();
     let memory = Memory::new();
-    let ctx = Context::new(memory);
+    // Writes publish through the context's notifier.
+    let ctx = Context::new(memory).with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
@@ -172,8 +207,7 @@ async fn test_phase6_subscription_filtered() {
             }
         }
     "#;
-    let mut req1 = Request::new(open_mutation).data(ctx.clone());
-    req1 = req1.data(pubsub.clone());
+    let req1 = Request::new(open_mutation).data(ctx.clone());
     let res1 = schema.execute(req1).await;
     assert!(res1.errors.is_empty());
 
@@ -185,8 +219,7 @@ async fn test_phase6_subscription_filtered() {
             }
         }
     "#;
-    let mut req2 = Request::new(closed_mutation).data(ctx.clone());
-    req2 = req2.data(pubsub.clone());
+    let req2 = Request::new(closed_mutation).data(ctx.clone());
     let res2 = schema.execute(req2).await;
     assert!(res2.errors.is_empty());
 
@@ -206,7 +239,8 @@ async fn test_phase6_subscription_filtered() {
 async fn test_phase6_subscription_updated_and_destroyed() {
     let pubsub = PubSub::new();
     let memory = Memory::new();
-    let ctx = Context::new(memory);
+    // Writes publish through the context's notifier.
+    let ctx = Context::new(memory).with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
@@ -224,7 +258,7 @@ async fn test_phase6_subscription_updated_and_destroyed() {
             }
         }
     "#;
-    let res = schema.execute(Request::new(create_mutation).data(ctx.clone()).data(pubsub.clone())).await;
+    let res = schema.execute(Request::new(create_mutation).data(ctx.clone())).await;
     let ticket_id = res.data.into_json().unwrap()["createTicket"]["result"]["id"]
         .as_str()
         .unwrap()
@@ -256,7 +290,7 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         }}
     "#
     );
-    let res_up = schema.execute(Request::new(&update_mut).data(ctx.clone()).data(pubsub.clone())).await;
+    let res_up = schema.execute(Request::new(&update_mut).data(ctx.clone())).await;
     assert!(res_up.errors.is_empty());
 
     let event_up = tokio::time::timeout(Duration::from_secs(2), update_handle)
@@ -291,7 +325,7 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         }}
     "#
     );
-    let res_del = schema.execute(Request::new(&destroy_mut).data(ctx.clone()).data(pubsub.clone())).await;
+    let res_del = schema.execute(Request::new(&destroy_mut).data(ctx.clone())).await;
     assert!(res_del.errors.is_empty());
 
     let event_del = tokio::time::timeout(Duration::from_secs(2), destroy_handle)
