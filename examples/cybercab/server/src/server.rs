@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use ash_core::{Context, DataLayer, Error, ResourceDef};
+use ash_core::{Context, DataLayer, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_pubsub::PubSub;
 use ash_typescript::{TypeScriptConfig, TypeScriptGenerator};
@@ -87,10 +87,6 @@ pub async fn postgres(url: &str) -> ash_core::Result<ash_postgres::Postgres> {
         .iter()
         .map(|resource| format!("\"{}\"", resource.table))
         .collect();
-    let pool = db.pool().expect("a pool, outside any transaction");
-    sqlx::query(&format!("TRUNCATE {} CASCADE", tables.join(", ")))
-        .execute(pool)
-        .await
-        .map_err(|err| Error::DataLayer(err.to_string()))?;
+    db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", "))).await?;
     Ok(db)
 }

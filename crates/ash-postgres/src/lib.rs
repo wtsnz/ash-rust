@@ -1,9 +1,8 @@
 //! # `ash-postgres`
 //!
-//! PostgreSQL data layer implementation for `ash-rust` powered by `sqlx`.
-//! Provides high-performance single-roundtrip writes via `RETURNING *`,
-//! native error code translation, schema multitenancy (`search_path`),
-//! and transaction savepoint management.
+//! PostgreSQL data layer implementation for `ash-rust`, on `tokio-postgres` with a
+//! `deadpool-postgres` pool. Provides single-roundtrip writes via `RETURNING *`, native
+//! error code translation, schema multitenancy, and transaction savepoint management.
 
 use std::future::Future;
 use std::path::Path;
@@ -18,201 +17,250 @@ use ash_sql::{
     CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlDialect, SqlParam,
     TableSnapshot,
 };
-use sqlx::Row;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow};
+use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use tokio::sync::Mutex;
+use tokio_postgres::types::{FromSql, ToSql, Type};
+use tokio_postgres::{NoTls, Row};
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+/// Connections a pool opens at most.
+const POOL_SIZE: usize = 20;
+
+#[derive(Clone)]
 enum PostgresSource {
-    Pool(PgPool),
-    Tx(Arc<Mutex<sqlx::pool::PoolConnection<sqlx::Postgres>>>),
+    /// The pool, and the settings it connects with, for pools of its own (a tenant's
+    /// migrations) to start from.
+    Pool(Pool, Option<Arc<tokio_postgres::Config>>),
+    Tx(Arc<Mutex<Object>>),
 }
 
 /// PostgreSQL data layer for Ash.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Postgres {
     source: PostgresSource,
 }
 
+impl std::fmt::Debug for Postgres {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = match &self.source {
+            PostgresSource::Pool(pool, _) => format!("{:?}", pool.status()),
+            PostgresSource::Tx(_) => "transaction".to_string(),
+        };
+        f.debug_struct("Postgres").field("source", &source).finish()
+    }
+}
+
+/// Why a statement failed: no connection to run it on, or the database refused it.
+enum Failure {
+    Pool(String),
+    Db(tokio_postgres::Error),
+}
+
+/// A connection one statement runs on: one checked out of the pool for it, or the
+/// transaction's. It lives on the stack for one statement, so it isn't boxed, which would
+/// allocate for every statement.
+#[allow(clippy::large_enum_variant)]
+enum Conn<'a> {
+    Pooled(Object),
+    Tx(tokio::sync::MutexGuard<'a, Object>),
+}
+
+impl std::ops::Deref for Conn<'_> {
+    type Target = Object;
+
+    fn deref(&self) -> &Object {
+        match self {
+            Conn::Pooled(object) => object,
+            Conn::Tx(guard) => guard,
+        }
+    }
+}
+
+/// A statement's parameters as Postgres receives them, each with the type it's declared
+/// with, as sqlx declares a bound value's: the SQL's casts (`$1::timestamptz`) take it
+/// from there, and a statement cached for one value's type serves the next.
+struct Params {
+    values: Vec<Box<dyn ToSql + Sync + Send>>,
+    types: Vec<Type>,
+}
+
+impl Params {
+    fn of(params: &[SqlParam]) -> Self {
+        let mut values: Vec<Box<dyn ToSql + Sync + Send>> = Vec::with_capacity(params.len());
+        let mut types = Vec::with_capacity(params.len());
+        for p in params {
+            let (value, ty): (Box<dyn ToSql + Sync + Send>, Type) = match &p.value {
+                Value::Array(items) if p.is_list => {
+                    if items.iter().all(|v| matches!(v, Value::Uuid(_))) {
+                        let uuids: Vec<Uuid> = items.iter().filter_map(Value::as_uuid).collect();
+                        (Box::new(uuids), Type::UUID_ARRAY)
+                    } else if items.iter().all(|v| matches!(v, Value::Int(_))) {
+                        let ints: Vec<i64> = items
+                            .iter()
+                            .filter_map(|v| match v {
+                                Value::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .collect();
+                        (Box::new(ints), Type::INT8_ARRAY)
+                    } else {
+                        let strings: Vec<String> = items
+                            .iter()
+                            .map(|v| match v {
+                                Value::String(s) => s.clone(),
+                                Value::Uuid(u) => u.to_string(),
+                                Value::Int(i) => i.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                _ => v.to_string(),
+                            })
+                            .collect();
+                        (Box::new(strings), Type::TEXT_ARRAY)
+                    }
+                }
+                // NULL is declared with the column's type: a cached statement keeps the
+                // parameter types of its first run, so a text NULL would break a later
+                // uuid value.
+                Value::Null => match p.ty {
+                    Some(AttrType::Uuid) => (Box::new(None::<Uuid>), Type::UUID),
+                    Some(AttrType::Integer) => (Box::new(None::<i64>), Type::INT8),
+                    Some(AttrType::Boolean) => (Box::new(None::<bool>), Type::BOOL),
+                    Some(AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }) => {
+                        (Box::new(None::<serde_json::Value>), Type::JSONB)
+                    }
+                    _ => (Box::new(None::<String>), Type::TEXT),
+                },
+                Value::Bool(b) => (Box::new(*b), Type::BOOL),
+                Value::Int(i) => (Box::new(*i), Type::INT8),
+                Value::Float(n) => (Box::new(*n), Type::FLOAT8),
+                Value::Uuid(u) => (Box::new(*u), Type::UUID),
+                Value::String(s) => (Box::new(s.clone()), Type::TEXT),
+                Value::Map(_) | Value::Array(_) => (Box::new(p.value.to_plain_json()), Type::JSONB),
+            };
+            values.push(value);
+            types.push(ty);
+        }
+        Self { values, types }
+    }
+
+    fn refs(&self) -> Vec<&(dyn ToSql + Sync)> {
+        self.values.iter().map(|value| value.as_ref() as &(dyn ToSql + Sync)).collect()
+    }
+}
+
 impl Postgres {
-    /// Creates a [`Postgres`] instance from an existing [`PgPool`].
-    pub fn new(pool: PgPool) -> Self {
+    /// Creates a [`Postgres`] instance from an existing pool. Migrating several schemas
+    /// ([`migrate_schemas`](Self::migrate_schemas)) needs the settings it connects with:
+    /// use [`connect`](Self::connect) or [`connect_with`](Self::connect_with).
+    pub fn new(pool: Pool) -> Self {
         Self {
-            source: PostgresSource::Pool(pool),
+            source: PostgresSource::Pool(pool, None),
         }
     }
 
     /// Connects to PostgreSQL using a connection string.
     pub async fn connect(url: &str) -> Result<Self> {
-        let options = PgConnectOptions::from_str(url).map_err(map_sqlx)?;
-        Self::connect_with(options).await
+        let config = tokio_postgres::Config::from_str(url).map_err(map_pg)?;
+        Self::connect_with(config).await
     }
 
-    /// Connects to PostgreSQL using custom [`PgConnectOptions`].
+    /// Connects to PostgreSQL with custom settings.
     ///
-    /// A connection isn't pinged as it's checked out, as Postgrex doesn't ping one for
-    /// Ash: each statement checks one out, so a ping there was a round trip for every
-    /// statement. sqlx still pings each connection as it's returned, so a broken one
-    /// doesn't go back to the pool; one that dies while idle fails the next statement.
-    pub async fn connect_with(options: PgConnectOptions) -> Result<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(20)
-            .test_before_acquire(false)
-            .connect_with(options)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(Self::new(pool))
+    /// A connection isn't checked with a round trip as it's checked out or returned, as
+    /// Postgrex doesn't check one for Ash: each statement checks one out, so a check was a
+    /// round trip per statement. A connection the server closed is noticed locally and
+    /// replaced; one that dies unnoticed while idle fails the next statement.
+    pub async fn connect_with(config: tokio_postgres::Config) -> Result<Self> {
+        let pool = pool_of(&config, POOL_SIZE)?;
+        // Connect once now, so an unreachable database fails here, as sqlx's did.
+        drop(pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?);
+        Ok(Self {
+            source: PostgresSource::Pool(pool, Some(Arc::new(config))),
+        })
     }
 
-    /// Returns a reference to the underlying [`PgPool`], if not inside an active transaction.
-    pub fn pool(&self) -> Option<&PgPool> {
+    /// Returns a reference to the underlying pool, if not inside an active transaction.
+    pub fn pool(&self) -> Option<&Pool> {
         match &self.source {
-            PostgresSource::Pool(p) => Some(p),
+            PostgresSource::Pool(pool, _) => Some(pool),
             PostgresSource::Tx(_) => None,
         }
     }
 
-    async fn execute_compiled(&self, compiled: &CompiledSql) -> Result<PgQueryResult> {
+    /// Runs `sql`, one statement or several, with no parameters: setup and maintenance
+    /// SQL such as `TRUNCATE` or `CREATE SCHEMA`. In a transaction, it runs there.
+    pub async fn execute_sql(&self, sql: &str) -> Result<()> {
+        let conn = self.conn().await.map_err(map_failure)?;
+        conn.batch_execute(sql).await.map_err(map_pg)
+    }
+
+    async fn conn(&self) -> std::result::Result<Conn<'_>, Failure> {
         match &self.source {
-            PostgresSource::Pool(pool) => {
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.execute(pool).await.map_err(map_sqlx)
-            }
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.execute(&mut **guard).await.map_err(map_sqlx)
-            }
+            PostgresSource::Pool(pool, _) => pool
+                .get()
+                .await
+                .map(Conn::Pooled)
+                .map_err(|e| Failure::Pool(e.to_string())),
+            PostgresSource::Tx(conn) => Ok(Conn::Tx(conn.lock().await)),
         }
     }
 
-    async fn execute_compiled_resource(
-        &self,
-        compiled: &CompiledSql,
-        resource: &ResourceDef,
-    ) -> Result<PgQueryResult> {
-        match &self.source {
-            PostgresSource::Pool(pool) => {
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .execute(pool)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .execute(&mut **guard)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-        }
+    /// The rows `compiled` returns, from its statement prepared once per connection.
+    async fn rows(&self, compiled: &CompiledSql) -> std::result::Result<Vec<Row>, Failure> {
+        let params = Params::of(&compiled.params);
+        let conn = self.conn().await?;
+        let statement = conn
+            .prepare_typed_cached(&compiled.sql, &params.types)
+            .await
+            .map_err(Failure::Db)?;
+        conn.query(&statement, &params.refs()).await.map_err(Failure::Db)
     }
 
-    async fn fetch_one_resource(
-        &self,
-        compiled: &CompiledSql,
-        resource: &ResourceDef,
-    ) -> Result<PgRow> {
-        match &self.source {
-            PostgresSource::Pool(pool) => {
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .fetch_one(pool)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .fetch_one(&mut **guard)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-        }
+    /// The number of rows `compiled` changed.
+    async fn affected(&self, compiled: &CompiledSql) -> std::result::Result<u64, Failure> {
+        let params = Params::of(&compiled.params);
+        let conn = self.conn().await?;
+        let statement = conn
+            .prepare_typed_cached(&compiled.sql, &params.types)
+            .await
+            .map_err(Failure::Db)?;
+        conn.execute(&statement, &params.refs()).await.map_err(Failure::Db)
     }
 
-    async fn fetch_all_resource(
-        &self,
-        compiled: &CompiledSql,
-        resource: &ResourceDef,
-    ) -> Result<Vec<PgRow>> {
-        match &self.source {
-            PostgresSource::Pool(pool) => {
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .fetch_all(pool)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .fetch_all(&mut **guard)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-        }
+    async fn execute_compiled(&self, compiled: &CompiledSql) -> Result<u64> {
+        self.affected(compiled).await.map_err(map_failure)
     }
 
-    async fn fetch_optional_resource(
-        &self,
-        compiled: &CompiledSql,
-        resource: &ResourceDef,
-    ) -> Result<Option<PgRow>> {
-        match &self.source {
-            PostgresSource::Pool(pool) => {
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query
-                    .fetch_optional(&mut **guard)
-                    .await
-                    .map_err(|e| map_sqlx_resource(e, resource))
-            }
-        }
+    async fn execute_compiled_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<u64> {
+        self.affected(compiled).await.map_err(|e| map_failure_resource(e, resource))
     }
 
-    async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<PgRow>> {
-        self.fetch_all_raw(compiled).await.map_err(map_sqlx)
+    async fn fetch_one_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Row> {
+        self.fetch_optional_resource(compiled, resource)
+            .await?
+            .ok_or_else(|| Error::DataLayer("no rows returned by a query that expected to return at least one row".into()))
+    }
+
+    async fn fetch_all_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Vec<Row>> {
+        self.rows(compiled).await.map_err(|e| map_failure_resource(e, resource))
+    }
+
+    async fn fetch_optional_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Option<Row>> {
+        Ok(self.fetch_all_resource(compiled, resource).await?.into_iter().next())
+    }
+
+    async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<Row>> {
+        self.rows(compiled).await.map_err(map_failure)
     }
 
     /// [`fetch_all`](Self::fetch_all), keeping the database's error for the caller to read.
-    async fn fetch_all_raw(&self, compiled: &CompiledSql) -> std::result::Result<Vec<PgRow>, sqlx::Error> {
-        match &self.source {
-            PostgresSource::Pool(pool) => {
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(pool).await
-            }
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(&mut **guard).await
-            }
-        }
+    async fn fetch_all_raw(&self, compiled: &CompiledSql) -> std::result::Result<Vec<Row>, Failure> {
+        self.rows(compiled).await
     }
 
-    async fn execute_raw(&self, sql: &str) -> Result<PgQueryResult> {
-        match &self.source {
-            PostgresSource::Pool(pool) => sqlx::query(sql).execute(pool).await.map_err(map_sqlx),
-            PostgresSource::Tx(conn) => {
-                let mut guard = conn.lock().await;
-                sqlx::query(sql)
-                    .execute(&mut **guard)
-                    .await
-                    .map_err(map_sqlx)
-            }
-        }
+    /// Runs one statement with no parameters, returning the rows it changed.
+    async fn execute_raw(&self, sql: &str) -> Result<u64> {
+        let conn = self.conn().await.map_err(map_failure)?;
+        conn.execute(sql, &[]).await.map_err(map_pg)
     }
 
     /// Installs table and index DDL for the given Ash resources.
@@ -322,11 +370,9 @@ impl Postgres {
                 let changed = self
                     .execute_raw(&ash_sql::install::record_new_statement(table, name, up))
                     .await?
-                    .rows_affected()
                     + self
                         .execute_raw(&ash_sql::install::record_changed_statement(table, name, up))
-                        .await?
-                        .rows_affected();
+                        .await?;
                 if changed > 0
                     && let Err(err) = self.execute_raw(up).await
                 {
@@ -348,43 +394,41 @@ impl Postgres {
         migrate(pool, migrations_dir).await
     }
 
-    /// Create each Postgres schema if needed, migrate the same history into it, then restore
-    /// the caller's `search_path`. Schema names must match `[A-Za-z_][A-Za-z0-9_]*`.
+    /// Create each Postgres schema if needed and migrate the same history into it, each
+    /// through a connection whose `search_path` starts with that schema. Schema names
+    /// must match `[A-Za-z_][A-Za-z0-9_]*`.
     pub async fn migrate_schemas(
         &self,
         schemas: &[&str],
         migrations_dir: impl AsRef<Path>,
     ) -> Result<()> {
-        let pool = self
-            .pool()
-            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
-        let previous: String = sqlx::query_scalar("SHOW search_path")
-            .fetch_one(pool)
-            .await
-            .map_err(map_sqlx)?;
+        let PostgresSource::Pool(pool, config) = &self.source else {
+            return Err(Error::DataLayer("Migration requires a connection pool".into()));
+        };
+        let config = config.as_ref().ok_or_else(|| {
+            Error::DataLayer("Migrating schemas needs the pool's connection settings: connect with Postgres::connect".into())
+        })?;
         let dir = migrations_dir.as_ref();
         for name in schemas {
             validate_schema_name(name)?;
             let quoted = quote_schema_name(name);
-            sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {quoted}"))
-                .execute(pool)
+            let conn = pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?;
+            conn.batch_execute(&format!("CREATE SCHEMA IF NOT EXISTS {quoted}"))
                 .await
-                .map_err(map_sqlx)?;
+                .map_err(map_pg)?;
+            drop(conn);
             // `public` keeps database-wide extension types such as `citext` visible.
-            let search_path = format!("{name},public");
-            let opts = (*pool.connect_options())
-                .clone()
-                .options([("search_path", search_path.as_str())]);
-            let tenant_pool = PgPoolOptions::new()
-                .max_connections(1)
-                .connect_with(opts)
-                .await
-                .map_err(map_sqlx)?;
+            let mut tenant_config = (**config).clone();
+            let options = match config.get_options() {
+                Some(options) => format!("{options} -c search_path={name},public"),
+                None => format!("-c search_path={name},public"),
+            };
+            tenant_config.options(&options);
+            let tenant_pool = pool_of(&tenant_config, 1)?;
             let migrated = migrate(&tenant_pool, dir).await;
-            tenant_pool.close().await;
+            tenant_pool.close();
             migrated?;
         }
-        set_search_path(pool, &previous).await?;
         Ok(())
     }
 
@@ -536,8 +580,8 @@ impl DataLayer for Postgres {
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_delete(resource, id)?;
-        let result = self.execute_compiled(&compiled).await?;
-        if result.rows_affected() == 0 {
+        let affected = self.execute_compiled(&compiled).await?;
+        if affected == 0 {
             return Err(Error::NotFound);
         }
         Ok(())
@@ -579,7 +623,7 @@ impl DataLayer for Postgres {
         // Each row's key, by its place in `keys`, so a key given twice gets its rows twice.
         let mut per_key = vec![Vec::new(); keys.len()];
         for row in &rows {
-            let ord: i64 = row.try_get("__ash_ord").map_err(map_sqlx)?;
+            let ord: i64 = row.try_get("__ash_ord").map_err(map_pg)?;
             if let Some(rows) = usize::try_from(ord - 1).ok().and_then(|i| per_key.get_mut(i)) {
                 rows.push(read_row(row, resource, query, &query.calculations, &query.aggregates)?);
             }
@@ -595,7 +639,7 @@ impl DataLayer for Postgres {
             .first()
             .ok_or_else(|| Error::DataLayer("COUNT returned no row".into()))?
             .try_get(0)
-            .map_err(map_sqlx)?;
+            .map_err(map_pg)?;
         Ok(count as usize)
     }
 
@@ -618,7 +662,7 @@ impl DataLayer for Postgres {
         let rows = match self.fetch_all_raw(&compiled).await {
             Ok(rows) => rows,
             Err(err) => {
-                return Err(raised_error(&err, resource, &update.conditions).unwrap_or_else(|| map_sqlx_resource(err, resource)));
+                return Err(raised_error(&err, resource, &update.conditions).unwrap_or_else(|| map_failure_resource(err, resource)));
             }
         };
         rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
@@ -641,7 +685,7 @@ impl DataLayer for Postgres {
         let compiled = compiler.compile_atomic_destroy(resource, query, conditions)?;
         let rows = match self.fetch_all_raw(&compiled).await {
             Ok(rows) => rows,
-            Err(err) => return Err(raised_error(&err, resource, conditions).unwrap_or_else(|| map_sqlx_resource(err, resource))),
+            Err(err) => return Err(raised_error(&err, resource, conditions).unwrap_or_else(|| map_failure_resource(err, resource))),
         };
         rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
     }
@@ -771,57 +815,45 @@ impl TransactionSupport for Postgres {
         T: Send,
     {
         match &self.source {
-            PostgresSource::Pool(pool) => {
-                let conn = pool.acquire().await.map_err(map_sqlx)?;
+            PostgresSource::Pool(pool, _) => {
+                let conn = pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?;
+                conn.batch_execute("BEGIN").await.map_err(map_pg)?;
                 let conn = Arc::new(Mutex::new(conn));
-                {
-                    let mut guard = conn.lock().await;
-                    sqlx::query("BEGIN")
-                        .execute(&mut **guard)
-                        .await
-                        .map_err(map_sqlx)?;
-                }
                 let tx_pg = Postgres {
                     source: PostgresSource::Tx(Arc::clone(&conn)),
                 };
                 match f(&tx_pg).await {
                     Ok(val) => {
-                        let mut guard = conn.lock().await;
-                        sqlx::query("COMMIT")
-                            .execute(&mut **guard)
-                            .await
-                            .map_err(map_sqlx)?;
+                        conn.lock().await.batch_execute("COMMIT").await.map_err(map_pg)?;
                         Ok(val)
                     }
                     Err(err) => {
-                        let mut guard = conn.lock().await;
-                        let _ = sqlx::query("ROLLBACK").execute(&mut **guard).await;
+                        let _ = conn.lock().await.batch_execute("ROLLBACK").await;
                         Err(err)
                     }
                 }
             }
             PostgresSource::Tx(conn) => {
                 let sp_name = format!("sp_{}", Uuid::new_v4().simple());
-                {
-                    let mut guard = conn.lock().await;
-                    sqlx::query(&format!("SAVEPOINT {sp_name}"))
-                        .execute(&mut **guard)
-                        .await
-                        .map_err(map_sqlx)?;
-                }
+                conn.lock()
+                    .await
+                    .batch_execute(&format!("SAVEPOINT {sp_name}"))
+                    .await
+                    .map_err(map_pg)?;
                 match f(self).await {
                     Ok(val) => {
-                        let mut guard = conn.lock().await;
-                        sqlx::query(&format!("RELEASE SAVEPOINT {sp_name}"))
-                            .execute(&mut **guard)
+                        conn.lock()
                             .await
-                            .map_err(map_sqlx)?;
+                            .batch_execute(&format!("RELEASE SAVEPOINT {sp_name}"))
+                            .await
+                            .map_err(map_pg)?;
                         Ok(val)
                     }
                     Err(err) => {
-                        let mut guard = conn.lock().await;
-                        let _ = sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
-                            .execute(&mut **guard)
+                        let _ = conn
+                            .lock()
+                            .await
+                            .batch_execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
                             .await;
                         Err(err)
                     }
@@ -831,8 +863,24 @@ impl TransactionSupport for Postgres {
     }
 }
 
+/// A pool of up to `size` connections made with `config`. A connection is reused without
+/// a round trip to check it (`RecyclingMethod::Fast`), as Postgrex reuses one.
+fn pool_of(config: &tokio_postgres::Config, size: usize) -> Result<Pool> {
+    let manager = Manager::from_config(
+        config.clone(),
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    Pool::builder(manager)
+        .max_size(size)
+        .build()
+        .map_err(|e| Error::DataLayer(e.to_string()))
+}
+
 /// Runs declarative migrations against a PostgreSQL connection pool.
-pub async fn migrate(pool: &PgPool, migrations_dir: impl AsRef<Path>) -> Result<Vec<String>> {
+pub async fn migrate(pool: &Pool, migrations_dir: impl AsRef<Path>) -> Result<Vec<String>> {
     let migrator = Migrator::new(PostgresDialect, migrations_dir);
     let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
     migrator.run(&executor).await
@@ -859,74 +907,62 @@ fn quote_schema_name(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-async fn set_search_path(pool: &PgPool, path: &str) -> Result<()> {
-    let sql = format!("SET search_path TO {path}");
-    let mut held = Vec::new();
-    while let Some(conn) = pool.try_acquire() {
-        held.push(conn);
-        if held.len() >= 64 {
-            break;
-        }
-    }
-    if held.is_empty() {
-        sqlx::query(&sql).execute(pool).await.map_err(map_sqlx)?;
-    } else {
-        for mut conn in held {
-            sqlx::query(&sql)
-                .execute(&mut *conn)
-                .await
-                .map_err(map_sqlx)?;
-        }
-    }
-    Ok(())
-}
-
 /// `pg_advisory_xact_lock` key each migration step takes inside its own transaction, so
 /// migrators on other hosts apply or roll back one version at a time. The lock ends with
 /// the transaction, so it cannot outlive or be lost during the work it protects.
 pub const MIGRATION_LOCK_KEY: i64 = 0x6173_685f_6d69_6772;
 
-async fn begin_locked(pool: &PgPool) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
-    let mut tx = pool.begin().await.map_err(map_sqlx)?;
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(MIGRATION_LOCK_KEY)
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx)?;
-    Ok(tx)
-}
+/// Text, as each value in a migration's bookkeeping is.
+const TEXT: Type = Type::TEXT;
 
 struct PgMigrationExecutor {
-    pool: PgPool,
+    pool: Pool,
     create_table_sql: &'static str,
 }
 
 impl PgMigrationExecutor {
-    fn new(pool: PgPool, create_table_sql: &'static str) -> Self {
+    fn new(pool: Pool, create_table_sql: &'static str) -> Self {
         Self {
             pool,
             create_table_sql,
         }
     }
 
+    async fn conn(&self) -> Result<Object> {
+        self.pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))
+    }
+
     async fn init(&self) -> Result<()> {
         // Concurrent `CREATE TABLE IF NOT EXISTS` calls can still collide, so take the lock.
-        let mut tx = begin_locked(&self.pool).await?;
-        sqlx::query(self.create_table_sql)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx)?;
-        tx.commit().await.map_err(map_sqlx)
+        let mut conn = self.conn().await?;
+        let tx = locked(&mut conn).await?;
+        tx.batch_execute(self.create_table_sql).await.map_err(map_pg)?;
+        tx.commit().await.map_err(map_pg)
     }
 }
 
+/// A transaction holding the migration lock.
+async fn locked(conn: &mut Object) -> Result<deadpool_postgres::Transaction<'_>> {
+    let tx = conn.transaction().await.map_err(map_pg)?;
+    tx.execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
+        .await
+        .map_err(map_pg)?;
+    Ok(tx)
+}
+
+/// Whether `sql`, with `version` for its one parameter, returns a row.
+async fn any_row(tx: &deadpool_postgres::Transaction<'_>, sql: &str, version: &str) -> Result<bool> {
+    let statement = tx.prepare_typed(sql, &[TEXT]).await.map_err(map_pg)?;
+    Ok(!tx.query(&statement, &[&version]).await.map_err(map_pg)?.is_empty())
+}
+
+const RECORD_MIGRATION: &str =
+    "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)";
+const FORGET_MIGRATION: &str = "DELETE FROM _ash_schema_migrations WHERE version = $1";
+
 impl MigrationExecutor for PgMigrationExecutor {
     async fn execute_script(&self, sql: &str) -> Result<()> {
-        sqlx::raw_sql(sql)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(())
+        self.conn().await?.batch_execute(sql).await.map_err(map_pg)
     }
 
     async fn ensure_tracking_table(&self) -> Result<()> {
@@ -934,186 +970,63 @@ impl MigrationExecutor for PgMigrationExecutor {
     }
 
     async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
-        let mut tx = begin_locked(&self.pool).await?;
-        let applied = sqlx::query("SELECT 1 FROM _ash_schema_migrations WHERE version = $1")
-            .bind(version)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(map_sqlx)?
-            .is_some();
-        if applied {
+        let mut conn = self.conn().await?;
+        let tx = locked(&mut conn).await?;
+        if any_row(&tx, "SELECT 1 FROM _ash_schema_migrations WHERE version = $1", version).await? {
             return Ok(false);
         }
-        sqlx::raw_sql(sql)
-            .execute(&mut *tx)
+        tx.batch_execute(sql).await.map_err(map_pg)?;
+        let record = tx.prepare_typed(RECORD_MIGRATION, &[TEXT, TEXT, TEXT]).await.map_err(map_pg)?;
+        tx.execute(&record, &[&version, &name, &ash_core::utc_now_iso8601()])
             .await
-            .map_err(map_sqlx)?;
-        sqlx::query(
-            "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)",
-        )
-        .bind(version)
-        .bind(name)
-        .bind(ash_core::utc_now_iso8601())
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx)?;
-        tx.commit().await.map_err(map_sqlx)?;
+            .map_err(map_pg)?;
+        tx.commit().await.map_err(map_pg)?;
         Ok(true)
     }
 
     async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
-        let mut tx = begin_locked(&self.pool).await?;
-        let latest =
-            sqlx::query("SELECT 1 WHERE (SELECT MAX(version) FROM _ash_schema_migrations) = $1")
-                .bind(version)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(map_sqlx)?
-            .is_some();
-        if !latest {
+        let mut conn = self.conn().await?;
+        let tx = locked(&mut conn).await?;
+        let latest = "SELECT 1 WHERE (SELECT MAX(version) FROM _ash_schema_migrations) = $1";
+        if !any_row(&tx, latest, version).await? {
             return Ok(false);
         }
-        sqlx::raw_sql(sql)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx)?;
-        sqlx::query("DELETE FROM _ash_schema_migrations WHERE version = $1")
-            .bind(version)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx)?;
-        tx.commit().await.map_err(map_sqlx)?;
+        tx.batch_execute(sql).await.map_err(map_pg)?;
+        let forget = tx.prepare_typed(FORGET_MIGRATION, &[TEXT]).await.map_err(map_pg)?;
+        tx.execute(&forget, &[&version]).await.map_err(map_pg)?;
+        tx.commit().await.map_err(map_pg)?;
         Ok(true)
     }
 
     async fn applied_versions(&self) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT version FROM _ash_schema_migrations ORDER BY version ASC")
-            .fetch_all(&self.pool)
+        let rows = self
+            .conn()
+            .await?
+            .query("SELECT version FROM _ash_schema_migrations ORDER BY version ASC", &[])
             .await
-            .map_err(map_sqlx)?;
-        let mut versions = Vec::new();
-        for r in rows {
-            let v: String = r.try_get("version").map_err(map_sqlx)?;
-            versions.push(v);
-        }
-        Ok(versions)
+            .map_err(map_pg)?;
+        rows.iter().map(|row| row.try_get("version").map_err(map_pg)).collect()
     }
 
     async fn record_migration(&self, version: &str, name: &str) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)",
-        )
-        .bind(version)
-        .bind(name)
-        .bind(ash_core::utc_now_iso8601())
-        .execute(&self.pool)
-        .await
-        .map_err(map_sqlx)?;
+        let conn = self.conn().await?;
+        let record = conn.prepare_typed(RECORD_MIGRATION, &[TEXT, TEXT, TEXT]).await.map_err(map_pg)?;
+        conn.execute(&record, &[&version, &name, &ash_core::utc_now_iso8601()])
+            .await
+            .map_err(map_pg)?;
         Ok(())
     }
 
     async fn remove_migration(&self, version: &str) -> Result<()> {
-        sqlx::query("DELETE FROM _ash_schema_migrations WHERE version = $1")
-            .bind(version)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
+        let conn = self.conn().await?;
+        let forget = conn.prepare_typed(FORGET_MIGRATION, &[TEXT]).await.map_err(map_pg)?;
+        conn.execute(&forget, &[&version]).await.map_err(map_pg)?;
         Ok(())
     }
 }
 
-fn bind_compiled<'q>(
-    mut query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
-    params: &'q [SqlParam],
-) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
-    for p in params {
-        if p.is_list
-            && let Value::Array(items) = &p.value
-        {
-            // If the array is empty or contains UUIDs, integers, strings, etc.
-            if items.iter().all(|v| matches!(v, Value::Uuid(_))) {
-                let uuids: Vec<Uuid> = items
-                    .iter()
-                    .filter_map(|v| match v {
-                        Value::Uuid(u) => Some(*u),
-                        _ => None,
-                    })
-                    .collect();
-                query = query.bind(uuids);
-                continue;
-            } else if items.iter().all(|v| matches!(v, Value::Int(_))) {
-                let ints: Vec<i64> = items
-                    .iter()
-                    .filter_map(|v| match v {
-                        Value::Int(i) => Some(*i),
-                        _ => None,
-                    })
-                    .collect();
-                query = query.bind(ints);
-                continue;
-            } else if items.iter().all(|v| matches!(v, Value::String(_))) {
-                let strings: Vec<String> = items
-                    .iter()
-                    .filter_map(|v| match v {
-                        Value::String(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                query = query.bind(strings);
-                continue;
-            } else {
-                // Fallback to string array
-                let strings: Vec<String> = items
-                    .iter()
-                    .map(|v| match v {
-                        Value::String(s) => s.clone(),
-                        Value::Uuid(u) => u.to_string(),
-                        Value::Int(i) => i.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        _ => v.to_string(),
-                    })
-                    .collect();
-                query = query.bind(strings);
-                continue;
-            }
-        }
-        match &p.value {
-            // Bind NULL with the column's type: a cached statement keeps the parameter
-            // types of its first run, so a text NULL would break a later uuid value.
-            Value::Null => {
-                query = match p.ty {
-                    Some(AttrType::Uuid) => query.bind(None::<Uuid>),
-                    Some(AttrType::Integer) => query.bind(None::<i64>),
-                    Some(AttrType::Boolean) => query.bind(None::<bool>),
-                    Some(AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }) => query.bind(None::<serde_json::Value>),
-                    _ => query.bind(None::<String>),
-                };
-            }
-            Value::Bool(b) => {
-                query = query.bind(*b);
-            }
-            Value::Int(i) => {
-                query = query.bind(*i);
-            }
-            Value::Float(n) => {
-                query = query.bind(*n);
-            }
-            Value::Uuid(u) => {
-                query = query.bind(*u);
-            }
-            Value::String(s) => {
-                query = query.bind(s.clone());
-            }
-            Value::Map(_) | Value::Array(_) => {
-                query = query.bind(p.value.to_plain_json());
-            }
-        }
-    }
-    query
-}
-
 fn row_to_fields(
-    row: &PgRow,
+    row: &Row,
     resource: &ResourceDef,
     calculations: &[String],
     aggregates: &[String],
@@ -1123,7 +1036,7 @@ fn row_to_fields(
 
 /// A row `query` read: the attributes it selected, and the calculations and aggregates.
 fn read_row(
-    row: &PgRow,
+    row: &Row,
     resource: &ResourceDef,
     query: &CompiledQuery,
     calculations: &[String],
@@ -1159,25 +1072,23 @@ fn read_row(
     Ok(map)
 }
 
-/// Reads a column sqlx has no Rust type for, decoding Postgres's binary or text form.
-fn raw_column(
-    row: &PgRow,
-    col_name: &str,
-    binary: fn(&[u8]) -> Option<String>,
-    text: fn(&str) -> Option<String>,
-) -> Value {
-    use sqlx::ValueRef;
-    let Ok(raw) = row.try_get_raw(col_name) else {
-        return Value::Null;
-    };
-    if raw.is_null() {
-        return Value::Null;
+/// A column's bytes as Postgres sent them (in binary), whatever its type: for the types
+/// with no Rust type to decode into.
+struct Raw(Vec<u8>);
+
+impl<'a> FromSql<'a> for Raw {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Raw(raw.to_vec()))
     }
-    let decoded = match raw.format() {
-        sqlx::postgres::PgValueFormat::Binary => raw.as_bytes().ok().and_then(binary),
-        sqlx::postgres::PgValueFormat::Text => raw.as_str().ok().and_then(text),
-    };
-    decoded.map(Value::String).unwrap_or(Value::Null)
+
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+}
+
+/// A column as `T`, if it's there, not NULL, and of a type `T` decodes.
+fn get<'a, T: FromSql<'a>>(row: &'a Row, col_name: &str) -> Option<T> {
+    row.try_get::<_, Option<T>>(col_name).ok().flatten()
 }
 
 /// Binary `inet`: family, prefix bits, cidr flag, address length, then the address bytes.
@@ -1207,128 +1118,72 @@ fn decode_vector(bytes: &[u8]) -> Option<String> {
     Some(ash_core::format_vector(&values))
 }
 
-fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) -> Value {
+fn extract_column_value(row: &Row, col_name: &str, ty: &ash_core::AttrType) -> Value {
+    let text = |row: &Row| get::<String>(row, col_name);
     match ty {
-        ash_core::AttrType::Inet => raw_column(row, col_name, decode_inet, |text| {
-            ash_core::Inet::parse(text).ok().map(|inet| inet.as_str().to_string())
-        }),
-        ash_core::AttrType::Vector { .. } => raw_column(row, col_name, decode_vector, |text| {
-            ash_core::parse_vector(text)
-                .ok()
-                .map(|values| ash_core::format_vector(&values))
-        }),
-        ash_core::AttrType::Uuid => {
-            if let Ok(Some(u)) = row.try_get::<Option<Uuid>, _>(col_name) {
-                Value::Uuid(u)
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Uuid::parse_str(&s).map(Value::Uuid).unwrap_or(Value::Null)
-            } else {
-                Value::Null
-            }
+        ash_core::AttrType::Inet => get::<Raw>(row, col_name)
+            .and_then(|raw| decode_inet(&raw.0))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Vector { .. } => get::<Raw>(row, col_name)
+            .and_then(|raw| decode_vector(&raw.0))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Uuid => get::<Uuid>(row, col_name)
+            .map(Value::Uuid)
+            .or_else(|| text(row).and_then(|s| Uuid::parse_str(&s).ok()).map(Value::Uuid))
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::String | ash_core::AttrType::CiString | ash_core::AttrType::Atom { .. } => {
+            text(row).map(Value::String).unwrap_or(Value::Null)
         }
-        ash_core::AttrType::String
-        | ash_core::AttrType::CiString
-        | ash_core::AttrType::Atom { .. } => {
-            if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(s)
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::UtcDatetime { precision } => {
-            if let Ok(Some(dt)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(col_name)
-            {
-                Value::String(precision.format(dt))
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(precision.normalize(&s).unwrap_or(s))
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Decimal => {
-            if let Ok(Some(n)) = row.try_get::<Option<rust_decimal::Decimal>, _>(col_name) {
-                Value::String(n.to_string())
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(s)
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Binary => {
-            if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(col_name) {
-                Value::String(ash_core::Binary::from_bytes(bytes).encode())
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Date => {
-            if let Ok(Some(date)) = row.try_get::<Option<chrono::NaiveDate>, _>(col_name) {
-                Value::String(date.format("%Y-%m-%d").to_string())
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(s)
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Float => {
-            if let Ok(Some(n)) = row.try_get::<Option<f64>, _>(col_name) {
-                Value::String(n.to_string())
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(s)
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Integer => {
-            if let Ok(Some(i)) = row.try_get::<Option<i64>, _>(col_name) {
-                Value::Int(i)
-            } else if let Ok(Some(i)) = row.try_get::<Option<i32>, _>(col_name) {
-                Value::Int(i as i64)
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Boolean => {
-            if let Ok(Some(b)) = row.try_get::<Option<bool>, _>(col_name) {
-                Value::Bool(b)
-            } else {
-                Value::Null
-            }
-        }
+        ash_core::AttrType::UtcDatetime { precision } => get::<chrono::DateTime<chrono::Utc>>(row, col_name)
+            .or_else(|| get::<chrono::NaiveDateTime>(row, col_name).map(|dt| dt.and_utc()))
+            .map(|dt| Value::String(precision.format(dt)))
+            .or_else(|| text(row).map(|s| Value::String(precision.normalize(&s).unwrap_or(s))))
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Decimal => get::<rust_decimal::Decimal>(row, col_name)
+            .map(|n| n.to_string())
+            .or_else(|| text(row))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Binary => get::<Vec<u8>>(row, col_name)
+            .map(|bytes| Value::String(ash_core::Binary::from_bytes(bytes).encode()))
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Date => get::<chrono::NaiveDate>(row, col_name)
+            .map(|date| date.format("%Y-%m-%d").to_string())
+            .or_else(|| text(row))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Float => get::<f64>(row, col_name)
+            .or_else(|| get::<f32>(row, col_name).map(f64::from))
+            .map(|n| n.to_string())
+            .or_else(|| text(row))
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Integer => get::<i64>(row, col_name)
+            .or_else(|| get::<i32>(row, col_name).map(i64::from))
+            .or_else(|| get::<i16>(row, col_name).map(i64::from))
+            .map(Value::Int)
+            .unwrap_or(Value::Null),
+        ash_core::AttrType::Boolean => get::<bool>(row, col_name).map(Value::Bool).unwrap_or(Value::Null),
         ash_core::AttrType::Map
+        | ash_core::AttrType::Array { .. }
         | ash_core::AttrType::Embedded(_)
         | ash_core::AttrType::TypedMap { .. }
-        | ash_core::AttrType::Union { .. } => {
-            if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
-                Value::from_plain_json(json_val)
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                serde_json::from_str::<serde_json::Value>(&s)
-                    .map(Value::from_plain_json)
-                    .unwrap_or(Value::Null)
-            } else {
-                Value::Null
-            }
-        }
-        ash_core::AttrType::Array { .. } => {
-            if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
-                Value::from_plain_json(json_val)
-            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                serde_json::from_str::<serde_json::Value>(&s)
-                    .map(Value::from_plain_json)
-                    .unwrap_or(Value::Null)
-            } else {
-                Value::Null
-            }
-        }
+        | ash_core::AttrType::Union { .. } => get::<serde_json::Value>(row, col_name)
+            .or_else(|| text(row).and_then(|s| serde_json::from_str(&s).ok()))
+            .map(Value::from_plain_json)
+            .unwrap_or(Value::Null),
     }
 }
 
 /// The error an atomic statement's condition raised through `ash_raise_error`, if that's
 /// what `err` is: `ash_error: {"condition": n, "row": {...}}`.
-fn raised_error(err: &sqlx::Error, resource: &ResourceDef, conditions: &[ash_core::AtomicCondition]) -> Option<Error> {
-    let sqlx::Error::Database(db_err) = err else {
+fn raised_error(err: &Failure, resource: &ResourceDef, conditions: &[ash_core::AtomicCondition]) -> Option<Error> {
+    let Failure::Db(err) = err else {
         return None;
     };
+    let db_err = err.as_db_error()?;
     let payload: serde_json::Value = serde_json::from_str(db_err.message().strip_prefix("ash_error: ")?).ok()?;
     let condition = conditions.get(payload.get("condition")?.as_u64()? as usize)?;
     let mut row = FieldMap::new();
@@ -1357,58 +1212,62 @@ fn json_value(ty: Option<ash_core::AttrType>, json: &serde_json::Value) -> Value
     }
 }
 
-fn map_sqlx(err: sqlx::Error) -> Error {
-    Error::DataLayer(err.to_string())
+/// A driver error, with the database's own message when it has one.
+fn map_pg(err: tokio_postgres::Error) -> Error {
+    match err.as_db_error() {
+        Some(db_err) => Error::DataLayer(db_err.to_string()),
+        None => Error::DataLayer(err.to_string()),
+    }
 }
 
-fn map_sqlx_resource(err: sqlx::Error, resource: &ResourceDef) -> Error {
-    if let sqlx::Error::Database(ref db_err) = err
-        && let Some(code) = db_err.code()
-    {
-        match code.as_ref() {
-            "23505" => {
-                let constraint = db_err.constraint().unwrap_or_default();
-                for id in resource.identities {
-                    let expected_idx = format!("idx_{}_{}", resource.table_name(), id.name);
-                    if constraint == expected_idx || constraint.contains(id.name) {
-                        return Error::IdentityConflict {
-                            identity: id.name,
-                            fields: id.keys.iter().map(|s| s.to_string()).collect(),
-                            message: id
-                                .message
-                                .unwrap_or("Unique constraint violation")
-                                .to_string(),
-                        };
-                    }
-                }
-                let id_name = resource
-                    .identities
-                    .first()
-                    .map(|i| i.name)
-                    .unwrap_or("unique_constraint");
-                return Error::IdentityConflict {
-                    identity: id_name,
-                    fields: Vec::new(),
-                    message: "unique constraint violation".to_string(),
-                };
-            }
-            "23503" => {
-                return Error::Invalid(
-                    "foreign key violation: referenced record does not exist".to_string(),
-                );
-            }
-            "23514" => {
-                return Error::Validation {
-                    field: "validation".to_string(),
-                    message: db_err.message().to_string(),
-                    vars: Vec::new(),
-                };
-            }
-            "40P01" => {
-                return Error::DataLayer("deadlock detected".to_string());
-            }
-            _ => {}
-        }
+fn map_failure(failure: Failure) -> Error {
+    match failure {
+        Failure::Pool(message) => Error::DataLayer(message),
+        Failure::Db(err) => map_pg(err),
     }
-    Error::DataLayer(err.to_string())
+}
+
+fn map_failure_resource(failure: Failure, resource: &ResourceDef) -> Error {
+    let Failure::Db(err) = failure else {
+        return map_failure(failure);
+    };
+    let Some(db_err) = err.as_db_error() else {
+        return map_pg(err);
+    };
+    match db_err.code().code() {
+        "23505" => {
+            let constraint = db_err.constraint().unwrap_or_default();
+            for id in resource.identities {
+                let expected_idx = format!("idx_{}_{}", resource.table_name(), id.name);
+                if constraint == expected_idx || constraint.contains(id.name) {
+                    return Error::IdentityConflict {
+                        identity: id.name,
+                        fields: id.keys.iter().map(|s| s.to_string()).collect(),
+                        message: id
+                            .message
+                            .unwrap_or("Unique constraint violation")
+                            .to_string(),
+                    };
+                }
+            }
+            let id_name = resource
+                .identities
+                .first()
+                .map(|i| i.name)
+                .unwrap_or("unique_constraint");
+            Error::IdentityConflict {
+                identity: id_name,
+                fields: Vec::new(),
+                message: "unique constraint violation".to_string(),
+            }
+        }
+        "23503" => Error::Invalid("foreign key violation: referenced record does not exist".to_string()),
+        "23514" => Error::Validation {
+            field: "validation".to_string(),
+            message: db_err.message().to_string(),
+            vars: Vec::new(),
+        },
+        "40P01" => Error::DataLayer("deadlock detected".to_string()),
+        _ => map_pg(err),
+    }
 }

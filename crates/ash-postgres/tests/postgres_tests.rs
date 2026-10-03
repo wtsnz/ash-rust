@@ -258,11 +258,8 @@ async fn test_postgres_declarative_migration_runner() {
     assert!(applied_again.is_empty());
 
     // Cleanup
-    let _ = sqlx::query("DELETE FROM _ash_schema_migrations WHERE version = $1")
-        .bind(&version)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}")).execute(pool).await;
+    let _ = pg.execute_sql(&format!("DELETE FROM _ash_schema_migrations WHERE version = '{version}'")).await;
+    let _ = pg.execute_sql(&format!("DROP TABLE IF EXISTS {table}")).await;
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
@@ -355,11 +352,9 @@ async fn test_postgres_self_referential_aggregate() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
-    let pool = pg.pool().unwrap();
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
-    let _ = sqlx::query("CREATE TABLE nodes (id UUID PRIMARY KEY, name TEXT NOT NULL, parent_id UUID REFERENCES nodes(id));")
-        .execute(pool)
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS nodes;").await;
+    pg.execute_sql("CREATE TABLE nodes (id UUID PRIMARY KEY, name TEXT NOT NULL, parent_id UUID REFERENCES nodes(id));")
         .await
         .unwrap();
 
@@ -388,7 +383,7 @@ async fn test_postgres_self_referential_aggregate() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("children_count"), Some(&Value::Int(3)));
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS nodes;").await;
 }
 
 static DOCUMENT_ATTRS: &[AttributeDef] = &[
@@ -426,10 +421,8 @@ async fn test_postgres_optimistic_locking_stale_record() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
-    let pool = pg.pool().unwrap();
-    let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
-    let _ = sqlx::query("CREATE TABLE documents (id UUID PRIMARY KEY, title TEXT NOT NULL, version BIGINT NOT NULL);")
-        .execute(pool)
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
+    pg.execute_sql("CREATE TABLE documents (id UUID PRIMARY KEY, title TEXT NOT NULL, version BIGINT NOT NULL);")
         .await
         .unwrap();
 
@@ -459,7 +452,7 @@ async fn test_postgres_optimistic_locking_stale_record() {
     let err_missing = pg.update(&DOCUMENT_DEF, None, Value::from(missing_id), missing_fields).await.unwrap_err();
     assert!(matches!(err_missing, ash_core::Error::NotFound));
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
 }
 
 #[tokio::test]
@@ -622,10 +615,7 @@ async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions()
     };
     // The app's tables live outside `public`, as they do with one schema per deployment.
     let schema = format!("app_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
-        .execute(admin.pool().unwrap())
-        .await
-        .unwrap();
+    admin.execute_sql(&format!("CREATE SCHEMA \"{schema}\"")).await.unwrap();
     let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
     let separator = if base.contains('?') { '&' } else { '?' };
     let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
@@ -1194,10 +1184,7 @@ async fn test_postgres_installs_tables_that_refer_to_each_other() {
         return;
     };
     let schema = format!("cycle_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
-        .execute(admin.pool().unwrap())
-        .await
-        .unwrap();
+    admin.execute_sql(&format!("CREATE SCHEMA \"{schema}\"")).await.unwrap();
     let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
     let separator = if base.contains('?') { '&' } else { '?' };
     let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
