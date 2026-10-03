@@ -11,6 +11,7 @@ ash-core = { path = "../ash-core" }
 ash-sql = { path = "../ash-sql" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 deadpool-postgres = "0.14"
+futures-util = { version = "0.3", default-features = false }
 rust_decimal = { version = "1", default-features = false, features = ["std", "db-tokio-postgres"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -360,31 +360,26 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 offset: None,
                 ..scoped
             });
-            // The count is read alongside the page, as Ash reads a page's count. In a
-            // transaction, its one connection takes them in turn.
-            let counting = async {
-                match &count_scope {
-                    Some(scoped) => count_records(&ash, resource, scoped).await.map(Some),
-                    None => Ok(None),
+            // The count is read alongside the page, as Ash reads a page's count: the data
+            // layer reads them at once (Postgres down one connection, pipelined).
+            let error = |e: ash_core::Error| async_graphql::Error::new(e.to_string());
+            let count_query =
+                count_scope.map(|scoped| CompiledQuery { sort: Vec::new(), limit: None, offset: None, ..scoped });
+            let (mut records, count) = match &count_query {
+                Some(count_query) => {
+                    let (records, count) = ash.data.run_query_with_count(resource, &query, count_query).await.map_err(error)?;
+                    (records, Some(count))
                 }
+                None => (ash.data.run_query(resource, &query).await.map_err(error)?, None),
             };
-            let reading = async {
-                let mut records = ash
-                    .data
-                    .run_query(resource, &query)
-                    .await
-                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-                if backward {
-                    records.reverse();
-                }
-                after_read(action, &arguments, &mut records)?;
-                for record in &mut records {
-                    redact_record(resource, ash.actor.as_ref(), record);
-                }
-                preload(&ash, resource, selected(ctx.ctx.field(), Some("results")), &mut records).await?;
-                Ok::<_, async_graphql::Error>(records)
-            };
-            let (count, records) = futures_util::future::try_join(counting, reading).await?;
+            if backward {
+                records.reverse();
+            }
+            after_read(action, &arguments, &mut records)?;
+            for record in &mut records {
+                redact_record(resource, ash.actor.as_ref(), record);
+            }
+            preload(&ash, resource, selected(ctx.ctx.field(), Some("results")), &mut records).await?;
             let keyset = |record: Option<&FieldMap>| record.map(|r| keyset_of(r, &sort, pk_name));
             Ok(Some(FieldValue::owned_any(KeysetPage {
                 start_keyset: keyset(records.first()),

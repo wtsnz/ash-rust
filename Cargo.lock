@@ -268,6 +268,7 @@ dependencies = [
  "chrono",
  "criterion",
  "deadpool-postgres",
+ "futures-util",
  "rust_decimal",
  "serde",
  "serde_json",
