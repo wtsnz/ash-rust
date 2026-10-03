@@ -182,7 +182,7 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
 
 /// A client's input to `action` on `resource`, as the action takes it: each accepted
 /// attribute and argument, cast to its type. Anything else is refused, as Ash refuses
-/// input an action doesn't take.
+/// input an action doesn't take, and so is input lacking an argument that may not be nil.
 pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, json: &Json) -> Result<FieldMap> {
     let mut input = FieldMap::new();
     let Json::Object(given) = json else {
@@ -200,6 +200,10 @@ pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, j
                 action: action.name,
             })?;
         input.insert(name.clone(), value_input(ty, value)?);
+    }
+    // An argument that may not be nil must be given, as Ash requires it.
+    if let Some(arg) = action.arguments.iter().find(|arg| !arg.allow_nil && input.get(arg.name).is_none_or(Value::is_null)) {
+        return Err(Error::Missing { field: arg.name.to_string() });
     }
     Ok(input)
 }
