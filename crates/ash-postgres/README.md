@@ -1,9 +1,10 @@
 # ash-postgres
 
-PostgreSQL data layer for `ash-rust` powered by `sqlx`.
+PostgreSQL data layer for `ash-rust`, on `tokio-postgres` with a `deadpool-postgres` pool.
 
 ## Features
 
+- **No Round Trips Spent Checking Connections**: A statement checks a connection out of the pool and returns it without pinging the server, as Postgrex doesn't for Ash, so a statement is one round trip. Each statement is prepared once per connection and cached, its parameters declared with their types.
 - **Single-Roundtrip Writes**: Leverages PostgreSQL's native `RETURNING *` clause on `INSERT` and `UPDATE` statements to return populated records in a single database roundtrip.
 - **SQLSTATE Error Mapping**: Translates native PostgreSQL error codes into Ash domain errors:
   - `23505` $\to$ `Error::IdentityConflict`

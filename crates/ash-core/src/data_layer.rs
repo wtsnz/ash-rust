@@ -189,6 +189,19 @@ pub trait DataLayer: Send + Sync {
         async move { Ok(self.run_query(resource, query).await?.len()) }
     }
 
+    /// A page of records, `page`, and how many records `count` matches, read at once, as
+    /// Ash reads a page's count alongside it. By default they're read concurrently; a data
+    /// layer that can send both down one connection together (Postgres pipelines them)
+    /// should.
+    fn run_query_with_count(
+        &self,
+        resource: &ResourceDef,
+        page: &CompiledQuery,
+        count: &CompiledQuery,
+    ) -> impl Future<Output = Result<(Vec<FieldMap>, usize)>> + Send {
+        futures_util::future::try_join(self.run_query(resource, page), self.count(resource, count))
+    }
+
     fn upsert(
         &self,
         resource: &ResourceDef,

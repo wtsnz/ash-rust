@@ -101,10 +101,8 @@ async fn dump_sqlite(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error
 }
 
 async fn dump_postgres(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error::Error>> {
-    let db = ash_postgres::Postgres::connect(url).await?;
-    let pool = db
-        .pool()
-        .ok_or("Cannot acquire PostgreSQL connection pool")?;
+    // The catalog is read directly, as `codegen` reads it.
+    let pool = &sqlx::PgPool::connect(url).await?;
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name != '_ash_schema_migrations' ORDER BY table_name ASC",
