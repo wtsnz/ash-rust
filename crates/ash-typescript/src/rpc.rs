@@ -124,7 +124,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         }
         let selection = match &request["fields"] {
             Json::Null => Selection::default(),
-            fields => Selection::parse(rpc.resource, fields)?,
+            fields => Selection::parse(rpc.resource, ctx.actor.as_ref(), fields)?,
         };
         let (resource, action) = (rpc.resource, rpc.action);
         match action.kind {
@@ -157,7 +157,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let resource = rpc.resource;
         let mut filters = Vec::new();
         if !request["filter"].is_null() {
-            filters.push(filter_input(resource, &snake_keys(&request["filter"]))?);
+            let filter = filter_input(resource, &snake_keys(&request["filter"]))?;
+            filters.push(ash_core::guard_input_filter(resource, ctx.actor.as_ref(), filter)?);
         }
         let get = !rpc.get_by.is_empty();
         if get {
@@ -168,7 +169,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             }
         }
         let sort = match request["sort"].as_str() {
-            Some(text) => sort_input(resource, &snake_sort(text))?,
+            Some(text) => ash_core::guard_input_sort(resource, ctx.actor.as_ref(), sort_input(resource, &snake_sort(text))?)?,
             None => Vec::new(),
         };
         let arguments = action_input(resource, rpc.action, &snake_keys(&request["input"]))?;
@@ -216,21 +217,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let backward = before.is_some() && after.is_none();
         let mut keyset_filter = scoped.filter.clone();
         if let Some(cursor) = after.or(before).and_then(KeysetCursor::decode) {
-            let tuples: Vec<(String, Value, bool)> = sort
-                .iter()
-                .map(|s| {
-                    let value = cursor.values.iter().find(|(k, _)| k == &s.field).map(|(_, v)| v.clone());
-                    let value = value.unwrap_or_else(|| if s.field == pk { Value::Uuid(cursor.id) } else { Value::Null });
-                    (s.field.clone(), value, s.descending)
-                })
-                .collect();
-            if let Some(keyset) = ash_core::build_keyset_filter(&tuples, !backward) {
+            let values = ash_core::keyset_values(resource, &cursor, &sort);
+            if let Some(keyset) = ash_core::build_keyset_filter(resource, &sort, &values, !backward) {
                 keyset_filter = Some(Filter::and(keyset_filter.into_iter().chain([keyset])));
             }
         }
         let read_sort: Vec<Sort> = sort
             .iter()
-            .map(|s| Sort { field: s.field.clone(), descending: s.descending != backward })
+            .map(|s| Sort { descending: s.descending != backward, ..s.clone() })
             .collect();
         let query = CompiledQuery { filter: keyset_filter, sort: read_sort, limit: Some(limit + 1), offset: None, ..scoped };
         let mut rows = read_rows(ctx, resource, &selection.keeping(sort.iter().map(|s| s.field.as_str())), query).await?;
@@ -284,7 +278,9 @@ struct Nested {
 }
 
 impl Selection {
-    fn parse(resource: &'static ResourceDef, fields: &Json) -> Result<Self, Failure> {
+    /// The selection `fields` makes of `resource`, its relationships' filters and sorts as
+    /// `actor` may run them.
+    fn parse(resource: &'static ResourceDef, actor: Option<&ash_core::Actor>, fields: &Json) -> Result<Self, Failure> {
         let items = fields.as_array().ok_or_else(|| Error::Invalid("fields must be a list".into()))?;
         let mut selection = Selection::default();
         for item in items {
@@ -309,13 +305,13 @@ impl Selection {
                             Json::Object(options) => (options.get("fields").cloned().unwrap_or(Json::Array(Vec::new())), nested.clone()),
                             _ => return Err(Failure::requires_field_selection(name)),
                         };
-                        let inner = Selection::parse(dest, &fields)?;
+                        let inner = Selection::parse(dest, actor, &fields)?;
                         let filter = match &options["filter"] {
                             Json::Null => None,
-                            filter => Some(filter_input(dest, &snake_keys(filter))?),
+                            filter => Some(ash_core::guard_input_filter(dest, actor, filter_input(dest, &snake_keys(filter))?)?),
                         };
                         let sort = match options["sort"].as_str() {
-                            Some(text) => sort_input(dest, &snake_sort(text))?,
+                            Some(text) => ash_core::guard_input_sort(dest, actor, sort_input(dest, &snake_sort(text))?)?,
                             None => Vec::new(),
                         };
                         let query = RelatedQuery {
@@ -340,8 +336,9 @@ impl Selection {
         self.fields.iter().filter(|name| matches(name)).cloned().collect()
     }
 
-    /// The attributes a read must select: those chosen, the primary key, and each chosen
-    /// relationship's key on this side.
+    /// The attributes a read must select: those chosen, the primary key, those the field
+    /// policies check (redacting the record reads them), and each chosen relationship's
+    /// key on this side.
     fn attributes(&self, resource: &ResourceDef) -> Vec<String> {
         let mut attrs: Vec<String> = self.of(|name| resource.attribute(name).is_some());
         let mut keep = |name: &str| {
@@ -351,6 +348,9 @@ impl Selection {
         };
         if let Some(pk) = resource.primary_key() {
             keep(pk.name);
+        }
+        for field in ash_core::field_policy_fields(resource) {
+            keep(field);
         }
         for (rel_name, _) in &self.relationships {
             if let Some(rel) = resource.relationship(rel_name)

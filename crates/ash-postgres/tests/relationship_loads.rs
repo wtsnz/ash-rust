@@ -156,7 +156,7 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         let shelves = shelves.clone();
         async move { load_related_query(&ctx, &SHELF, relationship, &shelves, &query).await.unwrap() }
     };
-    let by = |field: &str, descending: bool| vec![Sort { field: field.into(), descending }];
+    let by = |field: &str, descending: bool| vec![Sort { field: field.into(), descending, guard: None }];
 
     // The longest two of each shelf's books; the same shelf twice gets them twice.
     let books = load("books", RelatedQuery { sort: by("pages", true), limit: Some(2), ..RelatedQuery::default() }).await;
@@ -231,7 +231,7 @@ async fn per_key_twice<D: DataLayer>(data: &D) {
         insert(data, &BOOK, &fields).await;
     }
     let query = CompiledQuery {
-        sort: vec![Sort { field: "title".into(), descending: false }],
+        sort: vec![Sort { field: "title".into(), descending: false, guard: None }],
         limit: Some(1),
         ..CompiledQuery::default()
     };

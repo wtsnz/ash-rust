@@ -9,6 +9,10 @@ use crate::value::FieldMap;
 pub struct Sort {
     pub field: String,
     pub descending: bool,
+    /// Where the field may be read, when a field policy hides it from the actor: it sorts
+    /// as null elsewhere, as Ash sorts a client's sort on it (`if <policy> then field else
+    /// nil`). See [`guard_input_sort`](crate::guard_input_sort).
+    pub guard: Option<Filter>,
 }
 
 #[derive(Clone, Debug, Default)]

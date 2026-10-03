@@ -20,6 +20,8 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 13 | A list attribute or argument (`AttrType::Array`) has no element type, so GraphQL serves a list of maps as `[String]`, where AshGraphql serves `{:array, :map}` as `[Json]`. | — | open |
 | 14 | No `/rpc/validate`, AshTypescript's validation of an action's input without running it. | The generated client doesn't call it (validation functions aren't generated). | open |
 | 15 | ash-typescript doesn't generate AshTypescript's typed RPC client (a function per `rpc_action`). | The benchmark drives both desks through the client the Elixir desk generates, `client/ash_rpc.ts`. | open |
+| 16 | Field policies didn't guard a client's filter or sort: a viewer filtering tickets by `requester_email` found them by the hidden value. Ash reads a client's reference to a hidden field as null where it's hidden (`if <policy> then field else nil`). | — | fixed in this branch, for GraphQL and RPC alike |
+| 17 | Nulls sorted first ascending in memory and SQLite, last in Postgres, and keyset pages couldn't walk past a null. Ash sorts them last ascending and first descending everywhere, and its keysets step over them. | — | fixed in this branch |
 
 ## What the twin found in Ash's packages
 

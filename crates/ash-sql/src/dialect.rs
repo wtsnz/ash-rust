@@ -184,6 +184,12 @@ pub trait SqlDialect: Send + Sync + 'static {
 
     /// Render a text filter on `op`. `pattern` is the placeholder bound to [`Self::text_pattern`].
     fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
+
+    /// Where an `ORDER BY` term puts nulls, as Ash orders them: last ascending, first
+    /// descending. Postgres does so already; a dialect that doesn't says so here.
+    fn null_order(&self, _descending: bool) -> &'static str {
+        ""
+    }
 }
 
 /// How a read loads aggregates over a relationship, as ash_sql's `:lateral` and
@@ -204,6 +210,11 @@ pub enum AggregateStrategy {
 pub struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
+    // SQLite sorts nulls first ascending.
+    fn null_order(&self, descending: bool) -> &'static str {
+        if descending { " NULLS FIRST" } else { " NULLS LAST" }
+    }
+
     fn name(&self) -> &'static str {
         "sqlite"
     }
