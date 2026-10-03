@@ -199,9 +199,23 @@ impl DynamicChangeset {
         action: &'static ActionDef,
         existing: FieldMap,
     ) -> Result<Self> {
+        Self::for_destroy_with(ctx, resource, action, existing, FieldMap::new())
+    }
+
+    /// [`for_destroy`](Self::for_destroy) with `input`: the action's arguments, and the
+    /// attributes it accepts, which a soft destroy writes.
+    pub fn for_destroy_with<D>(
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        action: &'static ActionDef,
+        existing: FieldMap,
+        input: FieldMap,
+    ) -> Result<Self> {
         expect_kind(action, ActionKind::Destroy)?;
-        let fields = existing.clone();
-        let mut changeset = Self::new(resource, action, fields, FieldMap::new(), Some(existing));
+        let (accepted, arguments) = crate::pipeline::split_input(action, input)?;
+        let mut fields = existing.clone();
+        fields.extend(accepted);
+        let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
         changeset.apply_changes(ctx)?;
         changeset.run_validations(ctx)?;
         Ok(changeset.with_context(ctx))

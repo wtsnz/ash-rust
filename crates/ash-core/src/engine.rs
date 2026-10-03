@@ -9,8 +9,8 @@ mod relations;
 
 pub use generic::run;
 pub use lifecycle::{
-    create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_existing, get, insert, manual_create,
-    update, update_dynamic, update_dynamic_expecting, update_existing, update_existing_dynamic,
+    create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via, destroy_existing, get, insert, manual_create,
+    update, update_dynamic, update_dynamic_expecting, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub(crate) use lifecycle::{destroy_dynamic_with, destroy_existing_returning};
 pub(crate) use managed::{Cascade, cascade_destroy_related, persist_destroy};
