@@ -140,7 +140,6 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
                 actor: ctx.actor.as_ref(),
                 tenant: ctx.tenant(),
                 sets: FieldMap::new(),
-                written: Vec::new(),
                 arguments: &arguments,
                 expected_version: expected_version.map(|version| (id, version)),
                 collect_hooks: true,
@@ -224,7 +223,6 @@ pub async fn update_dynamic_expecting<D: DataLayer>(
     expect_kind(action, ActionKind::Update)?;
     if ctx.data.can_update_atomically(resource) {
         let (accepted, arguments) = crate::pipeline::split_input(action, input.clone())?;
-        let written = accepted.keys().cloned().collect();
         let planned = super::atomic::plan_update(
             resource,
             action,
@@ -232,7 +230,6 @@ pub async fn update_dynamic_expecting<D: DataLayer>(
                 actor: ctx.actor.as_ref(),
                 tenant: ctx.tenant(),
                 sets: accepted,
-                written,
                 arguments: &arguments,
                 expected_version: expected_version.map(|version| (id, version)),
                 collect_hooks: true,

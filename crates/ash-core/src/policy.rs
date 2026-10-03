@@ -360,23 +360,6 @@ pub fn write_filter(resource: &ResourceDef, action: &ActionDef, actor: Option<&A
     })
 }
 
-pub fn authorize_field_writes(
-    resource: &ResourceDef,
-    actor: Option<&Actor>,
-    record: Option<&FieldMap>,
-    input_fields: &FieldMap,
-) -> Result<()> {
-    for fp in resource.field_policies {
-        if input_fields.contains_key(fp.field) {
-            let is_allowed = eval_policy_effects(fp.checks, actor, record)?;
-            if !is_allowed {
-                return Err(Error::Forbidden);
-            }
-        }
-    }
-    Ok(())
-}
-
 pub fn check_to_filter(check: &Check, actor: Option<&Actor>) -> Result<Filter> {
     match check {
         Check::Always => Ok(Filter::True),
