@@ -3,7 +3,7 @@ defmodule Supportdesk.Desk.Tag do
   use Ash.Resource,
     domain: Supportdesk.Desk,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshGraphql.Resource]
+    extensions: [AshGraphql.Resource, AshTypescript.Resource]
 
   postgres do
     table "tags"
@@ -34,6 +34,10 @@ defmodule Supportdesk.Desk.Tag do
     create :seed do
       accept [:id, :org, :name]
     end
+  end
+
+  typescript do
+    type_name "Tag"
   end
 
   graphql do
