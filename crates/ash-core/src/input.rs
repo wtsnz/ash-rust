@@ -174,6 +174,7 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
             Ok(Sort {
                 field: field.to_string(),
                 descending,
+                guard: None,
             })
         })
         .collect()

@@ -3,7 +3,7 @@
 
 use ash_core::{
     ActionDef, CompiledQuery, DataLayer, FieldMap, Filter, KeysetCursor, ResourceDef, Sort, Value,
-    build_keyset_filter, keyset_sort, scope_read,
+    build_keyset_filter, keyset_sort, keyset_values, scope_read,
 };
 use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::*;
@@ -145,11 +145,11 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             let ash = request_context::<D>(&ctx)?;
             let arguments = read_arguments(&ctx, action)?;
             let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
-                Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?),
+                Some(filter) => Some(parse_resource_filter(resource, ash.actor.as_ref(), filter.as_value())?),
                 None => None,
             };
             let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
-                Some(sort) => parse_resource_sort(resource, sort.as_value())?,
+                Some(sort) => parse_resource_sort(resource, ash.actor.as_ref(), sort.as_value())?,
                 None => Vec::new(),
             };
             let number = |name: &str| {
@@ -199,21 +199,8 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             let mut page_filter = scoped.filter.clone();
             let cursor = if backward { before.as_deref() } else { after.as_deref() };
             if let Some(cursor) = cursor.and_then(KeysetCursor::decode) {
-                let tuples: Vec<(String, Value, bool)> = sort
-                    .iter()
-                    .map(|s| {
-                        let value = cursor
-                            .values
-                            .iter()
-                            .find(|(k, _)| k == &s.field)
-                            .map(|(_, v)| v.clone())
-                            .unwrap_or_else(|| {
-                                if s.field == pk_name { Value::Uuid(cursor.id) } else { Value::Null }
-                            });
-                        (s.field.clone(), value, s.descending)
-                    })
-                    .collect();
-                if let Some(keyset_filter) = build_keyset_filter(&tuples, !backward) {
+                let values = keyset_values(resource, &cursor, &sort);
+                if let Some(keyset_filter) = build_keyset_filter(resource, &sort, &values, !backward) {
                     page_filter = Some(match page_filter {
                         Some(f) => Filter::And(vec![f, keyset_filter]),
                         None => keyset_filter,

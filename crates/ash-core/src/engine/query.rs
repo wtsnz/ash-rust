@@ -13,7 +13,7 @@ use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
-use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort};
+use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort, keyset_values};
 use super::read::scope_read;
 use super::relations::attach_relationships;
 
@@ -108,6 +108,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self.sort.push(Sort {
             field: field.as_field().to_string(),
             descending,
+            guard: None,
         });
         self
     }
@@ -360,21 +361,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 }
             }
 
-            let mut sort_tuples = Vec::new();
-            for s in &self.sort {
-                let mut val = cursor
-                    .values
-                    .iter()
-                    .find(|(k, _)| k == &s.field)
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or(Value::Null);
-                if val.is_null() && s.field == pk {
-                    val = Value::Uuid(cursor.id);
-                }
-                sort_tuples.push((s.field.clone(), val, s.descending));
-            }
-
-            if let Some(keyset_filter) = build_keyset_filter(&sort_tuples, !is_before) {
+            let values = keyset_values(&R::DEF, &cursor, &self.sort);
+            if let Some(keyset_filter) = build_keyset_filter(&R::DEF, &self.sort, &values, !is_before) {
                 self = self.filter(keyset_filter);
             }
         }

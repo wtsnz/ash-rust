@@ -437,16 +437,24 @@ impl DataLayer for Memory {
             let by_sort: Vec<&str> = query.sort.iter().map(|sort| sort.field.as_str()).collect();
             compute(&tables, tenant, resource, query, &mut rows, &by_sort, &mut computed)?;
             if !query.sort.is_empty() {
+                // A guarded sort reads its field as null where the guard doesn't hold.
+                let sort_value = |row: &FieldMap, sort: &ash_core::Sort| match &sort.guard {
+                    Some(guard) if !row_matches_filter(&tables, tenant, resource, guard, row) => Value::Null,
+                    _ => row.get(&sort.field).cloned().unwrap_or(Value::Null),
+                };
                 rows.sort_by(|left, right| {
                     let mut order = Ordering::Equal;
                     for sort in &query.sort {
-                        let left_value = left.get(&sort.field).cloned().unwrap_or(Value::Null);
-                        let right_value = right.get(&sort.field).cloned().unwrap_or(Value::Null);
-                        order = compare_typed(
-                            field_type(resource, &sort.field),
-                            &left_value,
-                            &right_value,
-                        );
+                        let left_value = sort_value(left, sort);
+                        let right_value = sort_value(right, sort);
+                        // Nulls sort last ascending and first descending, as Ash and
+                        // Postgres order them.
+                        order = match (left_value.is_null(), right_value.is_null()) {
+                            (true, true) => Ordering::Equal,
+                            (true, false) => Ordering::Greater,
+                            (false, true) => Ordering::Less,
+                            (false, false) => compare_typed(field_type(resource, &sort.field), &left_value, &right_value),
+                        };
                         if sort.descending {
                             order = order.reverse();
                         }

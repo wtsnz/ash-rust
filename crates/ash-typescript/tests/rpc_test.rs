@@ -49,6 +49,8 @@ mod post {
                 draft: bool [default: false];
                 score: i64 [default: 0];
                 writer_id: Option<Uuid>;
+                /// Only editors read it.
+                editor_note: Option<String>;
             }
 
             relationships {
@@ -83,12 +85,18 @@ mod post {
                 }
             }
 
+            field_policies {
+                field editor_note {
+                    authorize_if actor_attribute_equals(role, "editor");
+                }
+            }
+
             actions {
                 read read { primary; }
 
                 create publish {
                     primary;
-                    accept [id, title, draft, score, writer_id];
+                    accept [id, title, draft, score, writer_id, editor_note];
                     argument notes: Option<Vec<FieldMap>>;
                     validate string_length(title, min: 3);
                     change manage_relationship(notes, create);
@@ -153,19 +161,25 @@ struct Blog {
 }
 
 impl Blog {
-    /// Three published posts by one writer, scored 1 to 3, the second with two notes, and
-    /// a draft only an editor reads.
+    /// Three published posts by one writer, scored 1 to 3, the first two with an editor's
+    /// note, the second with two notes, and a draft only an editor reads.
     async fn new() -> Self {
         let ctx = Context::new(Memory::new());
         let writer = Writer::create(&ctx).id(Uuid::new_v4()).name("Ada").await.unwrap();
         let editor = ctx.with_actor(editor());
         let mut published = Vec::new();
         for score in 1..=3 {
+            let note = match score {
+                1 => Some("cut"),
+                2 => Some("keep"),
+                _ => None,
+            };
             let post = Post::publish(&editor)
                 .id(Uuid::new_v4())
                 .title(format!("Post {score}"))
                 .score(score)
                 .writer_id(Some(writer.id))
+                .editor_note(note.map(str::to_string))
                 .await
                 .unwrap();
             published.push(post.id);
@@ -331,3 +345,32 @@ async fn bad_requests_fail_as_ash_typescript_fails_them() {
         assert_eq!(error_types(&answer), [expected], "{request}");
     }
 }
+
+#[tokio::test]
+async fn filters_and_sorts_read_hidden_fields_as_null() {
+    let blog = Blog::new().await;
+    let filtered = json!({ "action": "list_posts", "fields": ["title"], "filter": { "editorNote": { "eq": "cut" } } });
+    // A reader can't find posts by a note it can't read, nor order them by it.
+    assert_eq!(blog.run(reader(), filtered.clone()).await["data"], json!([]));
+    assert_eq!(blog.run(editor(), filtered).await["data"], json!([{ "title": "Post 1" }]));
+
+    let sorted = json!({ "action": "list_posts", "fields": ["title", "editorNote"], "sort": "-editorNote,score", "filter": { "draft": { "eq": false } } });
+    assert_eq!(
+        blog.run(reader(), sorted.clone()).await["data"],
+        json!([
+            { "title": "Post 1", "editorNote": null },
+            { "title": "Post 2", "editorNote": null },
+            { "title": "Post 3", "editorNote": null },
+        ])
+    );
+    // Nulls first descending.
+    assert_eq!(
+        blog.run(editor(), sorted).await["data"],
+        json!([
+            { "title": "Post 3", "editorNote": null },
+            { "title": "Post 2", "editorNote": "keep" },
+            { "title": "Post 1", "editorNote": "cut" },
+        ])
+    );
+}
+

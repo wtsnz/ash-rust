@@ -68,10 +68,12 @@ fn test_sqlite_query_compilation() {
             Sort {
                 field: "priority".into(),
                 descending: false,
+                guard: None,
             },
             Sort {
                 field: "subject".into(),
                 descending: true,
+                guard: None,
             },
         ],
         limit: Some(10),
@@ -340,10 +342,12 @@ fn test_keyset_cursor_compilation() {
         Sort {
             field: "priority".to_string(),
             descending: true,
+            guard: None,
         },
         Sort {
             field: "subject".to_string(),
             descending: false,
+            guard: None,
         },
     ];
 
@@ -604,6 +608,7 @@ fn test_count_compilation() {
         sort: vec![Sort {
             field: "priority".into(),
             descending: true,
+            guard: None,
         }],
         ..CompiledQuery::default()
     };

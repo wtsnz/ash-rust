@@ -849,15 +849,27 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// What `sort` orders by: its field, or null where its guard doesn't hold.
+    fn sort_operand(&mut self, resource: &ResourceDef, sort: &Sort) -> Result<String> {
+        let col = self.compile_operand(resource, &sort.field)?;
+        match &sort.guard {
+            None => Ok(col),
+            Some(guard) => {
+                let condition = self.compile_filter(resource, guard)?;
+                Ok(format!("CASE WHEN {condition} THEN {col} END"))
+            }
+        }
+    }
+
     pub fn compile_sort(&mut self, resource: &ResourceDef, sorts: &[Sort]) -> Result<String> {
         if sorts.is_empty() {
             return Ok(String::new());
         }
         let mut clauses = Vec::new();
         for sort in sorts {
-            let col = self.compile_operand(resource, &sort.field)?;
+            let col = self.sort_operand(resource, sort)?;
             let dir = if sort.descending { "DESC" } else { "ASC" };
-            clauses.push(format!("{col} {dir}"));
+            clauses.push(format!("{col} {dir}{}", self.dialect.null_order(sort.descending)));
         }
         Ok(format!(" ORDER BY {}", clauses.join(", ")))
     }
@@ -879,14 +891,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         for (i, sort) in sorts.iter().enumerate() {
             let mut prefix_match = Vec::new();
             for prev in sorts.iter().take(i) {
-                let prev_col = self.compile_operand(resource, &prev.field)?;
+                let prev_col = self.sort_operand(resource, prev)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
 
-            let col = self.compile_operand(resource, &sort.field)?;
+            let col = self.sort_operand(resource, sort)?;
             let op = if sort.descending { "<" } else { ">" };
             if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &sort.field) {
                 let p = self.bind_field(resource, &sort.field, val.clone());
@@ -903,7 +915,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if !sorts.iter().any(|s| s.field == pk) {
             let mut prefix_match = Vec::new();
             for prev in sorts {
-                let prev_col = self.compile_operand(resource, &prev.field)?;
+                let prev_col = self.sort_operand(resource, prev)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
@@ -1052,6 +1064,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 all_sorts.push(Sort {
                     field: pk.to_string(),
                     descending: false,
+                    guard: None,
                 });
             }
         }
@@ -1121,14 +1134,15 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if cursor.is_some() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             if !sorts.iter().any(|s| s.field == pk) {
-                sorts.push(Sort { field: pk.to_string(), descending: false });
+                sorts.push(Sort { field: pk.to_string(), descending: false, guard: None });
             }
         }
         let mut order = Vec::new();
         for (i, sort) in sorts.iter().enumerate() {
             let alias = ident(self.dialect, &format!("__ash_sort_{i}"))?;
-            items.push(format!("{} AS {alias}", self.compile_operand(resource, &sort.field)?));
-            order.push((alias, if sort.descending { "DESC" } else { "ASC" }));
+            items.push(format!("{} AS {alias}", self.sort_operand(resource, sort)?));
+            let dir = if sort.descending { "DESC" } else { "ASC" };
+            order.push((alias, format!("{dir}{}", self.dialect.null_order(sort.descending))));
         }
 
         let mut inner = format!("SELECT {} FROM {}", items.join(", "), self.table(resource)?);

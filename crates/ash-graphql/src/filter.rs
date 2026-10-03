@@ -113,13 +113,21 @@ fn field_type(resource: &ResourceDef, field: &str) -> Option<AttrType> {
         .or_else(|| resource.calculation(field).map(|calc| calc.ty))
 }
 
-/// Parses a `<Resource>FilterInput` into a [`Filter`]. It reads the value as given
-/// (an argument's, or one a selection holds), so a relationship selected with a filter
-/// can be loaded ahead of its field.
+/// Parses a `<Resource>FilterInput` into a [`Filter`] as `actor` may run it: fields its
+/// field policies hide read as null where they're hidden, as Ash reads a client's filter
+/// ([`ash_core::guard_input_filter`]). It reads the value as given (an argument's, or one
+/// a selection holds), so a relationship selected with a filter can be loaded ahead of
+/// its field.
 pub fn parse_resource_filter(
     resource: &'static ResourceDef,
+    actor: Option<&ash_core::Actor>,
     value: &GqlValue,
 ) -> Result<Filter, async_graphql::Error> {
+    let filter = parse_filter(resource, value)?;
+    ash_core::guard_input_filter(resource, actor, filter).map_err(|e| async_graphql::Error::new(e.to_string()))
+}
+
+fn parse_filter(resource: &'static ResourceDef, value: &GqlValue) -> Result<Filter, async_graphql::Error> {
     let obj = object(value)?;
     let mut filters = Vec::new();
 
@@ -145,7 +153,7 @@ pub fn parse_resource_filter(
             && !matches!(nested, GqlValue::Null)
         {
             let destination = (rel.destination)();
-            let inner = parse_resource_filter(destination, nested)?;
+            let inner = parse_filter(destination, nested)?;
             if inner != Filter::True {
                 filters.push(Filter::related(rel.name, inner));
             }
@@ -158,7 +166,7 @@ pub fn parse_resource_filter(
             && !matches!(value, GqlValue::Null)
         {
             for item in list(value) {
-                parts.push(parse_resource_filter(resource, item)?);
+                parts.push(parse_filter(resource, item)?);
             }
         }
         Ok(parts)

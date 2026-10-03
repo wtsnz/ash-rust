@@ -2554,6 +2554,7 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
                 sort: vec![ash_core::Sort {
                     field: "id".into(),
                     descending: false,
+                    guard: None,
                 }],
                 ..Default::default()
             };
@@ -3022,6 +3023,7 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
     let by_weight = Sort {
         field: "weight".into(),
         descending: false,
+        guard: None,
     };
     assert_eq!(ids(&db, None, vec![by_weight]).await, ["a1", "a2", "a3"]);
     assert_eq!(
