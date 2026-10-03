@@ -528,7 +528,7 @@ impl DataLayer for Postgres {
 
         // Postgres supports RETURNING * for single-roundtrip writes!
         let row = self.fetch_one_resource(&compiled, resource).await?;
-        row_to_fields(&row, resource, &[], &[])
+        row_to_fields(&row, resource)
     }
 
     async fn update(
@@ -545,7 +545,7 @@ impl DataLayer for Postgres {
         // Postgres RETURNING * executes update and returns the new row
         let opt_row = self.fetch_optional_resource(&compiled, resource).await?;
         match opt_row {
-            Some(row) => row_to_fields(&row, resource, &[], &[]),
+            Some(row) => row_to_fields(&row, resource),
             None => {
                 // If 0 rows were updated, check optimistic lock or not found
                 if resource.optimistic_lock_attribute().is_some() {
@@ -598,9 +598,8 @@ impl DataLayer for Postgres {
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_select(resource, query)?;
         let rows = self.fetch_all(&compiled).await?;
-        rows.iter()
-            .map(|row| read_row(row, resource, query, &query.calculations, &query.aggregates))
-            .collect()
+        let plan = RowPlan::new(&rows, resource, query);
+        rows.iter().map(|row| plan.read(row)).collect()
     }
 
     fn can_run_query_per_key(&self, _resource: &ResourceDef, _by: &ash_core::PerKey<'_>) -> bool {
@@ -622,10 +621,11 @@ impl DataLayer for Postgres {
         let rows = self.fetch_all(&compiled).await?;
         // Each row's key, by its place in `keys`, so a key given twice gets its rows twice.
         let mut per_key = vec![Vec::new(); keys.len()];
+        let plan = RowPlan::new(&rows, resource, query);
         for row in &rows {
             let ord: i64 = row.try_get("__ash_ord").map_err(map_pg)?;
             if let Some(rows) = usize::try_from(ord - 1).ok().and_then(|i| per_key.get_mut(i)) {
-                rows.push(read_row(row, resource, query, &query.calculations, &query.aggregates)?);
+                rows.push(plan.read(row)?);
             }
         }
         Ok(per_key)
@@ -665,7 +665,7 @@ impl DataLayer for Postgres {
                 return Err(raised_error(&err, resource, &update.conditions).unwrap_or_else(|| map_failure_resource(err, resource)));
             }
         };
-        rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
+        rows_to_fields(&rows, resource)
     }
 
     fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
@@ -687,7 +687,7 @@ impl DataLayer for Postgres {
             Ok(rows) => rows,
             Err(err) => return Err(raised_error(&err, resource, conditions).unwrap_or_else(|| map_failure_resource(err, resource))),
         };
-        rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
+        rows_to_fields(&rows, resource)
     }
 
     async fn upsert(
@@ -705,7 +705,7 @@ impl DataLayer for Postgres {
 
         // Single-roundtrip write with RETURNING *
         let row = self.fetch_one_resource(&compiled, resource).await?;
-        row_to_fields(&row, resource, &[], &[])
+        row_to_fields(&row, resource)
     }
 
     async fn bulk_create(
@@ -721,10 +721,7 @@ impl DataLayer for Postgres {
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_bulk_insert(resource, &rows)?;
         let pg_rows = self.fetch_all_resource(&compiled, resource).await?;
-        pg_rows
-            .iter()
-            .map(|r| row_to_fields(r, resource, &[], &[]))
-            .collect()
+        rows_to_fields(&pg_rows, resource)
     }
 
     /// Writes the batch in one `UPDATE … FROM (VALUES …)`, each row writing only the
@@ -772,19 +769,17 @@ impl DataLayer for Postgres {
             let compiled = QueryCompiler::new(&dialect)
                 .with_tenant(tenant)
                 .compile_bulk_update(resource, &columns, &batch_rows)?;
-            let mut stored: std::collections::HashMap<Value, FieldMap> = self
-                .fetch_all_resource(&compiled, resource)
-                .await?
-                .iter()
-                .map(|row| {
-                    let fields = row_to_fields(row, resource, &[], &[])?;
-                    let id = match fields.get(pk) {
-                        Some(id) if !id.is_null() => id.clone(),
-                        _ => return Err(Error::DataLayer(format!("{} row without its key", resource.name))),
-                    };
-                    Ok((id, fields))
-                })
-                .collect::<Result<_>>()?;
+            let mut stored: std::collections::HashMap<Value, FieldMap> =
+                rows_to_fields(&self.fetch_all_resource(&compiled, resource).await?, resource)?
+                    .into_iter()
+                    .map(|fields| {
+                        let id = match fields.get(pk) {
+                            Some(id) if !id.is_null() => id.clone(),
+                            _ => return Err(Error::DataLayer(format!("{} row without its key", resource.name))),
+                        };
+                        Ok((id, fields))
+                    })
+                    .collect::<Result<_>>()?;
             for &i in batch {
                 results[i] = Some(stored.remove(&rows[i].0).ok_or(Error::NotFound));
             }
@@ -1025,51 +1020,65 @@ impl MigrationExecutor for PgMigrationExecutor {
     }
 }
 
-fn row_to_fields(
-    row: &Row,
-    resource: &ResourceDef,
-    calculations: &[String],
-    aggregates: &[String],
-) -> Result<FieldMap> {
-    read_row(row, resource, &CompiledQuery::default(), calculations, aggregates)
+/// A record written with `RETURNING *`.
+fn row_to_fields(row: &Row, resource: &ResourceDef) -> Result<FieldMap> {
+    let query = CompiledQuery::default();
+    RowPlan::new(std::slice::from_ref(row), resource, &query).read(row)
 }
 
-/// A row `query` read: the attributes it selected, and the calculations and aggregates.
-fn read_row(
-    row: &Row,
-    resource: &ResourceDef,
-    query: &CompiledQuery,
-    calculations: &[String],
-    aggregates: &[String],
-) -> Result<FieldMap> {
-    let mut map = FieldMap::with_capacity(resource.attributes.len() + calculations.len() + aggregates.len());
+/// Records written with `RETURNING *`, the plan worked out once for them all.
+fn rows_to_fields(rows: &[Row], resource: &ResourceDef) -> Result<Vec<FieldMap>> {
+    let query = CompiledQuery::default();
+    let plan = RowPlan::new(rows, resource, &query);
+    rows.iter().map(|row| plan.read(row)).collect()
+}
 
-    for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
-        let val = extract_column_value(row, attr.name, &attr.ty);
-        map.insert(attr.name.to_string(), val);
-    }
+/// Where each field a result's rows hold sits, and its type, worked out once for the
+/// result: tokio-postgres finds a column by name by searching every column, so looking
+/// each field up by name in each row cost a search per field per row.
+struct RowPlan<'q> {
+    resource: &'q ResourceDef,
+    query: &'q CompiledQuery,
+    /// Each field read: its name, type, and column, if the result has it.
+    fields: Vec<(&'static str, AttrType, Option<usize>)>,
+}
 
-    for calc_name in calculations {
-        if let Some(calc) = resource.calculation(calc_name).filter(|calc| !calc.expr.is_custom()) {
-            let val = extract_column_value(row, calc.name, &calc.ty);
-            map.insert(calc.name.to_string(), val);
+impl<'q> RowPlan<'q> {
+    /// The plan for `rows` that `query` read: the attributes it selected, and the
+    /// calculations and aggregates it asked for.
+    fn new(rows: &[Row], resource: &'q ResourceDef, query: &'q CompiledQuery) -> Self {
+        let columns = rows.first().map(Row::columns).unwrap_or_default();
+        let column = |name: &str| columns.iter().position(|col| col.name() == name);
+        let mut fields = Vec::with_capacity(resource.attributes.len() + query.calculations.len() + query.aggregates.len());
+        for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
+            fields.push((attr.name, attr.ty, column(attr.name)));
         }
-    }
-
-    for agg_name in aggregates {
-        if let Some(agg) = resource.aggregate(agg_name) {
-            let val = extract_column_value(row, agg.name, &agg.ty);
-            map.insert(agg.name.to_string(), val);
+        for calc_name in &query.calculations {
+            if let Some(calc) = resource.calculation(calc_name).filter(|calc| !calc.expr.is_custom()) {
+                fields.push((calc.name, calc.ty, column(calc.name)));
+            }
         }
+        for agg_name in &query.aggregates {
+            if let Some(agg) = resource.aggregate(agg_name) {
+                fields.push((agg.name, agg.ty, column(agg.name)));
+            }
+        }
+        Self { resource, query, fields }
     }
 
-    // What only Rust computes, from the record as read.
-    for calc in query.custom_calculations(resource) {
-        let args = query.calculation_args.get(calc.name).cloned().unwrap_or_default();
-        ash_core::apply_named_with_args(resource, &mut map, calc.name, &args)?;
+    /// A row as the record it holds, with what only Rust computes from it.
+    fn read(&self, row: &Row) -> Result<FieldMap> {
+        let mut map = FieldMap::with_capacity(self.fields.len());
+        for (name, ty, column) in &self.fields {
+            let value = column.map_or(Value::Null, |idx| extract_column_value(row, idx, ty));
+            map.insert(name.to_string(), value);
+        }
+        for calc in self.query.custom_calculations(self.resource) {
+            let args = self.query.calculation_args.get(calc.name).cloned().unwrap_or_default();
+            ash_core::apply_named_with_args(self.resource, &mut map, calc.name, &args)?;
+        }
+        Ok(map)
     }
-
-    Ok(map)
 }
 
 /// A column's bytes as Postgres sent them (in binary), whatever its type: for the types
@@ -1086,9 +1095,9 @@ impl<'a> FromSql<'a> for Raw {
     }
 }
 
-/// A column as `T`, if it's there, not NULL, and of a type `T` decodes.
-fn get<'a, T: FromSql<'a>>(row: &'a Row, col_name: &str) -> Option<T> {
-    row.try_get::<_, Option<T>>(col_name).ok().flatten()
+/// A column as `T`, if it's not NULL and of a type `T` decodes.
+fn get<'a, T: FromSql<'a>>(row: &'a Row, idx: usize) -> Option<T> {
+    row.try_get::<_, Option<T>>(idx).ok().flatten()
 }
 
 /// Binary `inet`: family, prefix bits, cidr flag, address length, then the address bytes.
@@ -1118,59 +1127,59 @@ fn decode_vector(bytes: &[u8]) -> Option<String> {
     Some(ash_core::format_vector(&values))
 }
 
-fn extract_column_value(row: &Row, col_name: &str, ty: &ash_core::AttrType) -> Value {
-    let text = |row: &Row| get::<String>(row, col_name);
+fn extract_column_value(row: &Row, column: usize, ty: &ash_core::AttrType) -> Value {
+    let text = |row: &Row| get::<String>(row, column);
     match ty {
-        ash_core::AttrType::Inet => get::<Raw>(row, col_name)
+        ash_core::AttrType::Inet => get::<Raw>(row, column)
             .and_then(|raw| decode_inet(&raw.0))
             .map(Value::String)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Vector { .. } => get::<Raw>(row, col_name)
+        ash_core::AttrType::Vector { .. } => get::<Raw>(row, column)
             .and_then(|raw| decode_vector(&raw.0))
             .map(Value::String)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Uuid => get::<Uuid>(row, col_name)
+        ash_core::AttrType::Uuid => get::<Uuid>(row, column)
             .map(Value::Uuid)
             .or_else(|| text(row).and_then(|s| Uuid::parse_str(&s).ok()).map(Value::Uuid))
             .unwrap_or(Value::Null),
         ash_core::AttrType::String | ash_core::AttrType::CiString | ash_core::AttrType::Atom { .. } => {
             text(row).map(Value::String).unwrap_or(Value::Null)
         }
-        ash_core::AttrType::UtcDatetime { precision } => get::<chrono::DateTime<chrono::Utc>>(row, col_name)
-            .or_else(|| get::<chrono::NaiveDateTime>(row, col_name).map(|dt| dt.and_utc()))
+        ash_core::AttrType::UtcDatetime { precision } => get::<chrono::DateTime<chrono::Utc>>(row, column)
+            .or_else(|| get::<chrono::NaiveDateTime>(row, column).map(|dt| dt.and_utc()))
             .map(|dt| Value::String(precision.format(dt)))
             .or_else(|| text(row).map(|s| Value::String(precision.normalize(&s).unwrap_or(s))))
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Decimal => get::<rust_decimal::Decimal>(row, col_name)
+        ash_core::AttrType::Decimal => get::<rust_decimal::Decimal>(row, column)
             .map(|n| n.to_string())
             .or_else(|| text(row))
             .map(Value::String)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Binary => get::<Vec<u8>>(row, col_name)
+        ash_core::AttrType::Binary => get::<Vec<u8>>(row, column)
             .map(|bytes| Value::String(ash_core::Binary::from_bytes(bytes).encode()))
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Date => get::<chrono::NaiveDate>(row, col_name)
+        ash_core::AttrType::Date => get::<chrono::NaiveDate>(row, column)
             .map(|date| date.format("%Y-%m-%d").to_string())
             .or_else(|| text(row))
             .map(Value::String)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Float => get::<f64>(row, col_name)
-            .or_else(|| get::<f32>(row, col_name).map(f64::from))
+        ash_core::AttrType::Float => get::<f64>(row, column)
+            .or_else(|| get::<f32>(row, column).map(f64::from))
             .map(|n| n.to_string())
             .or_else(|| text(row))
             .map(Value::String)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Integer => get::<i64>(row, col_name)
-            .or_else(|| get::<i32>(row, col_name).map(i64::from))
-            .or_else(|| get::<i16>(row, col_name).map(i64::from))
+        ash_core::AttrType::Integer => get::<i64>(row, column)
+            .or_else(|| get::<i32>(row, column).map(i64::from))
+            .or_else(|| get::<i16>(row, column).map(i64::from))
             .map(Value::Int)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Boolean => get::<bool>(row, col_name).map(Value::Bool).unwrap_or(Value::Null),
+        ash_core::AttrType::Boolean => get::<bool>(row, column).map(Value::Bool).unwrap_or(Value::Null),
         ash_core::AttrType::Map
         | ash_core::AttrType::Array { .. }
         | ash_core::AttrType::Embedded(_)
         | ash_core::AttrType::TypedMap { .. }
-        | ash_core::AttrType::Union { .. } => get::<serde_json::Value>(row, col_name)
+        | ash_core::AttrType::Union { .. } => get::<serde_json::Value>(row, column)
             .or_else(|| text(row).and_then(|s| serde_json::from_str(&s).ok()))
             .map(Value::from_plain_json)
             .unwrap_or(Value::Null),
