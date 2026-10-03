@@ -307,8 +307,8 @@ resource! {
 ### Behavior:
 1. **Redaction on Read**:
    If an unauthorized actor queries or gets an `Employee`, unauthorized fields are redacted to `Value::Null` (`None`).
-2. **Authorization on Write**:
-   If an actor attempts to write or update a field without authorization, `Changeset` rejects the mutation with `Error::Forbidden`.
+2. **Reads only**:
+   As in Ash, field policies govern what's read, not what's written: an action's policies authorize its writes. To restrict who may set a field, put it in an action only the right actors may run, or validate it.
 3. **Safe Partial Updates**:
    Updating non-sensitive fields does not inadvertently erase redacted sensitive fields.
 
