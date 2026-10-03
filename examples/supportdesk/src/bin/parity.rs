@@ -288,8 +288,8 @@ async fn main() -> ExitCode {
         ("get, with relationships", &admin, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", "status", "requesterEmail", "weight", nested_comments, { "tags": { "fields": ["name"], "sort": "name" } }] })),
         ("get, as a viewer", &viewer, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", { "comments": ["internal"] }] })),
         ("get, missing", &agent, json!({ "action": "get_ticket", "getBy": { "id": "00000000-0000-0000-0000-000000000000" }, "fields": ["id"] })),
-        // As a viewer: AshTypescript loads relationships without the actor (see GAPS.md),
-        // so an agent's nested internal notes are hidden there.
+        // As a viewer: AshTypescript reads a relationship selected with options without the
+        // actor (see GAPS.md), so an agent's nested internal notes are hidden there.
         ("nested limit and sort", &viewer, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "limit": 2, "sort": "-insertedAt,id" } }], "sort": "-insertedAt,id", "page": { "limit": 2 } })),
         ("nested filter", &agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["internal"], "filter": { "internal": { "eq": false } } } }], "sort": "-insertedAt,id", "page": { "limit": 2, "offset": 0 } })),
         ("agents", &agent, json!({ "action": "list_agents", "fields": ["name", "openAssigned"], "sort": "name", "filter": { "role": { "eq": "agent" } } })),
