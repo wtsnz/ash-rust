@@ -100,6 +100,48 @@ fn rpc_comparable(response: &Value) -> Value {
     }
 }
 
+/// What's compared of an RPC response in full: its data but for cursors, or its errors
+/// whole, but for what can't match: an internal error's id and message (only its type and
+/// path), a resource's name (Elixir's is its module's), and Ash's "Bread Crumbs".
+fn rpc_shape(response: &Value) -> Value {
+    if response["success"] == true {
+        return json!({ "data": strip_cursors(&response["data"]) });
+    }
+    let errors: Vec<Value> = response["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|error| {
+            if error["type"] == "internal_error" {
+                return json!({ "type": "internal_error", "path": error["path"] });
+            }
+            let mut error = error.clone();
+            if let Some(map) = error.as_object_mut() {
+                map.remove("errorId");
+                if let Some(resource) = map.get_mut("vars").and_then(|vars| vars.get_mut("resource"))
+                    && let Some(name) = resource.as_str().and_then(|name| name.rsplit('.').next())
+                {
+                    *resource = json!(name);
+                }
+                if let Some(message) = map.get_mut("message")
+                    && let Some(text) = message.as_str().filter(|text| text.starts_with("Bread Crumbs:"))
+                {
+                    *message = json!(text.rsplit("\n\n\n").next().unwrap_or(text));
+                }
+            }
+            error
+        })
+        .collect();
+    json!({ "errors": errors })
+}
+
+/// A validation's answer, its errors in no order.
+fn validated(response: &Value) -> Value {
+    let mut errors: Vec<String> = response["errors"].as_array().into_iter().flatten().map(Value::to_string).collect();
+    errors.sort();
+    json!({ "success": response["success"], "errors": errors })
+}
+
 /// Keyset cursors encode the same position differently on each desk.
 fn strip_cursors(value: &Value) -> Value {
     match value {
@@ -363,6 +405,73 @@ async fn main() -> ExitCode {
             if status == 200 { json!({ "status": status, "body": body }) } else { json!({ "status": status, "error": body["error"] }) }
         };
         report.check(name, &keep(rs, &rb), &keep(es, &eb));
+    }
+
+    println!("RPC requests, errors and all:");
+    let t = open.as_str();
+    for (who, body) in [
+        (&agent, json!({ "action": "nope", "fields": ["id"] })),
+        (&agent, json!({ "action": "list_tickets" })),
+        (&agent, json!({ "action": "list_tickets", "fields": [] })),
+        (&agent, json!({ "action": "list_tickets", "fields": "id" })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"] })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": t, "nope": 1 } })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": { "eq": t } } })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": t }, "filter": { "priority": { "eq": 1 } } })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": t }, "page": { "limit": 1 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": { "limit": 2, "bogus": 1 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": 5 })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "id"] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "input": null })),
+        (&agent, json!({ "action": "view_ticket", "identity": t, "sort": "id" })),
+        (&agent, json!({ "action": "view_ticket", "fields": ["id"] })),
+        (&agent, json!({ "action": "view_ticket", "identity": { "nope": 1 }, "fields": ["id"] })),
+        (&agent, json!({ "action": "view_ticket", "identity": { "id": t }, "fields": ["id"] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": [] }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": "body" }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "assignee": { "fields": ["name"], "limit": 1 } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "subject": { "fields": ["x"], "limit": 1 } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "page": { "limit": 1 }, "limit": 1 } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "page": { "bogus": 1 } } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "commentCount": ["x"] }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "weight": { "args": {} } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": ["nope"] }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", 5] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "priority", { "scaledPriority": { "args": { "factor": 3 } } }], "sort": "id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "scaledPriority"] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["id"], "sort": ["-insertedAt", "id"], "page": { "limit": 2, "count": true } } }], "sort": "id", "page": { "limit": 2 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "assigneeId"], "sort": "++assigneeId,id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "assigneeId"], "sort": "--assigneeId,id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": { "limit": 2, "after": "garbage" } })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "x", "body": "b", "priority": 9, "requesterEmail": "a@b.c" }, "fields": ["id"] })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "body": "b", "priority": "high", "requesterEmail": "a@b.c" }, "fields": ["id"] })),
+        (&agent, json!({ "action": "create_comment", "input": { "ticketId": t, "body": "   " }, "fields": ["id"] })),
+        (&agent, json!({ "action": "route_ticket", "input": { "subject": "Hello", "body": "b", "priority": 2 } })),
+        (&agent, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "x" }, "fields": ["id"] })),
+        (&viewer, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "x" }, "fields": ["id"] })),
+        (&agent, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "  Trimmed subject  " }, "fields": ["subject"] })),
+        (&agent, json!({ "action": "destroy_ticket", "identity": "00000000-0000-0000-0000-000000000001", "fields": ["id", "weight"] })),
+    ] {
+        let r = desks[0].post("/rpc/run", who, body.clone()).await.1;
+        let e = desks[1].post("/rpc/run", who, body.clone()).await.1;
+        report.check(&short(&body), &rpc_shape(&r), &rpc_shape(&e));
+    }
+
+    println!("RPC validation:");
+    for (who, body) in [
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "x", "body": "b", "priority": 9, "requesterEmail": "a@b.c" } })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "body": "b", "priority": 2, "requesterEmail": "a@b.c" } })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "priority": "high" } })),
+        (&agent, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "x" } })),
+        (&agent, json!({ "action": "edit_ticket", "identity": "00000000-0000-0000-0000-000000000000", "input": { "subject": "Hello" } })),
+        (&viewer, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "Good subject" } })),
+        (&agent, json!({ "action": "route_ticket", "input": { "subject": "x" } })),
+        (&agent, json!({ "action": "list_tickets" })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"] })),
+    ] {
+        let r = desks[0].post("/rpc/validate", who, body.clone()).await.1;
+        let e = desks[1].post("/rpc/validate", who, body.clone()).await.1;
+        report.check(&short(&body), &validated(&r), &validated(&e));
     }
 
     println!("Subscriptions:");
