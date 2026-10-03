@@ -26,6 +26,8 @@ pub struct Shape {
     pub path: Vec<Json>,
     pub details: Option<Map<String, Json>>,
     pub error_id: Option<String>,
+    /// The errors reported with it, as Ash reports every validation a changeset fails.
+    pub rest: Vec<Failure>,
 }
 
 /// A field as the client names it: `comments.authorId`, its parents' path first.
@@ -63,6 +65,7 @@ impl Failure {
             path: Vec::new(),
             details: None,
             error_id: None,
+            rest: Vec::new(),
         }))
     }
 
@@ -464,6 +467,7 @@ impl Failure {
         if self.path.is_empty() {
             self.path = vec![json!(0)];
         }
+        self.rest = std::mem::take(&mut self.rest).into_iter().map(Failure::in_bulk).collect();
         self
     }
 
@@ -476,7 +480,13 @@ impl Failure {
             let what = if argument { "argument" } else { "attribute" };
             self.message = format!("{what} {field} is required");
         }
+        self.rest = std::mem::take(&mut self.rest).into_iter().map(|failure| failure.required_as(argument)).collect();
         self
+    }
+
+    /// This error and those reported with it, as JSON.
+    pub(crate) fn all_json(&self) -> Vec<Json> {
+        std::iter::once(self.to_json()).chain(self.rest.iter().flat_map(Failure::all_json)).collect()
     }
 
     pub fn to_json(&self) -> Json {
@@ -504,7 +514,15 @@ impl Failure {
             Error::Forbidden => Self::new("forbidden", "Forbidden", "forbidden"),
             Error::TenantRequired { resource } => Self::new("tenant_required", "Tenant required", err.to_string())
                 .vars(&[("resource", json!(resource))]),
-            Error::Validation { field, message } | Error::Constraint { field, message } => {
+            // A validation's message a template, its vars beside it, as Ash's.
+            Error::Validation { field, message, vars } => {
+                let field = to_camel_case(field);
+                let mut failure = Self::new("invalid_attribute", "Invalid attribute", message.clone()).fields(vec![field.clone()]);
+                failure.vars = vars.iter().map(|(name, value)| (to_camel_case(name), value.to_plain_json())).collect();
+                failure.vars.insert("field".into(), json!(field));
+                failure
+            }
+            Error::Constraint { field, message } => {
                 let field = to_camel_case(field);
                 Self::new("invalid_attribute", "Invalid attribute", message.clone())
                     .vars(&[("field", json!(field))])

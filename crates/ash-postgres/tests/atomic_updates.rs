@@ -56,6 +56,7 @@ fn closed_error(status: &str) -> Error {
     Error::Validation {
         field: "status".into(),
         message: format!("is {status}, not open"),
+        vars: Vec::new(),
     }
 }
 
@@ -233,7 +234,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert_eq!(closed.get("status"), Some(&Value::from("closed")));
     let again = update_dynamic(&ctx, &COUNTER, action("close"), id, FieldMap::new()).await;
     match again {
-        Err(Error::Validation { field, message }) => {
+        Err(Error::Validation { field, message, .. }) => {
             assert_eq!(field, "status");
             assert_eq!(message, "is closed, not open");
         }

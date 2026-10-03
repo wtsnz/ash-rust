@@ -63,10 +63,11 @@ async fn test_action_arguments_validation_failure() {
         .await
         .expect_err("should fail string_length validation on argument");
 
+    let text = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "reason");
-            assert!(message.contains("at least 5 characters"));
+            assert_eq!(text, "must have length of at least 5");
         }
         other => panic!("expected Error::Validation, got {other:?}"),
     }
