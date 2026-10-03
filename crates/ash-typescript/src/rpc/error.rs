@@ -441,6 +441,12 @@ impl Failure {
             .details(&[("suggestion", json!("Check the configured identities for this action"))])
     }
 
+    /// A problem a form validating input finds, as AshTypescript reports it: an invalid
+    /// attribute at its field, its message filled in.
+    pub(crate) fn form_error(field: &str, message: String) -> Self {
+        Self::new("invalid_attribute", "Invalid attribute", message).vars(&[("field", json!(field))]).fields(vec![field.to_string()]).at(&[field.to_string()])
+    }
+
     /// An error AshTypescript has no shape for: reported by its id alone, the error itself
     /// left to the server's [`Rpc::on_error`](super::Rpc::on_error).
     pub(crate) fn internal(error_id: String) -> Self {
@@ -484,9 +490,10 @@ impl Failure {
         self
     }
 
-    /// This error and those reported with it, as JSON.
-    pub(crate) fn all_json(&self) -> Vec<Json> {
-        std::iter::once(self.to_json()).chain(self.rest.iter().flat_map(Failure::all_json)).collect()
+    /// This error and those reported with it, each on its own.
+    pub fn flatten(mut self) -> Vec<Failure> {
+        let rest = std::mem::take(&mut self.rest);
+        std::iter::once(self).chain(rest.into_iter().flat_map(Failure::flatten)).collect()
     }
 
     pub fn to_json(&self) -> Json {

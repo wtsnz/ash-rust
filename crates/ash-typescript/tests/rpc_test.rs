@@ -546,3 +546,63 @@ async fn generic_actions_are_authorized() {
     let missing = blog.run(editor(), json!({ "action": "summarize", "input": {} })).await;
     assert_eq!(error_types(&missing), ["required"]);
 }
+
+#[tokio::test]
+async fn requests_validate_without_running() {
+    let blog = Blog::new().await;
+    let validate = |actor: Actor, request: Json| {
+        let blog = &blog;
+        async move { blog.rpc.validate(&blog.ctx.with_actor(actor), &request).await }
+    };
+    // Every problem, at its field, its message filled in.
+    let invalid = validate(editor(), json!({ "action": "publish_post", "input": { "title": "x", "score": "high" } })).await;
+    let mut problems: Vec<(String, String)> = invalid["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["fields"][0].as_str().unwrap().to_string(), e["message"].as_str().unwrap().to_string()))
+        .collect();
+    problems.sort();
+    assert_eq!(problems, [("score".into(), "is invalid".into()), ("title".into(), "must have length of at least 3".into())]);
+    assert_eq!(invalid["errors"][0]["path"], json!([invalid["errors"][0]["fields"][0]]));
+    // Nothing written, nor authorized: a reader validates a publish.
+    let valid = validate(reader(), json!({ "action": "publish_post", "input": { "title": "Fine" } })).await;
+    assert_eq!(valid, json!({ "success": true }));
+    assert_eq!(blog.run(editor(), json!({ "action": "list_posts", "fields": ["title"], "filter": { "title": { "eq": "Fine" } } })).await["data"], json!([]));
+    // An update's record is found first.
+    let missing = validate(editor(), json!({ "action": "rescore_post", "identity": Uuid::new_v4(), "input": { "score": 1 } })).await;
+    assert_eq!(error_types(&missing), ["not_found"]);
+    let found = validate(editor(), json!({ "action": "rescore_post", "identity": blog.published[0], "input": { "score": "x" } })).await;
+    assert_eq!(found["errors"][0]["message"], "is invalid");
+    // A read needs no fields to validate, but its request is checked as a run's.
+    assert_eq!(validate(reader(), json!({ "action": "list_posts" })).await, json!({ "success": true }));
+    assert_eq!(error_types(&validate(reader(), json!({ "action": "nope" })).await), ["action_not_found"]);
+}
+
+#[tokio::test]
+async fn errors_pass_through_the_error_handler() {
+    let blog = Blog::new().await;
+    let rpc = rpc()
+        .error_handler(|mut failure, source| {
+            if failure.kind == "forbidden" {
+                return None;
+            }
+            failure.message = format!("{}: {}", source.rpc_action.as_deref().unwrap_or("?"), failure.message);
+            Some(failure)
+        })
+        .show_raised_errors(true);
+    let ctx = blog.ctx.with_actor(reader());
+    let unknown = rpc.run(&ctx, &json!({ "action": "list_posts", "fields": ["nope"] })).await;
+    assert_eq!(unknown["errors"][0]["message"], "list_posts: Unknown field %{field} for resource %{resource}");
+    let forbidden = rpc.run(&ctx, &json!({ "action": "rescore_post", "identity": blog.published[0], "input": { "score": 1 } })).await;
+    assert_eq!(forbidden, json!({ "success": false, "errors": [] }));
+}
+
+#[tokio::test]
+async fn booleans_cast_from_text_as_ash_casts_them() {
+    let blog = Blog::new().await;
+    let request = |draft: Json| json!({ "action": "list_posts", "fields": ["title"], "filter": { "draft": { "eq": draft } } });
+    assert_eq!(blog.run(editor(), request(json!("true"))).await["data"], json!([{ "title": "Unfinished" }]));
+    let bad = blog.run(editor(), request(json!("yes"))).await;
+    assert_eq!(bad["success"], false);
+}
