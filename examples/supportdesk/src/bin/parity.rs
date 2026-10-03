@@ -224,6 +224,12 @@ async fn main() -> ExitCode {
     let open = ticket("an open ticket with comments", &|t| t["status"] == "open" && t["confidential"] == false && commented(t));
     let secret = ticket("a confidential new ticket", &|t| t["status"] == "new" && t["confidential"] == true);
     let plain = ticket("a new ticket", &|t| t["status"] == "new" && t["confidential"] == false);
+    // A requester's email, which field policies hide from all but an admin and the assignee.
+    let email = tickets.iter().find(|t| t["confidential"] == false && t["requester_email"].is_string()).expect("an email")
+        ["requester_email"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let desks = [Desk::new("rust", &rust_url), Desk::new("elixir", &elixir_url)];
     let mut report = Report { passed: 0, failed: Vec::new(), forbidden: 0 };
@@ -250,6 +256,14 @@ async fn main() -> ExitCode {
         let e2 = desks[1].graphql(who, INBOX, next(&e)).await;
         let (r2, e2) = (comparable(&r2, &mut report.forbidden), comparable(&e2, &mut report.forbidden));
         report.check(&format!("inbox page 2 as {}", who.role), &r2, &e2);
+    }
+    // A filter on a field the actor can't read finds nothing by it: the field reads as null
+    // where it's hidden.
+    let by_email = "query E($email: String!) { listTickets(first: 5, filter: { requesterEmail: { eq: $email } }, sort: [{ field: ID }]) { count results { id requesterEmail } } }";
+    for who in [&viewer, &admin] {
+        let (r, e) = both(by_email, who.clone(), json!({ "email": email })).await;
+        let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
+        report.check(&format!("filter by a hidden field as {}", who.role), &r, &e);
     }
 
     println!("Writes:");
@@ -306,6 +320,10 @@ async fn main() -> ExitCode {
         ("an unknown action", &agent, json!({ "action": "nope", "fields": ["id"] })),
         ("an unknown field", &agent, json!({ "action": "list_tickets", "fields": ["id", "nope"] })),
         ("a relationship without fields", &agent, json!({ "action": "list_tickets", "fields": ["id", "assignee"] })),
+        ("filter by a hidden field", &viewer, json!({ "action": "list_tickets", "fields": ["id"], "filter": { "requesterEmail": { "eq": email } } })),
+        // The agent sees the emails of the tickets assigned to it: those first, the rest as null.
+        ("sort by a field hidden on some", &agent, json!({ "action": "list_tickets", "fields": ["id", "requesterEmail"], "sort": "requesterEmail,id", "page": { "limit": 5 } })),
+        ("sort by a field hidden on some, descending", &agent, json!({ "action": "list_tickets", "fields": ["id", "requesterEmail"], "sort": "-requesterEmail,id", "page": { "limit": 5 } })),
     ] {
         let r = desks[0].post("/rpc/run", who, body.clone()).await.1;
         let e = desks[1].post("/rpc/run", who, body).await.1;
