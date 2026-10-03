@@ -212,7 +212,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             let mut query_sort = sort.clone();
             if backward {
                 for s in &mut query_sort {
-                    s.descending = !s.descending;
+                    *s = s.reversed();
                 }
             }
             // Only what's selected, and the sort a keyset holds.

@@ -447,17 +447,20 @@ impl DataLayer for Memory {
                     for sort in &query.sort {
                         let left_value = sort_value(left, sort);
                         let right_value = sort_value(right, sort);
-                        // Nulls sort last ascending and first descending, as Ash and
-                        // Postgres order them.
+                        // Nulls sort where the sort places them: by default last
+                        // ascending and first descending, as Ash and Postgres order them.
+                        let nulls_first = sort.nulls_first();
                         order = match (left_value.is_null(), right_value.is_null()) {
                             (true, true) => Ordering::Equal,
+                            (true, false) if nulls_first => Ordering::Less,
                             (true, false) => Ordering::Greater,
+                            (false, true) if nulls_first => Ordering::Greater,
                             (false, true) => Ordering::Less,
-                            (false, false) => compare_typed(field_type(resource, &sort.field), &left_value, &right_value),
+                            (false, false) => {
+                                let order = compare_typed(field_type(resource, &sort.field), &left_value, &right_value);
+                                if sort.descending { order.reverse() } else { order }
+                            }
                         };
-                        if sort.descending {
-                            order = order.reverse();
-                        }
                         if order != Ordering::Equal {
                             break;
                         }

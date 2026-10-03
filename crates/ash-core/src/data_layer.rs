@@ -13,6 +13,25 @@ pub struct Sort {
     /// as null elsewhere, as Ash sorts a client's sort on it (`if <policy> then field else
     /// nil`). See [`guard_input_sort`](crate::guard_input_sort).
     pub guard: Option<Filter>,
+    /// Where nulls go: first, or last. `None`: as Ash places them, last ascending and
+    /// first descending.
+    pub nulls_first: Option<bool>,
+}
+
+impl Sort {
+    /// Whether nulls sort first.
+    pub fn nulls_first(&self) -> bool {
+        self.nulls_first.unwrap_or(self.descending)
+    }
+
+    /// This sort, the other way around: a backward page reads in it.
+    pub fn reversed(&self) -> Sort {
+        Sort {
+            descending: !self.descending,
+            nulls_first: self.nulls_first.map(|first| !first),
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

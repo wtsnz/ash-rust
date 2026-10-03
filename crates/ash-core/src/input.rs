@@ -8,7 +8,8 @@
 //!   related resource's filter, and `and`, `or` and `not` take lists of filters (`not`
 //!   excluding records matching all of its).
 //! - A sort is text: fields separated by commas, each `field` or `+field` ascending,
-//!   `-field` descending (`++` and `--` too, as Ash takes them).
+//!   `-field` descending, `++field` ascending with nulls first and `--field` descending
+//!   with nulls last, as Ash takes them.
 //! - A value is cast to its field's type: a UUID from its text, an integer from a number,
 //!   text as text (validation canonicalizes it as it writes).
 
@@ -161,12 +162,14 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(|part| {
-            let (descending, field) = match part {
-                p if p.starts_with("--") => (true, &p[2..]),
-                p if p.starts_with("++") => (false, &p[2..]),
-                p if p.starts_with('-') => (true, &p[1..]),
-                p if p.starts_with('+') => (false, &p[1..]),
-                p => (false, p),
+            // `++` and `--` place nulls against the direction's default, as Ash's
+            // `asc_nils_first` and `desc_nils_last`.
+            let (descending, nulls_first, field) = match part {
+                p if p.starts_with("--") => (true, Some(false), &p[2..]),
+                p if p.starts_with("++") => (false, Some(true), &p[2..]),
+                p if p.starts_with('-') => (true, None, &p[1..]),
+                p if p.starts_with('+') => (false, None, &p[1..]),
+                p => (false, None, p),
             };
             if field_type(resource, field).is_none() {
                 return Err(invalid(format!("no field `{field}` to sort {} by", resource.name)));
@@ -174,7 +177,8 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
             Ok(Sort {
                 field: field.to_string(),
                 descending,
-                guard: None,
+                nulls_first,
+                ..Default::default()
             })
         })
         .collect()

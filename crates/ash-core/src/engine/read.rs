@@ -35,7 +35,7 @@ pub fn scope_read(
             PreparationDef::Sort { field, descending } => prepared_sort.push(Sort {
                 field: field.to_string(),
                 descending,
-                guard: None,
+                ..Default::default()
             }),
             PreparationDef::Limit(limit) => {
                 query.limit.get_or_insert(limit);

@@ -224,7 +224,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         }
         let read_sort: Vec<Sort> = sort
             .iter()
-            .map(|s| Sort { descending: s.descending != backward, ..s.clone() })
+            .map(|s| if backward { s.reversed() } else { s.clone() })
             .collect();
         let query = CompiledQuery { filter: keyset_filter, sort: read_sort, limit: Some(limit + 1), offset: None, ..scoped };
         let mut rows = read_rows(ctx, resource, &selection.keeping(sort.iter().map(|s| s.field.as_str())), query).await?;
