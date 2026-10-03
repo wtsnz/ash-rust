@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ash_core::{
-    BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, DataLayer, Error, FieldMap,
-    Filter, Resource, Result, UtcDateTimeUsec, Value,
+    BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap,
+    Filter, Resource, Result, TransactionSupport, UtcDateTimeUsec, Value,
 };
 use uuid::Uuid;
 
@@ -129,7 +129,7 @@ struct TripPlan {
     assisted: bool,
 }
 
-pub struct Simulation<D: DataLayer> {
+pub struct Simulation<D: TransactionSupport + 'static> {
     ctx: Context<D>,
     city: Arc<City>,
     config: SimConfig,
@@ -150,7 +150,7 @@ pub struct Simulation<D: DataLayer> {
     metrics: TickMetrics,
 }
 
-impl<D: DataLayer> Simulation<D> {
+impl<D: TransactionSupport + 'static> Simulation<D> {
     /// A simulation of the fleet `ctx` holds, as `seed::sol_city` left it.
     pub async fn new(ctx: Context<D>, city: Arc<City>, config: SimConfig) -> Result<Self> {
         let mut rng = Rng::seeded(config.seed);
@@ -937,7 +937,7 @@ impl<D: DataLayer> Simulation<D> {
     }
 }
 
-async fn destroy<R: Resource, D: DataLayer>(ctx: &Context<D>, ids: &[Uuid]) -> Result<()> {
+async fn destroy<R: Resource, D: TransactionSupport + 'static>(ctx: &Context<D>, ids: &[Uuid]) -> Result<()> {
     if ids.is_empty() {
         return Ok(());
     }

@@ -194,6 +194,7 @@ impl<D: DataLayer + 'static> Multi<D> {
         opts: BulkCreateOptions,
     ) -> Self
     where
+        D: TransactionSupport,
         I: IntoIterator<Item = F> + Send + 'static,
         F: IntoFieldMap,
     {
@@ -218,7 +219,10 @@ impl<D: DataLayer + 'static> Multi<D> {
         action: &'static str,
         ids: impl IntoIterator<Item = Uuid>,
         opts: BulkDestroyOptions,
-    ) -> Self {
+    ) -> Self
+    where
+        D: TransactionSupport,
+    {
         self.steps.push(Box::new(BulkDestroyStep::<R> {
             name: name.into(),
             action,

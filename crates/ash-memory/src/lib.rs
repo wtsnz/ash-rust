@@ -1063,4 +1063,10 @@ impl TransactionSupport for Memory {
             Err(err) => Err(err),
         }
     }
+
+    /// No, as Ash's ETS layer can't transact: a transaction here copies every table, too
+    /// much to do for each batch of a bulk action.
+    fn can_transact(&self) -> bool {
+        false
+    }
 }

@@ -1248,11 +1248,73 @@ mod pg_fleet {
     }
 }
 
-/// A bulk update writes each row's own changes, grouping rows that change the same
-/// columns into one statement, and a row that's gone fails alone.
+/// Counts the notifications it hears.
+#[derive(Debug, Default)]
+struct Counted(std::sync::atomic::AtomicUsize);
+
+impl Counted {
+    fn heard(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ash_core::Notifier for Counted {
+    fn notify<'a>(
+        &'a self,
+        _notification: &'a ash_core::Notification,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ash_core::Result<()>> + Send + 'a>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// `count` vehicles parked at -97.7, called `<run>-<i>`.
+async fn park(ctx: &ash_core::Context<Postgres>, run: &str, count: usize) -> Vec<pg_fleet::PgVehicle> {
+    let mut fleet = Vec::new();
+    for i in 0..count {
+        fleet.push(
+            pg_fleet::PgVehicle::create(ctx)
+                .call_sign(format!("{run}-{i}"))
+                .lng(-97.7)
+                .speed_kph(0)
+                .status("available".to_string())
+                .await
+                .unwrap(),
+        );
+    }
+    fleet
+}
+
+/// Each vehicle reports moving `i` hundredths east at `10 * i` km/h.
+fn reports(fleet: &[pg_fleet::PgVehicle]) -> impl Iterator<Item = (pg_fleet::PgVehicle, ash_core::FieldMap)> + '_ {
+    fleet.iter().cloned().enumerate().map(|(i, vehicle)| {
+        let mut input = ash_core::FieldMap::new();
+        input.insert("lng".into(), Value::from(-97.7 + i as f64 / 100.0));
+        input.insert("speed_kph".into(), Value::from(10 * i as i64));
+        (vehicle, input)
+    })
+}
+
+/// `(call_sign, lng, speed_kph, status)` of this run's vehicles, by call sign.
+async fn stored_fleet(ctx: &ash_core::Context<Postgres>, run: &str) -> Vec<(String, f64, i64, String)> {
+    let mut stored: Vec<(String, f64, i64, String)> = pg_fleet::PgVehicle::query(ctx)
+        .load()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|v| v.call_sign.starts_with(run))
+        .map(|v| (v.call_sign, v.lng, v.speed_kph, v.status))
+        .collect();
+    stored.sort_by(|a, b| a.0.cmp(&b.0));
+    stored
+}
+
+/// A bulk update writes each row's own changes in one statement, however its rows differ:
+/// a column a row doesn't change keeps what's stored, even a change made since the batch
+/// read it.
 #[tokio::test]
 async fn test_postgres_bulk_update_writes_each_rows_changes() {
-    use ash_core::{BulkUpdateOptions, Context, DataLayer, FieldMap, Resource};
+    use ash_core::{BulkUpdateOptions, Context, FieldMap, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1262,57 +1324,133 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
     let ctx = Context::new(pg);
     let run = Uuid::new_v4().simple().to_string();
-    let mut fleet = Vec::new();
-    for i in 0..5 {
-        fleet.push(
-            PgVehicle::create(&ctx)
-                .call_sign(format!("{run}-{i}"))
-                .lng(-97.7)
-                .speed_kph(0)
-                .status("available".to_string())
-                .await
-                .unwrap(),
-        );
-    }
-    // One is gone before the batch lands.
-    ctx.data.destroy(&PgVehicle::DEF, None, fleet[4].id).await.unwrap();
+    let fleet = park(&ctx, &run, 4).await;
+    // An operator recalls one after the batch has read it.
+    let mut recall = FieldMap::new();
+    recall.insert("status".into(), Value::from("returning"));
+    ctx.data.update(&PgVehicle::DEF, None, fleet[2].id, recall).await.unwrap();
 
-    let updates = fleet.iter().cloned().enumerate().map(|(i, vehicle)| {
-        let mut input = FieldMap::new();
-        input.insert("lng".into(), Value::from(-97.7 + i as f64 / 100.0));
-        input.insert("speed_kph".into(), Value::from(10 * i as i64));
-        // Two of them also change status: a second group of columns.
+    let updates = reports(&fleet).enumerate().map(|(i, (vehicle, mut input))| {
+        // Two of them also change status, so the rows change different columns.
         if i % 2 == 1 {
             input.insert("status".into(), Value::from("on_trip"));
         }
         (vehicle, input)
     });
+    let result = PgVehicle::bulk_update_with_opts(&ctx, "report", updates, BulkUpdateOptions::new())
+        .await
+        .unwrap();
+    assert_eq!((result.count, result.error_count), (4, 0), "{:?}", result.errors);
+
+    let expected: Vec<(String, f64, i64, String)> = (0..4)
+        .map(|i| {
+            let status = match i {
+                1 | 3 => "on_trip",
+                2 => "returning",
+                _ => "available",
+            };
+            (format!("{run}-{i}"), -97.7 + i as f64 / 100.0, 10 * i as i64, status.to_string())
+        })
+        .collect();
+    assert_eq!(stored_fleet(&ctx, &run).await, expected);
+}
+
+/// A batch is written in a transaction, as Ash writes one (`transaction: :batch`): a row
+/// that fails rolls back the rest, and no notification goes out for any of them. Without
+/// a transaction, the row fails alone.
+#[tokio::test]
+async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
+    use ash_core::{BulkTransaction, BulkUpdateOptions, Context, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let notified = std::sync::Arc::new(Counted::default());
+    let ctx = Context::new(pg).with_notifier(notified.clone());
+    let run = Uuid::new_v4().simple().to_string();
+    let fleet = park(&ctx, &run, 5).await;
+    // One is gone before the batch lands.
+    ctx.data.destroy(&PgVehicle::DEF, None, fleet[4].id).await.unwrap();
+    let parked: Vec<(String, f64, i64, String)> = (0..4)
+        .map(|i| (format!("{run}-{i}"), -97.7, 0, "available".to_string()))
+        .collect();
+    let before = notified.heard();
+
+    let opts = BulkUpdateOptions::new().stop_on_error(false);
+    let result = PgVehicle::bulk_update_with_opts(&ctx, "report", reports(&fleet), opts.clone())
+        .await
+        .unwrap();
+    assert_eq!((result.count, result.error_count), (0, 5), "{:?}", result.errors);
+    assert_eq!(stored_fleet(&ctx, &run).await, parked, "the batch rolls back");
+    assert_eq!(notified.heard(), before, "nothing is notified of a rolled-back batch");
+
     let result = PgVehicle::bulk_update_with_opts(
         &ctx,
         "report",
-        updates,
-        BulkUpdateOptions::new().stop_on_error(false),
+        reports(&fleet),
+        opts.transaction(BulkTransaction::Off),
     )
     .await
     .unwrap();
     assert_eq!((result.count, result.error_count), (4, 1), "{:?}", result.errors);
+    let moved: Vec<(String, f64, i64, String)> = (0..4)
+        .map(|i| (format!("{run}-{i}"), -97.7 + i as f64 / 100.0, 10 * i as i64, "available".to_string()))
+        .collect();
+    assert_eq!(stored_fleet(&ctx, &run).await, moved);
+    assert_eq!(notified.heard(), before + 4);
+}
 
-    let mut stored: Vec<(String, f64, i64, String)> = PgVehicle::query(&ctx)
-        .load()
+/// `transaction: :batch` rolls back only the batch a failed row is in; `:all` rolls back
+/// the whole action.
+#[tokio::test]
+async fn test_postgres_bulk_update_transaction_scopes() {
+    use ash_core::{BulkTransaction, BulkUpdateOptions, Context, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let parked = |run: &str, i: usize| (format!("{run}-{i}"), -97.7, 0, "available".to_string());
+    let moved = |run: &str, i: usize| {
+        (format!("{run}-{i}"), -97.7 + i as f64 / 100.0, 10 * i as i64, "available".to_string())
+    };
+    // Batches of two: [0, 1], [2, 3], [4], and 3 is gone.
+    let opts = BulkUpdateOptions::new().stop_on_error(false).batch_size(2);
+
+    let run = Uuid::new_v4().simple().to_string();
+    let fleet = park(&ctx, &run, 5).await;
+    ctx.data.destroy(&PgVehicle::DEF, None, fleet[3].id).await.unwrap();
+    let result = PgVehicle::bulk_update_with_opts(&ctx, "report", reports(&fleet), opts.clone())
         .await
-        .unwrap()
-        .into_iter()
-        .filter(|v| v.call_sign.starts_with(&run))
-        .map(|v| (v.call_sign, v.lng, v.speed_kph, v.status))
-        .collect();
-    stored.sort_by(|a, b| a.0.cmp(&b.0));
-    let expected: Vec<(String, f64, i64, String)> = (0..4)
-        .map(|i| {
-            let status = if i % 2 == 1 { "on_trip" } else { "available" };
-            (format!("{run}-{i}"), -97.7 + i as f64 / 100.0, 10 * i as i64, status.to_string())
-        })
-        .collect();
-    assert_eq!(stored, expected);
+        .unwrap();
+    assert_eq!((result.count, result.error_count), (3, 2), "{:?}", result.errors);
+    assert_eq!(
+        stored_fleet(&ctx, &run).await,
+        vec![moved(&run, 0), moved(&run, 1), parked(&run, 2), moved(&run, 4)]
+    );
+
+    let run = Uuid::new_v4().simple().to_string();
+    let fleet = park(&ctx, &run, 5).await;
+    ctx.data.destroy(&PgVehicle::DEF, None, fleet[3].id).await.unwrap();
+    let result = PgVehicle::bulk_update_with_opts(
+        &ctx,
+        "report",
+        reports(&fleet),
+        opts.transaction(BulkTransaction::All),
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.count, result.error_count), (0, 5), "{:?}", result.errors);
+    assert_eq!(
+        stored_fleet(&ctx, &run).await,
+        vec![parked(&run, 0), parked(&run, 1), parked(&run, 2), parked(&run, 4)]
+    );
 }
 
 /// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.

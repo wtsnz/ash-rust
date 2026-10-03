@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ash_core::{Context, DataLayer, Filter, Notification, Notifier, Result, UtcDateTimeUsec};
+use ash_core::{
+    Context, Filter, Notification, Notifier, Result, TransactionSupport, UtcDateTimeUsec,
+};
 use ash_memory::Memory;
 use ash_pubsub::PubSub;
 use cybercab::city::City;
@@ -185,8 +187,8 @@ fn median(values: Vec<f64>) -> f64 {
 }
 
 /// A data layer for one run: memory, or emptied tables in Postgres.
-trait Store: DataLayer + Clone + Send + Sync + 'static {}
-impl<D: DataLayer + Clone + Send + Sync + 'static> Store for D {}
+trait Store: TransactionSupport + Send + Sync + 'static {}
+impl<D: TransactionSupport + Send + Sync + 'static> Store for D {}
 
 async fn seeded<D: Store>(
     data: D,
