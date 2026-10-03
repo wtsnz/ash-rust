@@ -183,6 +183,7 @@ dependencies = [
  "ash-sqlite",
  "base64",
  "chrono",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
