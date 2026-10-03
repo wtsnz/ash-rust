@@ -437,7 +437,7 @@ impl DynamicChangeset {
             // Already being destroyed further up a cascade.
             existing.clone()
         } else {
-            let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update)
+            let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update, None)
                 .await?
                 .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
             if destroy {
@@ -451,8 +451,8 @@ impl DynamicChangeset {
 
     /// An update or destroy of record `id`, by id, as one statement: no read first. A
     /// hard destroy deletes it, returning what it held; a soft destroy updates it and
-    /// archives its children after. No row means no such record the context may see:
-    /// [`Error::NotFound`].
+    /// archives its children after, within `scope` when given. No row means no such
+    /// record the context may see: [`Error::NotFound`].
     pub(crate) async fn commit_atomic_by_id<D: DataLayer>(
         ctx: &Context<D>,
         resource: &'static ResourceDef,
@@ -460,13 +460,14 @@ impl DynamicChangeset {
         id: Uuid,
         arguments: FieldMap,
         plan: AtomicPlan,
+        scope: Option<crate::filter::Filter>,
     ) -> Result<FieldMap> {
         let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
         changeset.after_actions = plan.after_actions;
         let result = async {
             let stored = match action.kind {
                 ActionKind::Destroy if !action.soft => {
-                    let destroyed = run_atomic_destroy(ctx, resource, action, id, &plan.update.conditions)
+                    let destroyed = run_atomic_destroy(ctx, resource, action, id, &plan.update.conditions, scope.as_ref())
                         .await?
                         .ok_or(Error::NotFound)?;
                     // The record a destroy's notification carries, as one read first does.
@@ -476,11 +477,11 @@ impl DynamicChangeset {
                 ActionKind::Destroy => {
                     let cascade = Cascade::new(true);
                     cascade.enter(resource, id);
-                    let stored = run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?;
+                    let stored = run_atomic_update(ctx, resource, action, id, &plan.update, scope.as_ref()).await?.ok_or(Error::NotFound)?;
                     crate::engine::cascade_destroy_related(ctx, resource, action, id, &stored, &cascade).await?;
                     stored
                 }
-                _ => run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?,
+                _ => run_atomic_update(ctx, resource, action, id, &plan.update, scope.as_ref()).await?.ok_or(Error::NotFound)?,
             };
             changeset.finish(ctx, id, stored, true).await
         }
