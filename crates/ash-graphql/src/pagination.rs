@@ -325,11 +325,8 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             // A page sorts stably, so every record has its own keyset.
             let sort = keyset_sort(resource, scoped.sort.clone());
 
-            let count = if ctx.look_ahead().field("count").exists() {
-                Some(count_records(&ash, resource, &scoped).await?)
-            } else {
-                None
-            };
+            // Counted alongside the page, as Ash reads a page's count.
+            let count_scope = ctx.look_ahead().field("count").exists().then(|| scoped.clone());
 
             let mut page_filter = scoped.filter.clone();
             let cursor = if backward { before.as_deref() } else { after.as_deref() };
@@ -363,19 +360,31 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 offset: None,
                 ..scoped
             });
-            let mut records = ash
-                .data
-                .run_query(resource, &query)
-                .await
-                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-            if backward {
-                records.reverse();
-            }
-            after_read(action, &arguments, &mut records)?;
-            for record in &mut records {
-                redact_record(resource, ash.actor.as_ref(), record);
-            }
-            preload(&ash, resource, selected(ctx.ctx.field(), Some("results")), &mut records).await?;
+            // The count is read alongside the page, as Ash reads a page's count. In a
+            // transaction, its one connection takes them in turn.
+            let counting = async {
+                match &count_scope {
+                    Some(scoped) => count_records(&ash, resource, scoped).await.map(Some),
+                    None => Ok(None),
+                }
+            };
+            let reading = async {
+                let mut records = ash
+                    .data
+                    .run_query(resource, &query)
+                    .await
+                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                if backward {
+                    records.reverse();
+                }
+                after_read(action, &arguments, &mut records)?;
+                for record in &mut records {
+                    redact_record(resource, ash.actor.as_ref(), record);
+                }
+                preload(&ash, resource, selected(ctx.ctx.field(), Some("results")), &mut records).await?;
+                Ok::<_, async_graphql::Error>(records)
+            };
+            let (count, records) = futures_util::future::try_join(counting, reading).await?;
             let keyset = |record: Option<&FieldMap>| record.map(|r| keyset_of(r, &sort, pk_name));
             Ok(Some(FieldValue::owned_any(KeysetPage {
                 start_keyset: keyset(records.first()),
