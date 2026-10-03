@@ -17,6 +17,7 @@ mod error;
 mod expr;
 mod extension;
 mod filter;
+pub mod input;
 mod keys;
 mod multi;
 mod notifier;
