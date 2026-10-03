@@ -3,10 +3,12 @@
 //! Absinthe, which serves AshGraphql's subscriptions, deduplicates them: subscribers to the
 //! same document in the same context share one execution, so each event is resolved once
 //! and the result pushed to all of them. This does the same for `graphql-transport-ws`.
-//! Subscribers to the same document with the same operation name and variables share one
-//! stream: each event is resolved and serialized once, and every subscriber receives the
-//! same text. The router gives every connection the same context (the schema's), so
-//! nothing else tells them apart.
+//! Subscribers to the same document with the same operation name and variables, running as
+//! the same actor in the same tenant, share one stream: each event is resolved and
+//! serialized once, and every subscriber receives the same text. Who a connection runs as
+//! comes from its upgrade request's headers, through the router's
+//! [`RequestData`](crate::axum::RequestData), as Absinthe gives each socket its own
+//! context.
 //!
 //! Queries and mutations sent over the socket run for their sender alone. Every frame
 //! matches async-graphql's own handler: `next` for each response, errors included, then
@@ -47,6 +49,7 @@ pub(crate) fn upgrade(
     upgrade: WebSocketUpgrade,
     schema: Schema,
     hub: Arc<Hub>,
+    request_data: Arc<dyn crate::axum::RequestData>,
 ) -> Response {
     let transport_ws = headers
         .get_all("sec-websocket-protocol")
@@ -57,7 +60,7 @@ pub(crate) fn upgrade(
     if transport_ws {
         upgrade
             .protocols(["graphql-transport-ws"])
-            .on_upgrade(move |socket| serve(socket, schema, hub))
+            .on_upgrade(move |socket| serve(socket, schema, hub, headers, request_data))
     } else {
         upgrade
             .protocols(["graphql-ws"])
@@ -94,7 +97,7 @@ impl SubscribePayload {
     }
 
     /// The stream this subscription can share, if it's a subscription.
-    fn key(&self) -> Option<Key> {
+    fn key(&self, scope: &str) -> Option<Key> {
         let document = async_graphql::parser::parse_query(&self.query).ok()?;
         let operation = match (&document.operations, &self.operation_name) {
             (DocumentOperations::Single(operation), _) => operation,
@@ -104,6 +107,7 @@ impl SubscribePayload {
             (DocumentOperations::Multiple(_), None) => return None,
         };
         (operation.node.ty == OperationType::Subscription).then(|| Key {
+            scope: scope.to_string(),
             query: self.query.clone(),
             operation_name: self.operation_name.clone(),
             variables: self
@@ -118,6 +122,9 @@ impl SubscribePayload {
 /// What makes two subscriptions the same, so they can share a stream.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
+    /// Who the subscription runs as (see [`RequestData`](crate::axum::RequestData)):
+    /// subscribers in different scopes never share a stream.
+    scope: String,
     query: String,
     operation_name: Option<String>,
     variables: String,
@@ -277,13 +284,15 @@ fn missed(count: u64) -> String {
 async fn subscribe(
     id: String,
     payload: SubscribePayload,
+    request: Request,
+    scope: String,
     schema: Schema,
     hub: Arc<Hub>,
     out: mpsc::Sender<Message>,
 ) {
-    match payload.key() {
+    match payload.key(&scope) {
         Some(key) => {
-            let mut member = hub.join(&schema, key, payload.request());
+            let mut member = hub.join(&schema, key, request);
             loop {
                 match member.recv().await {
                     Ok(Frame::Next(json)) => {
@@ -301,7 +310,7 @@ async fn subscribe(
         }
         // A query or mutation runs once, for this subscriber alone.
         None => {
-            let mut stream = schema.execute_stream(payload.request());
+            let mut stream = schema.execute_stream(request);
             while let Some(response) = stream.next().await {
                 let json = serde_json::to_string(&response).expect("a response serializes");
                 if out.send(frame(&id, "next", Some(&json))).await.is_err() {
@@ -314,7 +323,13 @@ async fn subscribe(
 }
 
 /// Speaks `graphql-transport-ws` on one connection.
-async fn serve(socket: WebSocket, schema: Schema, hub: Arc<Hub>) {
+async fn serve(
+    socket: WebSocket,
+    schema: Schema,
+    hub: Arc<Hub>,
+    headers: HeaderMap,
+    request_data: Arc<dyn crate::axum::RequestData>,
+) {
     let (mut sink, mut incoming) = socket.split();
     let (out, mut queued) = mpsc::channel::<Message>(CONNECTION_BUFFER);
     let writer = tokio::spawn(async move {
@@ -380,9 +395,12 @@ async fn serve(socket: WebSocket, schema: Schema, hub: Arc<Hub>) {
                 if let Some(previous) = subscriptions.remove(&id) {
                     previous.abort();
                 }
+                let (request, scope) = request_data.apply(&headers, payload.request());
                 let task = tokio::spawn(subscribe(
                     id.clone(),
                     payload,
+                    request,
+                    scope,
                     schema.clone(),
                     Arc::clone(&hub),
                     out.clone(),
