@@ -58,7 +58,7 @@ pub(crate) async fn run_atomic_destroy<D: crate::data_layer::DataLayer>(
 
 /// The read that finds the record an update or destroy of `action` changes: the one it
 /// upgrades with, else the primary read.
-fn finding_read(resource: &'static ResourceDef, action: &ActionDef) -> Result<Option<&'static ActionDef>> {
+pub(crate) fn finding_read(resource: &'static ResourceDef, action: &ActionDef) -> Result<Option<&'static ActionDef>> {
     match action.atomic_upgrade_with {
         Some(name) => resource.action(name).map(Some).ok_or_else(|| Error::UnknownAction {
             resource: resource.name,
@@ -68,20 +68,22 @@ fn finding_read(resource: &'static ResourceDef, action: &ActionDef) -> Result<Op
     }
 }
 
-/// The records `actor` may read through the read that finds an update's or destroy's
-/// record by id: that read's policies, as a filter. AshGraphql and AshTypescript find
-/// the record so, running the update or destroy over a query of the read action
-/// (`Ash.bulk_update(query, ...)`), whose read policies filter what it finds: a record
-/// the actor can't read isn't found.
-pub(crate) fn read_scope(resource: &'static ResourceDef, action: &ActionDef, actor: Option<&Actor>) -> Result<Option<Filter>> {
-    match finding_read(resource, action)? {
-        Some(read) => crate::policy::compile_read_filter(resource, read, actor),
-        None => Ok(None),
-    }
+/// The records `actor` may read through `read`, the read that finds an update's or
+/// destroy's record by id: its filters and its policies, as a filter. AshGraphql and
+/// AshTypescript find the record so, running the update or destroy over a query of the
+/// read action (`Ash.bulk_update(query, ...)`), whose policies filter what it finds: a
+/// record the actor can't read isn't found. `None` where there's no read.
+pub(crate) fn read_scope(resource: &'static ResourceDef, read: Option<&ActionDef>, actor: Option<&Actor>) -> Result<Option<Filter>> {
+    let Some(read) = read else {
+        return Ok(None);
+    };
+    let policies = crate::policy::compile_read_filter(resource, read, actor)?;
+    Ok(Some(Filter::and(resource.read_filter(read).into_iter().chain(policies))))
 }
 
 /// The query selecting record `id` for an atomic statement of `action`: by its primary
-/// key, through the read `action` upgrades with, in the context's tenant, within `scope`.
+/// key, in the context's tenant, within `scope`, the read that finds it; or, given none,
+/// through the read `action` upgrades with.
 fn atomic_query<D>(
     ctx: &crate::context::Context<D>,
     resource: &'static ResourceDef,
@@ -92,9 +94,13 @@ fn atomic_query<D>(
     let pk = pk_name(resource)?;
     let (filter, tenant) =
         crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
-    let read = finding_read(resource, action)?;
-    let filter = crate::pipeline::and_filters(filter, read.and_then(|read| resource.read_filter(read)));
-    let filter = crate::pipeline::and_filters(filter, scope.cloned());
+    let filter = match scope {
+        Some(scope) => crate::pipeline::and_filters(filter, Some(scope.clone())),
+        None => {
+            let read = finding_read(resource, action)?;
+            crate::pipeline::and_filters(filter, read.and_then(|read| resource.read_filter(read)))
+        }
+    };
     Ok(crate::data_layer::CompiledQuery {
         filter,
         tenant,

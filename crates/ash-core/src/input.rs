@@ -203,7 +203,12 @@ pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, j
                 field: name.clone(),
                 action: action.name,
             })?;
-        input.insert(name.clone(), value_input(ty, value)?);
+        let value = value_input(ty, value).map_err(|_| Error::TypeMismatch {
+            field: name.clone(),
+            expected: ty.name().to_string(),
+            got: value.to_string(),
+        })?;
+        input.insert(name.clone(), value);
     }
     // An argument that may not be nil must be given, as Ash requires it.
     if let Some(arg) = action.arguments.iter().find(|arg| !arg.allow_nil && input.get(arg.name).is_none_or(Value::is_null)) {
