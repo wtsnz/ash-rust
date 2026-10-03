@@ -45,8 +45,14 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         (AttrType::Integer, Json::Number(n)) => Value::Int(n.as_i64().ok_or_else(mismatch)?),
         (AttrType::Integer, Json::String(text)) => Value::Int(text.parse().map_err(|_| mismatch())?),
         (AttrType::Boolean, Json::Bool(b)) => Value::Bool(*b),
+        // As Ash's boolean casts text.
+        (AttrType::Boolean, Json::String(text)) => match text.as_str() {
+            "true" | "1" => Value::Bool(true),
+            "false" | "0" => Value::Bool(false),
+            _ => return Err(mismatch()),
+        },
         (AttrType::Float | AttrType::Decimal, Json::Number(n)) => Value::String(n.to_string()),
-        (AttrType::Map | AttrType::Array, json) => Value::from_plain_json(json.clone()),
+        (AttrType::Map, json @ Json::Object(_)) | (AttrType::Array, json @ Json::Array(_)) => Value::from_plain_json(json.clone()),
         (AttrType::Atom { one_of, .. }, Json::String(text)) => Value::String(
             one_of
                 .iter()

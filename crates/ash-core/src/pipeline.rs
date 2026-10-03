@@ -86,7 +86,7 @@ pub fn split_input(resource: &ResourceDef, action: &ActionDef, input: FieldMap) 
 
 /// Text as Ash's string types cast it by default: trimmed, and nil when that leaves
 /// nothing (`trim?: true`, `allow_empty?: false`).
-fn cast_text(ty: AttrType, value: &mut Value) {
+pub(crate) fn cast_text(ty: AttrType, value: &mut Value) {
     if !matches!(ty, AttrType::String | AttrType::CiString) {
         return;
     }
@@ -449,7 +449,7 @@ pub(crate) fn validate_given(def: &ResourceDef, fields: &mut FieldMap) -> Result
     Ok(())
 }
 
-fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
+pub(crate) fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
     let ok = match (attribute.ty, value) {
         (AttrType::Uuid, Value::Uuid(_))
         | (AttrType::String, Value::String(_))
