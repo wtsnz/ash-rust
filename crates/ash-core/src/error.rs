@@ -111,6 +111,14 @@ impl Error {
         }
     }
 
+    /// The errors this one holds, by value: its own several, or itself.
+    pub fn into_each(self) -> Vec<Error> {
+        match self {
+            Self::Multiple(errors) => errors.into_iter().flat_map(Error::into_each).collect(),
+            other => vec![other],
+        }
+    }
+
     /// Each error this one holds: its own several, or itself.
     pub fn each(&self) -> Vec<&Error> {
         match self {

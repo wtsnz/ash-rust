@@ -145,6 +145,77 @@ impl DynamicChangeset {
         Ok(changeset.with_context(ctx))
     }
 
+    /// What's wrong with `input` to `action`, as a form validating it before it's
+    /// submitted finds: every validation it fails, every argument or attribute it needs
+    /// and lacks, every value of the wrong type. A create is checked from nothing, an
+    /// update or destroy against `existing`. Nothing is written, nor authorized, and keys
+    /// the action doesn't take are left out, as AshTypescript's `validate_action`
+    /// validates a form.
+    pub fn problems<D>(
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        action: &'static ActionDef,
+        existing: Option<FieldMap>,
+        input: FieldMap,
+    ) -> Vec<Error> {
+        let mut accepted = FieldMap::new();
+        let mut arguments = FieldMap::new();
+        for (name, mut value) in input {
+            if action.accept.contains(&name.as_str()) {
+                if let Some(attribute) = resource.attribute(&name) {
+                    crate::pipeline::cast_text(attribute.ty, &mut value);
+                }
+                accepted.insert(name, value);
+            } else if let Some(arg) = action.arguments.iter().find(|arg| arg.name == name) {
+                crate::pipeline::cast_text(arg.ty, &mut value);
+                arguments.insert(name, value);
+            }
+        }
+        let mut problems: Vec<Error> = action
+            .arguments
+            .iter()
+            .filter(|arg| !arg.allow_nil && arguments.get(arg.name).is_none_or(Value::is_null))
+            .map(|arg| Error::Missing { field: arg.name.to_string() })
+            .collect();
+        let creating = existing.is_none();
+        let fields = match &existing {
+            Some(existing) => {
+                let mut fields = existing.clone();
+                fields.extend(accepted.clone());
+                prepare_update_fields(resource, existing, &mut fields);
+                fields
+            }
+            None => {
+                let mut fields = accepted.clone();
+                prepare_create_fields(resource, &mut fields);
+                fields
+            }
+        };
+        let mut changeset = Self::new(resource, action, fields, arguments, existing);
+        if let Err(error) = changeset.apply_changes(ctx) {
+            problems.push(error);
+            return problems;
+        }
+        let _ = apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), creating);
+        if let Err(error) = changeset.run_validations(ctx) {
+            problems.extend(error.into_each());
+        }
+        if action.kind != ActionKind::Destroy {
+            for attribute in resource.attributes {
+                match changeset.fields.get(attribute.name) {
+                    None | Some(Value::Null) if attribute.allow_nil || !(creating || accepted.contains_key(attribute.name)) => {}
+                    None | Some(Value::Null) => problems.push(Error::Missing { field: attribute.name.to_string() }),
+                    Some(value) => {
+                        if let Err(error) = crate::pipeline::check_type(attribute, value) {
+                            problems.push(error);
+                        }
+                    }
+                }
+            }
+        }
+        problems
+    }
+
     /// An update of `existing` through `action`.
     pub fn for_update<D>(
         ctx: &Context<D>,
