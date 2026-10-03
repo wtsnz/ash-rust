@@ -15,7 +15,7 @@ use crate::atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUp
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{check_builtin_validation, pk_name, validate_given};
-use crate::policy::{effects_to_filter, write_filter};
+use crate::policy::write_filter;
 use crate::resource::{AttrType, OnDelete, RelKind, ResourceDef};
 use crate::value::{FieldMap, Value};
 
@@ -88,8 +88,6 @@ pub(crate) struct PlanInput<'a> {
     pub tenant: Option<&'a str>,
     /// Values set outright: the accepted input, or what a changeset already changes.
     pub sets: FieldMap,
-    /// Fields an actor's input sets, for the field policies on writes.
-    pub written: Vec<String>,
     pub arguments: &'a FieldMap,
     /// The lock version the record must still have, and the record's id for the error.
     pub expected_version: Option<(Uuid, i64)>,
@@ -124,7 +122,7 @@ pub(crate) fn plan_update(
             return Ok(Err("its relationships act on related records when it's deleted".into()));
         }
     }
-    let PlanInput { actor, tenant, mut sets, written, arguments, expected_version, collect_hooks } = input;
+    let PlanInput { actor, tenant, mut sets, arguments, expected_version, collect_hooks } = input;
     let lock = resource.optimistic_lock_attribute();
     let updated_at = resource.timestamps.map(|(_, updated_at)| updated_at);
     // The lock version and `updated_at` are the plan's to set, from the stored record.
@@ -196,19 +194,6 @@ pub(crate) fn plan_update(
     validate_given(resource, &mut known)?;
     for (name, value) in known {
         update.set(name, AtomicExpr::Value(value));
-    }
-
-    // Written fields guarded by a field policy, as the record-by-record write checks them.
-    for policy in resource.field_policies {
-        if written.iter().any(|field| field == policy.field) {
-            match effects_to_filter(policy.checks, actor)? {
-                Filter::True => {}
-                Filter::False => return Err(Error::Forbidden),
-                allowed => update
-                    .conditions
-                    .push(AtomicCondition::failing_with(AtomicExpr::not_true(AtomicExpr::Filter(allowed)), || Error::Forbidden)),
-            }
-        }
     }
 
     // The write policies, against the record as stored, as Ash authorizes an atomic update.

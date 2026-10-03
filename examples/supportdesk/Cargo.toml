@@ -1,0 +1,28 @@
+[package]
+name = "supportdesk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A multi-tenant support desk on ash-rust, twinned in Elixir Ash, for benchmarking real-world Ash features"
+publish = false
+
+[dependencies]
+ash-core = { path = "../../crates/ash-core" }
+ash-graphql = { path = "../../crates/ash-graphql", features = ["axum"] }
+ash-postgres = { path = "../../crates/ash-postgres" }
+ash-pubsub = { path = "../../crates/ash-pubsub" }
+ash-state-machine = { path = "../../crates/ash-state-machine" }
+async-graphql = { version = "7", features = ["dynamic-schema"] }
+axum = "0.8"
+bytes = "1"
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-tungstenite = "0.29"
+uuid.workspace = true

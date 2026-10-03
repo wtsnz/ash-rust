@@ -1,4 +1,4 @@
-use ash_core::{Actor, Context, Error, Resource, resource};
+use ash_core::{Actor, Context, Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -222,15 +222,13 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
         "salary must be redacted for bob"
     );
 
-    // 4. Alice attempts to update salary -> must be rejected by field policy on write
-    let update_res = UserProfile::update(&alice_ctx, fetched_by_alice.id)
+    // 4. Alice may write her salary: field policies govern what's read, as in Ash, and
+    // writes are the action's policies' to authorize. She still reads it redacted.
+    let raised = UserProfile::update(&alice_ctx, fetched_by_alice.id)
         .salary(Some(150_000))
-        .await;
-
-    assert!(
-        matches!(update_res, Err(Error::Forbidden)),
-        "alice cannot write to salary"
-    );
+        .await
+        .expect("field policies don't govern writes");
+    assert_eq!(raised.salary, None, "alice still can't read her salary");
 
     // 5. Alice updating permitted field (name) -> succeeds
     let alice_update_ok = UserProfile::update(&alice_ctx, fetched_by_alice.id)
@@ -249,7 +247,7 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
 
     assert_eq!(fetched_by_admin.name, "Alice Wonder");
     assert_eq!(fetched_by_admin.ssn, Some("123-45-6789".into()));
-    assert_eq!(fetched_by_admin.salary, Some(120_000));
+    assert_eq!(fetched_by_admin.salary, Some(150_000));
 }
 
 #[tokio::test]
@@ -282,13 +280,14 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
     assert_eq!(user_view.ssn, Some("987-65-4321".into()));
     assert_eq!(user_view.salary, None, "salary redacted in sqlite");
 
-    // Attempting unauthorized write in SQLite
-    let forbidden = UserProfile::update(&user_ctx, profile.id)
+    // Field policies don't govern writes, in SQLite either: the write lands, unreadable.
+    let raised = UserProfile::update(&user_ctx, profile.id)
         .salary(Some(200_000))
-        .await;
-    assert!(matches!(forbidden, Err(Error::Forbidden)));
+        .await
+        .unwrap();
+    assert_eq!(raised.salary, None, "salary still redacted for the user");
 
-    // Permitted write in SQLite preserves redacted field
+    // A write that doesn't set the redacted field leaves it as stored
     let updated = UserProfile::update(&user_ctx, profile.id)
         .name("Charlie Brown")
         .await
@@ -302,7 +301,7 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
     assert_eq!(admin_view.name, "Charlie Brown");
     assert_eq!(
         admin_view.salary,
-        Some(95_000),
-        "salary preserved in sqlite"
+        Some(200_000),
+        "the user's raise stands, and the rename didn't overwrite it with the redacted null"
     );
 }
