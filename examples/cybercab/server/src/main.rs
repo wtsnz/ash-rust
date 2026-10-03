@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use ash_core::DataLayer;
+use ash_core::TransactionSupport;
 use ash_memory::Memory;
 use ash_pubsub::PubSub;
 use cybercab::city::City;
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Seeds the city on `data`, sets the fleet running, and serves the API.
 async fn serve<D>(data: D, store: &str) -> Result<(), Box<dyn std::error::Error>>
 where
-    D: DataLayer + Clone + Send + Sync + 'static,
+    D: TransactionSupport + Send + Sync + 'static,
 {
     let config = SimConfig {
         speedup: env("SIM_SPEED", 8.0),

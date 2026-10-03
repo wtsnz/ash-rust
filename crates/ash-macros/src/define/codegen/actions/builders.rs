@@ -289,7 +289,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
     {
         let act_name_str = create_act.name.to_string();
         resource_methods.push(quote! {
-            pub async fn bulk_create<D: ::ash_core::DataLayer, I, F>(
+            pub async fn bulk_create<D: ::ash_core::TransactionSupport + 'static, I, F>(
                 ctx: &::ash_core::Context<D>,
                 inputs: I,
             ) -> ::ash_core::Result<::ash_core::BulkResult<Self>>
@@ -300,7 +300,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 ::ash_core::bulk_create(ctx, #act_name_str, inputs, ::ash_core::BulkCreateOptions::default()).await
             }
 
-            pub async fn bulk_create_with_opts<D: ::ash_core::DataLayer, I, F>(
+            pub async fn bulk_create_with_opts<D: ::ash_core::TransactionSupport + 'static, I, F>(
                 ctx: &::ash_core::Context<D>,
                 action: &str,
                 inputs: I,
@@ -319,7 +319,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
         resource_methods.push(quote! {
             /// Updates several records through update action `action`, each with its own
             /// input, written together. See [`::ash_core::bulk_update`].
-            pub async fn bulk_update<D: ::ash_core::DataLayer, I, F>(
+            pub async fn bulk_update<D: ::ash_core::TransactionSupport + 'static, I, F>(
                 ctx: &::ash_core::Context<D>,
                 action: &str,
                 updates: I,
@@ -331,7 +331,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 ::ash_core::bulk_update(ctx, action, updates, ::ash_core::BulkUpdateOptions::default()).await
             }
 
-            pub async fn bulk_update_with_opts<D: ::ash_core::DataLayer, I, F>(
+            pub async fn bulk_update_with_opts<D: ::ash_core::TransactionSupport + 'static, I, F>(
                 ctx: &::ash_core::Context<D>,
                 action: &str,
                 updates: I,
@@ -353,14 +353,14 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
     {
         let act_name_str = destroy_act.name.to_string();
         resource_methods.push(quote! {
-            pub async fn bulk_destroy<D: ::ash_core::DataLayer>(
+            pub async fn bulk_destroy<D: ::ash_core::TransactionSupport + 'static>(
                 ctx: &::ash_core::Context<D>,
                 ids: &[::uuid::Uuid],
             ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
                 ::ash_core::bulk_destroy(ctx, #act_name_str, ids, ::ash_core::BulkDestroyOptions::default()).await
             }
 
-            pub async fn bulk_destroy_with_opts<D: ::ash_core::DataLayer>(
+            pub async fn bulk_destroy_with_opts<D: ::ash_core::TransactionSupport + 'static>(
                 ctx: &::ash_core::Context<D>,
                 action: &str,
                 ids: &[::uuid::Uuid],

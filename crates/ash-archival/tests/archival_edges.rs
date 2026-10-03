@@ -276,7 +276,7 @@ async fn hard_deletes_remove_archival_children<D: DataLayer>(ctx: Context<D>) {
     );
 }
 
-async fn archived_records_are_out_of_reach<D: DataLayer>(ctx: Context<D>) {
+async fn archived_records_are_out_of_reach<D: ash_core::TransactionSupport + 'static>(ctx: Context<D>) {
     let ledger = Ledger::create(&ctx).name("Old").await.unwrap();
     let id = ledger.id;
     ledger.destroy(&ctx).await.unwrap();

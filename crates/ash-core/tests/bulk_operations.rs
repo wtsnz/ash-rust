@@ -427,7 +427,7 @@ async fn test_bulk_create_stop_on_error_false() {
 /// Each record gets its own input, through the update action's changeset; the batch is
 /// written together and each row is notified as an update. A row that fails validation
 /// fails alone when the bulk update carries on past errors.
-async fn bulk_updates_each_record<D: ash_core::DataLayer>(ctx: Context<D>) {
+async fn bulk_updates_each_record<D: ash_core::TransactionSupport + 'static>(ctx: Context<D>) {
     let updates = Arc::new(AtomicUsize::new(0));
     let heard = updates.clone();
     let ctx = ctx.with_notifier(Arc::new(SyncFnNotifier::new("updates", move |notification| {

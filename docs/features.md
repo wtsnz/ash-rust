@@ -998,6 +998,7 @@ resource! {
 - `stop_on_error(bool)`: Whether to halt on the first validation/persistence error or collect errors in `BulkResult.errors`.
 - `notify(bool)`: Emits lifecycle action notifications to registered notifiers for each record.
 - `upsert(identity, update_fields)`: Runs atomic upsert operations on conflict with the specified identity constraint (creates only).
+- `transaction(BulkTransaction)`: Ash's `transaction` option. `Batch` (the default, as in Ash) writes each batch in a transaction: its notifications go out once it commits, and a row that fails after its batch is written rolls the batch back and fails every row in it, as Ash rolls back on error. `All` makes the whole action one transaction, its after-transaction hooks running inside it as Ash's do; `Off` writes each row alone, so a failed row fails by itself. A row that fails before its batch is written (a validation, a policy) fails alone either way, unless the action is `All`. A data layer that can't transact (`TransactionSupport::can_transact`) runs without one, as Ash checks `data_layer_can?(resource, :transact)`: ash-memory can't, as Ash's ETS layer can't. Bulk actions need a data layer with `TransactionSupport`, which Postgres, SQLite and memory all have.
 
 ### Example Usage
 ```rust
