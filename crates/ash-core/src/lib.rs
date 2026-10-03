@@ -7,6 +7,7 @@
 mod action;
 mod actor;
 mod aggregate;
+mod atomic;
 mod bulk;
 mod changeset;
 mod context;
@@ -28,6 +29,7 @@ pub mod store;
 mod types;
 mod value;
 
+pub use atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdate};
 pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
@@ -37,24 +39,27 @@ pub use action::{
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
-pub use bulk::{BulkCreateOptions, BulkDestroyOptions, BulkResult, bulk_create, bulk_destroy};
+pub use bulk::{
+    BulkCreateOptions, BulkDestroyOptions, BulkResult, BulkUpdateOptions, bulk_create,
+    bulk_destroy, bulk_update,
+};
 pub use changeset::{
     AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, DynamicChangeset,
     DynamicChangesetHook, IntoFieldMap, ManagedRelationshipSpec,
 };
 pub use context::Context;
 pub use data_layer::{
-    CompiledQuery, DataLayer, NoDataLayer, SchemaSupport, Sort, TransactionSupport,
+    CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
 pub use engine::{
-    KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
-    get, handle_managed_relationships, insert, load_related, manual_create, query, record_visible,
-    run, scope_read, update, update_dynamic, update_existing,
+    KeysetCursor, Page, Query, build_keyset_filter, create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_existing,
+    RelatedQuery, get, handle_managed_relationships, insert, load_related, load_related_query, manual_create, query, record_visible,
+    keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_expecting, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
-pub use filter::{Filter, all_of, any_of, in_list, text_matches};
+pub use filter::{Filter, all_of, any_of, in_list, like_matches, text_matches};
 pub use keys::{
     Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation, TextValue,
 };
@@ -63,7 +68,7 @@ pub use notifier::{Notification, Notifier, SyncFnNotifier};
 pub use pipeline::visible_scope;
 pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_field_writes,
-    authorize_write, check_to_filter, compile_read_filter, redact_fields,
+    authorize_write, check_to_filter, compile_read_filter, field_policy_fields, redact_fields,
 };
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;

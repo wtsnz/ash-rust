@@ -29,6 +29,11 @@ pub fn select_query(resource: &ResourceDef, query: &CompiledQuery) -> Result<Com
     compiler.compile_select(resource, query)
 }
 
+pub fn count_query(resource: &ResourceDef, query: &CompiledQuery) -> Result<CompiledSql> {
+    let mut compiler = QueryCompiler::new(&SqliteDialect);
+    compiler.compile_count(resource, query)
+}
+
 pub fn insert_query(resource: &ResourceDef, fields: &FieldMap) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_insert(resource, fields)
@@ -65,9 +70,20 @@ pub fn row_to_fields(
     calculations: &[String],
     aggregates: &[String],
 ) -> Result<FieldMap> {
+    read_row(row, resource, &CompiledQuery::default(), calculations, aggregates)
+}
+
+/// A row `query` read: the attributes it selected, and the calculations and aggregates.
+pub fn read_row(
+    row: &SqliteRow,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+    calculations: &[String],
+    aggregates: &[String],
+) -> Result<FieldMap> {
     let mut map = FieldMap::new();
 
-    for attr in resource.attributes {
+    for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
         let val = extract_column_value(row, attr.name, &attr.ty)?;
         map.insert(attr.name.to_string(), val);
     }
@@ -79,6 +95,9 @@ pub fn row_to_fields(
                 resource.name
             ))
         })?;
+        if calc.expr.is_custom() {
+            continue;
+        }
         let val = extract_column_value(row, calc.name, &calc.ty)?;
         map.insert(calc.name.to_string(), val);
     }
@@ -92,6 +111,12 @@ pub fn row_to_fields(
         })?;
         let val = extract_aggregate_value(row, agg)?;
         map.insert(agg.name.to_string(), val);
+    }
+
+    // What only Rust computes, from the record as read.
+    for calc in query.custom_calculations(resource) {
+        let args = query.calculation_args.get(calc.name).cloned().unwrap_or_default();
+        ash_core::apply_named_with_args(resource, &mut map, calc.name, &args)?;
     }
 
     Ok(map)
@@ -282,6 +307,7 @@ mod tests {
                 "status",
                 AttrType::Atom {
                     one_of: &["open", "closed"],
+                    name: None,
                 },
             ),
             AttributeDef::optional("representative_id", AttrType::Uuid),

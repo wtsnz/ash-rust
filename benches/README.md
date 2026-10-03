@@ -9,7 +9,7 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
      - Measures raw action invocations, changeset pipelines, memory and SQLite filtering, and correlated aggregate queries.
      - Command: `cargo bench -p helpdesk`
    - **GraphQL API Suite**: `crates/ash-graphql/benches/graphql_bench.rs`
-     - Measures dynamic GraphQL schema reflection, single record queries by ID, 100-record collections, filtered & sorted queries, Relay keyset pagination, DataLoader N+1 relationship batching, GraphQL mutations, Axum HTTP POST `/graphql` roundtrips, and SQLite data layer queries.
+     - Measures dynamic GraphQL schema reflection, single record queries by ID, 100-record collections, filtered & sorted queries, keyset pagination, DataLoader N+1 relationship batching, GraphQL mutations, Axum HTTP POST `/graphql` roundtrips, and SQLite data layer queries.
      - Command: `cargo bench -p ash-graphql --bench graphql_bench --features axum`
 
 2. **Fast Standalone Benchmark Runners**

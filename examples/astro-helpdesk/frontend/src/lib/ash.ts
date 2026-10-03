@@ -8,68 +8,36 @@ import { z } from "zod";
 // Common Ash TypeScript Types
 export type SortOrder = "asc" | "desc";
 
-export interface PageInfo {
-  hasNextPage: boolean;
-  hasPreviousPage: boolean;
-  startCursor?: string | null;
-  endCursor?: string | null;
-}
-
+/** A keyset page of records, as AshGraphql returns a paginated read. */
 export interface PaginatedResult<T> {
   results: T[];
-  totalCount?: number;
-  pageInfo?: PageInfo;
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  startKeyset?: string | null;
+  endKeyset?: string | null;
 }
 
-export interface UuidFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
+/** The operators AshGraphql filters a field by. */
+export interface AshFilter<T> {
   isNil?: boolean;
+  eq?: T | null;
+  notEq?: T | null;
+  in?: (T | null)[];
+  lessThan?: T;
+  greaterThan?: T;
+  lessThanOrEqual?: T;
+  greaterThanOrEqual?: T;
+  isDistinctFrom?: T | null;
+  isNotDistinctFrom?: T | null;
 }
 
-export interface StringFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
-}
-
-export interface TextFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
+/** A text field's filter: AshFilter's operators and AshGraphql's text operators. */
+export interface AshTextFilter extends AshFilter<string> {
   contains?: string;
-  startsWith?: string;
-  endsWith?: string;
-}
-
-export interface FloatFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  isNil?: boolean;
-}
-
-export interface IntFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  in?: number[];
-  isNil?: boolean;
-}
-
-export interface BooleanFilter {
-  eq?: boolean;
-  ne?: boolean;
-  isNil?: boolean;
+  stringStartsWith?: string;
+  stringEndsWith?: string;
+  like?: string;
+  ilike?: string;
 }
 
 // --- Section 2: Resource Types & Action Inputs ---
@@ -80,10 +48,10 @@ export interface Ticket {
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
   priority: number;
   estimate?: number | null;
-  due_on?: string | null;
+  dueOn?: string | null;
   attachment?: string | null;
-  requester_email?: string | null;
-  author_id?: string | null;
+  requesterEmail?: string | null;
+  authorId?: string | null;
   author?: Representative | null;
 }
 
@@ -92,24 +60,22 @@ export interface OpenTicketInput {
   description?: string | null;
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
   priority: number;
-  author_id?: string | null;
   estimate?: number | null;
-  due_on?: string | null;
+  dueOn?: string | null;
   attachment?: string | null;
-  requester_email?: string | null;
+  requesterEmail?: string | null;
+  authorId?: string | null;
 }
 
 export type TicketOpenInput = OpenTicketInput;
 
 export interface ChangeStatusTicketInput {
-  id?: string;
   status?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED" | null;
 }
 
 export type TicketChangeStatusInput = ChangeStatusTicketInput;
 
 export interface UpdateDetailsTicketInput {
-  id?: string;
   title?: string | null;
   description?: string | null;
   priority?: number | null;
@@ -118,36 +84,27 @@ export interface UpdateDetailsTicketInput {
 export type TicketUpdateDetailsInput = UpdateDetailsTicketInput;
 
 export interface CloseTicketInput {
-  id: string;
 }
 
 export type TicketCloseInput = CloseTicketInput;
 
-export interface TicketStatusFilter {
-  eq?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
-  ne?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
-  in?: ("OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED")[];
-  isNil?: boolean;
-}
-
 export interface TicketFilterInput {
-  id?: UuidFilter;
-  title?: TextFilter;
-  description?: TextFilter;
-  status?: TicketStatusFilter;
-  priority?: IntFilter;
-  estimate?: FloatFilter;
-  due_on?: StringFilter;
-  attachment?: StringFilter;
-  requester_email?: TextFilter;
-  author_id?: UuidFilter;
+  id?: AshFilter<string>;
+  title?: AshTextFilter;
+  description?: AshTextFilter;
+  status?: AshFilter<"OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED">;
+  priority?: AshFilter<number>;
+  estimate?: AshFilter<number>;
+  dueOn?: AshFilter<string>;
+  requesterEmail?: AshTextFilter;
+  authorId?: AshFilter<string>;
   author?: RepresentativeFilterInput;
   and?: TicketFilterInput[];
   or?: TicketFilterInput[];
-  not?: TicketFilterInput;
+  not?: TicketFilterInput[];
 }
 
-export type TicketSortField = "id" | "title" | "description" | "status" | "priority" | "estimate" | "due_on" | "attachment" | "requester_email" | "author_id";
+export type TicketSortField = "id" | "title" | "description" | "status" | "priority" | "estimate" | "dueOn" | "attachment" | "requesterEmail" | "authorId";
 
 export interface TicketSortInput {
   field: TicketSortField;
@@ -175,13 +132,13 @@ export interface CreateRepresentativeInput {
 export type RepresentativeCreateInput = CreateRepresentativeInput;
 
 export interface RepresentativeFilterInput {
-  id?: UuidFilter;
-  name?: TextFilter;
-  email?: TextFilter;
-  role?: TextFilter;
+  id?: AshFilter<string>;
+  name?: AshTextFilter;
+  email?: AshTextFilter;
+  role?: AshTextFilter;
   and?: RepresentativeFilterInput[];
   or?: RepresentativeFilterInput[];
-  not?: RepresentativeFilterInput;
+  not?: RepresentativeFilterInput[];
 }
 
 export type RepresentativeSortField = "id" | "name" | "email" | "role";
@@ -203,10 +160,10 @@ export const TicketSchema = z.object({
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]),
   priority: z.number().int(),
   estimate: z.number().nullable().optional(),
-  due_on: z.string().nullable().optional(),
+  dueOn: z.string().nullable().optional(),
   attachment: z.string().nullable().optional(),
-  requester_email: z.string().nullable().optional(),
-  author_id: z.string().uuid().nullable().optional(),
+  requesterEmail: z.string().nullable().optional(),
+  authorId: z.string().uuid().nullable().optional(),
 });
 
 export const OpenTicketInputSchema = z.object({
@@ -214,24 +171,22 @@ export const OpenTicketInputSchema = z.object({
   description: z.string().nullable().optional(),
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]),
   priority: z.number().int().min(1).max(5),
-  author_id: z.string().uuid().nullable().optional(),
   estimate: z.number().nullable().optional(),
-  due_on: z.string().nullable().optional(),
+  dueOn: z.string().nullable().optional(),
   attachment: z.string().nullable().optional(),
-  requester_email: z.string().nullable().optional(),
+  requesterEmail: z.string().nullable().optional(),
+  authorId: z.string().uuid().nullable().optional(),
 });
 
 export const TicketOpenInputSchema = OpenTicketInputSchema;
 
 export const ChangeStatusTicketInputSchema = z.object({
-  id: z.string().uuid().optional(),
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).nullable().optional(),
 });
 
 export const TicketChangeStatusInputSchema = ChangeStatusTicketInputSchema;
 
 export const UpdateDetailsTicketInputSchema = z.object({
-  id: z.string().uuid().optional(),
   title: z.string().min(5).max(100),
   description: z.string().nullable().optional(),
   priority: z.number().int().min(1).max(5).nullable().optional(),
@@ -240,7 +195,6 @@ export const UpdateDetailsTicketInputSchema = z.object({
 export const TicketUpdateDetailsInputSchema = UpdateDetailsTicketInputSchema;
 
 export const CloseTicketInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const TicketCloseInputSchema = CloseTicketInputSchema;
@@ -264,6 +218,9 @@ export const RepresentativeCreateInputSchema = CreateRepresentativeInputSchema;
 
 // --- Section 4: Isomorphic Client SDK & Transport ---
 // Ash Client Runtime & Transport
+/** The most records a page holds: Ash's default `max_page_size`. */
+export const ASH_PAGE_SIZE = 250;
+
 export interface AshClientConfig {
   baseUrl: string;
   graphqlEndpoint?: string;
@@ -271,9 +228,15 @@ export interface AshClientConfig {
   headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 }
 
+/** An error a mutation reports, as AshGraphql's `MutationError`, or a GraphQL error. */
 export interface AshUserError {
-  field?: string;
   message: string;
+  shortMessage?: string | null;
+  /** Ash's error code, e.g. `invalid_attribute`, `required`, `not_found`, `forbidden`. */
+  code?: string | null;
+  /** The input fields it's about. */
+  fields?: string[];
+  path?: (string | number)[];
 }
 
 export class AshClientError extends Error {
@@ -324,13 +287,13 @@ export class AshTransport {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message: string; path?: string[] }>;
+      errors?: Array<{ message: string; path?: (string | number)[] }>;
     };
 
     if (json.errors && json.errors.length > 0) {
       const userErrors: AshUserError[] = json.errors.map((e) => ({
-        field: e.path ? e.path.join(".") : undefined,
         message: e.message,
+        path: e.path,
       }));
       throw new AshClientError(userErrors[0].message || "GraphQL execution error", userErrors);
     }
@@ -344,7 +307,7 @@ export class AshTransport {
 }
 
 export function buildTicketSelectionSet(include?: TicketInclude): string {
-  let fields = "id title description status priority estimate due_on attachment requester_email author_id";
+  let fields = "id title description status priority estimate dueOn attachment requesterEmail authorId";
   if (include?.author) {
     const subInclude = typeof include.author === "object" ? include.author : undefined;
     fields += ` author { ${buildRepresentativeSelectionSet(subInclude)} }`;
@@ -357,11 +320,12 @@ export function buildRepresentativeSelectionSet(include?: RepresentativeInclude)
   return fields;
 }
 
+const TicketSortFieldNames: Record<TicketSortField, string> = { id: "ID", title: "TITLE", description: "DESCRIPTION", status: "STATUS", priority: "PRIORITY", estimate: "ESTIMATE", dueOn: "DUE_ON", attachment: "ATTACHMENT", requesterEmail: "REQUESTER_EMAIL", authorId: "AUTHOR_ID" };
+
 export class TicketQueryBuilder {
   private _filter?: TicketFilterInput;
   private _sort: TicketSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: TicketInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -376,13 +340,9 @@ export class TicketQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -391,69 +351,69 @@ export class TicketQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Ticket[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: TicketSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<Ticket>> {
     const fields = buildTicketSelectionSet(this._include);
-    const query = `query ListTicket($filter: TicketFilterInput, $sort: [TicketSortInput!], $limit: Int, $offset: Int) {
-      listTickets(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListTicket($filter: TicketFilterInput, $sort: [TicketSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listTickets(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listTickets: Ticket[] }>(query, {
+    const data = await this.transport.request<{ listTickets: PaginatedResult<Ticket> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listTickets;
   }
 
-  public async first(): Promise<Ticket | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
+  public async all(): Promise<Ticket[]> {
+    const records: Ticket[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Ticket>> {
-    const fields = buildTicketSelectionSet(this._include);
-    const query = `query ConnTicket($filter: TicketFilterInput, $sort: [TicketSortInput!], $first: Int, $after: String) {
-      ticketsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<Ticket | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      ticketsConnection: {
-        edges: Array<{ node: Ticket; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.ticketsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Ticket>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -465,7 +425,6 @@ export class TicketQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -473,7 +432,7 @@ export class TicketQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "Ticket",
@@ -483,19 +442,21 @@ export class TicketQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 }
+
+const RepresentativeSortFieldNames: Record<RepresentativeSortField, string> = { id: "ID", name: "NAME", email: "EMAIL", role: "ROLE" };
 
 export class RepresentativeQueryBuilder {
   private _filter?: RepresentativeFilterInput;
   private _sort: RepresentativeSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: RepresentativeInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -510,13 +471,9 @@ export class RepresentativeQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -525,69 +482,69 @@ export class RepresentativeQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Representative[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: RepresentativeSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(
+    paging: { first?: number; after?: string; last?: number; before?: string },
+    count: boolean,
+  ): Promise<PaginatedResult<Representative>> {
     const fields = buildRepresentativeSelectionSet(this._include);
-    const query = `query ListRepresentative($filter: RepresentativeFilterInput, $sort: [RepresentativeSortInput!], $limit: Int, $offset: Int) {
-      listRepresentatives(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
-        ${fields}
+    const query = `query ListRepresentative($filter: RepresentativeFilterInput, $sort: [RepresentativeSortInput], $first: Int, $after: String, $last: Int, $before: String) {
+      listRepresentatives(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {
+        results {
+          ${fields}
+        }
+        startKeyset
+        endKeyset${count ? "\n        count" : ""}
       }
     }`;
 
-    const data = await this.transport.request<{ listRepresentatives: Representative[] }>(query, {
+    const data = await this.transport.request<{ listRepresentatives: PaginatedResult<Representative> }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
+      ...paging,
     });
-
     return data.listRepresentatives;
   }
 
-  public async first(): Promise<Representative | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /**
+   * Every matching record, or the first `limit` of them. The server pages every read, as
+   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   */
+  public async all(): Promise<Representative[]> {
+    const records: Representative[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({ first: wanted, after }, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Representative>> {
-    const fields = buildRepresentativeSelectionSet(this._include);
-    const query = `query ConnRepresentative($filter: RepresentativeFilterInput, $sort: [RepresentativeSortInput!], $first: Int, $after: String) {
-      representativesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
+  public async first(): Promise<Representative | null> {
+    const page = await this.read({ first: 1 }, false);
+    return page.results[0] ?? null;
+  }
 
-    const data = await this.transport.request<{
-      representativesConnection: {
-        edges: Array<{ node: Representative; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.representativesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<Representative>> {
+    return before !== undefined
+      ? this.read({ last: first, before }, true)
+      : this.read({ first, after }, true);
   }
 
   public queryOptions() {
@@ -599,7 +556,6 @@ export class RepresentativeQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
@@ -607,7 +563,7 @@ export class RepresentativeQueryBuilder {
     };
   }
 
-  public pageQueryOptions(first: number = 20, after?: string) {
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {
     return {
       queryKey: [
         "Representative",
@@ -617,10 +573,11 @@ export class RepresentativeQueryBuilder {
           sort: this._sort,
           first,
           after,
+          before,
           include: this._include,
         },
       ],
-      queryFn: () => this.page(first, after),
+      queryFn: () => this.page(first, after, before),
     };
   }
 }
@@ -659,112 +616,113 @@ export class TicketClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       openTicket: {
-        result?: Ticket;
+        result?: Ticket | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.openTicket;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async changeStatus(id: string, input: ChangeStatusTicketInput, include?: TicketInclude): Promise<Ticket> {
+  public async changeStatus(id: string, input: ChangeStatusTicketInput = {}, include?: TicketInclude): Promise<Ticket> {
     const fields = buildTicketSelectionSet(include);
-    const query = `mutation MutateTicket($input: ChangeStatusTicketInput!) {
-      changeStatusTicket(input: $input) {
+    const query = `mutation MutateTicket($id: ID!, $input: ChangeStatusTicketInput) {
+      changeStatusTicket(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       changeStatusTicket: {
-        result?: Ticket;
+        result?: Ticket | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.changeStatusTicket;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async updateDetails(id: string, input: UpdateDetailsTicketInput, include?: TicketInclude): Promise<Ticket> {
+  public async updateDetails(id: string, input: UpdateDetailsTicketInput = {}, include?: TicketInclude): Promise<Ticket> {
     const fields = buildTicketSelectionSet(include);
-    const query = `mutation MutateTicket($input: UpdateDetailsTicketInput!) {
-      updateDetailsTicket(input: $input) {
+    const query = `mutation MutateTicket($id: ID!, $input: UpdateDetailsTicketInput) {
+      updateDetailsTicket(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       updateDetailsTicket: {
-        result?: Ticket;
+        result?: Ticket | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.updateDetailsTicket;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async close(id: string): Promise<boolean> {
-    const query = `mutation MutateTicket($input: CloseTicketInput!) {
-      closeTicket(input: $input) {
+  public async close(id: string, _input: CloseTicketInput = {}): Promise<boolean> {
+    const query = `mutation MutateTicket($id: ID!) {
+      closeTicket(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       closeTicket: {
+        result?: Ticket | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.closeTicket;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -805,23 +763,23 @@ export class RepresentativeClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       createRepresentative: {
-        result?: Representative;
+        result?: Representative | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.createRepresentative;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -875,7 +833,6 @@ export function useTicketQuery(
   params?: {
     filter?: TicketFilterInput;
     limit?: number;
-    offset?: number;
     include?: TicketInclude;
   },
   options?: Record<string, unknown>
@@ -883,7 +840,6 @@ export function useTicketQuery(
   const builder = client.ticket.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -952,7 +908,6 @@ export function useRepresentativeQuery(
   params?: {
     filter?: RepresentativeFilterInput;
     limit?: number;
-    offset?: number;
     include?: RepresentativeInclude;
   },
   options?: Record<string, unknown>
@@ -960,7 +915,6 @@ export function useRepresentativeQuery(
   const builder = client.representative.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {

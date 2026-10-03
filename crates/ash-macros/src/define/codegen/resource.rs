@@ -243,7 +243,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             attr_defs.push(quote! {
                 ::ash_core::AttributeDef::required(
                     #name_str,
-                    ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*] }
+                    ::ash_core::AttrType::Atom { one_of: &[#(#atoms),*], name: None }
                 )
             });
         } else if is_uuid(ty) {
@@ -559,6 +559,18 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 );
             });
         }
+    }
+    for calc in &def.calculations {
+        let id = &calc.ident;
+        let name_str = id.to_string();
+        to_inserts.push(quote! {
+            if let ::std::option::Option::Some(val) = &self.#id {
+                map.insert(
+                    ::std::string::String::from(#name_str),
+                    ::ash_core::Value::from(val.clone()),
+                );
+            }
+        });
     }
     for agg in &def.aggregates {
         let id = &agg.ident;
@@ -1225,8 +1237,10 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         )
     };
 
+    // `PartialEq` but not `Eq`: a float attribute, or a relationship to a resource with
+    // one, can't be `Eq`, and the macro can't see into related resources.
     Ok(quote! {
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, Debug, PartialEq)]
         #(#outer_attrs)*
         pub struct #resource {
             #(#struct_fields,)*

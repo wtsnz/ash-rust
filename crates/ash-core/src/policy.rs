@@ -185,10 +185,16 @@ pub fn authorize_write(
 }
 
 fn policy_to_filter(policy: &PolicyDef, actor: Option<&Actor>) -> Result<Filter> {
+    effects_to_filter(policy.checks, actor)
+}
+
+/// The records `effects` allow `actor`, as a filter: what [`eval_policy_effects`] decides
+/// record by record.
+pub fn effects_to_filter(effects: &[PolicyEffect], actor: Option<&Actor>) -> Result<Filter> {
     let mut forbids = Vec::new();
     let mut authorizes = Vec::new();
 
-    for effect in policy.checks {
+    for effect in effects {
         match effect {
             PolicyEffect::ForbidIf(check) => {
                 let f = check_to_filter(check, actor)?;
@@ -275,18 +281,83 @@ fn eval_policy(
     eval_policy_effects(policy.checks, actor, record)
 }
 
+impl Check {
+    /// The record's fields this check reads.
+    pub fn fields(&self, out: &mut Vec<&'static str>) {
+        match self {
+            Check::RelatesToActor { field } | Check::IsNil { field } | Check::Eq { field, .. } => out.push(field),
+            Check::And(checks) | Check::Or(checks) => checks.iter().for_each(|check| check.fields(out)),
+            Check::Always | Check::ActorPresent | Check::ActorAttributeEquals { .. } => {}
+        }
+    }
+}
+
+/// The record's fields `resource`'s field policies check: a read whose records are
+/// redacted reads them, whatever it selects.
+pub fn field_policy_fields(resource: &ResourceDef) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    for policy in resource.field_policies {
+        for effect in policy.checks {
+            let (PolicyEffect::AuthorizeIf(check)
+            | PolicyEffect::AuthorizeUnless(check)
+            | PolicyEffect::ForbidIf(check)
+            | PolicyEffect::ForbidUnless(check)) = effect;
+            check.fields(&mut fields);
+        }
+    }
+    fields
+}
+
 pub fn redact_fields(
     resource: &ResourceDef,
     actor: Option<&Actor>,
     fields: &mut FieldMap,
 ) -> Result<()> {
+    // Every policy checks the record as it was read, then the fields they hide go: one
+    // hidden first mustn't read as nil to a policy checking it after.
+    let mut hidden = Vec::new();
     for fp in resource.field_policies {
-        let is_allowed = eval_policy_effects(fp.checks, actor, Some(fields))?;
-        if !is_allowed {
-            fields.insert(fp.field.to_string(), crate::value::Value::Null);
+        if !eval_policy_effects(fp.checks, actor, Some(fields))? {
+            hidden.push(fp.field);
         }
     }
+    for field in hidden {
+        fields.insert(field.to_string(), crate::value::Value::Null);
+    }
     Ok(())
+}
+
+/// The records `actor` may run the write `action` on, as a filter: what [`authorize_write`]
+/// decides record by record, as Ash compiles a write's policies into an atomic update.
+pub fn write_filter(resource: &ResourceDef, action: &ActionDef, actor: Option<&Actor>) -> Result<Filter> {
+    if resource.policies.is_empty() {
+        return Ok(Filter::True);
+    }
+    let applicable: Vec<_> = resource.policies.iter().filter(|policy| policy.applies(action)).collect();
+    if applicable.is_empty() {
+        return Ok(Filter::False);
+    }
+    let (bypass_policies, normal_policies): (Vec<_>, Vec<_>) =
+        applicable.into_iter().partition(|p| p.bypass);
+    let bypass: Vec<Filter> = bypass_policies
+        .into_iter()
+        .map(|policy| policy_to_filter(policy, actor))
+        .collect::<Result<_>>()?;
+    let normal = if normal_policies.is_empty() {
+        Filter::False
+    } else {
+        Filter::and(
+            normal_policies
+                .into_iter()
+                .map(|policy| policy_to_filter(policy, actor))
+                .collect::<Result<Vec<_>>>()?,
+        )
+    };
+    Ok(if bypass.is_empty() {
+        normal
+    } else {
+        Filter::or(bypass.into_iter().chain([normal]))
+    })
 }
 
 pub fn authorize_field_writes(

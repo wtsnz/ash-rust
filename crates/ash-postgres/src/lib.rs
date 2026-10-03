@@ -14,7 +14,10 @@ use ash_core::{
     AttrType, CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
-use ash_sql::{CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam};
+use ash_sql::{
+    CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlDialect, SqlParam,
+    TableSnapshot,
+};
 use sqlx::Row;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow};
 use tokio::sync::Mutex;
@@ -175,15 +178,20 @@ impl Postgres {
     }
 
     async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<PgRow>> {
+        self.fetch_all_raw(compiled).await.map_err(map_sqlx)
+    }
+
+    /// [`fetch_all`](Self::fetch_all), keeping the database's error for the caller to read.
+    async fn fetch_all_raw(&self, compiled: &CompiledSql) -> std::result::Result<Vec<PgRow>, sqlx::Error> {
         match &self.source {
             PostgresSource::Pool(pool) => {
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(pool).await.map_err(map_sqlx)
+                query.fetch_all(pool).await
             }
             PostgresSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(&mut **guard).await.map_err(map_sqlx)
+                query.fetch_all(&mut **guard).await
             }
         }
     }
@@ -254,14 +262,40 @@ impl Postgres {
         let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
-        for res in &resources {
-            for extension in ash_sql::required_extensions(&dialect, res) {
-                self.execute_raw(&extension).await?;
-            }
-            let ddl = compiler.compile_create_table(res)?;
-            self.execute_raw(&ddl).await?;
-            for idx_ddl in compiler.compile_create_indexes(res)? {
-                self.execute_raw(&idx_ddl).await?;
+        // Tables that refer to each other are created without the keys to tables not yet
+        // made, and those keys added after: no order creates them with every key inline.
+        let creates = resources
+            .iter()
+            .map(|res| ash_sql::SchemaOperation::CreateTable(TableSnapshot::from_resource(res, &dialect)))
+            .collect();
+        for operation in ash_sql::defer_forward_references(creates) {
+            match operation {
+                ash_sql::SchemaOperation::CreateTable(table) => {
+                    let res = resources
+                        .iter()
+                        .find(|res| res.table_name() == table.table)
+                        .expect("a table for each resource");
+                    for extension in ash_sql::required_extensions(&dialect, res) {
+                        self.execute_raw(&extension).await?;
+                    }
+                    self.execute_raw(&ash_sql::emit_create_table(&dialect, &table)).await?;
+                    for idx_ddl in compiler.compile_create_indexes(res)? {
+                        self.execute_raw(&idx_ddl).await?;
+                    }
+                }
+                ash_sql::SchemaOperation::AddReference { table, reference } => {
+                    // Installing again finds the key already there.
+                    let alter = ash_sql::emit_add_reference(&dialect, &table, &reference);
+                    let literal = |text: &str| format!("'{}'", text.replace('\'', "''"));
+                    self.execute_raw(&format!(
+                        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = {} \
+                         AND conrelid = to_regclass({})) THEN {alter} END IF; END $$",
+                        literal(&reference.name),
+                        literal(&dialect.quote_identifier(&table)),
+                    ))
+                    .await?;
+                }
+                _ => {}
             }
         }
         let has_statements = resources.iter().any(|res| {
@@ -505,8 +539,95 @@ impl DataLayer for Postgres {
         let compiled = compiler.compile_select(resource, query)?;
         let rows = self.fetch_all(&compiled).await?;
         rows.iter()
-            .map(|row| row_to_fields(row, resource, &query.calculations, &query.aggregates))
+            .map(|row| read_row(row, resource, query, &query.calculations, &query.aggregates))
             .collect()
+    }
+
+    fn can_run_query_per_key(&self, _resource: &ResourceDef, _by: &ash_core::PerKey<'_>) -> bool {
+        true
+    }
+
+    /// The read once per key, in one statement with a lateral join (see
+    /// [`QueryCompiler::compile_select_per_key`]), as AshPostgres loads a relationship.
+    async fn run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        by: &ash_core::PerKey<'_>,
+        keys: &[Value],
+    ) -> Result<Vec<Vec<FieldMap>>> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_select_per_key(resource, query, by, keys.to_vec())?;
+        let rows = self.fetch_all(&compiled).await?;
+        // Each row's key, by its place in `keys`, so a key given twice gets its rows twice.
+        let mut per_key = vec![Vec::new(); keys.len()];
+        for row in &rows {
+            let ord: i64 = row.try_get("__ash_ord").map_err(map_sqlx)?;
+            if let Some(rows) = usize::try_from(ord - 1).ok().and_then(|i| per_key.get_mut(i)) {
+                rows.push(read_row(row, resource, query, &query.calculations, &query.aggregates)?);
+            }
+        }
+        Ok(per_key)
+    }
+
+    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let rows = self.fetch_all(&compiler.compile_count(resource, query)?).await?;
+        let count: i64 = rows
+            .first()
+            .ok_or_else(|| Error::DataLayer("COUNT returned no row".into()))?
+            .try_get(0)
+            .map_err(map_sqlx)?;
+        Ok(count as usize)
+    }
+
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The update as one statement (see [`QueryCompiler::compile_atomic_update`]). A
+    /// condition that holds raises through `ash_raise_error`, which this turns back into
+    /// the condition's error, from the record's values it reports.
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &ash_core::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_atomic_update(resource, query, update)?;
+        let rows = match self.fetch_all_raw(&compiled).await {
+            Ok(rows) => rows,
+            Err(err) => {
+                return Err(raised_error(&err, resource, &update.conditions).unwrap_or_else(|| map_sqlx_resource(err, resource)));
+            }
+        };
+        rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
+    }
+
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// The destroy as one statement (see [`QueryCompiler::compile_atomic_destroy`]), its
+    /// conditions raised as an atomic update's are.
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[ash_core::AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
+        let dialect = PostgresDialect;
+        let mut compiler = QueryCompiler::new(&dialect);
+        let compiled = compiler.compile_atomic_destroy(resource, query, conditions)?;
+        let rows = match self.fetch_all_raw(&compiled).await {
+            Ok(rows) => rows,
+            Err(err) => return Err(raised_error(&err, resource, conditions).unwrap_or_else(|| map_sqlx_resource(err, resource))),
+        };
+        rows.iter().map(|row| row_to_fields(row, resource, &[], &[])).collect()
     }
 
     async fn upsert(
@@ -544,6 +665,69 @@ impl DataLayer for Postgres {
             .iter()
             .map(|r| row_to_fields(r, resource, &[], &[]))
             .collect()
+    }
+
+    /// Writes each group of rows that change the same columns in one
+    /// `UPDATE … FROM (VALUES …)`. Rows that change nothing, and resources with optimistic
+    /// locking, which checks each row's version, go one at a time.
+    async fn bulk_update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> Result<Vec<Result<FieldMap>>> {
+        let mut results: Vec<Option<Result<FieldMap>>> = (0..rows.len()).map(|_| None).collect();
+        let pk = resource
+            .primary_key()
+            .ok_or(Error::NoPrimaryKey(resource.name))?
+            .name;
+        let mut groups: std::collections::BTreeMap<Vec<&str>, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (i, (id, fields)) in rows.iter().enumerate() {
+            let columns: Vec<&str> = resource
+                .attributes
+                .iter()
+                .filter(|attr| !attr.primary_key && fields.contains_key(attr.name))
+                .map(|attr| attr.name)
+                .collect();
+            if columns.is_empty() || resource.optimistic_lock_attribute().is_some() {
+                results[i] = Some(self.update(resource, tenant, *id, fields.clone()).await);
+            } else {
+                groups.entry(columns).or_default().push(i);
+            }
+        }
+        let dialect = PostgresDialect;
+        for (columns, indices) in groups {
+            // Postgres binds at most 65,535 parameters to a statement.
+            let per_statement = (65_535 / (columns.len() + 1)).max(1);
+            for batch in indices.chunks(per_statement) {
+                let batch_rows: Vec<(Uuid, &FieldMap)> =
+                    batch.iter().map(|&i| (rows[i].0, &rows[i].1)).collect();
+                let compiled = QueryCompiler::new(&dialect)
+                    .with_tenant(tenant)
+                    .compile_bulk_update(resource, &columns, &batch_rows)?;
+                let mut stored: std::collections::HashMap<Uuid, FieldMap> = self
+                    .fetch_all_resource(&compiled, resource)
+                    .await?
+                    .iter()
+                    .map(|row| {
+                        let fields = row_to_fields(row, resource, &[], &[])?;
+                        let id = match fields.get(pk) {
+                            Some(Value::Uuid(id)) => *id,
+                            _ => return Err(Error::DataLayer(format!("{} row without its key", resource.name))),
+                        };
+                        Ok((id, fields))
+                    })
+                    .collect::<Result<_>>()?;
+                for &i in batch {
+                    results[i] = Some(stored.remove(&rows[i].0).ok_or(Error::NotFound));
+                }
+            }
+        }
+        Ok(results
+            .into_iter()
+            .map(|result| result.expect("every row has a result"))
+            .collect())
     }
 
     async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
@@ -910,15 +1094,26 @@ fn row_to_fields(
     calculations: &[String],
     aggregates: &[String],
 ) -> Result<FieldMap> {
-    let mut map = FieldMap::new();
+    read_row(row, resource, &CompiledQuery::default(), calculations, aggregates)
+}
 
-    for attr in resource.attributes {
+/// A row `query` read: the attributes it selected, and the calculations and aggregates.
+fn read_row(
+    row: &PgRow,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+    calculations: &[String],
+    aggregates: &[String],
+) -> Result<FieldMap> {
+    let mut map = FieldMap::with_capacity(resource.attributes.len() + calculations.len() + aggregates.len());
+
+    for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
         let val = extract_column_value(row, attr.name, &attr.ty);
         map.insert(attr.name.to_string(), val);
     }
 
     for calc_name in calculations {
-        if let Some(calc) = resource.calculation(calc_name) {
+        if let Some(calc) = resource.calculation(calc_name).filter(|calc| !calc.expr.is_custom()) {
             let val = extract_column_value(row, calc.name, &calc.ty);
             map.insert(calc.name.to_string(), val);
         }
@@ -929,6 +1124,12 @@ fn row_to_fields(
             let val = extract_column_value(row, agg.name, &agg.ty);
             map.insert(agg.name.to_string(), val);
         }
+    }
+
+    // What only Rust computes, from the record as read.
+    for calc in query.custom_calculations(resource) {
+        let args = query.calculation_args.get(calc.name).cloned().unwrap_or_default();
+        ash_core::apply_named_with_args(resource, &mut map, calc.name, &args)?;
     }
 
     Ok(map)
@@ -1092,6 +1293,40 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
+    }
+}
+
+/// The error an atomic statement's condition raised through `ash_raise_error`, if that's
+/// what `err` is: `ash_error: {"condition": n, "row": {...}}`.
+fn raised_error(err: &sqlx::Error, resource: &ResourceDef, conditions: &[ash_core::AtomicCondition]) -> Option<Error> {
+    let sqlx::Error::Database(db_err) = err else {
+        return None;
+    };
+    let payload: serde_json::Value = serde_json::from_str(db_err.message().strip_prefix("ash_error: ")?).ok()?;
+    let condition = conditions.get(payload.get("condition")?.as_u64()? as usize)?;
+    let mut row = FieldMap::new();
+    if let Some(reported) = payload.get("row").and_then(serde_json::Value::as_object) {
+        for (name, value) in reported {
+            let ty = resource.attribute(name).map(|attr| attr.ty);
+            row.insert(name.clone(), json_value(ty, value));
+        }
+    }
+    Some((condition.error)(&row))
+}
+
+/// A record's value as `jsonb_build_object` wrote it, back as the attribute's value.
+fn json_value(ty: Option<ash_core::AttrType>, json: &serde_json::Value) -> Value {
+    use ash_core::AttrType;
+    match (ty, json) {
+        (_, serde_json::Value::Null) => Value::Null,
+        (Some(AttrType::Uuid), serde_json::Value::String(text)) => {
+            Uuid::parse_str(text).map(Value::Uuid).unwrap_or_else(|_| Value::String(text.clone()))
+        }
+        (_, serde_json::Value::Bool(b)) => Value::Bool(*b),
+        (Some(AttrType::Integer), serde_json::Value::Number(n)) => n.as_i64().map(Value::Int).unwrap_or(Value::Null),
+        (_, serde_json::Value::Number(n)) => Value::String(n.to_string()),
+        (_, serde_json::Value::String(text)) => Value::String(text.clone()),
+        (_, other) => Value::String(other.to_string()),
     }
 }
 

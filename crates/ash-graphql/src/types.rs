@@ -2,74 +2,44 @@ use ash_core::{AttrType, FieldMap, Value as AshValue};
 use async_graphql::dynamic::TypeRef;
 use async_graphql::{Name, Value as GqlValue};
 
+/// The GraphQL scalar or enum an Ash type is, by name, as AshGraphql maps them: UUIDs are
+/// `ID`, UTC datetimes `DateTime`, maps `Json`, and an enum type (a named atom) its own
+/// enum. An unnamed atom is constrained text, a `String`, as a plain `:atom` is.
+pub fn graphql_type_name(ty: AttrType) -> &'static str {
+    match ty {
+        AttrType::Uuid => TypeRef::ID,
+        AttrType::Integer => TypeRef::INT,
+        AttrType::Float => TypeRef::FLOAT,
+        AttrType::Boolean => TypeRef::BOOLEAN,
+        AttrType::UtcDatetime { .. } => "DateTime",
+        AttrType::Date => "Date",
+        AttrType::Decimal => "Decimal",
+        AttrType::Map => "Json",
+        AttrType::Atom { name: Some(name), .. } => name,
+        AttrType::Atom { name: None, .. }
+        | AttrType::String
+        | AttrType::CiString
+        | AttrType::Binary
+        | AttrType::Inet
+        | AttrType::Array
+        | AttrType::Vector { .. } => TypeRef::STRING,
+    }
+}
+
+/// The custom scalars the schema's types use.
+pub const CUSTOM_SCALARS: &[&str] = &["DateTime", "Date", "Decimal", "Json"];
+
 /// Converts an Ash [`AttrType`] into an `async_graphql` [`TypeRef`].
 pub fn attr_type_to_type_ref(
-    resource_name: &str,
-    field_name: &str,
+    _resource_name: &str,
+    _field_name: &str,
     ty: AttrType,
     allow_nil: bool,
 ) -> TypeRef {
     match ty {
-        AttrType::Uuid => {
-            if allow_nil {
-                TypeRef::named(TypeRef::ID)
-            } else {
-                TypeRef::named_nn(TypeRef::ID)
-            }
-        }
-        AttrType::String
-        | AttrType::CiString
-        | AttrType::Date
-        | AttrType::Binary
-        | AttrType::UtcDatetime { .. }
-        | AttrType::Inet
-        | AttrType::Decimal => {
-            if allow_nil {
-                TypeRef::named(TypeRef::STRING)
-            } else {
-                TypeRef::named_nn(TypeRef::STRING)
-            }
-        }
-        AttrType::Integer => {
-            if allow_nil {
-                TypeRef::named(TypeRef::INT)
-            } else {
-                TypeRef::named_nn(TypeRef::INT)
-            }
-        }
-        AttrType::Float => {
-            if allow_nil {
-                TypeRef::named(TypeRef::FLOAT)
-            } else {
-                TypeRef::named_nn(TypeRef::FLOAT)
-            }
-        }
-        AttrType::Boolean => {
-            if allow_nil {
-                TypeRef::named(TypeRef::BOOLEAN)
-            } else {
-                TypeRef::named_nn(TypeRef::BOOLEAN)
-            }
-        }
-        AttrType::Atom { .. } => {
-            let enum_name = enum_type_name(resource_name, field_name);
-            if allow_nil {
-                TypeRef::named(enum_name)
-            } else {
-                TypeRef::named_nn(enum_name)
-            }
-        }
-        AttrType::Map => {
-            let json_type = "JSON";
-            if allow_nil {
-                TypeRef::named(json_type)
-            } else {
-                TypeRef::named_nn(json_type)
-            }
-        }
         AttrType::Array => {
             if allow_nil {
-                TypeRef::named_list(TypeRef::STRING)
+                TypeRef::named_nn_list(TypeRef::STRING)
             } else {
                 TypeRef::named_nn_list_nn(TypeRef::STRING)
             }
@@ -81,24 +51,17 @@ pub fn attr_type_to_type_ref(
                 TypeRef::named_nn_list_nn(TypeRef::FLOAT)
             }
         }
+        _ if allow_nil => TypeRef::named(graphql_type_name(ty)),
+        _ => TypeRef::named_nn(graphql_type_name(ty)),
     }
 }
 
-/// Generates a standardized Enum type name for an atom field on a resource.
-pub fn enum_type_name(resource_name: &str, field_name: &str) -> String {
-    let mut capitalized_field = String::new();
-    let mut capitalize_next = true;
-    for ch in field_name.chars() {
-        if ch == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            capitalized_field.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else {
-            capitalized_field.push(ch);
-        }
+/// The enum type a named atom is, if it is one.
+pub fn enum_type_name(ty: AttrType) -> Option<&'static str> {
+    match ty {
+        AttrType::Atom { name: Some(name), .. } => Some(name),
+        _ => None,
     }
-    format!("{}{}Enum", resource_name, capitalized_field)
 }
 
 /// Converts an [`ash_core::Value`] into an `async_graphql` [`GqlValue`].
@@ -127,7 +90,9 @@ pub fn ash_value_to_graphql_value(val: &AshValue) -> GqlValue {
 pub fn ash_value_to_graphql_value_typed(val: &AshValue, ty: AttrType) -> GqlValue {
     match (val, ty) {
         (AshValue::Null, _) => GqlValue::Null,
-        (AshValue::String(s), AttrType::Atom { .. }) => GqlValue::Enum(Name::new(s.to_uppercase())),
+        (AshValue::String(s), AttrType::Atom { name: Some(_), .. }) => {
+            GqlValue::Enum(Name::new(s.to_uppercase()))
+        }
         (AshValue::String(s), AttrType::Float) => match s.parse::<f64>() {
             Ok(value) => float_value(value),
             Err(_) => GqlValue::Null,
@@ -156,7 +121,11 @@ fn float_value(value: f64) -> GqlValue {
 pub fn parse_inet_input(
     acc: &async_graphql::dynamic::ValueAccessor<'_>,
 ) -> Result<String, async_graphql::Error> {
-    let inet = ash_core::Inet::parse(acc.string()?)
+    inet_text(acc.as_value())
+}
+
+fn inet_text(value: &GqlValue) -> Result<String, async_graphql::Error> {
+    let inet = ash_core::Inet::parse(string(value)?)
         .map_err(|err| async_graphql::Error::new(err.to_string()))?;
     Ok(inet.as_str().to_string())
 }
@@ -166,13 +135,31 @@ pub fn parse_vector_input(
     acc: &async_graphql::dynamic::ValueAccessor<'_>,
     dimensions: u32,
 ) -> Result<String, async_graphql::Error> {
+    vector_text(acc.as_value(), dimensions)
+}
+
+fn vector_text(value: &GqlValue, dimensions: u32) -> Result<String, async_graphql::Error> {
     let mut values = Vec::new();
-    for item in acc.list()?.iter() {
-        values.push(item.f64()? as f32);
+    for item in crate::filter::list(value) {
+        values.push(float(item)? as f32);
     }
     ash_core::check_vector(&values, dimensions)
         .map_err(|err| async_graphql::Error::new(err.to_string()))?;
     Ok(ash_core::format_vector(&values))
+}
+
+fn string(value: &GqlValue) -> Result<&str, async_graphql::Error> {
+    match value {
+        GqlValue::String(text) => Ok(text),
+        _ => Err(async_graphql::Error::new("internal: not a string")),
+    }
+}
+
+fn float(value: &GqlValue) -> Result<f64, async_graphql::Error> {
+    match value {
+        GqlValue::Number(n) => n.as_f64().ok_or_else(|| async_graphql::Error::new("internal: not a float")),
+        _ => Err(async_graphql::Error::new("internal: not a float")),
+    }
 }
 
 /// Converts an `async_graphql` [`GqlValue`] into an [`ash_core::Value`].
@@ -217,67 +204,71 @@ pub fn parse_input_val(
     acc: &async_graphql::dynamic::ValueAccessor<'_>,
     ty: AttrType,
 ) -> Result<AshValue, async_graphql::Error> {
+    parse_input_value(acc.as_value(), ty)
+}
+
+/// [`parse_input_val`] of the value as given: an argument's, or one a selection holds.
+pub fn parse_input_value(value: &GqlValue, ty: AttrType) -> Result<AshValue, async_graphql::Error> {
     match ty {
         AttrType::Uuid => {
-            let s = acc.string()?;
+            let s = string(value)?;
             let u = uuid::Uuid::parse_str(s)
                 .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
             Ok(AshValue::Uuid(u))
         }
-        AttrType::String => {
-            let s = acc.string()?;
-            Ok(AshValue::String(s.to_string()))
-        }
+        AttrType::String => Ok(AshValue::String(string(value)?.to_string())),
         AttrType::UtcDatetime { precision } => {
-            let s = acc.string()?;
             let normalized = precision
-                .normalize(s)
+                .normalize(string(value)?)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(normalized))
         }
         AttrType::Binary => {
-            let s = acc.string()?;
-            let binary =
-                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            let binary = ash_core::Binary::parse(string(value)?)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(binary.encode()))
         }
         AttrType::Date => {
-            let s = acc.string()?;
+            let s = string(value)?;
             ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
         }
         AttrType::CiString => {
-            let s = acc.string()?;
-            let value = ash_core::CiString::parse(s)
+            let value = ash_core::CiString::parse(string(value)?)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(value.as_str().to_string()))
         }
         AttrType::Decimal => {
-            let s = acc.string()?;
+            let s = string(value)?;
             ash_core::Decimal::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(s.to_string()))
         }
         AttrType::Float => {
-            let n = acc.f64()?;
+            let n = float(value)?;
             let float = ash_core::Float::parse(&n.to_string())
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(AshValue::String(float.as_str().to_string()))
         }
-        AttrType::Integer => {
-            let n = acc.i64()?;
-            Ok(AshValue::Int(n))
-        }
-        AttrType::Boolean => {
-            let b = acc.boolean()?;
-            Ok(AshValue::Bool(b))
-        }
-        AttrType::Inet => Ok(AshValue::String(parse_inet_input(acc)?)),
-        AttrType::Vector { dimensions } => {
-            Ok(AshValue::String(parse_vector_input(acc, dimensions)?))
-        }
-        AttrType::Atom { one_of } => {
-            let name = acc.enum_name()?;
+        AttrType::Integer => match value {
+            GqlValue::Number(n) => n
+                .as_i64()
+                .map(AshValue::Int)
+                .ok_or_else(|| async_graphql::Error::new("internal: not an signed integer")),
+            _ => Err(async_graphql::Error::new("internal: not an signed integer")),
+        },
+        AttrType::Boolean => match value {
+            GqlValue::Boolean(b) => Ok(AshValue::Bool(*b)),
+            _ => Err(async_graphql::Error::new("internal: not a boolean")),
+        },
+        AttrType::Inet => Ok(AshValue::String(inet_text(value)?)),
+        AttrType::Vector { dimensions } => Ok(AshValue::String(vector_text(value, dimensions)?)),
+        AttrType::Atom { one_of, name: type_name } => {
+            let name = match (value, type_name) {
+                (GqlValue::Enum(name), Some(_)) => name.as_str(),
+                (GqlValue::String(name), _) => name.as_str(),
+                _ => return Err(async_graphql::Error::new("internal: not an enum name")),
+            };
             if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {
                 Ok(AshValue::String((*matched).to_string()))
             } else {

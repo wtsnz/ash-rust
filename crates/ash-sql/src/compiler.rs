@@ -1,10 +1,11 @@
 use ash_core::{
+    AtomicCondition, AtomicExpr, AtomicUpdate,
     AggregateDef, AggregateFilter, AggregateKind, AttrType, CalculationDef, CompiledQuery, Error,
     Expr, FieldMap, Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
 use uuid::Uuid;
 
-use crate::dialect::{SqlDialect, TextMatch};
+use crate::dialect::{AggregateStrategy, SqlDialect, TextMatch};
 use crate::param::SqlParam;
 
 /// A parameterized SQL statement and its bound parameter values.
@@ -95,6 +96,14 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     applying_read_filters: Vec<&'static str>,
     /// The query's tenant, which also limits the rows read through relationships.
     tenant: Option<String>,
+    /// The query's actor, whose read policies limit the related rows aggregates count.
+    actor: Option<ash_core::Actor>,
+    /// The alias a calculation's fields are qualified with, inside a subquery that names
+    /// its table so.
+    expr_scope: Option<String>,
+    /// Ties a read to the key it's run for, inside a lateral join (see
+    /// [`compile_select_per_key`](Self::compile_select_per_key)).
+    per_key: Option<String>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -110,6 +119,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             calc_args: std::collections::HashMap::new(),
             applying_read_filters: Vec::new(),
             tenant: None,
+            actor: None,
+            expr_scope: None,
+            per_key: None,
         }
     }
 
@@ -213,7 +225,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     fn bind_field(&mut self, resource: &ResourceDef, field: &str, val: Value) -> String {
-        match resource.attribute(field).map(|attr| attr.ty) {
+        let ty = resource
+            .attribute(field)
+            .map(|attr| attr.ty)
+            .or_else(|| resource.aggregate(field).map(|agg| agg.ty))
+            .or_else(|| resource.calculation(field).map(|calc| calc.ty));
+        match ty {
             Some(ty) => self.bind_typed(ty, val),
             None => self.push_param(val),
         }
@@ -237,7 +254,19 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         scope_alias: Option<&str>,
     ) -> Result<String> {
         if let Some(calc) = resource.calculation(field) {
-            self.compile_calculation(resource, calc)
+            // Its fields are the scoped table's, as a filter's are.
+            let outer = std::mem::replace(&mut self.expr_scope, scope_alias.map(str::to_string));
+            let compiled = self.compile_calculation(resource, calc);
+            self.expr_scope = outer;
+            compiled
+        } else if let Some(agg) = resource.aggregate(field) {
+            // An aggregate is its subquery wherever a filter, sort or keyset refers to it,
+            // as AshPostgres writes it: there's no column of that name to refer to.
+            let source = match scope_alias {
+                Some(alias) => alias.to_string(),
+                None => ident(self.dialect, resource.table_name())?,
+            };
+            self.compile_aggregate_from(resource, agg, &source)
         } else {
             let col = column(self.dialect, resource, field)?;
             if let Some(alias) = scope_alias {
@@ -248,9 +277,18 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// `name`'s column, qualified by the calculation's scope if it has one.
+    fn scoped_column(&self, resource: &ResourceDef, name: &str) -> Result<String> {
+        let col = column(self.dialect, resource, name)?;
+        Ok(match &self.expr_scope {
+            Some(alias) => format!("{alias}.{col}"),
+            None => col,
+        })
+    }
+
     pub fn compile_expr(&mut self, resource: &ResourceDef, expr: &Expr) -> Result<String> {
         match expr {
-            Expr::Field(name) => column(self.dialect, resource, name),
+            Expr::Field(name) => self.scoped_column(resource, name),
             Expr::Arg(name) => {
                 let val = self
                     .current_calc_args
@@ -273,7 +311,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Expr::LitBool(b) => Ok(self.dialect.boolean_literal(*b).to_string()),
             Expr::Null => Ok("NULL".to_string()),
             Expr::StringLength(name) => {
-                let col = column(self.dialect, resource, name)?;
+                let col = self.scoped_column(resource, name)?;
                 Ok(format!("length({col})"))
             }
             Expr::Length(inner) => {
@@ -376,6 +414,19 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         needle: &str,
         scope_alias: Option<&str>,
     ) -> Result<String> {
+        self.compile_text_match_with(resource, field, kind, needle, scope_alias, false)
+    }
+
+    /// A text filter; `ignore_case` makes it case-insensitive whatever the field's type.
+    fn compile_text_match_with(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        kind: TextMatch,
+        needle: &str,
+        scope_alias: Option<&str>,
+        ignore_case: bool,
+    ) -> Result<String> {
         let ty = resource
             .attribute(field)
             .map(|attr| attr.ty)
@@ -390,6 +441,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 )));
             }
         };
+        let case_insensitive = case_insensitive || ignore_case;
         let op = self.compile_operand_scoped(resource, field, scope_alias)?;
         let pattern = self.dialect.text_pattern(kind, needle, case_insensitive);
         let p = self.bind_field(resource, field, Value::String(pattern));
@@ -473,12 +525,24 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Filter::EndsWith(field, needle) => {
                 self.compile_text_match(resource, field, TextMatch::EndsWith, needle, scope_alias)
             }
+            Filter::Like(field, pattern) => {
+                self.compile_text_match(resource, field, TextMatch::Like, pattern, scope_alias)
+            }
+            Filter::ILike(field, pattern) => self.compile_text_match_with(
+                resource,
+                field,
+                TextMatch::Like,
+                pattern,
+                scope_alias,
+                true,
+            ),
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 let ty = resource
                     .attribute(field)
                     .map(|attr| attr.ty)
+                    .or_else(|| resource.aggregate(field).map(|agg| agg.ty))
                     .or_else(|| resource.calculation(field).map(|calc| calc.ty));
                 if ty == Some(AttrType::Binary) {
                     // Each value needs decoding, so compare one bound value at a time.
@@ -622,15 +686,30 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         join: Option<(&'static ResourceDef, &str)>,
     ) -> Result<String> {
         let mut sql = self.compile_aggregate_filter(dest_alias, &agg.filter)?;
-        if let Some(compiled) = self.compile_read_filter(dest, dest_alias)? {
+        if let Some(compiled) = self.compile_related_read_filter(dest, dest_alias)? {
             sql.push_str(&format!(" AND {compiled}"));
         }
         if let Some((through, join_alias)) = join
-            && let Some(compiled) = self.compile_read_filter(through, join_alias)?
+            && let Some(compiled) = self.compile_related_read_filter(through, join_alias)?
         {
             sql.push_str(&format!(" AND {compiled}"));
         }
         Ok(sql)
+    }
+
+    /// The rows of `resource` an aggregate counts, as a condition on `alias`'s rows: those
+    /// its primary read returns to the query's actor, its policies included, as Ash
+    /// authorizes an aggregate's query by default. No policy letting the actor read any
+    /// means none.
+    fn compile_related_read_filter(&mut self, resource: &'static ResourceDef, alias: &str) -> Result<Option<String>> {
+        let mut parts: Vec<String> = self.compile_read_filter(resource, alias)?.into_iter().collect();
+        match ash_core::compile_read_filter(resource, resource.default_read(), self.actor.as_ref()) {
+            Ok(None) => {}
+            Ok(Some(policy)) => parts.push(self.compile_filter_scoped(resource, &policy, Some(alias))?),
+            Err(Error::Forbidden) => parts.push("1=0".to_string()),
+            Err(err) => return Err(err),
+        }
+        Ok((!parts.is_empty()).then(|| format!("({})", parts.join(" AND "))))
     }
 
     pub fn compile_aggregate(
@@ -638,18 +717,29 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         agg: &AggregateDef,
     ) -> Result<String> {
+        let source_table = ident(self.dialect, resource.table_name())?;
+        self.compile_aggregate_from(resource, agg, &source_table)
+    }
+
+    /// [`compile_aggregate`](Self::compile_aggregate) of the record `source_table` names:
+    /// the table, or the alias a subquery gives it.
+    fn compile_aggregate_from(
+        &mut self,
+        resource: &ResourceDef,
+        agg: &AggregateDef,
+        source_table: &str,
+    ) -> Result<String> {
         let rel = resource.relationship(agg.relationship).ok_or_else(|| {
             Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
         })?;
         let dest = (rel.destination)();
         let dest_table = self.table(dest)?;
         let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
-        let source_table = ident(self.dialect, resource.table_name())?;
         let join_sql = relationship_equalities(
             self.dialect,
             &dest_alias,
             dest,
-            &source_table,
+            source_table,
             resource,
             rel,
         )?;
@@ -759,13 +849,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
-    pub fn compile_sort(&self, resource: &ResourceDef, sorts: &[Sort]) -> Result<String> {
+    pub fn compile_sort(&mut self, resource: &ResourceDef, sorts: &[Sort]) -> Result<String> {
         if sorts.is_empty() {
             return Ok(String::new());
         }
         let mut clauses = Vec::new();
         for sort in sorts {
-            let col = column(self.dialect, resource, &sort.field)?;
+            let col = self.compile_operand(resource, &sort.field)?;
             let dir = if sort.descending { "DESC" } else { "ASC" };
             clauses.push(format!("{col} {dir}"));
         }
@@ -789,14 +879,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         for (i, sort) in sorts.iter().enumerate() {
             let mut prefix_match = Vec::new();
             for prev in sorts.iter().take(i) {
-                let prev_col = column(self.dialect, resource, &prev.field)?;
+                let prev_col = self.compile_operand(resource, &prev.field)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
 
-            let col = column(self.dialect, resource, &sort.field)?;
+            let col = self.compile_operand(resource, &sort.field)?;
             let op = if sort.descending { "<" } else { ">" };
             if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &sort.field) {
                 let p = self.bind_field(resource, &sort.field, val.clone());
@@ -813,7 +903,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if !sorts.iter().any(|s| s.field == pk) {
             let mut prefix_match = Vec::new();
             for prev in sorts {
-                let prev_col = column(self.dialect, resource, &prev.field)?;
+                let prev_col = self.compile_operand(resource, &prev.field)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
@@ -863,10 +953,38 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     ) -> Result<CompiledSql> {
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
+
+        // The aggregates over each relationship, together: those that can share a subquery.
+        let mut groups: Vec<(&ash_core::RelationshipDef, Vec<&AggregateDef>)> = Vec::new();
+        let mut inline: Vec<&AggregateDef> = Vec::new();
+        for agg_name in &query.aggregates {
+            let agg = resource.aggregate(agg_name).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "unknown aggregate `{agg_name}` on {}",
+                    resource.name
+                ))
+            })?;
+            let rel = resource.relationship(agg.relationship).ok_or_else(|| {
+                Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
+            })?;
+            if matches!(agg.kind, AggregateKind::First { .. }) {
+                inline.push(agg);
+            } else {
+                match groups.iter_mut().find(|(r, _)| r.name == rel.name) {
+                    Some((_, aggs)) => aggs.push(agg),
+                    None => groups.push((rel, vec![agg])),
+                }
+            }
+        }
+        if !groups.is_empty() {
+            return self.compile_select_with_aggregate_groups(resource, query, cursor, &groups, &inline);
+        }
+
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 
-        for attr in resource.attributes {
+        for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
             select_items.push(ident(self.dialect, attr.name)?);
         }
 
@@ -877,6 +995,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     resource.name
                 ))
             })?;
+            // Only Rust computes this, from the record once it's read.
+            if calc.expr.is_custom() {
+                continue;
+            }
             let expr_sql = self.compile_calculation(resource, calc)?;
             let alias = ident(self.dialect, calc.name)?;
             select_items.push(format!("{expr_sql} AS {alias}"));
@@ -894,6 +1016,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             select_items.push(format!("{agg_sql} AS {alias}"));
         }
 
+        if self.per_key.is_some() {
+            // Each key's rows in the read's order, through the lateral join.
+            let order = self.compile_sort(resource, &query.sort)?;
+            select_items.push(format!("row_number() OVER ({}) AS \"__ash_row\"", order.trim()));
+        }
+
         sql.push_str(&select_items.join(", "));
         sql.push_str(" FROM ");
         sql.push_str(&self.table(resource)?);
@@ -906,6 +1034,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         if let Some(c) = cursor {
             where_clauses.push(self.compile_keyset_cursor(resource, c, &query.sort)?);
+        }
+
+        if let Some(per_key) = self.per_key.take() {
+            where_clauses.push(per_key);
         }
 
         if !where_clauses.is_empty() {
@@ -938,6 +1070,579 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The read with each relationship's aggregates computed once, together, as ash_sql
+    /// loads them: the records the query selects, sorted and paged, as a subquery, with one
+    /// subquery per relationship joined to it, laterally or grouped by the dialect's
+    /// [`AggregateStrategy`]. The rows come back in the query's order.
+    ///
+    /// ```sql
+    /// SELECT "__ash_s".*, "__ash_aggs_trips"."trips_completed", …
+    /// FROM (SELECT …, <sort> AS "__ash_sort_0" FROM cabs WHERE … ORDER BY "__ash_sort_0" LIMIT n) AS "__ash_s"
+    /// LEFT JOIN LATERAL (SELECT COUNT(*) FILTER (WHERE d.status = $1) AS "trips_completed", …
+    ///                    FROM trips AS d WHERE d.cab_id = "__ash_s".id) AS "__ash_aggs_trips" ON TRUE
+    /// ORDER BY "__ash_s"."__ash_sort_0"
+    /// ```
+    fn compile_select_with_aggregate_groups(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        cursor: Option<&KeysetCursor>,
+        groups: &[(&ash_core::RelationshipDef, Vec<&AggregateDef>)],
+        inline: &[&AggregateDef],
+    ) -> Result<CompiledSql> {
+        let source = ident(self.dialect, "__ash_s")?;
+
+        // The records: what's selected, the keys the aggregates join on, the sort.
+        let mut items = Vec::new();
+        for attr in resource.attributes {
+            let joins_on = groups.iter().any(|(rel, _)| rel.source_columns().contains(&attr.name));
+            if query.reads(resource, attr) || joins_on {
+                items.push(ident(self.dialect, attr.name)?);
+            }
+        }
+        for calc_name in &query.calculations {
+            let calc = resource.calculation(calc_name).ok_or_else(|| {
+                Error::Invalid(format!("unknown calculation `{calc_name}` on {}", resource.name))
+            })?;
+            // Only Rust computes this, from the record once it's read.
+            if calc.expr.is_custom() {
+                continue;
+            }
+            let expr_sql = self.compile_calculation(resource, calc)?;
+            items.push(format!("{expr_sql} AS {}", ident(self.dialect, calc.name)?));
+        }
+        for agg in inline {
+            let agg_sql = self.compile_aggregate(resource, agg)?;
+            items.push(format!("{agg_sql} AS {}", ident(self.dialect, agg.name)?));
+        }
+        let mut sorts = query.sort.clone();
+        if cursor.is_some() {
+            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
+            if !sorts.iter().any(|s| s.field == pk) {
+                sorts.push(Sort { field: pk.to_string(), descending: false });
+            }
+        }
+        let mut order = Vec::new();
+        for (i, sort) in sorts.iter().enumerate() {
+            let alias = ident(self.dialect, &format!("__ash_sort_{i}"))?;
+            items.push(format!("{} AS {alias}", self.compile_operand(resource, &sort.field)?));
+            order.push((alias, if sort.descending { "DESC" } else { "ASC" }));
+        }
+
+        let mut inner = format!("SELECT {} FROM {}", items.join(", "), self.table(resource)?);
+        let mut where_clauses = Vec::new();
+        if let Some(filter) = &query.filter {
+            where_clauses.push(self.compile_filter(resource, filter)?);
+        }
+        if let Some(c) = cursor {
+            where_clauses.push(self.compile_keyset_cursor(resource, c, &query.sort)?);
+        }
+        let per_key = self.per_key.take();
+        if let Some(per_key) = &per_key {
+            where_clauses.push(per_key.clone());
+        }
+        if !where_clauses.is_empty() {
+            inner.push_str(" WHERE ");
+            inner.push_str(&where_clauses.join(" AND "));
+        }
+        if !order.is_empty() {
+            let by: Vec<String> = order.iter().map(|(alias, dir)| format!("{alias} {dir}")).collect();
+            inner.push_str(&format!(" ORDER BY {}", by.join(", ")));
+        }
+        if let Some(limit) = query.limit {
+            let p = self.push_param(Value::Int(limit as i64));
+            inner.push_str(&format!(" LIMIT {p}"));
+        }
+        if let Some(offset) = query.offset {
+            let p = self.push_param(Value::Int(offset as i64));
+            inner.push_str(&format!(" OFFSET {p}"));
+        }
+
+        // Each relationship's aggregates, joined.
+        let mut columns = vec![format!("{source}.*")];
+        if per_key.is_some() {
+            let by: Vec<String> = order.iter().map(|(alias, dir)| format!("{source}.{alias} {dir}")).collect();
+            let over = if by.is_empty() { String::new() } else { format!("ORDER BY {}", by.join(", ")) };
+            columns.push(format!("row_number() OVER ({over}) AS \"__ash_row\""));
+        }
+        let mut joins = Vec::new();
+        for (rel, aggs) in groups {
+            let (join, values) = self.compile_aggregate_group(rel, aggs, &source)?;
+            joins.push(join);
+            columns.extend(values);
+        }
+
+        let mut sql = format!("SELECT {} FROM ({inner}) AS {source} {}", columns.join(", "), joins.join(" "));
+        if !order.is_empty() {
+            let by: Vec<String> = order.iter().map(|(alias, dir)| format!("{source}.{alias} {dir}")).collect();
+            sql.push_str(&format!(" ORDER BY {}", by.join(", ")));
+        }
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The join computing `aggs`, all over `rel`, for the records `source` names, and
+    /// the columns that read each from it, as the aggregate's name.
+    fn compile_aggregate_group(
+        &mut self,
+        rel: &ash_core::RelationshipDef,
+        aggs: &[&AggregateDef],
+        source: &str,
+    ) -> Result<(String, Vec<String>)> {
+        let strategy = self.dialect.aggregate_strategy();
+        let dest = (rel.destination)();
+        let dest_alias = ident(self.dialect, &format!("__ash_agg_{}", rel.name))?;
+        let group_alias = ident(self.dialect, &format!("__ash_aggs_{}", rel.name))?;
+
+        // What each aggregate computes, over the relationship's rows.
+        let mut computed = Vec::new();
+        for agg in aggs {
+            let filter = self.compile_aggregate_filter(&dest_alias, &agg.filter)?;
+            let filter = match filter.strip_prefix(" AND ") {
+                Some(condition) => format!(" FILTER (WHERE {condition})"),
+                None => String::new(),
+            };
+            let value = match &agg.kind {
+                AggregateKind::Count => format!("COUNT(*){filter}"),
+                AggregateKind::Exists => format!("COUNT(*){filter} > 0"),
+                AggregateKind::Sum { field } => format!("SUM({dest_alias}.{}){filter}", ident(self.dialect, field)?),
+                AggregateKind::First { .. } => {
+                    return Err(Error::Invalid(format!("aggregate `{}` can't be grouped", agg.name)));
+                }
+            };
+            computed.push(format!("{value} AS {}", ident(self.dialect, agg.name)?));
+        }
+
+        // The relationship's rows: the destination, through the join resource for a
+        // many_to_many, as the destination's primary read (and the join's) returns them to
+        // the query's actor.
+        let dest_table = self.table(dest)?;
+        let mut from = format!("{dest_table} AS {dest_alias}");
+        let mut conditions = Vec::new();
+        // The record's key and the related rows' key it matches, column by column.
+        let mut keys: Vec<(String, String)> = Vec::new();
+        match rel.kind {
+            RelKind::ManyToMany => {
+                let through = rel.through.ok_or_else(|| {
+                    Error::Invalid(format!("many_to_many relationship `{}` must specify a join resource", rel.name))
+                })?();
+                let join_alias = ident(self.dialect, &format!("__ash_agg_join_{}", rel.name))?;
+                let source_on_join = ident(self.dialect, rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute))?;
+                let dest_on_join = ident(self.dialect, rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute))?;
+                let dest_attr = ident(self.dialect, rel.destination_attribute)?;
+                from.push_str(&format!(
+                    " JOIN {} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join}",
+                    self.table(through)?
+                ));
+                if let Some(compiled) = self.compile_related_read_filter(through, &join_alias)? {
+                    conditions.push(compiled);
+                }
+                keys.push((ident(self.dialect, rel.source_attribute)?, format!("{join_alias}.{source_on_join}")));
+            }
+            _ => {
+                for (source_col, dest_col) in rel.source_columns().iter().zip(rel.destination_columns()) {
+                    keys.push((ident(self.dialect, source_col)?, format!("{dest_alias}.{}", column(self.dialect, dest, dest_col)?)));
+                }
+            }
+        }
+        if let Some(compiled) = self.compile_related_read_filter(dest, &dest_alias)? {
+            conditions.push(compiled);
+        }
+
+        let join = match strategy {
+            AggregateStrategy::Lateral => {
+                for (source_col, related) in &keys {
+                    conditions.push(format!("{related} = {source}.{source_col}"));
+                }
+                format!(
+                    "LEFT JOIN LATERAL (SELECT {} FROM {from} WHERE {}) AS {group_alias} ON TRUE",
+                    computed.join(", "),
+                    conditions.join(" AND ")
+                )
+            }
+            AggregateStrategy::Grouped => {
+                let mut select = Vec::new();
+                let mut on = Vec::new();
+                for (i, (source_col, related)) in keys.iter().enumerate() {
+                    let key = ident(self.dialect, &format!("__ash_key_{i}"))?;
+                    select.push(format!("{related} AS {key}"));
+                    on.push(format!("{group_alias}.{key} = {source}.{source_col}"));
+                }
+                select.extend(computed);
+                let related: Vec<&str> = keys.iter().map(|(_, related)| related.as_str()).collect();
+                let mut subquery = format!("SELECT {} FROM {from}", select.join(", "));
+                if !conditions.is_empty() {
+                    subquery.push_str(&format!(" WHERE {}", conditions.join(" AND ")));
+                }
+                subquery.push_str(&format!(" GROUP BY {}", related.join(", ")));
+                format!("LEFT JOIN ({subquery}) AS {group_alias} ON {}", on.join(" AND "))
+            }
+        };
+
+        // A grouped join finds no group for a record with no related rows: none counted.
+        let mut values = Vec::new();
+        for agg in aggs {
+            let name = ident(self.dialect, agg.name)?;
+            let value = format!("{group_alias}.{name}");
+            let value = match (&agg.kind, strategy) {
+                (AggregateKind::Count, AggregateStrategy::Grouped) => format!("COALESCE({value}, 0)"),
+                (AggregateKind::Exists, AggregateStrategy::Grouped) => {
+                    format!("COALESCE({value}, {})", self.dialect.boolean_literal(false))
+                }
+                (AggregateKind::Sum { .. }, _) => self.dialect.cast_expression(agg.ty, &value),
+                _ => value,
+            };
+            values.push(format!("{value} AS {name}"));
+        }
+        Ok((join, values))
+    }
+
+    /// `query` run once for each of `keys`, in one statement, as AshPostgres loads a
+    /// relationship with a lateral join: each key's rows filtered, sorted, limited and
+    /// offset on their own. Each row carries its key's place in `keys`, from 1, as
+    /// `"__ash_ord"`, and the rows come back key by key, each key's in the read's order.
+    ///
+    /// ```sql
+    /// SELECT "__ash_k"."ord" AS "__ash_ord", "__ash_d".*
+    /// FROM unnest($1) WITH ORDINALITY AS "__ash_k"("key", "ord")
+    /// CROSS JOIN LATERAL (SELECT …, row_number() OVER (ORDER BY …) AS "__ash_row" FROM trips
+    ///                     WHERE … AND "cab_id" = "__ash_k"."key" ORDER BY … LIMIT 3) AS "__ash_d"
+    /// ORDER BY "__ash_k"."ord", "__ash_d"."__ash_row"
+    /// ```
+    pub fn compile_select_per_key(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        by: &ash_core::PerKey<'_>,
+        keys: Vec<Value>,
+    ) -> Result<CompiledSql> {
+        // The join resource's filter compiles before the read does, as the same actor.
+        self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
+        let key_ty = match by {
+            ash_core::PerKey::Attribute(field) => resource.attribute(field).map(|attr| attr.ty),
+            ash_core::PerKey::Through { resource: through, source, .. } => through.attribute(source).map(|attr| attr.ty),
+        };
+        let param = self.push_list_param(keys);
+        let param = match key_ty {
+            Some(ty) => self.dialect.cast_list_param(ty, &param),
+            None => param,
+        };
+        let key = "\"__ash_k\".\"key\"";
+        // A binary key is bound as base64 text, as a binary value is, and decoded to compare.
+        let key = match key_ty {
+            Some(ty @ AttrType::Binary) => self.dialect.cast_param(ty, key),
+            _ => key.to_string(),
+        };
+        let condition = match by {
+            ash_core::PerKey::Attribute(field) => format!("{} = {key}", column(self.dialect, resource, field)?),
+            ash_core::PerKey::Through { resource: through, filter, source, destination, attribute } => {
+                let join = ident(self.dialect, "__ash_j")?;
+                let mut links = format!(
+                    "SELECT {join}.{} FROM {} AS {join} WHERE {join}.{} = {key}",
+                    column(self.dialect, through, destination)?,
+                    self.table(through)?,
+                    column(self.dialect, through, source)?,
+                );
+                if let Some(filter) = filter {
+                    links.push_str(&format!(" AND {}", self.compile_filter_scoped(through, filter, Some(&join))?));
+                }
+                format!("{} IN ({links})", column(self.dialect, resource, attribute)?)
+            }
+        };
+        self.per_key = Some(condition);
+        let inner = self.compile_select_internal(resource, query, None);
+        self.per_key = None;
+        let inner = inner?.sql;
+        let sql = format!(
+            "SELECT \"__ash_k\".\"ord\" AS \"__ash_ord\", \"__ash_d\".* FROM unnest({param}) WITH ORDINALITY AS \"__ash_k\"(\"key\", \"ord\") \
+             CROSS JOIN LATERAL ({inner}) AS \"__ash_d\" ORDER BY \"__ash_k\".\"ord\", \"__ash_d\".\"__ash_row\""
+        );
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// `SELECT COUNT(*)` of the records `query` would return: its filter, and its limit
+    /// and offset if it has them. Sort, calculations and aggregates don't change how many.
+    pub fn compile_count(&mut self, resource: &ResourceDef, query: &CompiledQuery) -> Result<CompiledSql> {
+        self.calc_args = query.calculation_args.clone();
+        self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
+        let mut from = self.table(resource)?;
+        if let Some(filter) = &query.filter {
+            from.push_str(" WHERE ");
+            from.push_str(&self.compile_filter(resource, filter)?);
+        }
+        let sql = if query.limit.is_none() && query.offset.is_none() {
+            format!("SELECT COUNT(*) FROM {from}")
+        } else {
+            let mut page = format!("SELECT 1 FROM {from}");
+            if let Some(limit) = query.limit {
+                let p = self.push_param(Value::Int(limit as i64));
+                page.push_str(&format!(" LIMIT {p}"));
+            }
+            if let Some(offset) = query.offset {
+                if query.limit.is_none() {
+                    // SQLite takes an offset only after a limit; -1 is no limit.
+                    let p = self.push_param(Value::Int(-1));
+                    page.push_str(&format!(" LIMIT {p}"));
+                }
+                let p = self.push_param(Value::Int(offset as i64));
+                page.push_str(&format!(" OFFSET {p}"));
+            }
+            format!("SELECT COUNT(*) FROM ({page}) AS counted")
+        };
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The type a value compared with, or set to the result of, `expr` takes.
+    fn atomic_type(resource: &ResourceDef, expr: &AtomicExpr) -> Option<AttrType> {
+        match expr {
+            AtomicExpr::Field(name) => resource.attribute(name).map(|attr| attr.ty),
+            AtomicExpr::StringLength(_) => Some(AttrType::Integer),
+            AtomicExpr::Trim(inner) => Self::atomic_type(resource, inner),
+            AtomicExpr::Add(a, b) => Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b)),
+            AtomicExpr::Coalesce(items) => items.iter().find_map(|e| Self::atomic_type(resource, e)),
+            AtomicExpr::If { then, otherwise, .. } => {
+                Self::atomic_type(resource, then).or_else(|| Self::atomic_type(resource, otherwise))
+            }
+            _ => None,
+        }
+    }
+
+    /// SQL for an atomic update's expression, over the resource's table. A value takes
+    /// `ty`, the type of what it's compared with or set to.
+    pub fn compile_atomic_expr(
+        &mut self,
+        resource: &ResourceDef,
+        expr: &AtomicExpr,
+        ty: Option<AttrType>,
+    ) -> Result<String> {
+        let typed = |a: &AtomicExpr, b: &AtomicExpr| {
+            Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b))
+        };
+        Ok(match expr {
+            AtomicExpr::Value(value) => match ty {
+                Some(ty) => self.bind_typed(ty, value.clone()),
+                None => self.push_param(value.clone()),
+            },
+            AtomicExpr::Field(name) => {
+                if resource.attribute(name).is_none() {
+                    return Err(Error::Invalid(format!("unknown attribute `{name}` on {}", resource.name)));
+                }
+                ident(self.dialect, name)?
+            }
+            AtomicExpr::Add(a, b) => {
+                let ty = typed(a, b).or(ty);
+                format!("({} + {})", self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?)
+            }
+            AtomicExpr::StringLength(e) => format!("char_length({})", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Trim(e) => format!("btrim({})", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Coalesce(items) => {
+                let ty = items.iter().find_map(|e| Self::atomic_type(resource, e)).or(ty);
+                let parts = items
+                    .iter()
+                    .map(|e| self.compile_atomic_expr(resource, e, ty))
+                    .collect::<Result<Vec<_>>>()?;
+                format!("COALESCE({})", parts.join(", "))
+            }
+            AtomicExpr::If { condition, then, otherwise } => {
+                let condition = self.compile_atomic_expr(resource, condition, None)?;
+                let ty = typed(then, otherwise).or(ty);
+                let then = self.compile_atomic_expr(resource, then, ty)?;
+                let otherwise = self.compile_atomic_expr(resource, otherwise, ty)?;
+                format!("(CASE WHEN {condition} THEN {then} ELSE {otherwise} END)")
+            }
+            AtomicExpr::IsNil(e) => format!("({} IS NULL)", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Eq(a, b) | AtomicExpr::Lt(a, b) | AtomicExpr::Gt(a, b) | AtomicExpr::DistinctFrom(a, b) => {
+                let op = match expr {
+                    AtomicExpr::Eq(..) => "=",
+                    AtomicExpr::Lt(..) => "<",
+                    AtomicExpr::Gt(..) => ">",
+                    _ => "IS DISTINCT FROM",
+                };
+                let ty = typed(a, b);
+                format!("({} {op} {})", self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?)
+            }
+            AtomicExpr::In(e, values) => match e.as_ref() {
+                AtomicExpr::Field(name) => format!("({})", self.compile_filter(resource, &Filter::In(name.clone(), values.clone()))?),
+                other => {
+                    if values.is_empty() {
+                        "FALSE".to_string()
+                    } else {
+                        let ty = Self::atomic_type(resource, other);
+                        let operand = self.compile_atomic_expr(resource, other, ty)?;
+                        let items = values
+                            .iter()
+                            .map(|v| self.compile_atomic_expr(resource, &AtomicExpr::Value(v.clone()), ty))
+                            .collect::<Result<Vec<_>>>()?;
+                        format!("({operand} IN ({}))", items.join(", "))
+                    }
+                }
+            },
+            AtomicExpr::And(items) | AtomicExpr::Or(items) => {
+                if items.is_empty() {
+                    return Ok(if matches!(expr, AtomicExpr::And(_)) { "TRUE" } else { "FALSE" }.to_string());
+                }
+                let joiner = if matches!(expr, AtomicExpr::And(_)) { " AND " } else { " OR " };
+                let parts = items
+                    .iter()
+                    .map(|e| self.compile_atomic_expr(resource, e, None))
+                    .collect::<Result<Vec<_>>>()?;
+                format!("({})", parts.join(joiner))
+            }
+            AtomicExpr::Not(e) => format!("(NOT {})", self.compile_atomic_expr(resource, e, None)?),
+            AtomicExpr::Filter(filter) => format!("({})", self.compile_filter(resource, filter)?),
+        })
+    }
+
+    /// An update as one statement, as AshPostgres runs an atomic update:
+    ///
+    /// ```sql
+    /// UPDATE t SET a = s.new_a, ...
+    /// FROM (SELECT pk, <new a> AS new_a, ...,
+    ///         CASE WHEN <condition> THEN ash_raise_error(<which, and the row>) ... END AS check
+    ///       FROM t WHERE <query> LIMIT n FOR UPDATE) AS s
+    /// WHERE t.pk = s.pk AND s.check IS NULL
+    /// RETURNING t.*
+    /// ```
+    ///
+    /// The subquery locks each record and computes everything from it as it is then, so
+    /// no write slips in between; a condition that holds raises its error from the
+    /// statement, through the database's `ash_raise_error` function.
+    pub fn compile_atomic_update(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &AtomicUpdate,
+    ) -> Result<CompiledSql> {
+        self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
+        let pk = resource.primary_key().ok_or(Error::NoPrimaryKey(resource.name))?;
+        let pk_col = ident(self.dialect, pk.name)?;
+        let table = self.table(resource)?;
+
+        let mut items = vec![pk_col.clone()];
+        let mut sets = Vec::new();
+        for (i, (field, expr)) in update.set.iter().enumerate() {
+            let attr = resource
+                .attribute(field)
+                .ok_or_else(|| Error::Invalid(format!("unknown attribute `{field}` on {}", resource.name)))?;
+            let value = self.compile_atomic_expr(resource, expr, Some(attr.ty))?;
+            items.push(format!("{} AS \"__ash_set_{i}\"", self.dialect.cast_expression(attr.ty, &value)));
+            sets.push(format!("{} = __ash_s.\"__ash_set_{i}\"", ident(self.dialect, field)?));
+        }
+        if sets.is_empty() {
+            return Err(Error::Invalid(format!("an atomic update of {} sets nothing", resource.name)));
+        }
+        items.extend(self.atomic_check(resource, &update.conditions)?);
+        let subquery = self.atomic_subquery(resource, query, &table, &items)?;
+
+        let mut sql = format!(
+            "UPDATE {table} AS __ash_t SET {} FROM ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}",
+            sets.join(", ")
+        );
+        if !update.conditions.is_empty() {
+            sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
+        }
+        sql.push_str(" RETURNING __ash_t.*");
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// A destroy as one statement, as AshPostgres runs `destroy_query`: like
+    /// [`compile_atomic_update`](Self::compile_atomic_update), the records `query` selects
+    /// locked and checked against `conditions` in a subquery, then deleted, returning
+    /// what they held.
+    ///
+    /// ```sql
+    /// DELETE FROM t AS __ash_t
+    /// USING (SELECT pk, CASE WHEN <fails> THEN ash_raise_error(..) ELSE NULL END AS "__ash_check"
+    ///        FROM t WHERE <filter> LIMIT n FOR UPDATE) AS __ash_s
+    /// WHERE __ash_t.pk = __ash_s.pk AND __ash_s."__ash_check" IS NULL
+    /// RETURNING __ash_t.*
+    /// ```
+    pub fn compile_atomic_destroy(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[AtomicCondition],
+    ) -> Result<CompiledSql> {
+        self.tenant = query.tenant.clone();
+        self.actor = query.actor.clone();
+        let pk = resource.primary_key().ok_or(Error::NoPrimaryKey(resource.name))?;
+        let pk_col = ident(self.dialect, pk.name)?;
+        let table = self.table(resource)?;
+
+        let mut items = vec![pk_col.clone()];
+        items.extend(self.atomic_check(resource, conditions)?);
+        let subquery = self.atomic_subquery(resource, query, &table, &items)?;
+
+        let mut sql = format!(
+            "DELETE FROM {table} AS __ash_t USING ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}"
+        );
+        if !conditions.is_empty() {
+            sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
+        }
+        sql.push_str(" RETURNING __ash_t.*");
+        if let Some(err) = self.invalid_param.take() {
+            return Err(err);
+        }
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// The `"__ash_check"` column of an atomic statement's subquery: null when no condition
+    /// holds, else raised through `ash_raise_error` with the first that does, by index,
+    /// and the record's values it reports. `None` without conditions.
+    fn atomic_check(&mut self, resource: &ResourceDef, conditions: &[AtomicCondition]) -> Result<Option<String>> {
+        if conditions.is_empty() {
+            return Ok(None);
+        }
+        let mut check = String::from("CASE");
+        for (i, condition) in conditions.iter().enumerate() {
+            let when = self.compile_atomic_expr(resource, &condition.fails_when, None)?;
+            let mut row = Vec::new();
+            for name in &condition.reports {
+                let key = self.push_param(Value::String(name.clone()));
+                row.push(format!("{key}::text, {}", ident(self.dialect, name)?));
+            }
+            check.push_str(&format!(
+                " WHEN {when} THEN ash_raise_error(jsonb_build_object('condition', {i}, 'row', jsonb_build_object({})))",
+                row.join(", ")
+            ));
+        }
+        check.push_str(" ELSE NULL END");
+        Ok(Some(format!("{check} AS \"__ash_check\"")))
+    }
+
+    /// The subquery an atomic statement runs over: `items` from the records `query`
+    /// selects, locked.
+    fn atomic_subquery(
+        &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        table: &str,
+        items: &[String],
+    ) -> Result<String> {
+        let mut subquery = format!("SELECT {} FROM {table}", items.join(", "));
+        if let Some(filter) = &query.filter {
+            subquery.push_str(" WHERE ");
+            subquery.push_str(&self.compile_filter(resource, filter)?);
+        }
+        if let Some(limit) = query.limit {
+            let p = self.push_param(Value::Int(limit as i64));
+            subquery.push_str(&format!(" LIMIT {p}"));
+        }
+        subquery.push_str(" FOR UPDATE");
+        Ok(subquery)
     }
 
     pub fn compile_insert(
@@ -1062,6 +1767,50 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             sql.push_str(" RETURNING *");
         }
 
+        Ok(CompiledSql::new(sql, self.params.clone()))
+    }
+
+    /// Updates `rows`, which all set `columns`, in one statement:
+    /// `UPDATE t SET c = v.c, … FROM (VALUES …) AS v(…) WHERE t.pk = v.pk RETURNING t.*`.
+    /// For dialects with `VALUES` column aliases and `RETURNING` (Postgres).
+    pub fn compile_bulk_update(
+        &mut self,
+        resource: &ResourceDef,
+        columns: &[&str],
+        rows: &[(Uuid, &FieldMap)],
+    ) -> Result<CompiledSql> {
+        let pk = resource
+            .primary_key()
+            .ok_or(Error::NoPrimaryKey(resource.name))?;
+        let table = self.table(resource)?;
+        let pk_col = ident(self.dialect, pk.name)?;
+        let mut aliases = vec![pk_col.clone()];
+        let mut set_clauses = Vec::with_capacity(columns.len());
+        let mut types = Vec::with_capacity(columns.len());
+        for column in columns {
+            let attr = resource
+                .attribute(column)
+                .ok_or_else(|| Error::Invalid(format!("{} has no attribute {column}", resource.name)))?;
+            let col = ident(self.dialect, attr.name)?;
+            set_clauses.push(format!("{col} = \"v\".{col}"));
+            aliases.push(col);
+            types.push((attr.name, attr.ty));
+        }
+        let mut values = Vec::with_capacity(rows.len());
+        for (id, fields) in rows {
+            let mut tuple = vec![self.bind_typed(pk.ty, Value::Uuid(*id))];
+            for (name, ty) in &types {
+                let value = fields.get(*name).cloned().unwrap_or(Value::Null);
+                tuple.push(self.bind_typed(*ty, value));
+            }
+            values.push(format!("({})", tuple.join(", ")));
+        }
+        let sql = format!(
+            "UPDATE {table} SET {} FROM (VALUES {}) AS \"v\" ({}) WHERE {table}.{pk_col} = \"v\".{pk_col} RETURNING {table}.*",
+            set_clauses.join(", "),
+            values.join(", "),
+            aliases.join(", "),
+        );
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 

@@ -115,6 +115,52 @@ impl BulkDestroyOptions {
     }
 }
 
+/// Options for a bulk update.
+#[derive(Clone, Debug)]
+pub struct BulkUpdateOptions {
+    pub batch_size: Option<usize>,
+    pub return_records: bool,
+    pub stop_on_error: bool,
+    pub notify: bool,
+}
+
+impl Default for BulkUpdateOptions {
+    fn default() -> Self {
+        Self {
+            batch_size: None,
+            return_records: true,
+            stop_on_error: true,
+            notify: true,
+        }
+    }
+}
+
+impl BulkUpdateOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn batch_size(mut self, size: usize) -> Self {
+        self.batch_size = Some(size);
+        self
+    }
+
+    pub fn return_records(mut self, return_records: bool) -> Self {
+        self.return_records = return_records;
+        self
+    }
+
+    pub fn stop_on_error(mut self, stop: bool) -> Self {
+        self.stop_on_error = stop;
+        self
+    }
+
+    pub fn notify(mut self, notify: bool) -> Self {
+        self.notify = notify;
+        self
+    }
+}
+
 /// Results returned from a bulk action.
 #[derive(Debug)]
 pub struct BulkResult<R> {
@@ -407,6 +453,106 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
         }
         for (mut row, existing) in chunk {
             let outcome = row.changeset.finish(ctx, row.id, existing, opts.notify).await;
+            conclude(row.after_transactions, outcome.as_ref());
+            match outcome {
+                Ok(stored) => {
+                    if opts.return_records {
+                        result.records.push(R::from_fields(&stored)?);
+                    }
+                    result.count += 1;
+                }
+                Err(err) => result.fail(err, opts.stop_on_error)?,
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Update several records, each with its own input, through one update action.
+///
+/// Each record runs through the same changeset as a single update made from it: accept,
+/// changes, validations, policies and before-action hooks. Each batch is then written
+/// together, the attributes each row changes, in one statement where the data layer can
+/// (`DataLayer::bulk_update`). Each row then runs its after-action hooks and is notified
+/// as an update. Ash's `bulk_update` applies one input to every record it's given; this
+/// takes an input per record, as a stream of telemetry does, where every record reports
+/// its own values.
+pub async fn bulk_update<R: Resource, D: DataLayer, I, F>(
+    ctx: &Context<D>,
+    action: &str,
+    updates: I,
+    opts: BulkUpdateOptions,
+) -> Result<BulkResult<R>>
+where
+    I: IntoIterator<Item = (R, F)>,
+    F: IntoFieldMap,
+{
+    let action_def = action_named(&R::DEF, action)?;
+    expect_kind(action_def, ActionKind::Update)?;
+    expect_persist(action_def, PersistKind::DataLayer)?;
+
+    let mut result = BulkResult::default();
+    let mut prepared = Vec::new();
+    for (record, input) in updates {
+        let mut changeset = match DynamicChangeset::for_update(
+            ctx,
+            &R::DEF,
+            action_def,
+            record.to_fields(),
+            input.into_field_map(),
+        ) {
+            Ok(changeset) => changeset,
+            Err(err) => {
+                result.fail(err, opts.stop_on_error)?;
+                continue;
+            }
+        };
+        let after_transactions = changeset.take_after_transactions();
+        match changeset.prepare(ctx).await {
+            Ok(id) => prepared.push(PreparedRow {
+                id,
+                changeset,
+                after_transactions,
+            }),
+            Err(err) => {
+                conclude(after_transactions, Err(&err));
+                result.fail(err, opts.stop_on_error)?;
+            }
+        }
+    }
+
+    let chunk_size = opts.batch_size.unwrap_or(prepared.len()).max(1);
+    let mut rows = prepared.into_iter().peekable();
+    while rows.peek().is_some() {
+        let mut chunk: Vec<PreparedRow> = rows.by_ref().take(chunk_size).collect();
+        let writes = chunk
+            .iter_mut()
+            .map(|row| {
+                let fields = row.changeset.take_fields();
+                (row.id, row.changeset.changes(fields))
+            })
+            .collect();
+        let stored = match ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await {
+            Ok(stored) => stored,
+            Err(err) => {
+                let failed = chunk.len();
+                for row in chunk {
+                    conclude(row.after_transactions, Err(&err));
+                }
+                if opts.stop_on_error {
+                    return Err(err);
+                }
+                result.errors.push(err.to_string());
+                result.error_count += failed;
+                continue;
+            }
+        };
+        for (mut row, stored) in chunk.into_iter().zip(stored) {
+            let outcome = match stored {
+                Ok(stored) => row.changeset.finish(ctx, row.id, stored, opts.notify).await,
+                Err(err) => Err(err),
+            };
             conclude(row.after_transactions, outcome.as_ref());
             match outcome {
                 Ok(stored) => {

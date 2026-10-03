@@ -34,6 +34,38 @@ pub enum Expr {
     Custom(fn(&FieldMap) -> Result<Value>),
 }
 
+impl Expr {
+    /// Whether only Rust can compute this: it calls a custom function, which a data layer
+    /// can't run, and which reads whatever of the record it likes.
+    pub fn is_custom(&self) -> bool {
+        match self {
+            Self::Custom(_) => true,
+            Self::Length(e) | Self::Lower(e) | Self::Upper(e) => e.is_custom(),
+            Self::Concat(parts) | Self::Coalesce(parts) => parts.iter().any(|e| e.is_custom()),
+            Self::Add(a, b)
+            | Self::Sub(a, b)
+            | Self::Mul(a, b)
+            | Self::Div(a, b)
+            | Self::Eq(a, b)
+            | Self::Ne(a, b)
+            | Self::Gt(a, b)
+            | Self::Gte(a, b)
+            | Self::Lt(a, b)
+            | Self::Lte(a, b) => a.is_custom() || b.is_custom(),
+            Self::IfElse { cond, then_expr, else_expr } => {
+                cond.is_custom() || then_expr.is_custom() || else_expr.is_custom()
+            }
+            Self::Field(_)
+            | Self::LitInt(_)
+            | Self::LitString(_)
+            | Self::LitBool(_)
+            | Self::Null
+            | Self::StringLength(_)
+            | Self::Arg(_) => false,
+        }
+    }
+}
+
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

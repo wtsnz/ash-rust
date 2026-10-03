@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::data_layer::Sort;
 use crate::filter::Filter;
-use crate::resource::Resource;
+use crate::resource::{Resource, ResourceDef};
 use crate::value::Value;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -38,7 +38,32 @@ impl KeysetCursor {
     }
 }
 
-pub(crate) fn build_keyset_filter(sorts: &[(String, Value, bool)], is_after: bool) -> Option<Filter> {
+/// The sort a keyset page reads in, as Ash makes it stable: `sort`, then the primary key,
+/// unless the sort already orders by the primary key or every key of an identity, so no
+/// two records share a keyset.
+pub fn keyset_sort(resource: &ResourceDef, mut sort: Vec<Sort>) -> Vec<Sort> {
+    let sorted_on = |keys: &[&str]| keys.iter().all(|key| sort.iter().any(|s| s.field == *key));
+    let primary_key: Vec<&str> = resource
+        .attributes
+        .iter()
+        .filter(|attr| attr.primary_key)
+        .map(|attr| attr.name)
+        .collect();
+    if sorted_on(&primary_key) || resource.identities.iter().any(|identity| sorted_on(identity.keys)) {
+        return sort;
+    }
+    for key in primary_key {
+        sort.push(Sort {
+            field: key.to_string(),
+            descending: false,
+        });
+    }
+    sort
+}
+
+/// The filter for the records after (or before) a keyset: `sorts` holds each sort
+/// field, the keyset's value for it, and whether it sorts descending.
+pub fn build_keyset_filter(sorts: &[(String, Value, bool)], is_after: bool) -> Option<Filter> {
     if sorts.is_empty() {
         return None;
     }

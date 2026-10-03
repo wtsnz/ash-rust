@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::redact::key_value;
+
 /// One source record's relationship, batched by [`AshBatchLoader`].
 #[derive(Clone, Debug)]
 pub struct RelatedKey {
@@ -25,7 +27,7 @@ impl RelatedKey {
             source: relationship
                 .source_columns()
                 .into_iter()
-                .map(|column| (column, source.get(column).cloned().unwrap_or(Value::Null)))
+                .map(|column| (column, key_value(source, column)))
                 .collect(),
         }
     }

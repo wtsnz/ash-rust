@@ -12,6 +12,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["open", "closed"],
+            name: None,
         },
     ),
     AttributeDef::optional("representative_id", AttrType::Uuid),
@@ -280,15 +281,15 @@ fn test_self_referential_aggregate_subquery_aliasing() {
     assert!(
         compiled
             .sql
-            .contains("FROM \"categories\" AS \"_ash_sub_subcategories_count\""),
+            .contains("FROM \"categories\" AS \"__ash_agg_subcategories\""),
         "Inner table must be aliased to prevent self-referential shadowing, got: {}",
         compiled.sql
     );
     assert!(
         compiled
             .sql
-            .contains("\"_ash_sub_subcategories_count\".\"parent_id\" = \"categories\".\"id\""),
-        "Inner alias must join against outer table, got: {}",
+            .contains("\"__ash_aggs_subcategories\".\"__ash_key_0\" = \"__ash_s\".\"id\""),
+        "Grouped counts must join on the outer record's key, got: {}",
         compiled.sql
     );
 }
@@ -536,7 +537,7 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
             ("sqlite", compiled.sql, compiled.params)
         },
     ] {
-        let sub = "\"_ash_sub_child_count\"";
+        let sub = "\"__ash_agg_children\"";
         assert!(
             sql.contains(&format!("{sub}.\"archived_at\" IS NULL AND {sub}.\"name\" <>")),
             "{dialect} aggregate must apply the read filter: {sql}"
@@ -549,9 +550,9 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
         assert_eq!(
             values,
             [
-                &Value::String("hidden".into()),
                 &Value::String("root".into()),
                 &Value::String("docs".into()),
+                &Value::String("hidden".into()),
                 &Value::String("hidden".into()),
             ]
         );
@@ -562,4 +563,81 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
             assert!(!sql.contains("$5"), "placeholders must be consecutive: {sql}");
         }
     }
+}
+
+/// A count is `COUNT(*)` over the filtered table, or over the page when the query has a
+/// limit or offset, and never sorts.
+#[test]
+fn test_count_compilation() {
+    let dialect = PostgresDialect;
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("status", "open")),
+        sort: vec![Sort {
+            field: "priority".into(),
+            descending: true,
+        }],
+        ..CompiledQuery::default()
+    };
+    let compiled = QueryCompiler::new(&dialect).compile_count(&TICKET_DEF, &query).unwrap();
+    assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM "tickets" WHERE "status" = $1"#);
+
+    let page = CompiledQuery {
+        limit: Some(10),
+        offset: Some(20),
+        ..query
+    };
+    let compiled = QueryCompiler::new(&dialect).compile_count(&TICKET_DEF, &page).unwrap();
+    assert_eq!(
+        compiled.sql(),
+        r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" WHERE "status" = $1 LIMIT $2 OFFSET $3) AS counted"#
+    );
+
+    let offset_only = CompiledQuery {
+        offset: Some(5),
+        ..CompiledQuery::default()
+    };
+    let compiled = QueryCompiler::new(&SqliteDialect).compile_count(&TICKET_DEF, &offset_only).unwrap();
+    assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" LIMIT ? OFFSET ?) AS counted"#);
+}
+
+static ITEM_NAME: Expr = Expr::Field("name");
+
+static BIN_DEF: ResourceDef = ResourceDef {
+    name: "Bin",
+    table: "bins",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    relationships: &[ash_core::RelationshipDef::has_many("items", || &ITEM_DEF, "bin_id")],
+    actions: &[ActionDef::read("read").primary()],
+    aggregates: &[],
+    calculations: &[],
+    ..FOLDER_DEF
+};
+
+static ITEM_DEF: ResourceDef = ResourceDef {
+    name: "Item",
+    table: "items",
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("bin_id", AttrType::Uuid),
+        AttributeDef::required("name", AttrType::String),
+    ],
+    relationships: &[],
+    actions: &[ActionDef::read("read").primary()],
+    aggregates: &[],
+    calculations: &[CalculationDef::new("loud_name", AttrType::String, Expr::Upper(&ITEM_NAME))],
+    ..FOLDER_DEF
+};
+
+/// A calculation in a filter on related records reads that subquery's table, by its
+/// alias, as the filter's fields do: both tables have a `name`.
+#[test]
+fn a_related_calculation_reads_its_own_table() {
+    let query = CompiledQuery {
+        filter: Some(Filter::related("items", Filter::eq("loud_name", "BOLT"))),
+        ..CompiledQuery::default()
+    };
+    let mut compiler = QueryCompiler::new(&PostgresDialect);
+    let sql = compiler.compile_select(&BIN_DEF, &query).unwrap().sql;
+    let alias = sql.split("\"items\" AS ").nth(1).and_then(|rest| rest.split_whitespace().next()).expect("an alias");
+    assert!(sql.contains(&format!("upper({alias}.\"name\")")), "{sql}");
 }

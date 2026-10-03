@@ -3,8 +3,11 @@ pub mod dataloader;
 pub mod error;
 pub mod filter;
 pub mod mutation;
+pub mod names;
 pub mod object;
 pub mod pagination;
+mod preload;
+mod redact;
 pub mod query;
 pub(crate) mod request;
 pub mod sort;
@@ -13,31 +16,29 @@ pub mod types;
 
 #[cfg(feature = "axum")]
 pub mod axum;
+#[cfg(feature = "axum")]
+mod ws;
 
 pub use builder::AshGraphQLBuilder;
 pub use dataloader::{AshBatchLoader, RelatedKey};
 pub use error::{UserError, register_user_error};
-pub use filter::{
-    parse_resource_filter, register_primitive_filter_inputs, register_resource_filter_inputs,
-};
+pub use builder::{ROOT_MUTATION, ROOT_QUERY, ROOT_SUBSCRIPTION};
+pub use filter::{field_filter_input_name, parse_resource_filter, register_resource_filter_inputs};
 pub use mutation::{
     MutationPayload, build_action_mutation, mutation_input_name, mutation_name,
     mutation_payload_name, register_action_input, register_action_payload,
 };
 pub use object::{build_resource_object, collect_enums_for_resource};
-pub use pagination::{
-    build_resource_connection_query, register_page_info, register_resource_connection_types,
-    resource_connection_field_name, resource_connection_type_name, resource_edge_type_name,
-};
+pub use pagination::{KeysetPage, MAX_PAGE_SIZE, build_keyset_query, keyset_page_type_name, register_keyset_page};
 pub use query::{
     build_read_action_query, build_resource_queries, get_query_name, list_query_name,
     list_query_name_for_action,
 };
 pub use sort::{parse_resource_sort, register_resource_sort_inputs};
-pub use subscription::build_resource_subscriptions;
+pub use subscription::{build_resource_subscriptions, subscription_result_name};
 pub use types::{
     ash_value_to_graphql_value, ash_value_to_graphql_value_typed, attr_type_to_type_ref,
-    enum_type_name, graphql_value_to_ash_value,
+    enum_type_name, graphql_type_name, graphql_value_to_ash_value,
 };
 
 /// Main facade for `ash-graphql`.

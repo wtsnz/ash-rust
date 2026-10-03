@@ -21,6 +21,11 @@ pub enum Filter {
     StartsWith(String, String),
     /// Text ends with the suffix. Case-insensitive on `CiString` attributes.
     EndsWith(String, String),
+    /// Text matches a SQL `LIKE` pattern: `%` any run of characters, `_` any one, `\`
+    /// escaping the next. Case-insensitive on `CiString` attributes. Ash's `like/2`.
+    Like(String, String),
+    /// [`Like`](Self::Like), ignoring case. Ash's `ilike/2`.
+    ILike(String, String),
     And(Vec<Filter>),
     Or(Vec<Filter>),
     Not(Box<Filter>),
@@ -78,6 +83,14 @@ impl Filter {
         Self::EndsWith(field.into(), suffix.into())
     }
 
+    pub fn like(field: impl Into<String>, pattern: impl Into<String>) -> Self {
+        Self::Like(field.into(), pattern.into())
+    }
+
+    pub fn ilike(field: impl Into<String>, pattern: impl Into<String>) -> Self {
+        Self::ILike(field.into(), pattern.into())
+    }
+
     pub fn in_list(field: impl Into<String>, values: impl IntoIterator<Item = impl Into<Value>>) -> Self {
         Self::In(field.into(), values.into_iter().map(Into::into).collect())
     }
@@ -95,7 +108,9 @@ impl Filter {
             | Self::IsNil(field)
             | Self::Contains(field, _)
             | Self::StartsWith(field, _)
-            | Self::EndsWith(field, _) => out.push(field),
+            | Self::EndsWith(field, _)
+            | Self::Like(field, _)
+            | Self::ILike(field, _) => out.push(field),
             Self::And(parts) | Self::Or(parts) => {
                 for part in parts {
                     part.collect_fields(out);
@@ -188,6 +203,10 @@ impl Filter {
                 text(field, needle, |text, needle| text.starts_with(needle))
             }
             Self::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+            Self::Like(field, pattern) => text(field, pattern, like_matches),
+            Self::ILike(field, pattern) => {
+                present(field).map(|got| text_matches(Some(got), pattern, true, like_matches))
+            }
             Self::And(parts) => all_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Not(inner) => inner.eval(resource, fields).map(|matched| !matched),
@@ -252,6 +271,48 @@ pub fn in_list(
 }
 
 /// Applies a text match to a stored value. Non-string and null values never match.
+/// Whether `text` matches the SQL `LIKE` `pattern`: `%` matches any run of characters,
+/// `_` any one character, and `\` makes the next character literal.
+pub fn like_matches(text: &str, pattern: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum Token {
+        Any,
+        One,
+        Char(char),
+    }
+    let mut tokens = Vec::new();
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        tokens.push(match ch {
+            '%' => Token::Any,
+            '_' => Token::One,
+            '\\' => Token::Char(chars.next().unwrap_or('\\')),
+            other => Token::Char(other),
+        });
+    }
+    let text: Vec<char> = text.chars().collect();
+    // matched[j]: the first i characters of text match the first j tokens.
+    let mut matched = vec![false; tokens.len() + 1];
+    matched[0] = true;
+    for (j, token) in tokens.iter().enumerate() {
+        if matches!(token, Token::Any) {
+            matched[j + 1] = matched[j];
+        }
+    }
+    for ch in text {
+        let mut next = vec![false; tokens.len() + 1];
+        for (j, token) in tokens.iter().enumerate() {
+            next[j + 1] = match token {
+                Token::Any => next[j] || matched[j + 1],
+                Token::One => matched[j],
+                Token::Char(want) => matched[j] && *want == ch,
+            };
+        }
+        matched = next;
+    }
+    matched[tokens.len()]
+}
+
 pub fn text_matches(
     got: Option<&Value>,
     needle: &str,

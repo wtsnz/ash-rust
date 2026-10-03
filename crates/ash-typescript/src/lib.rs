@@ -1,6 +1,7 @@
 pub mod client;
 pub mod config;
 pub mod generator;
+pub mod live;
 pub mod react;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;

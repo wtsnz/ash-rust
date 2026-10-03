@@ -25,14 +25,16 @@ async fn test_fullstack_helpdesk_server_crud() {
         "query": r#"
             query {
                 listTickets {
-                    id
-                    title
-                    status
-                    priority
-                    author {
+                    results {
                         id
-                        name
-                        role
+                        title
+                        status
+                        priority
+                        author {
+                            id
+                            name
+                            role
+                        }
                     }
                 }
             }
@@ -55,7 +57,7 @@ async fn test_fullstack_helpdesk_server_crud() {
         "GraphQL query failed: {body:?}"
     );
 
-    let tickets = body["data"]["listTickets"].as_array().unwrap();
+    let tickets = body["data"]["listTickets"]["results"].as_array().unwrap();
     assert_eq!(tickets.len(), 3, "Expected 3 initial seeded tickets");
     assert!(tickets[0]["author"]["name"].is_string());
 
@@ -72,10 +74,9 @@ async fn test_fullstack_helpdesk_server_crud() {
                         priority
                     }
                     errors {
-                        field
+                        fields
                         message
                     }
-                    success
                 }
             }
         "#,
@@ -103,26 +104,28 @@ async fn test_fullstack_helpdesk_server_crud() {
     assert!(body.get("errors").is_none(), "Mutation errors: {body:?}");
 
     let payload = &body["data"]["openTicket"];
-    assert!(payload["success"].as_bool().unwrap());
+    assert_eq!(payload["errors"], serde_json::json!([]));
     let created_id = payload["result"]["id"].as_str().unwrap().to_string();
     assert_eq!(payload["result"]["title"].as_str().unwrap(), new_title);
 
     // 4. Update (Change status via GraphQL mutation)
     let update_mutation = serde_json::json!({
         "query": r#"
-            mutation ChangeStatus($input: ChangeStatusTicketInput!) {
-                changeStatusTicket(input: $input) {
+            mutation ChangeStatus($id: ID!, $input: ChangeStatusTicketInput) {
+                changeStatusTicket(id: $id, input: $input) {
                     result {
                         id
                         status
                     }
-                    success
+                    errors {
+                        message
+                    }
                 }
             }
         "#,
         "variables": {
+            "id": created_id,
             "input": {
-                "id": created_id,
                 "status": "RESOLVED"
             }
         }
@@ -149,16 +152,19 @@ async fn test_fullstack_helpdesk_server_crud() {
     // 5. Delete (Close ticket via GraphQL mutation)
     let close_mutation = serde_json::json!({
         "query": r#"
-            mutation Close($input: CloseTicketInput!) {
-                closeTicket(input: $input) {
-                    success
+            mutation Close($id: ID!) {
+                closeTicket(id: $id) {
+                    result {
+                        id
+                    }
+                    errors {
+                        message
+                    }
                 }
             }
         "#,
         "variables": {
-            "input": {
-                "id": created_id
-            }
+            "id": created_id
         }
     });
 
@@ -173,7 +179,8 @@ async fn test_fullstack_helpdesk_server_crud() {
     assert_eq!(res.status(), StatusCode::OK);
     let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(body["data"]["closeTicket"]["success"].as_bool().unwrap());
+    assert_eq!(body["data"]["closeTicket"]["errors"], serde_json::json!([]), "{body:?}");
+    assert_eq!(body["data"]["closeTicket"]["result"]["id"], created_id.as_str());
 }
 
 #[test]
@@ -274,124 +281,151 @@ async fn test_rust_resource_and_context_dsl() {
     assert_eq!(remaining.len(), 0);
 }
 
+/// The input fields of a GraphQL input type, by name, with their types.
+async fn input_fields(app: &axum::Router, name: &str) -> Vec<(String, serde_json::Value)> {
+    let named = r#"kind name enumValues { name }"#;
+    let query = serde_json::json!({
+        "query": format!(
+            "{{ __type(name: \"{name}\") {{ inputFields {{ name type {{ {named} \
+             ofType {{ {named} ofType {{ {named} ofType {{ {named} }} }} }} }} }} }} }}"
+        )
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/graphql")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let mut fields: Vec<(String, serde_json::Value)> = body["data"]["__type"]["inputFields"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{name} missing from GraphQL schema: {body:?}"))
+        .iter()
+        .map(|field| (field["name"].as_str().unwrap().to_string(), field["type"].clone()))
+        .collect();
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    fields
+}
+
+/// A TypeScript interface's `name?: type;` fields, as (name, type), sorted.
+fn ts_fields(ts: &str, header: &str) -> Vec<(String, String)> {
+    let body = ts
+        .split(&format!("{header} {{\n"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("`{header}` missing from generated TypeScript"));
+    let mut fields: Vec<(String, String)> = body
+        .lines()
+        .take_while(|line| *line != "}")
+        .filter(|line| !line.trim_start().starts_with("/**"))
+        .map(|line| {
+            let (name, ty) = line.trim().split_once("?: ").unwrap();
+            (name.to_string(), ty.trim_end_matches(';').to_string())
+        })
+        .collect();
+    fields.sort();
+    fields
+}
+
+/// GraphQL's type with non-null stripped, and whether it's a list.
+fn unwrap_type(mut gql: &serde_json::Value) -> (&serde_json::Value, bool) {
+    if gql["kind"] == "NON_NULL" {
+        gql = &gql["ofType"];
+    }
+    let list = gql["kind"] == "LIST";
+    if list {
+        gql = &gql["ofType"];
+        if gql["kind"] == "NON_NULL" {
+            gql = &gql["ofType"];
+        }
+    }
+    (gql, list)
+}
+
+/// A TypeScript value type matches the GraphQL type it stands for.
+fn assert_value_type(ts_type: &str, gql: &serde_json::Value, at: &str) {
+    let gql_named = gql["name"].as_str().unwrap();
+    let base = ts_type
+        .trim_end_matches(" | null")
+        .trim_end_matches("[]")
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim_end_matches(" | null");
+    match base {
+        "string" => assert!(
+            gql["kind"] == "SCALAR" && !["Int", "Float", "Boolean"].contains(&gql_named),
+            "{at}"
+        ),
+        "number" => assert!(["Int", "Float"].contains(&gql_named), "{at}"),
+        "boolean" => assert_eq!(gql_named, "Boolean", "{at}"),
+        literals if literals.starts_with('"') => {
+            assert_eq!(gql["kind"], "ENUM", "{at}");
+            let mut ts_values: Vec<&str> = literals.split(" | ").map(|v| v.trim_matches('"')).collect();
+            let mut gql_values: Vec<&str> = gql["enumValues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v["name"].as_str().unwrap())
+                .collect();
+            ts_values.sort_unstable();
+            gql_values.sort_unstable();
+            assert_eq!(ts_values, gql_values, "{at}");
+        }
+        other => panic!("unexpected TypeScript type `{other}` at {at}"),
+    }
+}
+
 #[tokio::test]
 async fn test_typescript_filters_match_graphql_filter_inputs() {
     let app = build_app().await.expect("Failed to build Axum app");
     let mut ts = ash_typescript::types::generate_common_types();
-    ts.push_str(&ash_typescript::types::generate_resource_filter_input(
-        &astro_helpdesk::TICKET_DEF,
-    ));
-    ts.push_str(&ash_typescript::types::generate_resource_filter_input(
-        &astro_helpdesk::REPRESENTATIVE_DEF,
-    ));
+    for def in [&astro_helpdesk::TICKET_DEF, &astro_helpdesk::REPRESENTATIVE_DEF] {
+        ts.push_str(&ash_typescript::types::generate_resource_filter_input(def));
+    }
+    let ash_filter = ts_fields(&ts, "export interface AshFilter<T>");
+    let text_ops = ts_fields(&ts, "export interface AshTextFilter extends AshFilter<string>");
 
-    // The helpdesk has no boolean attributes, so `BooleanFilterInput` is not in its schema.
-    let pairs = [
-        ("UuidFilter", "UuidFilterInput"),
-        ("StringFilter", "StringFilterInput"),
-        ("TextFilter", "TextFilterInput"),
-        ("TicketStatusFilter", "TicketstatusEnumFilterInput"),
-        ("IntFilter", "IntFilterInput"),
-        ("FloatFilter", "FloatFilterInput"),
-        ("TicketFilterInput", "TicketFilterInput"),
-        ("RepresentativeFilterInput", "RepresentativeFilterInput"),
-    ];
-    let named = r#"kind name enumValues { name }"#;
-    for (ts_name, gql_name) in pairs {
-        let body = ts
-            .split(&format!("export interface {ts_name} {{\n"))
-            .nth(1)
-            .unwrap_or_else(|| panic!("{ts_name} missing from generated TypeScript"));
-        // `name?: type;` lines, as (name, type).
-        let mut ts_fields: Vec<(String, String)> = body
-            .lines()
-            .take_while(|line| *line != "}")
-            .map(|line| {
-                let (name, ty) = line.trim().split_once("?: ").unwrap();
-                (name.to_string(), ty.trim_end_matches(';').to_string())
-            })
-            .collect();
-        ts_fields.sort();
+    for resource in ["Ticket", "Representative"] {
+        let input = format!("{resource}FilterInput");
+        let ts_input = ts_fields(&ts, &format!("export interface {input}"));
+        let gql_input = input_fields(&app, &input).await;
+        let ts_names: Vec<&str> = ts_input.iter().map(|(name, _)| name.as_str()).collect();
+        let gql_names: Vec<&str> = gql_input.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(ts_names, gql_names, "{input} does not match");
 
-        let query = serde_json::json!({
-            "query": format!(
-                "{{ __type(name: \"{gql_name}\") {{ inputFields {{ name type {{ {named} \
-                 ofType {{ {named} ofType {{ {named} ofType {{ {named} }} }} }} }} }} }} }}"
-            )
-        });
-        let req = Request::builder()
-            .method("POST")
-            .uri("/graphql")
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&query).unwrap()))
-            .unwrap();
-        let res = app.clone().oneshot(req).await.unwrap();
-        let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        let mut gql_fields: Vec<(String, serde_json::Value)> = body["data"]["__type"]["inputFields"]
-            .as_array()
-            .unwrap_or_else(|| panic!("{gql_name} missing from GraphQL schema: {body:?}"))
-            .iter()
-            .map(|field| (field["name"].as_str().unwrap().to_string(), field["type"].clone()))
-            .collect();
-        gql_fields.sort_by(|a, b| a.0.cmp(&b.0));
-
-        let ts_names: Vec<&str> = ts_fields.iter().map(|(name, _)| name.as_str()).collect();
-        let gql_names: Vec<&str> = gql_fields.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(ts_names, gql_names, "{ts_name} does not match {gql_name}");
-
-        for ((field, ts_type), (_, gql_type)) in ts_fields.iter().zip(&gql_fields) {
-            let at = format!("{ts_name}.{field}: {ts_type} vs {gql_type}");
-            // GraphQL: strip non-null, note a list, then strip non-null again.
-            let mut gql = gql_type;
-            if gql["kind"] == "NON_NULL" {
-                gql = &gql["ofType"];
-            }
-            let gql_list = gql["kind"] == "LIST";
-            if gql_list {
-                gql = &gql["ofType"];
-                if gql["kind"] == "NON_NULL" {
-                    gql = &gql["ofType"];
-                }
-            }
-            let ts_list = ts_type.ends_with("[]");
-            assert_eq!(ts_list, gql_list, "list mismatch at {at}");
-            let base = ts_type
-                .trim_end_matches("[]")
-                .trim_start_matches('(')
-                .trim_end_matches(')');
+        for ((field, ts_type), (_, gql_type)) in ts_input.iter().zip(&gql_input) {
+            let at = format!("{input}.{field}: {ts_type} vs {gql_type}");
+            let (gql, gql_list) = unwrap_type(gql_type);
             let gql_named = gql["name"].as_str().unwrap();
-            match base {
-                "string" => assert!(
-                    gql["kind"] == "SCALAR"
-                        && !["Int", "Float", "Boolean"].contains(&gql_named),
-                    "{at}"
-                ),
-                "number" => assert!(["Int", "Float"].contains(&gql_named), "{at}"),
-                "boolean" => assert_eq!(gql_named, "Boolean", "{at}"),
-                literals if literals.starts_with('"') => {
-                    assert_eq!(gql["kind"], "ENUM", "{at}");
-                    let mut ts_values: Vec<&str> =
-                        literals.split(" | ").map(|v| v.trim_matches('"')).collect();
-                    let mut gql_values: Vec<&str> = gql["enumValues"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v["name"].as_str().unwrap())
-                        .collect();
-                    ts_values.sort_unstable();
-                    gql_values.sort_unstable();
-                    assert_eq!(ts_values, gql_values, "{at}");
-                }
-                filter => {
-                    let expected = pairs
-                        .iter()
-                        .find(|(ts, _)| *ts == filter)
-                        .map(|(_, gql)| *gql)
-                        .unwrap_or_else(|| panic!("no GraphQL input paired with {filter} at {at}"));
-                    assert_eq!(gql_named, expected, "{at}");
-                }
+            // `and` / `or` / `not`, and relationships: another filter input.
+            if let Some(other) = ts_type.strip_suffix("FilterInput[]").or(ts_type.strip_suffix("FilterInput")) {
+                assert_eq!(gql_list, ts_type.ends_with("[]"), "list mismatch at {at}");
+                assert_eq!(gql_named, format!("{other}FilterInput"), "{at}");
+                continue;
             }
+            // A field: AshGraphql's operators, over its value type.
+            assert!(!gql_list, "{at}");
+            let (value_type, text) = match ts_type.as_str() {
+                "AshTextFilter" => ("string", true),
+                other => (
+                    other
+                        .strip_prefix("AshFilter<")
+                        .and_then(|t| t.strip_suffix('>'))
+                        .unwrap_or_else(|| panic!("unexpected filter type at {at}")),
+                    false,
+                ),
+            };
+            let ops = input_fields(&app, gql_named).await;
+            let mut ts_ops: Vec<&str> = ash_filter.iter().map(|(op, _)| op.as_str()).collect();
+            if text {
+                ts_ops.extend(text_ops.iter().map(|(op, _)| op.as_str()));
+            }
+            ts_ops.sort_unstable();
+            let gql_ops: Vec<&str> = ops.iter().map(|(op, _)| op.as_str()).collect();
+            assert_eq!(ts_ops, gql_ops, "{at}: operators");
+            let (eq, _) = unwrap_type(&ops.iter().find(|(op, _)| op == "eq").unwrap().1);
+            assert_value_type(value_type, eq, &format!("{at}: eq"));
         }
     }
 }

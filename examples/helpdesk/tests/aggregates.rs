@@ -208,8 +208,13 @@ async fn sqlite_aggregates_loading_and_filtering() {
     let t3 = as_customer.open_ticket("Keyboard missing").await.unwrap();
     as_bob.assign_ticket(&t3, bob.id).await.unwrap();
 
-    // Query across SQLite using domain accessors
-    let reps = desk
+    // Aggregates count only the tickets the reader may read, as Ash authorizes them:
+    // none, for a reader who isn't signed in.
+    let anonymous = desk.representatives().aggregate(r::ticket_count).sort(r::name).all().await.unwrap();
+    assert!(anonymous.iter().all(|rep| rep.ticket_count == Some(0)));
+
+    // Query across SQLite using domain accessors, as the customer who opened them all.
+    let reps = as_customer
         .representatives()
         .aggregate(r::ticket_count)
         .aggregate(r::open_ticket_count)
@@ -250,7 +255,7 @@ async fn sqlite_aggregates_loading_and_filtering() {
     assert_eq!(rep_carol.first_ticket_subject, None);
 
     // Filter in SQLite WHERE clause: ticket_count >= 2
-    let filtered_reps = desk
+    let filtered_reps = as_customer
         .representatives()
         .aggregate(r::ticket_count)
         .filter(r::ticket_count.gte(2_i64))
@@ -261,6 +266,25 @@ async fn sqlite_aggregates_loading_and_filtering() {
     assert_eq!(filtered_reps.len(), 1);
     assert_eq!(filtered_reps[0].name, "Alice");
     assert_eq!(filtered_reps[0].ticket_count, Some(2));
+
+    // Paged by keyset, sorted by an aggregate: each page's cursor holds the count it
+    // sorts by, so the next page starts after it.
+    let mut names = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = as_customer
+            .representatives()
+            .sort(r::ticket_count)
+            .page_keyset(1, after.as_deref(), None)
+            .await
+            .unwrap();
+        names.extend(page.results.iter().map(|rep| rep.name.clone()));
+        if !page.has_more {
+            break;
+        }
+        after = page.after.clone();
+    }
+    assert_eq!(names, ["Carol", "Bob", "Alice"]);
 }
 
 #[tokio::test]

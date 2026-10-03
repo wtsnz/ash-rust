@@ -52,7 +52,7 @@ fn test_zod_schema_generation() {
     // Resource schema
     assert!(zod.contains("export const TicketSchema = z.object({"));
     assert!(zod.contains("id: z.string().uuid()"));
-    assert!(zod.contains("author_id: z.string().uuid().nullable().optional()"));
+    assert!(zod.contains("authorId: z.string().uuid().nullable().optional()"));
 
     // Action input schema
     assert!(zod.contains("export const OpenTicketInputSchema = z.object({"));
@@ -60,7 +60,7 @@ fn test_zod_schema_generation() {
     assert!(zod.contains("title: z.string().min(5).max(255)"));
     assert!(zod.contains("status: z.enum([\"open\", \"in_progress\", \"closed\"])"));
     assert!(zod.contains("priority: z.number().int().min(1).max(5)"));
-    assert!(zod.contains("author_id: z.string().uuid().nullable().optional()"));
+    assert!(zod.contains("authorId: z.string().uuid().nullable().optional()"));
 }
 
 static ISSUE_ATTRS: &[AttributeDef] = &[
@@ -69,12 +69,20 @@ static ISSUE_ATTRS: &[AttributeDef] = &[
         "kind",
         AttrType::Atom {
             one_of: &["bug", "feature", "chore"],
+            name: Some("IssueKind"),
+        },
+    ),
+    AttributeDef::optional(
+        "source",
+        AttrType::Atom {
+            one_of: &["email", "web_form"],
+            name: None,
         },
     ),
 ];
 
 static ISSUE_ACTIONS: &[ActionDef] = &[ActionDef::create("file")
-    .accept(&["kind"])
+    .accept(&["kind", "source"])
     .validations(&[Validation::one_of("kind", &["bug", "feature"])])];
 
 static ISSUE_DEF: ResourceDef = ResourceDef {
@@ -90,4 +98,6 @@ fn test_atom_one_of_inputs_use_graphql_enum_values() {
     let zod = generate_resource_zod(&ISSUE_DEF);
     assert!(zod.contains("kind: z.enum([\"BUG\", \"FEATURE\", \"CHORE\"])"), "{zod}");
     assert!(zod.contains("kind: z.enum([\"BUG\", \"FEATURE\"])"), "{zod}");
+    // An atom with no enum type is a string in GraphQL, spelled as it's stored.
+    assert!(zod.contains("source: z.enum([\"email\", \"web_form\"]).nullable().optional()"), "{zod}");
 }

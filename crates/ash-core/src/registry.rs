@@ -9,7 +9,7 @@ use crate::data_layer::{CompiledQuery, DataLayer, SchemaSupport, TransactionSupp
 use crate::error::{Error, Result};
 use crate::resource::{DataLayerKind, IdentityDef, Resource, ResourceDef};
 use crate::store::{HasStore, StoreTag};
-use crate::value::FieldMap;
+use crate::value::{FieldMap, Value};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -44,6 +44,40 @@ pub trait DynDataLayer: Send + Sync {
         query: &'a CompiledQuery,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
+    fn count_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+    ) -> BoxFuture<'a, Result<usize>>;
+
+    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn update_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        update: &'a crate::atomic::AtomicUpdate,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
+
+    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn can_run_query_per_key_dyn(&self, resource: &ResourceDef, by: &crate::data_layer::PerKey<'_>) -> bool;
+
+    fn run_query_per_key_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        by: &'a crate::data_layer::PerKey<'a>,
+        keys: &'a [Value],
+    ) -> BoxFuture<'a, Result<Vec<Vec<FieldMap>>>>;
+
+    fn destroy_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        conditions: &'a [crate::atomic::AtomicCondition],
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
+
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
@@ -67,6 +101,13 @@ pub trait DynDataLayer: Send + Sync {
         tenant: Option<&'a str>,
         ids: &'a [Uuid],
     ) -> BoxFuture<'a, Result<()>>;
+
+    fn bulk_update_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>>;
 }
 
 impl<T: DataLayer> DynDataLayer for T {
@@ -107,6 +148,54 @@ impl<T: DataLayer> DynDataLayer for T {
         Box::pin(self.run_query(resource, query))
     }
 
+    fn count_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+    ) -> BoxFuture<'a, Result<usize>> {
+        Box::pin(self.count(resource, query))
+    }
+
+    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_update_atomically(resource)
+    }
+
+    fn update_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        update: &'a crate::atomic::AtomicUpdate,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.update_atomic(resource, query, update))
+    }
+
+    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_destroy_atomically(resource)
+    }
+
+    fn can_run_query_per_key_dyn(&self, resource: &ResourceDef, by: &crate::data_layer::PerKey<'_>) -> bool {
+        self.can_run_query_per_key(resource, by)
+    }
+
+    fn run_query_per_key_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        by: &'a crate::data_layer::PerKey<'a>,
+        keys: &'a [Value],
+    ) -> BoxFuture<'a, Result<Vec<Vec<FieldMap>>>> {
+        Box::pin(self.run_query_per_key(resource, query, by, keys))
+    }
+
+    fn destroy_atomic_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        query: &'a CompiledQuery,
+        conditions: &'a [crate::atomic::AtomicCondition],
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.destroy_atomic(resource, query, conditions))
+    }
+
     fn upsert_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
@@ -135,6 +224,15 @@ impl<T: DataLayer> DynDataLayer for T {
         ids: &'a [Uuid],
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(self.bulk_destroy(resource, tenant, ids))
+    }
+
+    fn bulk_update_dyn<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+        tenant: Option<&'a str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>> {
+        Box::pin(self.bulk_update(resource, tenant, rows))
     }
 }
 
@@ -311,6 +409,64 @@ impl DataLayer for StoreRegistry {
         layer.run_query_dyn(resource, query).await
     }
 
+    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        let layer = self.get_layer(resource)?;
+        layer.count_dyn(resource, query).await
+    }
+
+    fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
+    }
+
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &crate::atomic::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        let layer = self.get_layer(resource)?;
+        layer.update_atomic_dyn(resource, query, update).await
+    }
+
+    fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_destroy_atomically_dyn(resource))
+    }
+
+    /// A join resource in another store can't join in the same statement.
+    fn can_run_query_per_key(&self, resource: &ResourceDef, by: &crate::data_layer::PerKey<'_>) -> bool {
+        let Ok(layer) = self.get_layer(resource) else {
+            return false;
+        };
+        if let crate::data_layer::PerKey::Through { resource: through, .. } = by {
+            match self.get_layer(through) {
+                Ok(other) if std::ptr::addr_eq(layer, other) => {}
+                _ => return false,
+            }
+        }
+        layer.can_run_query_per_key_dyn(resource, by)
+    }
+
+    async fn run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        by: &crate::data_layer::PerKey<'_>,
+        keys: &[Value],
+    ) -> Result<Vec<Vec<FieldMap>>> {
+        let layer = self.get_layer(resource)?;
+        layer.run_query_per_key_dyn(resource, query, by, keys).await
+    }
+
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[crate::atomic::AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
+        let layer = self.get_layer(resource)?;
+        layer.destroy_atomic_dyn(resource, query, conditions).await
+    }
+
     async fn upsert(
         &self,
         resource: &ResourceDef,
@@ -339,6 +495,16 @@ impl DataLayer for StoreRegistry {
     async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
         let layer = self.get_layer(resource)?;
         layer.bulk_destroy_dyn(resource, tenant, ids).await
+    }
+
+    async fn bulk_update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> Result<Vec<Result<FieldMap>>> {
+        let layer = self.get_layer(resource)?;
+        layer.bulk_update_dyn(resource, tenant, rows).await
     }
 }
 

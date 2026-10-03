@@ -6,10 +6,15 @@ pub enum TextMatch {
     Contains,
     StartsWith,
     EndsWith,
+    /// The needle is a `LIKE` pattern of its own, used as given.
+    Like,
 }
 
 /// `LIKE` pattern with `\`, `%`, and `_` in `needle` escaped by a backslash.
 pub fn like_pattern(kind: TextMatch, needle: &str) -> String {
+    if kind == TextMatch::Like {
+        return needle.to_string();
+    }
     let mut escaped = String::with_capacity(needle.len());
     for ch in needle.chars() {
         if matches!(ch, '\\' | '%' | '_') {
@@ -20,8 +25,35 @@ pub fn like_pattern(kind: TextMatch, needle: &str) -> String {
     wrap_pattern(kind, &escaped, "%")
 }
 
+/// The `GLOB` pattern matching what the `LIKE` `pattern` does, case for case.
+fn like_to_glob(pattern: &str) -> String {
+    let mut glob = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    let literal = |glob: &mut String, ch: char| {
+        if matches!(ch, '*' | '?' | '[') {
+            glob.push('[');
+            glob.push(ch);
+            glob.push(']');
+        } else {
+            glob.push(ch);
+        }
+    };
+    while let Some(ch) = chars.next() {
+        match ch {
+            '%' => glob.push('*'),
+            '_' => glob.push('?'),
+            '\\' => literal(&mut glob, chars.next().unwrap_or('\\')),
+            other => literal(&mut glob, other),
+        }
+    }
+    glob
+}
+
 /// SQLite `GLOB` pattern with `*`, `?`, and `[` in `needle` matched literally.
 pub fn glob_pattern(kind: TextMatch, needle: &str) -> String {
+    if kind == TextMatch::Like {
+        return like_to_glob(needle);
+    }
     let mut escaped = String::with_capacity(needle.len());
     for ch in needle.chars() {
         match ch {
@@ -41,6 +73,7 @@ fn wrap_pattern(kind: TextMatch, escaped: &str, any: &str) -> String {
         TextMatch::Contains => format!("{any}{escaped}{any}"),
         TextMatch::StartsWith => format!("{escaped}{any}"),
         TextMatch::EndsWith => format!("{any}{escaped}"),
+        TextMatch::Like => escaped.to_string(),
     }
 }
 
@@ -96,8 +129,10 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Whether the dialect supports `RETURNING *` on INSERT/UPDATE.
     fn supports_returning(&self) -> bool;
 
-    /// Render lateral join syntax for aggregates/relationships.
-    fn render_lateral_join(&self, subquery: &str, alias: &str) -> String;
+    /// How a read loads aggregates, as ash_sql's `aggregate_strategy`: each relationship's
+    /// aggregates in one subquery, laterally joined to each record where the database
+    /// can, else grouped by the relationship's key and joined on it.
+    fn aggregate_strategy(&self) -> AggregateStrategy;
 
     /// Render boolean literal for SQL statements.
     fn boolean_literal(&self, val: bool) -> &'static str {
@@ -111,6 +146,13 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Whether table creation uses IF NOT EXISTS.
     fn create_table_if_not_exists(&self) -> bool {
         true
+    }
+
+    /// Whether a `CREATE TABLE` may declare a foreign key to a table that doesn't exist
+    /// yet. SQLite checks foreign keys only when rows are written; Postgres resolves the
+    /// target when the key is created.
+    fn allows_forward_references(&self) -> bool {
+        false
     }
 
     /// Render membership check (`IN` / `= ANY(...)`).
@@ -129,6 +171,12 @@ pub trait SqlDialect: Send + Sync + 'static {
         None
     }
 
+    /// Functions the data layer's statements call, created with the tables: on
+    /// Postgres, the `ash_raise_error` an atomic update raises its errors through.
+    fn database_functions(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Pattern to bind for a text filter, with wildcards in `needle` escaped.
     fn text_pattern(&self, kind: TextMatch, needle: &str, _case_insensitive: bool) -> String {
         like_pattern(kind, needle)
@@ -138,6 +186,19 @@ pub trait SqlDialect: Send + Sync + 'static {
     fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
 }
 
+/// How a read loads aggregates over a relationship, as ash_sql's `:lateral` and
+/// `:grouped` strategies do. Either way, the aggregates over one relationship share one
+/// subquery, each with its own filter, so its rows are read once, not once per aggregate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggregateStrategy {
+    /// `LEFT JOIN LATERAL (SELECT … WHERE related.key = record.key) ON TRUE`: computed for
+    /// each record the read returns, as AshPostgres does.
+    Lateral,
+    /// `LEFT JOIN (SELECT key, … GROUP BY key) ON key = record.key`: computed for every key
+    /// at once, as AshSqlite does, where there are no lateral joins.
+    Grouped,
+}
+
 /// Dialect implementation for SQLite.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SqliteDialect;
@@ -145,6 +206,10 @@ pub struct SqliteDialect;
 impl SqlDialect for SqliteDialect {
     fn name(&self) -> &'static str {
         "sqlite"
+    }
+
+    fn allows_forward_references(&self) -> bool {
+        true
     }
 
     fn placeholder(&self, _index: usize) -> String {
@@ -199,8 +264,9 @@ impl SqlDialect for SqliteDialect {
         false
     }
 
-    fn render_lateral_join(&self, subquery: &str, alias: &str) -> String {
-        format!("(SELECT * FROM ({subquery})) AS {}", self.quote_identifier(alias))
+    /// SQLite has no lateral joins, so aggregates group, as AshSqlite's do.
+    fn aggregate_strategy(&self) -> AggregateStrategy {
+        AggregateStrategy::Grouped
     }
 
     fn boolean_literal(&self, val: bool) -> &'static str {
@@ -323,8 +389,8 @@ impl SqlDialect for PostgresDialect {
         true
     }
 
-    fn render_lateral_join(&self, subquery: &str, alias: &str) -> String {
-        format!("LEFT JOIN LATERAL ({subquery}) AS {} ON true", self.quote_identifier(alias))
+    fn aggregate_strategy(&self) -> AggregateStrategy {
+        AggregateStrategy::Lateral
     }
 
     fn boolean_literal(&self, val: bool) -> &'static str {
@@ -337,6 +403,10 @@ impl SqlDialect for PostgresDialect {
 
     fn render_in_list(&self, op: &str, param: &str) -> String {
         format!("{op} = ANY({param})")
+    }
+
+    fn database_functions(&self) -> &'static [&'static str] {
+        &[ASH_RAISE_ERROR]
     }
 
     fn extension_for_type(&self, sql_type: &str) -> Option<&'static str> {
@@ -363,11 +433,26 @@ impl SqlDialect for PostgresDialect {
     }
 
     /// `LIKE` on a `citext` column already ignores case, so one form covers both.
-    fn render_text_match(&self, op: &str, pattern: &str, _case_insensitive: bool) -> String {
-        format!("{op} LIKE {pattern}")
+    fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String {
+        if case_insensitive {
+            format!("{op} ILIKE {pattern}")
+        } else {
+            format!("{op} LIKE {pattern}")
+        }
     }
 
     fn binary_literal(&self, encoded: &str) -> String {
         format!("decode('{}', 'base64')", encoded.replace('\'', "''"))
     }
 }
+
+/// Raises an error carrying `json_data`, as AshPostgres's function of the same name does:
+/// the message is `ash_error: ` and the JSON, which the data layer turns back into the
+/// error. An atomic update calls it when one of its conditions holds.
+pub const ASH_RAISE_ERROR: &str = "CREATE OR REPLACE FUNCTION ash_raise_error(json_data jsonb) \
+RETURNS BOOLEAN AS $$ \
+BEGIN \
+    RAISE EXCEPTION 'ash_error: %', json_data::text; \
+    RETURN NULL; \
+END; \
+$$ LANGUAGE plpgsql STABLE SET search_path = '';";

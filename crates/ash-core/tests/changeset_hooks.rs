@@ -29,6 +29,7 @@ resource! {
         }
 
         update update {
+            require_atomic false;
             primary;
             accept [title, body, slug, view_count];
         }

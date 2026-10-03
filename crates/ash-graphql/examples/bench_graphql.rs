@@ -77,6 +77,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["OPEN", "CLOSED"],
+            name: Some("TicketStatus"),
         },
     ),
     AttributeDef::required("priority", AttrType::Integer),
@@ -301,7 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // 3. Collection Query (100 records)
-    let collection_query = r#"query { listTickets(limit: 100) { id title status priority } }"#;
+    let collection_query = r#"query { listTickets(first: 100) { results { id title status priority } } }"#;
     run_bench(
         "GraphQL Query: 100 Tickets Collection",
         warmup,
@@ -319,11 +320,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             listTickets(
                 filter: { status: { eq: OPEN } }
                 sort: [{ field: PRIORITY, order: DESC }]
-                limit: 50
+                first: 50
             ) {
-                id
-                title
-                priority
+                results { id title priority }
             }
         }
     "#;
@@ -338,27 +337,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
-    // 5. Relay Keyset Pagination
+    // 5. Keyset Pagination
     let relay_query = r#"
         query {
-            ticketsConnection(first: 20) {
-                totalCount
-                pageInfo {
-                    hasNextPage
-                    endCursor
-                }
-                edges {
-                    cursor
-                    node {
-                        id
-                        title
-                    }
-                }
+            listTickets(first: 20) {
+                count
+                endKeyset
+                results { id title }
             }
         }
     "#;
     run_bench(
-        "GraphQL Query: Relay Keyset Pagination (first: 20)",
+        "GraphQL Query: Keyset Pagination (first: 20)",
         warmup,
         bench_dur,
         || async {
@@ -371,14 +361,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. DataLoader Nested Relations (100 tickets + author resolved in 1 batch)
     let nested_query = r#"
         query {
-            listTickets(limit: 100) {
-                id
-                title
-                author {
-                    id
-                    name
-                    email
-                }
+            listTickets(first: 100) {
+                results { id title author { id name email } }
             }
         }
     "#;
@@ -396,7 +380,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Full Axum HTTP POST Roundtrip (Routing + Deserialization + Execution + Serialization)
     let app = ash_graphql::axum::graphql_router(schema.clone());
     let http_payload = serde_json::json!({
-        "query": "query { listTickets(limit: 20) { id title status priority } }"
+        "query": "query { listTickets(first: 20) { results { id title status priority } } }"
     })
     .to_string();
 
@@ -444,7 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 title: "Production Alert: High Error Rate",
                 status: OPEN,
                 priority: 1,
-                author_id: "{mut_author_id}"
+                authorId: "{mut_author_id}"
             }}) {{
                 result {{
                     id

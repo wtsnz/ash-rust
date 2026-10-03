@@ -1,0 +1,112 @@
+/*
+ * Cybercab Command Center tokens.
+ *
+ * The room is Austin at night: asphalt surfaces, the Cybercab's champagne-gold steel
+ * for whatever carries a rider (and whatever you've selected), sensor cyan for cabs on
+ * their way to a pickup, Supercharger green, sodium-lamp amber for warnings and
+ * brake-light red for what needs a person now. Everything else is quiet steel.
+ */
+@import "@fontsource/barlow/400.css";
+@import "@fontsource/barlow/500.css";
+@import "@fontsource/barlow/600.css";
+@import "@fontsource/barlow/700.css";
+@import "@fontsource/barlow-semi-condensed/500.css";
+@import "@fontsource/barlow-semi-condensed/600.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+:root {
+  /* Asphalt: surfaces rise in small steps of lightness. */
+  --asphalt-0: #06090e;
+  --asphalt-1: #0a0f16;
+  --asphalt-2: #0f151e;
+  --asphalt-3: #151d28;
+  --asphalt-4: #1b2532;
+  --glass: rgba(10, 15, 22, 0.84);
+
+  /* Seams: borders you notice only when you look for them. */
+  --seam-soft: rgba(148, 170, 200, 0.06);
+  --seam: rgba(148, 170, 200, 0.11);
+  --seam-strong: rgba(148, 170, 200, 0.2);
+  --seam-focus: rgba(217, 185, 122, 0.55);
+
+  /* Ink: four levels of text. */
+  --ink-1: #e9eef5;
+  --ink-2: #aab5c4;
+  --ink-3: #707d90;
+  --ink-4: #4a5466;
+
+  /* The cab's own steel, and the world around it. */
+  --champagne: #d9b97a;
+  --champagne-glow: rgba(217, 185, 122, 0.22);
+  --sensor: #45c8e8;
+  --sensor-glow: rgba(69, 200, 232, 0.2);
+  --curb: #c9d4e2;
+  --steel: #8b9db6;
+  --charge: #5fd391;
+  --sodium: #f0a84a;
+  --brake: #f25b5b;
+  --brake-glow: rgba(242, 91, 91, 0.22);
+
+  /* A cab's status, as the map and every list draw it. */
+  --status-available: var(--curb);
+  --status-dispatched: var(--sensor);
+  --status-on_trip: var(--champagne);
+  --status-returning: var(--steel);
+  --status-charging: var(--charge);
+  --status-maintenance: var(--ink-4);
+
+  --font-ui: "Barlow", system-ui, sans-serif;
+  --font-label: "Barlow Semi Condensed", "Barlow", system-ui, sans-serif;
+  --font-code: "JetBrains Mono", ui-monospace, monospace;
+
+  /* 4px grid. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Wall mode scales the whole room up for the far side of the floor. */
+  --scale: 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--asphalt-0);
+  color: var(--ink-1);
+  font-family: var(--font-ui);
+  font-size: calc(14px * var(--scale));
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 1px solid var(--seam-focus);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--seam-strong);
+  border-radius: 3px;
+}

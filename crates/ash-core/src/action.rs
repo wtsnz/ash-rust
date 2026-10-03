@@ -116,6 +116,13 @@ impl<'a> ChangeContext<'a> {
 
 pub trait CustomChange: Send + Sync + 'static {
     fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()>;
+
+    /// What the change sets in an atomic update, as Ash's `atomic/3`: expressions over the
+    /// record as the data layer holds it, and conditions on it. By default a custom change
+    /// can't run atomically.
+    fn atomic(&self, _ctx: &crate::atomic::AtomicContext<'_>) -> crate::atomic::Atomic {
+        crate::atomic::Atomic::not_atomic("a custom change without an atomic implementation")
+    }
 }
 
 pub struct ValidationContext<'a> {
@@ -129,6 +136,13 @@ pub struct ValidationContext<'a> {
 
 pub trait CustomValidation: Send + Sync + 'static {
     fn validate(&self, ctx: &ValidationContext<'_>) -> Result<()>;
+
+    /// When the validation fails in an atomic update, as Ash's `atomic/3`: conditions on
+    /// the record as the data layer holds it. By default a custom validation can't run
+    /// atomically.
+    fn atomic(&self, _ctx: &crate::atomic::AtomicContext<'_>) -> crate::atomic::Atomic {
+        crate::atomic::Atomic::not_atomic("a custom validation without an atomic implementation")
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -250,6 +264,16 @@ pub struct ActionDef {
     /// Relationships whose related records are destroyed first, with their primary
     /// destroy action.
     pub cascade_destroy: &'static [&'static str],
+    /// For an update or a soft destroy: run as one statement in the data layer, or fail,
+    /// as Ash's `require_atomic?` (true by default). One whose changes or validations
+    /// can't run in the data layer must set this to false to read the record first
+    /// instead. A hard destroy runs as one statement when it can, and reads first when it
+    /// can't, whatever this says, as in Ash.
+    pub require_atomic: bool,
+    /// For an update or destroy run atomically: the read action whose filters decide
+    /// which records it reaches, as Ash's `atomic_upgrade_with`; the primary read when
+    /// `None`.
+    pub atomic_upgrade_with: Option<&'static str>,
 }
 
 impl ActionDef {
@@ -266,6 +290,8 @@ impl ActionDef {
             persist: PersistKind::DataLayer,
             soft: false,
             cascade_destroy: &[],
+            require_atomic: true,
+            atomic_upgrade_with: None,
         }
     }
 
@@ -282,6 +308,8 @@ impl ActionDef {
             persist: PersistKind::DataLayer,
             soft: false,
             cascade_destroy: &[],
+            require_atomic: true,
+            atomic_upgrade_with: None,
         }
     }
 
@@ -298,6 +326,8 @@ impl ActionDef {
             persist: PersistKind::DataLayer,
             soft: false,
             cascade_destroy: &[],
+            require_atomic: true,
+            atomic_upgrade_with: None,
         }
     }
 
@@ -314,6 +344,8 @@ impl ActionDef {
             persist: PersistKind::DataLayer,
             soft: false,
             cascade_destroy: &[],
+            require_atomic: true,
+            atomic_upgrade_with: None,
         }
     }
 
@@ -330,6 +362,8 @@ impl ActionDef {
             persist: PersistKind::DataLayer,
             soft: false,
             cascade_destroy: &[],
+            require_atomic: true,
+            atomic_upgrade_with: None,
         }
     }
 
@@ -368,6 +402,19 @@ impl ActionDef {
 
     pub const fn primary(mut self) -> Self {
         self.primary = true;
+        self
+    }
+
+    /// The read action an atomic update reaches records through: see
+    /// [`atomic_upgrade_with`](Self::atomic_upgrade_with).
+    pub const fn atomic_upgrade_with(mut self, read: &'static str) -> Self {
+        self.atomic_upgrade_with = Some(read);
+        self
+    }
+
+    /// Whether an update or soft destroy must run atomically, as Ash's `require_atomic?`.
+    pub const fn require_atomic(mut self, require: bool) -> Self {
+        self.require_atomic = require;
         self
     }
 

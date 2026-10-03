@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::dialect::SqlDialect;
-use crate::diff::SchemaOperation;
-use crate::snapshot::TableSnapshot;
+use crate::diff::{SchemaOperation, defer_forward_references};
+use crate::snapshot::{ReferenceSnapshot, TableSnapshot};
 
 /// Contains generated `.up.sql` and `.down.sql` migration files metadata and contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +64,13 @@ pub fn generate_migration_with_version<D: SqlDialect>(
     let up_filename = format!("{version}_{name}.{dialect_name}.up.sql");
     let down_filename = format!("{version}_{name}.{dialect_name}.down.sql");
 
+    let deferred;
+    let operations = if dialect.allows_forward_references() {
+        operations
+    } else {
+        deferred = defer_forward_references(operations.to_vec());
+        &deferred[..]
+    };
     let mut up_stmts = extension_sql(dialect, operations);
     let mut down_stmts = Vec::new();
 
@@ -344,16 +351,9 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             (up, down)
         }
         SchemaOperation::AddReference { table, reference } => {
+            let up = emit_add_reference(dialect, table, reference);
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(&reference.name);
-            let (col, target_col) = reference.key_sql(dialect);
-            let target_t = dialect.quote_identifier(&reference.target_table);
-            let on_del = &reference.on_delete;
-
-            let up = format!(
-                "ALTER TABLE {t} ADD CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {on_del}{};",
-                reference.on_update_sql()
-            );
             let down = format!("ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {ref_name};");
             (up, down)
         }
@@ -369,6 +369,23 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             (up, down)
         }
     }
+}
+
+/// `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY` for `reference` on `table`.
+pub fn emit_add_reference<D: SqlDialect>(
+    dialect: &D,
+    table: &str,
+    reference: &ReferenceSnapshot,
+) -> String {
+    let t = dialect.quote_identifier(table);
+    let ref_name = dialect.quote_identifier(&reference.name);
+    let (col, target_col) = reference.key_sql(dialect);
+    let target_t = dialect.quote_identifier(&reference.target_table);
+    format!(
+        "ALTER TABLE {t} ADD CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}{};",
+        reference.on_delete,
+        reference.on_update_sql()
+    )
 }
 
 pub fn emit_create_table<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String {
@@ -577,10 +594,16 @@ fn extension_sql<D: SqlDialect>(dialect: &D, operations: &[SchemaOperation]) -> 
             }
         }
     }
-    names
+    let mut statements: Vec<String> = names
         .into_iter()
         .map(|name| format!("CREATE EXTENSION IF NOT EXISTS {name} WITH SCHEMA public;"))
-        .collect()
+        .collect();
+    // The functions the data layer calls come with the first tables, and `CREATE OR
+    // REPLACE` keeps them current with any later ones.
+    if operations.iter().any(|op| matches!(op, SchemaOperation::CreateTable(_))) {
+        statements.extend(dialect.database_functions().iter().map(|sql| sql.to_string()));
+    }
+    statements
 }
 
 /// Extensions `resource`'s columns need, for installing without migrations.
@@ -637,6 +660,13 @@ pub fn emit_sql<D: SqlDialect>(
         HashSet::new()
     };
 
+    let deferred;
+    let operations = if dialect.allows_forward_references() {
+        operations
+    } else {
+        deferred = defer_forward_references(operations.to_vec());
+        &deferred[..]
+    };
     let mut stmts = extension_sql(dialect, operations);
     let mut rebuilt = HashSet::new();
 

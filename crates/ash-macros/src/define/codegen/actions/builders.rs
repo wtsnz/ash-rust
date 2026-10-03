@@ -315,6 +315,37 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
         });
     }
 
+    if actions.iter().any(|a| a.kind == ActionKind::Update) {
+        resource_methods.push(quote! {
+            /// Updates several records through update action `action`, each with its own
+            /// input, written together. See [`::ash_core::bulk_update`].
+            pub async fn bulk_update<D: ::ash_core::DataLayer, I, F>(
+                ctx: &::ash_core::Context<D>,
+                action: &str,
+                updates: I,
+            ) -> ::ash_core::Result<::ash_core::BulkResult<Self>>
+            where
+                I: ::std::iter::IntoIterator<Item = (Self, F)>,
+                F: ::ash_core::IntoFieldMap,
+            {
+                ::ash_core::bulk_update(ctx, action, updates, ::ash_core::BulkUpdateOptions::default()).await
+            }
+
+            pub async fn bulk_update_with_opts<D: ::ash_core::DataLayer, I, F>(
+                ctx: &::ash_core::Context<D>,
+                action: &str,
+                updates: I,
+                opts: ::ash_core::BulkUpdateOptions,
+            ) -> ::ash_core::Result<::ash_core::BulkResult<Self>>
+            where
+                I: ::std::iter::IntoIterator<Item = (Self, F)>,
+                F: ::ash_core::IntoFieldMap,
+            {
+                ::ash_core::bulk_update(ctx, action, updates, opts).await
+            }
+        });
+    }
+
     if let Some(destroy_act) = actions
         .iter()
         .find(|a| a.kind == ActionKind::Destroy && a.primary)

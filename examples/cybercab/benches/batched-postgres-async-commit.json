@@ -1,0 +1,136 @@
+{
+  "machine": "macos aarch64, 16 threads",
+  "store": "postgres",
+  "fleets": [
+    {
+      "fleet": 34,
+      "seed_s": 0.250553541,
+      "get_us": 190.583,
+      "read_all_ms": 0.488084,
+      "find_by_call_sign_ms": 0.215167,
+      "report_us": 223.0,
+      "record_us": 188.167,
+      "tick_ms": {
+        "p50": 3.4768339999999998,
+        "p95": 8.936875,
+        "p99": 9.702583,
+        "max": 9.702583
+      },
+      "actions_per_tick": 10.75,
+      "actions_per_s": 2642.0146789844025,
+      "busy_pct": 25
+    },
+    {
+      "fleet": 250,
+      "seed_s": 1.706010375,
+      "get_us": 198.667,
+      "read_all_ms": 1.8408339999999999,
+      "find_by_call_sign_ms": 0.28904199999999997,
+      "report_us": 244.25,
+      "record_us": 220.542,
+      "tick_ms": {
+        "p50": 14.615875,
+        "p95": 26.53875,
+        "p99": 85.554958,
+        "max": 85.554958
+      },
+      "actions_per_tick": 114.45,
+      "actions_per_s": 6229.346206684122,
+      "busy_pct": 23
+    },
+    {
+      "fleet": 1000,
+      "seed_s": 6.678216709,
+      "get_us": 195.45899999999997,
+      "read_all_ms": 6.353,
+      "find_by_call_sign_ms": 0.371125,
+      "report_us": 206.584,
+      "record_us": 186.041,
+      "tick_ms": {
+        "p50": 36.037459,
+        "p95": 90.693625,
+        "p99": 615.568208,
+        "max": 615.568208
+      },
+      "actions_per_tick": 469.1,
+      "actions_per_s": 6743.306106292169,
+      "busy_pct": 19
+    },
+    {
+      "fleet": 2500,
+      "seed_s": 13.354483667,
+      "get_us": 433.70799999999997,
+      "read_all_ms": 23.028375,
+      "find_by_call_sign_ms": 1.430458,
+      "report_us": 533.1669999999999,
+      "record_us": 466.625,
+      "tick_ms": {
+        "p50": 104.287667,
+        "p95": 220.64941599999997,
+        "p99": 1323.30225,
+        "max": 1323.30225
+      },
+      "actions_per_tick": 950.65,
+      "actions_per_s": 5455.059286946015,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 5000,
+      "seed_s": 14.539991959,
+      "get_us": 167.0,
+      "read_all_ms": 32.467208,
+      "find_by_call_sign_ms": 0.4025,
+      "report_us": 222.458,
+      "record_us": 199.0,
+      "tick_ms": {
+        "p50": 175.22975,
+        "p95": 411.285291,
+        "p99": 2190.806625,
+        "max": 2190.806625
+      },
+      "actions_per_tick": 1744.2,
+      "actions_per_s": 5913.545420437204,
+      "busy_pct": 20
+    },
+    {
+      "fleet": 10000,
+      "seed_s": 18.3895515,
+      "get_us": 207.959,
+      "read_all_ms": 67.84937500000001,
+      "find_by_call_sign_ms": 1.005167,
+      "report_us": 261.458,
+      "record_us": 209.792,
+      "tick_ms": {
+        "p50": 552.28625,
+        "p95": 1059.22725,
+        "p99": 5158.419916,
+        "max": 5158.419916
+      },
+      "actions_per_tick": 3297.25,
+      "actions_per_s": 4389.780050185414,
+      "busy_pct": 20
+    }
+  ],
+  "fanout": [
+    {
+      "fleet": 1000,
+      "subscribers": 100,
+      "publish_round_ms": {
+        "p50": 717.367959,
+        "p95": 815.9875,
+        "p99": 815.9875,
+        "max": 815.9875
+      },
+      "expected": 500000,
+      "delivered": 500000,
+      "latency_ms": {
+        "p50": 1.128,
+        "p95": 1.879,
+        "p99": 2.945,
+        "max": 8.426
+      },
+      "ended": 0,
+      "told": 0
+    }
+  ]
+}

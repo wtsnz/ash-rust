@@ -423,3 +423,89 @@ async fn test_bulk_create_stop_on_error_false() {
     assert!(!res.is_success());
     assert_eq!(res.errors.len(), 1);
 }
+
+/// Each record gets its own input, through the update action's changeset; the batch is
+/// written together and each row is notified as an update. A row that fails validation
+/// fails alone when the bulk update carries on past errors.
+async fn bulk_updates_each_record<D: ash_core::DataLayer>(ctx: Context<D>) {
+    let updates = Arc::new(AtomicUsize::new(0));
+    let heard = updates.clone();
+    let ctx = ctx.with_notifier(Arc::new(SyncFnNotifier::new("updates", move |notification| {
+        if notification.action_kind == ash_core::ActionKind::Update {
+            heard.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    })));
+    let created = Product::bulk_create(
+        &ctx,
+        (1..=4).map(|i| {
+            [
+                ("sku", Value::from(format!("SKU-UP-{i}"))),
+                ("title", Value::from(format!("Item {i}"))),
+                ("price", Value::from(i * 10)),
+                ("category", Value::from("Before")),
+            ]
+        }),
+    )
+    .await
+    .unwrap();
+
+    // Each its own price; the third also moves category, and a stale copy's title isn't
+    // written back.
+    let mut stale = created.records.clone();
+    let renamed = stale[1].clone().update_on(&ctx).title("Renamed".to_string()).await.unwrap();
+    assert_eq!(renamed.title, "Renamed");
+    stale[2].category = "Stale".into();
+    let inputs = stale.into_iter().enumerate().map(|(i, product)| {
+        let mut input = ash_core::FieldMap::new();
+        input.insert("price".into(), Value::from(1_000 + i as i64));
+        if i == 2 {
+            input.insert("category".into(), Value::from("After"));
+        }
+        (product, input)
+    });
+    let result = Product::bulk_update(&ctx, "update", inputs).await.unwrap();
+    assert_eq!(result.count, 4);
+    assert_eq!(updates.load(Ordering::SeqCst), 5, "the rename, then one per row");
+
+    let mut stored = Product::query(&ctx).load().await.unwrap();
+    stored.sort_by_key(|p| p.price);
+    let summary: Vec<(i64, &str, &str)> = stored
+        .iter()
+        .map(|p| (p.price, p.title.as_str(), p.category.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (1_000, "Item 1", "Before"),
+            (1_001, "Renamed", "Before"),
+            (1_002, "Item 3", "After"),
+            (1_003, "Item 4", "Before"),
+        ]
+    );
+
+    // One row's input isn't accepted by the action: it fails alone.
+    let inputs = stored.into_iter().enumerate().map(|(i, product)| {
+        let mut input = ash_core::FieldMap::new();
+        input.insert("price".into(), Value::from(2_000 + i as i64));
+        if i == 0 {
+            input.insert("sku".into(), Value::from("NOT-ACCEPTED"));
+        }
+        (product, input)
+    });
+    let opts = ash_core::BulkUpdateOptions::new().stop_on_error(false);
+    let result = Product::bulk_update_with_opts(&ctx, "update", inputs, opts).await.unwrap();
+    assert_eq!((result.count, result.error_count), (3, 1), "{:?}", result.errors);
+    let prices: Vec<i64> = {
+        let mut prices: Vec<i64> = Product::query(&ctx).load().await.unwrap().iter().map(|p| p.price).collect();
+        prices.sort_unstable();
+        prices
+    };
+    assert_eq!(prices, [1_000, 2_001, 2_002, 2_003]);
+}
+
+#[tokio::test]
+async fn test_bulk_update_memory_and_sqlite() {
+    bulk_updates_each_record(setup_memory()).await;
+    bulk_updates_each_record(setup_sqlite().await).await;
+}

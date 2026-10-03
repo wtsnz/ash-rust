@@ -135,6 +135,80 @@ resource! {
 
 ---
 
+## 3b. Atomic Updates
+
+As in Ash, an update runs as one statement in the data layer rather than read, changed in
+memory and written back. Each part of the action says how it runs there:
+
+- **Changes** become values computed from the record as stored: `set`, `set_new`,
+  `set_from_arg`, `relate_actor`, the lock version (`version + 1`), and `updated_at`, which
+  moves only when a value does. A custom change implements `CustomChange::atomic`, as an
+  Ash change implements `atomic/3`; a state machine's transition sets the target state.
+- **Validations, write policies and transitions** become conditions checked in the same
+  statement, against the record as stored, each with the error it fails with: a built-in
+  validation's, `Forbidden`, `StaleRecord`, or the state machine's `InvalidTransition`. A
+  value the update sets outright is validated before the statement runs.
+
+On Postgres the update locks the record (`FOR UPDATE`) and raises a failed condition's
+error from the statement through an `ash_raise_error` function, created with the tables,
+as AshPostgres does:
+
+```sql
+UPDATE "cabs" AS t SET "status" = s.new_status, ...
+FROM (SELECT "id", $1 AS new_status, ...,
+        CASE WHEN NOT ("status" = ANY($2)) THEN ash_raise_error(...) END AS check
+      FROM "cabs" WHERE "id" = $3 LIMIT 1 FOR UPDATE) AS s
+WHERE t."id" = s."id" AND s.check IS NULL
+RETURNING t.*
+```
+
+The memory data layer runs it under its lock. SQLite, which can't raise an error from a
+statement, reads the record first, as AshSqlite does.
+
+An update by id (`update_dynamic`, and a GraphQL update mutation) needs no read at all;
+one of a record in hand (`update_existing`, or an instance action such as
+`cab.recall_on(&ctx)`) checks it hasn't changed
+since, failing with `StaleRecord` if it has.
+
+An update that needs the record in memory (a `before_action` hook, a change or validation
+function, managed relationships) can't run in the statement. As Ash's `require_atomic?`,
+`require_atomic` is on by default, so such an update fails with `Error::MustBeAtomic`
+unless its action opts out:
+
+```rust
+update rename {
+    accept [title];
+    change before_action(clean_title);
+    require_atomic false; // reads the record first
+}
+```
+
+## 3c. Atomic Destroys
+
+Destroys follow Ash too. A soft destroy is an update, so it runs as one, atomically, with
+`require_atomic` and `atomic_upgrade_with` as an update has them, and archives its
+`cascade_destroy` children after.
+
+A hard destroy by id (`destroy_dynamic_by_id`, and a GraphQL destroy mutation, which runs
+as AshGraphql's bulk destroy does) is one delete: its validations, write policies and lock
+version are conditions checked in the statement, as an update's are, and it returns the
+record as it was deleted. On Postgres:
+
+```sql
+DELETE FROM "cabs" AS t
+USING (SELECT "id", CASE WHEN ... THEN ash_raise_error(...) END AS check
+       FROM "cabs" WHERE "id" = $1 LIMIT 1 FOR UPDATE) AS s
+WHERE t."id" = s."id" AND s.check IS NULL
+RETURNING t.*
+```
+
+A hard destroy that needs the record (a change or validation function, a `before_action`
+hook, `cascade_destroy`, or a relationship's `on_delete`) reads it first instead. As in
+Ash, `require_atomic` doesn't apply to hard destroys, and one of a record in hand isn't
+made atomic.
+
+---
+
 ## 4. Keyset & Offset Pagination
 
 Ash queries support two high-performance pagination strategies returning a uniform `Page<T>`:
@@ -907,22 +981,23 @@ resource! {
 }
 ```
 
-## 16. Bulk & Batch Operations (`bulk_create`, `bulk_destroy`, chunked streaming)
+## 16. Bulk & Batch Operations (`bulk_create`, `bulk_update`, `bulk_destroy`, chunked streaming)
 
 `ash-rust` provides native, optimized bulk data operations directly mirroring Ash Elixir's bulk actions:
 - `Resource::bulk_create(&ctx, inputs)`: Validates, sets defaults, checks policies, and inserts records in batched chunks.
+- `Resource::bulk_update(&ctx, "action", updates)`: Updates many records, each with its own input, through one update action. Each runs the action's changes, validations, policies and hooks as a single update would, and writes only the attributes it changes. The batch is written together: on Postgres, rows that change the same columns go in one `UPDATE … FROM (VALUES …)`. Each row is notified as an update. Ash's `bulk_update` applies one input to every record; this takes one per record, for streams like telemetry where every record reports its own values.
 - `Resource::bulk_destroy(&ctx, ids)`: Verifies authorizations, applies cascading relationship deletes, and removes records using optimized multi-id batch deletes (`WHERE id IN (...)`).
 - `Query::bulk_destroy(&ctx, "destroy", opts)`: Bulk destroys all records matching any complex query filter.
 - `Query::chunked(batch_size, |chunk| ...)`: Streams query results in chunks without exhausting memory.
 - `Query::chunked_keyset(batch_size, |chunk| ...)`: Streams keyset-ordered queries across massive tables with constant performance.
 - `Multi::bulk_create` & `Multi::bulk_destroy`: Atomic bulk operations inside transactional multi pipelines.
 
-### Bulk Options (`BulkCreateOptions`, `BulkDestroyOptions`)
+### Bulk Options (`BulkCreateOptions`, `BulkUpdateOptions`, `BulkDestroyOptions`)
 - `batch_size(usize)`: Chunk large collections into batches of N rows (default: all at once).
 - `return_records(bool)`: Controls whether loaded/redacted records are returned in `BulkResult`.
 - `stop_on_error(bool)`: Whether to halt on the first validation/persistence error or collect errors in `BulkResult.errors`.
 - `notify(bool)`: Emits lifecycle action notifications to registered notifiers for each record.
-- `upsert(identity, update_fields)`: Runs atomic upsert operations on conflict with the specified identity constraint.
+- `upsert(identity, update_fields)`: Runs atomic upsert operations on conflict with the specified identity constraint (creates only).
 
 ### Example Usage
 ```rust
@@ -939,13 +1014,20 @@ let opts = BulkCreateOptions::new().batch_size(250);
 let result = Product::bulk_create_with_opts(&ctx, "create", items, opts).await?;
 println!("Inserted {} items with {} errors", result.count, result.error_count);
 
-// 2. Query Bulk Destroy
+// 2. Bulk Update: each record its own input, written together
+let repriced = products.into_iter().map(|product| {
+    let price = product.price * 110 / 100;
+    (product, [("price", Value::from(price))])
+});
+let result = Product::bulk_update(&ctx, "update", repriced).await?;
+
+// 3. Query Bulk Destroy
 let del_result = Product::query(&ctx)
     .filter(Product::category.eq("Archived"))
     .bulk_destroy("destroy", BulkDestroyOptions::default())
     .await?;
 
-// 3. Chunked Streaming
+// 4. Chunked Streaming
 Product::query(&ctx)
     .filter(Product::price.gt(50))
     .chunked(100, |chunk| async move {

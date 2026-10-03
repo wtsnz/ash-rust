@@ -1,7 +1,7 @@
 //! React and TanStack Query hook generators.
 
 use ash_core::{ActionKind, ResourceDef};
-use crate::types::{to_camel_case, to_pascal_case};
+use crate::types::{input_fields, to_camel_case, to_pascal_case};
 
 /// Generate React / TanStack Query hooks for a given resource.
 pub fn generate_resource_react_hooks(res: &ResourceDef, client_name: &str) -> String {
@@ -33,7 +33,6 @@ pub fn generate_resource_react_hooks(res: &ResourceDef, client_name: &str) -> St
   params?: {{
     filter?: {name}FilterInput;
     limit?: number;
-    offset?: number;
     include?: {name}Include;
   }},
   options?: Record<string, unknown>
@@ -41,7 +40,6 @@ pub fn generate_resource_react_hooks(res: &ResourceDef, client_name: &str) -> St
   const builder = client.{prop}.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {{
@@ -85,6 +83,22 @@ pub fn generate_resource_react_hooks(res: &ResourceDef, client_name: &str) -> St
   return {{
     mutationFn: (variables: {{ id: string; input: {input_type}; include?: {name}Include }}) =>
       client.{prop}.{action_camel}(variables.id, variables.input, variables.include),
+    ...options,
+  }};
+}}
+
+"#
+                ));
+            }
+            ActionKind::Destroy if input_fields(res, action).iter().any(|(_, _, required)| *required) => {
+                out.push_str(&format!(
+                    r#"export function use{action_pascal}{name}Mutation(
+  client: {client_name},
+  options?: Record<string, unknown>
+) {{
+  return {{
+    mutationFn: (variables: {{ id: string; input: {input_type} }}) =>
+      client.{prop}.{action_camel}(variables.id, variables.input),
     ...options,
   }};
 }}

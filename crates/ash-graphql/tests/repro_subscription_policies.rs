@@ -61,13 +61,13 @@ async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
 
     let listed = schema
         .execute(
-            Request::new("{ listTickets { title } }").data(ctx.clone().with_actor(viewer.clone())),
+            Request::new("{ listTickets { results { title } } }").data(ctx.clone().with_actor(viewer.clone())),
         )
         .await;
     assert!(listed.errors.is_empty(), "{:?}", listed.errors);
 
     let mut stream = schema.execute_stream(
-        Request::new("subscription { ticketCreated { title owner_id } }")
+        Request::new("subscription { ticketCreated { created { title ownerId } } }")
             .data(ctx.clone())
             .data(viewer.clone()),
     );
@@ -76,9 +76,9 @@ async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
 
     let mutation = format!(
         r#"mutation {{
-            createTicket(input: {{ title: "not yours", owner_id: "{other}" }}) {{
-                success
-                errors {{ message field code }}
+            createTicket(input: {{ title: "not yours", ownerId: "{other}" }}) {{
+                errors {{ code }}
+                errors {{ message fields code }}
             }}
         }}"#
     );
@@ -88,7 +88,7 @@ async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
     assert!(created.errors.is_empty(), "{:?}", created.errors);
     let created_json = created.data.into_json().unwrap();
     assert_eq!(
-        created_json["createTicket"]["success"], true,
+        created_json["createTicket"]["errors"], serde_json::json!([]),
         "create must succeed so the subscription has a chance to leak: {created_json}"
     );
 

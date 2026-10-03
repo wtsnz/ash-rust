@@ -218,10 +218,10 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_memory() {
     let a5 = Article::create(&ctx).title("Art 200").views(200).await.unwrap();
     let a6 = Article::create(&ctx).title("Art 100").views(100).await.unwrap();
 
-    // Determine deterministic expected order: views DESC, then id DESC
+    // Determine deterministic expected order: views DESC, then id ascending, as Ash breaks ties
     let mut all = [a1, a2, a3, a4, a5, a6];
     all.sort_by(|x, y| match y.views.cmp(&x.views) {
-        std::cmp::Ordering::Equal => y.id.cmp(&x.id),
+        std::cmp::Ordering::Equal => x.id.cmp(&y.id),
         other => other,
     });
 
@@ -307,7 +307,7 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_sqlite() {
 
     let mut all = [a1, a2, a3, a4, a5, a6];
     all.sort_by(|x, y| match y.views.cmp(&x.views) {
-        std::cmp::Ordering::Equal => y.id.cmp(&x.id),
+        std::cmp::Ordering::Equal => x.id.cmp(&y.id),
         other => other,
     });
 
@@ -385,7 +385,7 @@ async fn test_keyset_pagination_duplicate_keys_across_boundary_sqlite() {
 
     let mut expected_order = [a1, a2, a3, a4];
     expected_order.sort_by(|x, y| match y.views.cmp(&x.views) {
-        std::cmp::Ordering::Equal => y.id.cmp(&x.id),
+        std::cmp::Ordering::Equal => x.id.cmp(&y.id),
         other => other,
     });
 
@@ -415,4 +415,48 @@ async fn test_keyset_pagination_duplicate_keys_across_boundary_sqlite() {
     assert_eq!(page2.results[0].id, expected_order[2].id, "The duplicate-keyed item must be retrieved on page 2");
     assert_eq!(page2.results[1].id, expected_order[3].id);
     assert!(!page2.has_more);
+}
+
+/// A keyset page sorts stably, as Ash makes it: the primary key breaks ties, ascending,
+/// unless the sort already orders by the primary key or every key of an identity.
+#[test]
+fn keyset_sort_breaks_ties_as_ash_does() {
+    use ash_core::{IdentityDef, ResourceDef, Sort, keyset_sort};
+
+    static WITH_IDENTITY: ResourceDef = ResourceDef {
+        identities: &[IdentityDef {
+            name: "unique_title",
+            keys: &["title"],
+            message: None,
+            predicate: None,
+            nils_distinct: true,
+        }],
+        ..Article::DEF
+    };
+    let sort = |fields: &[(&str, bool)]| -> Vec<Sort> {
+        fields
+            .iter()
+            .map(|(field, descending)| Sort {
+                field: field.to_string(),
+                descending: *descending,
+            })
+            .collect()
+    };
+    let fields = |sort: Vec<Sort>| -> Vec<(String, bool)> {
+        sort.into_iter().map(|s| (s.field, s.descending)).collect()
+    };
+
+    assert_eq!(
+        fields(keyset_sort(&Article::DEF, sort(&[("views", true)]))),
+        fields(sort(&[("views", true), ("id", false)]))
+    );
+    assert_eq!(fields(keyset_sort(&Article::DEF, Vec::new())), fields(sort(&[("id", false)])));
+    assert_eq!(
+        fields(keyset_sort(&Article::DEF, sort(&[("id", true), ("views", false)]))),
+        fields(sort(&[("id", true), ("views", false)]))
+    );
+    assert_eq!(
+        fields(keyset_sort(&WITH_IDENTITY, sort(&[("title", false)]))),
+        fields(sort(&[("title", false)]))
+    );
 }

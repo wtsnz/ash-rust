@@ -146,8 +146,18 @@ fn is_string_type(ty: &Type) -> bool {
     is_string(ty) || option_inner(ty).is_some_and(is_string)
 }
 
+/// Integers, floats and decimals, as Ash's numericality accepts.
 fn is_numeric_type(ty: &Type) -> bool {
-    is_integer(ty) || option_inner(ty).is_some_and(is_integer)
+    let number = |ty: &Type| {
+        is_integer(ty)
+            || matches!(
+                ty,
+                Type::Path(path) if path.path.segments.last().is_some_and(|segment| {
+                    matches!(segment.ident.to_string().as_str(), "f64" | "f32" | "Float" | "Decimal")
+                })
+            )
+    };
+    number(ty) || option_inner(ty).is_some_and(number)
 }
 
 fn check_unique_idents<'a>(
@@ -179,6 +189,19 @@ fn check_name_collisions(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             errors.push(Error::new_spanned(
                 &rel.ident,
                 format!("name collision: `{name}` is both an attribute and a relationship"),
+            ));
+        }
+    }
+    // An identity names a constant on the resource, as an attribute does.
+    for identity in &def.identities {
+        let name = identity.name.to_string();
+        if attr_names.contains(&name) {
+            errors.push(Error::new_spanned(
+                &identity.name,
+                format!(
+                    "name collision: `{name}` is both an attribute and an identity; name the \
+                     identity for what it keeps unique, such as `unique_{name}`"
+                ),
             ));
         }
     }
@@ -1211,6 +1234,24 @@ mod tests {
             }
         }});
         assert!(msg.contains("duplicate attribute `title`"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_identity_named_like_an_attribute_fails() {
+        let msg = validate_err_msg(quote! {
+            TestResource {
+            attributes {
+                id: Uuid [pk];
+                code: String;
+            }
+            identities {
+                identity code: [code];
+            }
+        }});
+        assert!(
+            msg.contains("`code` is both an attribute and an identity") && msg.contains("unique_code"),
+            "got: {msg}"
+        );
     }
 
     #[test]

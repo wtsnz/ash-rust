@@ -22,6 +22,7 @@ use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value, required_uuid};
 
 use super::managed::{ManagedRelationshipSpec, extract_managed_relationships};
+use crate::engine::atomic::{AtomicPlan, PlanInput, plan_update, run_atomic_destroy, run_atomic_update};
 
 /// Hook running before persistence with mutable access to the changeset.
 pub type DynamicChangesetHook =
@@ -44,6 +45,8 @@ pub struct DynamicChangeset {
     after_actions: Vec<DynamicAfterActionHook>,
     after_transactions: Vec<DynamicAfterTransactionHook>,
     managed_relationships: Vec<ManagedRelationshipSpec>,
+    /// The attributes the input writes, for the field policies on writes.
+    written: Vec<String>,
 }
 
 impl DynamicChangeset {
@@ -67,6 +70,7 @@ impl DynamicChangeset {
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
             managed_relationships: Vec::new(),
+            written: Vec::new(),
         }
     }
 
@@ -173,6 +177,7 @@ impl DynamicChangeset {
         fields.extend(forced);
         prepare_update_fields(resource, &existing, &mut fields);
         let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
+        changeset.written = accepted.keys().cloned().collect();
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
         changeset.run_validations(ctx)?;
@@ -359,12 +364,133 @@ impl DynamicChangeset {
     ) -> Result<FieldMap> {
         let after_transactions = std::mem::take(&mut self.after_transactions);
         let result = async {
+            if let Some(plan) = self.atomic_plan(ctx)? {
+                return self.persist_atomically(ctx, plan, cascade).await;
+            }
             let id = self.prepare(ctx).await?;
             let stored = self.persist(ctx, id, cascade).await?;
             self.finish(ctx, id, stored, cascade.notify).await
         }
         .await;
         for hook in after_transactions {
+            hook(result.as_ref());
+        }
+        result
+    }
+
+    /// The update of the record in hand as one statement, as Ash upgrades an update of a
+    /// record to an atomic one: what this changeset changes, with the action's changes as
+    /// expressions and its validations, policies and lock version as conditions. A soft
+    /// destroy is an update here, as in Ash; a hard destroy of a record in hand isn't
+    /// upgraded, as in Ash. `None` when it runs record by record: it isn't an update, its
+    /// data layer can't, or it can't and doesn't have to (`require_atomic`, else an error).
+    fn atomic_plan<D: DataLayer>(&self, ctx: &Context<D>) -> Result<Option<AtomicPlan>> {
+        let Some(existing) = self.existing.as_ref() else {
+            return Ok(None);
+        };
+        let updates = match self.action.kind {
+            ActionKind::Update => true,
+            ActionKind::Destroy => self.action.soft,
+            _ => false,
+        };
+        if !updates || !ctx.data.can_update_atomically(self.resource) {
+            return Ok(None);
+        }
+        let planned = if !self.before_actions.is_empty() {
+            Err("it has a before_action hook".to_string())
+        } else if !self.managed_relationships.is_empty() {
+            Err("it manages relationships".to_string())
+        } else {
+            let id = required_uuid(existing, pk_name(self.resource)?)?;
+            let expected_version = self
+                .resource
+                .optimistic_lock_attribute()
+                .map(|version| (id, existing.get(version).and_then(Value::as_int).unwrap_or(1)));
+            plan_update(
+                self.resource,
+                self.action,
+                PlanInput {
+                    actor: ctx.actor.as_ref(),
+                    tenant: ctx.tenant(),
+                    sets: self.changes(self.fields.clone()),
+                    written: self.written.clone(),
+                    arguments: &self.arguments,
+                    expected_version,
+                    collect_hooks: false,
+                },
+            )?
+        };
+        match planned {
+            Ok(plan) => Ok(Some(plan)),
+            Err(reason) if self.action.require_atomic => Err(Error::MustBeAtomic {
+                resource: self.resource.name,
+                action: self.action.name,
+                reason,
+            }),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Runs `plan` against the record in hand. No row means it changed (or went) since it
+    /// was read: [`Error::StaleRecord`], as in Ash. A soft destroy archives its children
+    /// after, as one run record by record does.
+    async fn persist_atomically<D: DataLayer>(&mut self, ctx: &Context<D>, plan: AtomicPlan, cascade: &Cascade) -> Result<FieldMap> {
+        let existing = self.existing.as_ref().ok_or(Error::NotFound)?;
+        let id = required_uuid(existing, pk_name(self.resource)?)?;
+        let destroy = self.action.kind == ActionKind::Destroy;
+        let stored = if destroy && !cascade.enter(self.resource, id) {
+            // Already being destroyed further up a cascade.
+            existing.clone()
+        } else {
+            let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update)
+                .await?
+                .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
+            if destroy {
+                crate::engine::cascade_destroy_related(ctx, self.resource, self.action, id, &stored, cascade).await?;
+            }
+            stored
+        };
+        self.after_actions.extend(plan.after_actions);
+        self.finish(ctx, id, stored, cascade.notify).await
+    }
+
+    /// An update or destroy of record `id`, by id, as one statement: no read first. A
+    /// hard destroy deletes it, returning what it held; a soft destroy updates it and
+    /// archives its children after. No row means no such record the context may see:
+    /// [`Error::NotFound`].
+    pub(crate) async fn commit_atomic_by_id<D: DataLayer>(
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        action: &'static ActionDef,
+        id: Uuid,
+        arguments: FieldMap,
+        plan: AtomicPlan,
+    ) -> Result<FieldMap> {
+        let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
+        changeset.after_actions = plan.after_actions;
+        let result = async {
+            let stored = match action.kind {
+                ActionKind::Destroy if !action.soft => {
+                    let destroyed = run_atomic_destroy(ctx, resource, action, id, &plan.update.conditions)
+                        .await?
+                        .ok_or(Error::NotFound)?;
+                    // The record a destroy's notification carries, as one read first does.
+                    changeset.existing = Some(destroyed.clone());
+                    destroyed
+                }
+                ActionKind::Destroy => {
+                    let cascade = Cascade::new(true);
+                    cascade.enter(resource, id);
+                    let stored = run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?;
+                    crate::engine::cascade_destroy_related(ctx, resource, action, id, &stored, &cascade).await?;
+                    stored
+                }
+                _ => run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?,
+            };
+            changeset.finish(ctx, id, stored, true).await
+        }
+        .await;
+        for hook in plan.after_transactions {
             hook(result.as_ref());
         }
         result
@@ -475,6 +601,21 @@ impl DynamicChangeset {
         std::mem::take(&mut self.fields)
     }
 
+    /// What an update writes: the prepared attributes that differ from the record it
+    /// started from. As in Ash, an update writes only the attributes it changes, merged
+    /// into the stored row, so one made from a stale copy of the record doesn't write that
+    /// copy's other fields back over newer values. Setting a field to the value the copy
+    /// holds isn't a change either (`Ash.Changeset` drops it).
+    pub(crate) fn changes(&self, fields: FieldMap) -> FieldMap {
+        match &self.existing {
+            Some(existing) => fields
+                .into_iter()
+                .filter(|(name, value)| existing.get(name) != Some(value))
+                .collect(),
+            None => fields,
+        }
+    }
+
     /// Writes the prepared record through the data layer.
     pub(crate) async fn persist<D: DataLayer>(
         &mut self,
@@ -493,7 +634,10 @@ impl DynamicChangeset {
                 }
                 None => ctx.data.create(self.resource, ctx.tenant.as_deref(), id, fields).await,
             },
-            ActionKind::Update => ctx.data.update(self.resource, ctx.tenant.as_deref(), id, fields).await,
+            ActionKind::Update => {
+                let changes = self.changes(fields);
+                ctx.data.update(self.resource, ctx.tenant.as_deref(), id, changes).await
+            }
             ActionKind::Destroy => {
                 let existing = self.existing.clone().unwrap_or_else(|| fields.clone());
                 crate::engine::persist_destroy(

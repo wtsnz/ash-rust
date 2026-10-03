@@ -308,6 +308,13 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
             builder_chain = quote! { #builder_chain.manual() };
         }
 
+        if let Some(read) = &act.atomic_upgrade_with {
+            let read = read.to_string();
+            builder_chain = quote! { #builder_chain.atomic_upgrade_with(#read) };
+        }
+        if !act.require_atomic {
+            builder_chain = quote! { #builder_chain.require_atomic(false) };
+        }
         if act.soft {
             builder_chain = quote! { #builder_chain.soft() };
         }

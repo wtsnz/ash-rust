@@ -80,6 +80,8 @@ pub mod order_mod {
             }
 
             update update {
+                // Managing relationships needs the record in memory.
+                require_atomic false;
                 primary;
                 accept [customer];
             }
@@ -157,6 +159,8 @@ pub mod team_mod {
             }
 
             update update {
+                // Managing relationships needs the record in memory.
+                require_atomic false;
                 primary;
                 accept [name];
             }
@@ -321,6 +325,8 @@ pub mod article_mod {
             }
 
             update update {
+                // Managing relationships needs the record in memory.
+                require_atomic false;
                 primary;
                 accept [title];
             }

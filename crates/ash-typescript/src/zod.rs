@@ -1,6 +1,6 @@
 //! Zod validation schema generator for Ash resources and action inputs.
 
-use crate::types::to_pascal_case;
+use crate::types::{atom_values, input_fields, to_camel_case, to_pascal_case};
 use ash_core::{ActionDef, ActionKind, AttrType, ResourceDef, Validation};
 
 /// Generate Zod schema for a single attribute.
@@ -18,11 +18,11 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
         AttrType::Vector { dimensions } => format!("z.array(z.number()).length({dimensions})"),
         AttrType::Integer => "z.number().int()".to_string(),
         AttrType::Boolean => "z.boolean()".to_string(),
-        AttrType::Atom { one_of } => {
+        AttrType::Atom { one_of, name } => {
             if one_of.is_empty() {
                 "z.string()".to_string()
             } else {
-                let options = crate::types::enum_values(one_of)
+                let options = atom_values(one_of, *name)
                     .iter()
                     .map(|s| format!("\"{s}\""))
                     .collect::<Vec<_>>()
@@ -54,28 +54,9 @@ pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Opti
     let mut out = String::new();
     out.push_str(&format!("export const {schema_name} = z.object({{\n"));
 
-    if action.kind == ActionKind::Destroy {
-        out.push_str("  id: z.string().uuid(),\n");
-    } else {
-        if action.kind == ActionKind::Update {
-            out.push_str("  id: z.string().uuid().optional(),\n");
-        }
-
-        // Collect accepted fields
-        for attr_name in action.accept {
-            if let Some(attr) = res.attribute(attr_name) {
-                let field_schema =
-                    build_field_zod_schema(res, action, attr_name, &attr.ty, attr.allow_nil);
-                out.push_str(&format!("  {attr_name}: {field_schema},\n"));
-            }
-        }
-
-        // Collect action arguments
-        for arg in action.arguments {
-            let field_schema =
-                build_field_zod_schema(res, action, arg.name, &arg.ty, arg.allow_nil);
-            out.push_str(&format!("  {}: {},\n", arg.name, field_schema));
-        }
+    for (field, ty, required) in input_fields(res, action) {
+        let field_schema = build_field_zod_schema(action, field, &ty, required);
+        out.push_str(&format!("  {}: {field_schema},\n", to_camel_case(field)));
     }
 
     out.push_str("});\n\n");
@@ -88,13 +69,7 @@ pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Opti
 }
 
 /// Build a Zod chain for a field taking action-level validations into account.
-fn build_field_zod_schema(
-    _res: &ResourceDef,
-    action: &ActionDef,
-    field_name: &str,
-    ty: &AttrType,
-    allow_nil: bool,
-) -> String {
+fn build_field_zod_schema(action: &ActionDef, field_name: &str, ty: &AttrType, required: bool) -> String {
     // Check if field has a OneOf validation
     let mut one_of_allowed: Option<&[&str]> = None;
     let mut string_length: Option<(Option<usize>, Option<usize>)> = None;
@@ -120,9 +95,9 @@ fn build_field_zod_schema(
     }
 
     let mut schema = if let Some(allowed) = one_of_allowed {
-        // GraphQL takes atoms as upper-case enum values, so validate those.
-        let values: Vec<String> = if matches!(ty, AttrType::Atom { .. }) {
-            crate::types::enum_values(allowed)
+        // GraphQL takes an enum type's values upper-cased, so validate those.
+        let values: Vec<String> = if let AttrType::Atom { name, .. } = ty {
+            atom_values(allowed, *name)
         } else {
             allowed.iter().map(|s| s.to_string()).collect()
         };
@@ -150,11 +125,11 @@ fn build_field_zod_schema(
             }
             AttrType::Integer => "z.number().int()".to_string(),
             AttrType::Boolean => "z.boolean()".to_string(),
-            AttrType::Atom { one_of } => {
+            AttrType::Atom { one_of, name } => {
                 if one_of.is_empty() {
                     "z.string()".to_string()
                 } else {
-                    let options = crate::types::enum_values(one_of)
+                    let options = atom_values(one_of, *name)
                         .iter()
                         .map(|s| format!("\"{s}\""))
                         .collect::<Vec<_>>()
@@ -187,10 +162,8 @@ fn build_field_zod_schema(
         }
     }
 
-    // Check optionality:
-    // If it's an update action, fields not explicitly marked Present are optional
-    let is_optional = (allow_nil || action.kind == ActionKind::Update) && !is_present;
-    if is_optional {
+    // Optional as the mutation's input takes it, unless the action requires it be present.
+    if !required && !is_present {
         schema.push_str(".nullable().optional()");
     }
 
@@ -205,7 +178,7 @@ pub fn generate_resource_zod_schema(res: &ResourceDef) -> String {
 
     for attr in res.attributes {
         let field_schema = generate_attr_zod(&attr.ty, attr.allow_nil);
-        out.push_str(&format!("  {}: {},\n", attr.name, field_schema));
+        out.push_str(&format!("  {}: {},\n", to_camel_case(attr.name), field_schema));
     }
 
     out.push_str("});\n\n");

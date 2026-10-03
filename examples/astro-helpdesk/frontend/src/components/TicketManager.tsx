@@ -71,7 +71,7 @@ export default function TicketManager({
       description: formDesc.trim() || null,
       priority: Number(formPriority),
       status: formStatus,
-      author_id: formAuthorId || null,
+      authorId: formAuthorId || null,
     };
 
     // 1. Zod Schema Validation (Derived directly from Ash Rust backend)

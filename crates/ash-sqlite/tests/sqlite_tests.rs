@@ -13,6 +13,7 @@ const TICKET: ResourceDef = ResourceDef {
             "status",
             AttrType::Atom {
                 one_of: &["open", "closed"],
+                name: None,
             },
         ),
         AttributeDef::optional("priority", AttrType::Integer),
@@ -254,5 +255,33 @@ async fn test_sqlite_empty_in_and_empty_bulk_operations() -> Result<()> {
     // 4. bulk_destroy with empty IDs -> returns Ok(())
     db.bulk_destroy(&TICKET, None, &[]).await?;
 
+    Ok(())
+}
+
+/// Counts run in the database, as `COUNT(*)`: of a filter, and of a page.
+#[tokio::test]
+async fn test_sqlite_counts_in_the_database() -> Result<()> {
+    let db = Sqlite::memory().await?;
+    db.install(&[&TICKET]).await?;
+    for (i, status) in ["open", "open", "closed"].into_iter().enumerate() {
+        let id = Uuid::new_v4();
+        let mut fields = FieldMap::new();
+        fields.insert("id".to_string(), Value::Uuid(id));
+        fields.insert("subject".to_string(), Value::String(format!("Ticket {i}")));
+        fields.insert("status".to_string(), Value::String(status.into()));
+        fields.insert("priority".to_string(), Value::Int(i as i64));
+        db.create(&TICKET, None, id, fields).await?;
+    }
+    let open = ash_core::CompiledQuery {
+        filter: Some(ash_core::Filter::eq("status", "open")),
+        ..Default::default()
+    };
+    assert_eq!(db.count(&TICKET, &ash_core::CompiledQuery::default()).await?, 3);
+    assert_eq!(db.count(&TICKET, &open).await?, 2);
+    let page = ash_core::CompiledQuery {
+        offset: Some(1),
+        ..Default::default()
+    };
+    assert_eq!(db.count(&TICKET, &page).await?, 2);
     Ok(())
 }

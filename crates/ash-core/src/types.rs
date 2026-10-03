@@ -130,15 +130,48 @@ impl TimePrecision {
         Ok(self.format(parsed.with_timezone(&chrono::Utc)))
     }
 
-    /// `instant` in this precision's stored form.
+    /// `instant` in this precision's stored form. Every read of a timestamp writes one, so
+    /// the digits are written directly rather than through a format string, which chrono
+    /// parses on every call; a year without four digits takes chrono's form.
     pub fn format(self, instant: chrono::DateTime<chrono::Utc>) -> String {
-        match self {
-            Self::Second => instant.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            Self::Microsecond => {
-                let micros = instant.timestamp_subsec_micros().min(999_999);
-                format!("{}.{micros:06}Z", instant.format("%Y-%m-%dT%H:%M:%S"))
-            }
+        use chrono::{Datelike, Timelike};
+        let year = instant.year();
+        // A leap second, which chrono writes as `:60`, takes chrono's form too.
+        if !(0..=9999).contains(&year) || instant.nanosecond() >= 1_000_000_000 {
+            return match self {
+                Self::Second => instant.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                Self::Microsecond => {
+                    let micros = instant.timestamp_subsec_micros().min(999_999);
+                    format!("{}.{micros:06}Z", instant.format("%Y-%m-%dT%H:%M:%S"))
+                }
+            };
         }
+        let time = instant.time();
+        let mut out = String::with_capacity(27);
+        push_digits(&mut out, year as u32, 4);
+        for (separator, value) in [
+            ('-', instant.month()),
+            ('-', instant.day()),
+            ('T', time.hour()),
+            (':', time.minute()),
+            (':', time.second()),
+        ] {
+            out.push(separator);
+            push_digits(&mut out, value, 2);
+        }
+        if self == Self::Microsecond {
+            out.push('.');
+            push_digits(&mut out, instant.timestamp_subsec_micros().min(999_999), 6);
+        }
+        out.push('Z');
+        out
+    }
+}
+
+/// `value`'s last `width` decimal digits, zero-padded.
+fn push_digits(out: &mut String, value: u32, width: u32) {
+    for place in (0..width).rev() {
+        out.push(char::from(b'0' + (value / 10u32.pow(place) % 10) as u8));
     }
 }
 
@@ -251,6 +284,44 @@ impl Float {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The number, as an `f64`.
+    pub fn value(&self) -> f64 {
+        // `parse` only admits finite numbers, so the text always reads back.
+        self.0.parse().unwrap_or_default()
+    }
+}
+
+impl TryFrom<f64> for Float {
+    type Error = Error;
+
+    fn try_from(value: f64) -> Result<Self> {
+        Self::parse(&value.to_string())
+    }
+}
+
+/// A plain `f64` is a float attribute, as Ash's `:float` is an Elixir float. It's stored
+/// as `Float`'s canonical text; a non-finite value fails validation when written.
+impl AshType for f64 {
+    const ATTR_TYPE: AttrType = AttrType::Float;
+
+    fn to_value(&self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::String(s) => Float::parse(s).map(|float| float.value()),
+            Value::Int(n) => Ok(*n as f64),
+            _ => Err(Error::Invalid("expected float".into())),
+        }
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        value.to_value()
     }
 }
 
@@ -797,6 +868,31 @@ mod tests {
         assert!(UtcDateTime::parse("2024-01-02").is_err());
         assert!(UtcDateTime::parse("2024-01-02T03:04:05").is_err());
         assert!(UtcDateTime::parse("nope").is_err());
+    }
+
+    #[test]
+    fn stored_datetimes_are_written_as_chrono_writes_them() {
+        let chrono_form = |precision: TimePrecision, instant: chrono::DateTime<chrono::Utc>| match precision {
+            TimePrecision::Second => instant.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            TimePrecision::Microsecond => {
+                format!("{}.{:06}Z", instant.format("%Y-%m-%dT%H:%M:%S"), instant.timestamp_subsec_micros())
+            }
+        };
+        let instants = [
+            "0000-01-01T00:00:00Z",
+            "0999-12-31T23:59:59.000001Z",
+            "1970-01-01T00:00:00Z",
+            "2026-10-02T09:05:07.123456Z",
+            "9999-12-31T23:59:59.999999Z",
+        ]
+        .into_iter()
+        .map(|raw| chrono::DateTime::parse_from_rfc3339(raw).unwrap().with_timezone(&chrono::Utc))
+        .chain((0..1000).map(|i| chrono::DateTime::from_timestamp_micros(i * 7_919_237_123_457 - 3_000_000_000_000_000).unwrap()));
+        for instant in instants {
+            for precision in [TimePrecision::Second, TimePrecision::Microsecond] {
+                assert_eq!(precision.format(instant), chrono_form(precision, instant), "{instant:?}");
+            }
+        }
     }
 
     #[test]

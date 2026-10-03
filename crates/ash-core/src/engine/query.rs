@@ -13,7 +13,7 @@ use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
-use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record};
+use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort};
 use super::read::scope_read;
 use super::relations::attach_relationships;
 
@@ -193,14 +193,35 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
         }
 
+        // The calculations and aggregates the field policies check load too, so the
+        // policies see them, and go once they've decided.
+        let mut calculations = this.calculations.clone();
+        let mut aggregates = this.aggregates.clone();
+        let mut operands = Vec::new();
+        for field in crate::policy::field_policy_fields(&R::DEF) {
+            let list = if R::DEF.calculation(field).is_some() {
+                &mut calculations
+            } else if R::DEF.aggregate(field).is_some() {
+                &mut aggregates
+            } else {
+                continue;
+            };
+            if !list.iter().any(|name| name == field) {
+                list.push(field.to_string());
+                operands.push(field);
+            }
+        }
         let query = this.scoped(
             action,
             CompiledQuery {
                 filter: this.filter.clone(),
                 sort: this.sort.clone(),
-                calculations: this.calculations.clone(),
+                // A typed record holds every attribute.
+                select: None,
+                actor: None,
+                calculations,
                 calculation_args: this.calculation_args.clone(),
-                aggregates: this.aggregates.clone(),
+                aggregates,
                 limit: this.limit,
                 offset: this.offset,
                 tenant: None,
@@ -211,6 +232,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let mut records = Vec::with_capacity(rows.len());
         for mut row in rows {
             crate::policy::redact_fields(&R::DEF, this.ctx.actor.as_ref(), &mut row)?;
+            for operand in &operands {
+                row.remove(*operand);
+            }
             records.push(R::from_fields(&row)?);
         }
         attach_relationships(this.ctx, &mut records, &this.loads).await?;
@@ -248,8 +272,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         query.limit = None;
         query.offset = None;
         query.sort.clear();
-        let rows = self.ctx.data.run_query(&R::DEF, &query).await?;
-        Ok(rows.len())
+        self.ctx.data.count(&R::DEF, &query).await
     }
 
     pub async fn page_offset(
@@ -308,18 +331,15 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         before: Option<&str>,
     ) -> Result<Page<R>> {
         let pk = pk_name(&R::DEF)?.to_string();
-
-        if self.sort.is_empty() {
-            self.sort.push(Sort {
-                field: pk.clone(),
-                descending: false,
-            });
-        } else if !self.sort.iter().any(|s| s.field == pk) {
-            let last_desc = self.sort.last().map(|s| s.descending).unwrap_or(false);
-            self.sort.push(Sort {
-                field: pk.clone(),
-                descending: last_desc,
-            });
+        self.sort = keyset_sort(&R::DEF, std::mem::take(&mut self.sort));
+        // Each record's keyset holds the values it sorts by: an aggregate or calculation
+        // sorted by loads with it.
+        for sort in &self.sort {
+            if R::DEF.aggregate(&sort.field).is_some() && !self.aggregates.contains(&sort.field) {
+                self.aggregates.push(sort.field.clone());
+            } else if R::DEF.calculation(&sort.field).is_some() && !self.calculations.contains(&sort.field) {
+                self.calculations.push(sort.field.clone());
+            }
         }
 
         let is_before = before.is_some() && after.is_none();

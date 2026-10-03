@@ -53,22 +53,29 @@ When rendering collections of parents with their children (e.g. 50 tickets with 
 
 ---
 
-### 4. Inline Subquery Aggregates & Counter Caches
+### 4. Aggregates, Grouped by Relationship
 
-Dashboards frequently require summaries alongside rows (e.g. a list of categories along with their child counts, or whether the current user liked a post).
+Dashboards frequently require summaries alongside rows (e.g. a list of cabs with how many trips each completed, and what they earned).
 
-* **Pattern**:
-  ```sql
-  SELECT
-    "categories"."id",
-    "categories"."name",
-    (SELECT COUNT(*) FROM "categories" AS "_ash_sub_subcategories_count"
-     WHERE "_ash_sub_subcategories_count"."parent_id" = "categories"."id") AS "subcategories_count"
-  FROM "categories";
-  ```
+* **Pattern**: as ash_sql loads them, a read's aggregates over one relationship share one subquery, each with its own filter, so the related rows are read once however many aggregates there are. The read's records, sorted and paged, are a subquery the aggregates join to.
+  * **Lateral** (Postgres, as AshPostgres):
+    ```sql
+    SELECT "__ash_s".*, "__ash_aggs_trips"."trips_completed", "__ash_aggs_trips"."fares_cents"::bigint
+    FROM (SELECT "id", "call_sign", "call_sign" AS "__ash_sort_0" FROM "cabs"
+          ORDER BY "__ash_sort_0" ASC LIMIT $1) AS "__ash_s"
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) FILTER (WHERE "__ash_agg_trips"."status" = $2) AS "trips_completed",
+             SUM("__ash_agg_trips"."fare_cents") FILTER (WHERE "__ash_agg_trips"."status" = $3) AS "fares_cents"
+      FROM "trips" AS "__ash_agg_trips" WHERE "__ash_agg_trips"."cab_id" = "__ash_s"."id"
+    ) AS "__ash_aggs_trips" ON TRUE
+    ORDER BY "__ash_s"."__ash_sort_0" ASC
+    ```
+  * **Grouped** (SQLite, which has no lateral joins, as AshSqlite): `LEFT JOIN (SELECT key, … GROUP BY key) ON key = record.key`, a record with no related rows counting none.
 * **Ash-Rust Solution**:
-  * `compile_aggregate` compiles `AggregateKind::Count`, `Exists`, `Sum`, and `First` directly into the `SELECT` projection list as correlated subqueries.
-  * Subquery targets are automatically aliased to prevent variable and column shadowing.
+  * `SqlDialect::aggregate_strategy` chooses, as ash_sql's `aggregate_strategy/1` does.
+  * `count`, `exists` and `sum` share their relationship's subquery; `first` is a correlated subquery of its own. A filter or sort that refers to an aggregate writes its subquery inline.
+  * The destination's primary read filter (and the join resource's, for a `many_to_many`) applies to the related rows, and every subquery target is aliased, so a relationship back to the same table doesn't shadow it.
+  * A sum of no rows is null, as Ash's is, in memory too.
 
 ---
 

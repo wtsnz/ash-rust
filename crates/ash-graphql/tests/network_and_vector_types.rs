@@ -50,7 +50,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
     let create = r#"
         mutation {
             createDevice(input: { address: "10.0.0.1/32", embedding: [0.1, 2.5, -3] }) {
-                success
+                errors { code }
                 result { address embedding }
             }
         }
@@ -60,20 +60,20 @@ async fn inet_and_vector_round_trip_through_graphql() {
     assert_eq!(
         res.data.into_json().unwrap()["createDevice"],
         json!({
-            "success": true,
+            "errors": [],
             "result": { "address": "10.0.0.1", "embedding": [0.1, 2.5, -3.0] }
         })
     );
 
     let list = r#"
         query {
-            listDevices(filter: { address: { eq: "10.0.0.1/32" } }) { address embedding }
+            listDevices(filter: { address: { eq: "10.0.0.1/32" } }) { results { address embedding } }
         }
     "#;
     let res = schema.execute(Request::new(list).data(ctx.clone())).await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     assert_eq!(
-        res.data.into_json().unwrap()["listDevices"],
+        res.data.into_json().unwrap()["listDevices"]["results"],
         json!([{ "address": "10.0.0.1", "embedding": [0.1, 2.5, -3.0] }])
     );
 
@@ -81,7 +81,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
         (r#"{ address: "10.0.0.300" }"#, "invalid inet"),
         (r#"{ address: "10.0.0.1", embedding: [1, 2] }"#, "3 dimensions"),
     ] {
-        let mutation = format!("mutation {{ createDevice(input: {input}) {{ success }} }}");
+        let mutation = format!("mutation {{ createDevice(input: {input}) {{ errors {{ code }} }} }}");
         let res = schema.execute(Request::new(mutation).data(ctx.clone())).await;
         let errors = format!("{:?}", res.errors);
         assert!(errors.contains(message), "{input}: {errors}");

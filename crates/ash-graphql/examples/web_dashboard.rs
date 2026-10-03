@@ -28,6 +28,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         "status",
         AttrType::Atom {
             one_of: &["OPEN", "IN_PROGRESS", "CLOSED"],
+            name: Some("TicketStatus"),
         },
     ),
     AttributeDef::required("priority", AttrType::Integer),
@@ -172,7 +173,7 @@ async fn dashboard_landing() -> Html<&'static str> {
   <div class="card">
     <span class="badge">ash-rust</span>
     <h1>Declarative Ash Web Dashboard</h1>
-    <p>Welcome to the <strong>ash-rust</strong> web dashboard! Your Ash domain schema is automatically reflected into a live GraphQL schema and interactive GraphiQL IDE with full documentation, queries, mutations, and Relay cursor pagination.</p>
+    <p>Welcome to the <strong>ash-rust</strong> web dashboard! Your Ash domain schema is automatically reflected into a live GraphQL schema and interactive GraphiQL IDE with full documentation, queries, mutations, and keyset pagination.</p>
     <a class="btn" href="/graphiql">Open Interactive GraphiQL IDE &rarr;</a>
   </div>
 
@@ -191,10 +192,12 @@ async fn dashboard_landing() -> Html<&'static str> {
 # 1. List all seeded tickets
 query {
   listTickets {
-    id
-    title
-    status
-    priority
+    results {
+      id
+      title
+      status
+      priority
+    }
   }
 }
 
@@ -207,26 +210,20 @@ mutation {
       status
     }
     errors {
-      field
+      fields
       message
     }
   }
 }
 
-# 3. Relay connection with cursor pagination
+# 3. A keyset page: pass endKeyset as `after` for the next one
 query {
-  ticketConnection(first: 2) {
-    totalCount
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    edges {
-      cursor
-      node {
-        id
-        title
-      }
+  listTickets(first: 2, sort: [{ field: PRIORITY }]) {
+    count
+    endKeyset
+    results {
+      id
+      title
     }
   }
 }

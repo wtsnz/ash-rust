@@ -48,25 +48,25 @@ async fn graphql_stays_inside_the_tenant() {
         .unwrap();
     let run = |ctx: &Context<Memory>, query: String| schema.execute(Request::new(query).data(ctx.clone()));
 
-    let listed = run(&acme, "{ listShipments { label } }".into()).await;
+    let listed = run(&acme, "{ listShipments { results { label } } }".into()).await;
     assert!(listed.errors.is_empty(), "{:?}", listed.errors);
-    assert_eq!(listed.data.into_json().unwrap()["listShipments"], serde_json::json!([{ "label": "ours" }]));
+    assert_eq!(listed.data.into_json().unwrap()["listShipments"]["results"], serde_json::json!([{ "label": "ours" }]));
 
     let got = run(&acme, format!(r#"{{ getShipment(id: "{}") {{ label }} }}"#, theirs.id)).await;
     assert!(got.errors.is_empty(), "{:?}", got.errors);
     assert_eq!(got.data.into_json().unwrap()["getShipment"], serde_json::Value::Null);
 
     // Without a tenant, a tenant-scoped read is refused, as it is outside GraphQL.
-    let refused = run(&base, "{ listShipments { label } }".into()).await;
+    let refused = run(&base, "{ listShipments { results { label } } }".into()).await;
     assert!(!refused.errors.is_empty());
 
     // Subscribers only hear about their own tenant. A subscription starts listening when
     // it is first polled, so poll each before anything changes.
     let listen = |ctx: &Context<Memory>| {
-        let mut stream = schema.execute_stream(Request::new("subscription { shipmentUpdated { label } }").data(ctx.clone()));
+        let mut stream = schema.execute_stream(Request::new("subscription { shipmentUpdated { updated { label } } }").data(ctx.clone()));
         tokio::spawn(async move {
             let first = stream.next().await.unwrap();
-            first.data.into_json().unwrap()["shipmentUpdated"]["label"].clone()
+            first.data.into_json().unwrap()["shipmentUpdated"]["updated"]["label"].clone()
         })
     };
     let acme_hears = listen(&acme);

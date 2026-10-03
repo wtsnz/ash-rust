@@ -718,6 +718,173 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
     assert_eq!(rows[0].get("total"), Some(&Value::Int(42)));
 }
 
+/// An aggregate is its subquery wherever a filter or sort refers to it, as AshPostgres
+/// writes it, and a read selects only the attributes asked for.
+#[tokio::test]
+async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&SUM_ORDER_DEF, &SUM_LINE_DEF]).await.unwrap();
+    let mut orders = Vec::new();
+    for amounts in [&[12, 30][..], &[5][..]] {
+        let order = Uuid::new_v4();
+        orders.push(order);
+        pg.create(&SUM_ORDER_DEF, None, order, FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
+        for amount in amounts {
+            let id = Uuid::new_v4();
+            let fields = FieldMap::from([
+                ("id".into(), Value::Uuid(id)),
+                ("order_id".into(), Value::Uuid(order)),
+                ("amount".into(), Value::Int(*amount)),
+            ]);
+            pg.create(&SUM_LINE_DEF, None, id, fields).await.unwrap();
+        }
+    }
+    let ours = Filter::in_list("id", orders.iter().copied().map(Value::Uuid));
+
+    let query = CompiledQuery {
+        filter: Some(Filter::and([ours.clone(), Filter::gt("total", Value::Int(10))])),
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    assert_eq!(rows.iter().map(|row| row.get("id")).collect::<Vec<_>>(), [Some(&Value::Uuid(orders[0]))]);
+
+    let query = CompiledQuery {
+        filter: Some(ours),
+        sort: vec![ash_core::Sort { field: "total".into(), descending: false }],
+        aggregates: vec!["total".into()],
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    let totals: Vec<_> = rows.iter().map(|row| row.get("total").cloned()).collect();
+    assert_eq!(totals, [Some(Value::Int(5)), Some(Value::Int(42))]);
+
+    // Only the primary key and what's selected.
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("order_id", Value::Uuid(orders[0]))),
+        select: Some(vec!["amount".into()]),
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SUM_LINE_DEF, &query).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        let mut keys: Vec<_> = row.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["amount", "id"]);
+    }
+}
+
+static OWNED_LINE_DEF: ResourceDef = ResourceDef {
+    name: "OwnedLine",
+    table: "owned_lines",
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("order_id", AttrType::Uuid),
+        AttributeDef::required("owner_id", AttrType::Uuid),
+        AttributeDef::required("at", AttrType::UTC_DATETIME_USEC),
+    ],
+    actions: &[ash_core::ActionDef::read("read").primary()],
+    // Each line is its owner's to read.
+    policies: &[ash_core::PolicyDef::when(
+        ash_core::PolicyWhen::ActionType(ash_core::ActionKind::Read),
+        &[ash_core::PolicyEffect::AuthorizeIf(ash_core::Check::RelatesToActor { field: "owner_id" })],
+    )],
+    ..NULLABLE_DEF
+};
+
+static OWNED_ORDER_DEF: ResourceDef = ResourceDef {
+    name: "OwnedOrder",
+    table: "owned_orders",
+    attributes: &[AttributeDef::uuid_pk("id")],
+    relationships: &[ash_core::RelationshipDef::has_many("lines", || &OWNED_LINE_DEF, "order_id")],
+    aggregates: &[
+        ash_core::AggregateDef::count("line_count", "lines"),
+        ash_core::AggregateDef::first("first_at", "lines", "at", AttrType::UTC_DATETIME_USEC),
+    ],
+    ..NULLABLE_DEF
+};
+
+/// An aggregate counts only the related rows its actor may read, as Ash authorizes an
+/// aggregate's query by default; and a filter on an aggregate binds its value as the
+/// aggregate's type.
+#[tokio::test]
+async fn test_postgres_aggregates_count_what_the_actor_reads() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&OWNED_ORDER_DEF, &OWNED_LINE_DEF]).await.unwrap();
+    let order = Uuid::new_v4();
+    pg.create(&OWNED_ORDER_DEF, None, order, FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
+    let (mine, theirs) = (Uuid::new_v4(), Uuid::new_v4());
+    for owner in [mine, mine, theirs] {
+        let id = Uuid::new_v4();
+        let fields = FieldMap::from([
+            ("id".into(), Value::Uuid(id)),
+            ("order_id".into(), Value::Uuid(order)),
+            ("owner_id".into(), Value::Uuid(owner)),
+            ("at".into(), Value::from("2026-01-02T03:04:05.000000Z")),
+        ]);
+        pg.create(&OWNED_LINE_DEF, None, id, fields).await.unwrap();
+    }
+    let count_as = |actor: Option<ash_core::Actor>| CompiledQuery {
+        filter: Some(Filter::eq("id", Value::Uuid(order))),
+        aggregates: vec!["line_count".into()],
+        actor,
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&OWNED_ORDER_DEF, &count_as(Some(ash_core::Actor::new(mine)))).await.unwrap();
+    assert_eq!(rows[0].get("line_count"), Some(&Value::Int(2)));
+    let rows = pg.run_query(&OWNED_ORDER_DEF, &count_as(None)).await.unwrap();
+    assert_eq!(rows[0].get("line_count"), Some(&Value::Int(0)));
+
+    let query = CompiledQuery {
+        filter: Some(Filter::and([
+            Filter::eq("id", Value::Uuid(order)),
+            Filter::gt("first_at", Value::from("2026-01-01T00:00:00.000000Z")),
+        ])),
+        actor: Some(ash_core::Actor::new(mine)),
+        ..CompiledQuery::default()
+    };
+    assert_eq!(pg.run_query(&OWNED_ORDER_DEF, &query).await.unwrap().len(), 1);
+}
+
+fn shout(fields: &FieldMap) -> ash_core::Result<Value> {
+    Ok(fields.get("label").and_then(Value::as_str).map(|t| Value::String(t.to_uppercase())).unwrap_or(Value::Null))
+}
+
+static SHOUTING_DEF: ResourceDef = ResourceDef {
+    name: "Shouting",
+    table: "shoutings",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("label", AttrType::String)],
+    calculations: &[ash_core::CalculationDef::new("shout", AttrType::String, ash_core::Expr::Custom(shout))],
+    ..NULLABLE_DEF
+};
+
+/// A calculation only Rust can compute loads from Postgres too: computed from the record
+/// once it's read, every attribute read for it, whatever the query selects.
+#[tokio::test]
+async fn test_postgres_computes_rust_only_calculations() {
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&SHOUTING_DEF]).await.unwrap();
+    let id = Uuid::new_v4();
+    let fields = FieldMap::from([("id".into(), Value::Uuid(id)), ("label".into(), Value::from("quiet"))]);
+    pg.create(&SHOUTING_DEF, None, id, fields).await.unwrap();
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("id", Value::Uuid(id))),
+        select: Some(Vec::new()),
+        calculations: vec!["shout".into()],
+        ..CompiledQuery::default()
+    };
+    let rows = pg.run_query(&SHOUTING_DEF, &query).await.unwrap();
+    assert_eq!(rows[0].get("shout"), Some(&Value::from("QUIET")));
+}
+
 mod pg_shift {
     use ash_core::{UtcDateTime, UtcDateTimeUsec, resource};
     use uuid::Uuid;
@@ -953,4 +1120,279 @@ mod context_tenancy {
         }
         tenants_stay_apart(Context::new(pg), &acme, &globex).await;
     }
+}
+
+mod pg_cycle {
+    pub mod car {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        use super::driver::PgDriver;
+
+        resource! {
+            PgCar {
+                table "pg_cars";
+
+                attributes {
+                    id: Uuid [pk];
+                    plate: String;
+                    driver_id: Option<Uuid>;
+                }
+
+                relationships {
+                    belongs_to driver: PgDriver [fk: driver_id];
+                }
+
+                actions {
+                    create create { primary; accept [plate, driver_id]; }
+                    read read { primary; }
+                }
+            }
+        }
+    }
+
+    pub mod driver {
+        use ash_core::resource;
+        use uuid::Uuid;
+
+        use super::car::PgCar;
+
+        resource! {
+            PgDriver {
+                table "pg_drivers";
+
+                attributes {
+                    id: Uuid [pk];
+                    name: String;
+                    car_id: Option<Uuid>;
+                }
+
+                relationships {
+                    belongs_to car: PgCar [fk: car_id];
+                }
+
+                actions {
+                    create create { primary; accept [name, car_id]; }
+                    read read { primary; }
+                    update assign { accept [car_id]; }
+                }
+            }
+        }
+    }
+}
+
+/// Two tables that refer to each other install: neither can be created first with its
+/// foreign key inline, so the keys are added once both exist. Installing again changes
+/// nothing, and the keys hold.
+#[tokio::test]
+async fn test_postgres_installs_tables_that_refer_to_each_other() {
+    use ash_core::{Context, Resource};
+    use pg_cycle::{car::PgCar, driver::PgDriver};
+
+    let Some(admin) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    let schema = format!("cycle_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+        .execute(admin.pool().unwrap())
+        .await
+        .unwrap();
+    let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
+        .await
+        .unwrap();
+    pg.install(&[&PgCar::DEF, &PgDriver::DEF]).await.unwrap();
+    pg.install(&[&PgCar::DEF, &PgDriver::DEF]).await.unwrap();
+
+    let ctx = Context::new(pg);
+    let driver = PgDriver::create(&ctx).name("Ada".to_string()).await.unwrap();
+    let car = PgCar::create(&ctx)
+        .plate("CYBR-1".to_string())
+        .driver_id(Some(driver.id))
+        .await
+        .unwrap();
+    let driver = driver.assign_on(&ctx).car_id(Some(car.id)).await.unwrap();
+    assert_eq!(driver.car_id, Some(car.id));
+
+    // Both keys are enforced.
+    let missing = Some(Uuid::new_v4());
+    assert!(PgCar::create(&ctx).plate("GHOST".to_string()).driver_id(missing).await.is_err());
+    assert!(PgDriver::create(&ctx).name("Nobody".to_string()).car_id(missing).await.is_err());
+}
+
+mod pg_fleet {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        PgVehicle {
+            table "pg_vehicles";
+
+            attributes {
+                id: Uuid [pk];
+                call_sign: String;
+                lng: f64;
+                speed_kph: i64;
+                status: String;
+            }
+
+            actions {
+                create create { primary; accept [call_sign, lng, speed_kph, status]; }
+                read read { primary; }
+                update report { accept [lng, speed_kph, status]; }
+                destroy destroy { primary; }
+            }
+        }
+    }
+}
+
+/// A bulk update writes each row's own changes, grouping rows that change the same
+/// columns into one statement, and a row that's gone fails alone.
+#[tokio::test]
+async fn test_postgres_bulk_update_writes_each_rows_changes() {
+    use ash_core::{BulkUpdateOptions, Context, DataLayer, FieldMap, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().simple().to_string();
+    let mut fleet = Vec::new();
+    for i in 0..5 {
+        fleet.push(
+            PgVehicle::create(&ctx)
+                .call_sign(format!("{run}-{i}"))
+                .lng(-97.7)
+                .speed_kph(0)
+                .status("available".to_string())
+                .await
+                .unwrap(),
+        );
+    }
+    // One is gone before the batch lands.
+    ctx.data.destroy(&PgVehicle::DEF, None, fleet[4].id).await.unwrap();
+
+    let updates = fleet.iter().cloned().enumerate().map(|(i, vehicle)| {
+        let mut input = FieldMap::new();
+        input.insert("lng".into(), Value::from(-97.7 + i as f64 / 100.0));
+        input.insert("speed_kph".into(), Value::from(10 * i as i64));
+        // Two of them also change status: a second group of columns.
+        if i % 2 == 1 {
+            input.insert("status".into(), Value::from("on_trip"));
+        }
+        (vehicle, input)
+    });
+    let result = PgVehicle::bulk_update_with_opts(
+        &ctx,
+        "report",
+        updates,
+        BulkUpdateOptions::new().stop_on_error(false),
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.count, result.error_count), (4, 1), "{:?}", result.errors);
+
+    let mut stored: Vec<(String, f64, i64, String)> = PgVehicle::query(&ctx)
+        .load()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|v| v.call_sign.starts_with(&run))
+        .map(|v| (v.call_sign, v.lng, v.speed_kph, v.status))
+        .collect();
+    stored.sort_by(|a, b| a.0.cmp(&b.0));
+    let expected: Vec<(String, f64, i64, String)> = (0..4)
+        .map(|i| {
+            let status = if i % 2 == 1 { "on_trip" } else { "available" };
+            (format!("{run}-{i}"), -97.7 + i as f64 / 100.0, 10 * i as i64, status.to_string())
+        })
+        .collect();
+    assert_eq!(stored, expected);
+}
+
+/// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.
+#[tokio::test]
+async fn test_postgres_like_and_ilike() {
+    use ash_core::{Context, Filter, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().simple().to_string();
+    for sign in ["LIKE-A_1", "LIKE-B2", "like-c3"] {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}{sign}"))
+            .lng(0.0)
+            .speed_kph(0)
+            .status("available".to_string())
+            .await
+            .unwrap();
+    }
+    let signs = |filter: Filter| {
+        let ctx = ctx.clone();
+        let run = run.clone();
+        async move {
+            let mut signs: Vec<String> = PgVehicle::query(&ctx)
+                .filter(Filter::And(vec![Filter::starts_with("call_sign", run.clone()), filter]))
+                .load()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| v.call_sign.trim_start_matches(&run).to_string())
+                .collect();
+            signs.sort();
+            signs
+        }
+    };
+    assert_eq!(signs(Filter::like("call_sign", "%LIKE-%")).await, ["LIKE-A_1", "LIKE-B2"]);
+    assert_eq!(signs(Filter::ilike("call_sign", "%like-%")).await, ["LIKE-A_1", "LIKE-B2", "like-c3"]);
+    assert_eq!(signs(Filter::like("call_sign", "%A\\_1")).await, ["LIKE-A_1"]);
+    assert_eq!(signs(Filter::like("call_sign", "%LIKE-__")).await, ["LIKE-B2"]);
+}
+
+/// Counts run in the database, as `COUNT(*)`: of a filter, and of a page.
+#[tokio::test]
+async fn test_postgres_counts_in_the_database() {
+    use ash_core::{CompiledQuery, Context, DataLayer, Filter, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg.clone());
+    let run = Uuid::new_v4().simple().to_string();
+    for (i, status) in ["available", "available", "charging"].into_iter().enumerate() {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}-{i}"))
+            .lng(0.0)
+            .speed_kph(0)
+            .status(status.to_string())
+            .await
+            .unwrap();
+    }
+    let ours = Filter::starts_with("call_sign", run.clone());
+    let count = |filter: Filter| PgVehicle::query(&ctx).filter(filter).count();
+    assert_eq!(count(ours.clone()).await.unwrap(), 3);
+    assert_eq!(
+        count(Filter::And(vec![ours.clone(), Filter::eq("status", "available")])).await.unwrap(),
+        2
+    );
+    let page = CompiledQuery {
+        filter: Some(ours),
+        limit: Some(2),
+        offset: Some(2),
+        ..CompiledQuery::default()
+    };
+    assert_eq!(pg.count(&PgVehicle::DEF, &page).await.unwrap(), 1);
 }

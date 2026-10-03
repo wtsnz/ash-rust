@@ -35,6 +35,10 @@ resource! {
             primary;
             accept [display_name, points];
         }
+
+        update change_email {
+            accept [email];
+        }
     }
     }}
 
@@ -358,4 +362,59 @@ async fn memory_identities_follow_nulls_and_skip_partial_predicates() {
         .await
         .expect_err("upsert on a partial identity should be rejected");
     assert!(matches!(err, Error::Invalid(_)), "unexpected error: {err:?}");
+}
+
+/// As in Ash, an update checks an identity only when it changes one of the identity's
+/// fields: an update that leaves them alone isn't refused over a clash already stored,
+/// and doesn't pay to look for one.
+#[tokio::main(flavor = "current_thread")]
+#[test]
+async fn memory_updates_check_only_the_identities_they_change() {
+    // Two accounts already sharing an email, stored before the identity existed.
+    let org = Uuid::new_v4();
+    let row = |email: &str, slug: &str| {
+        let id = Uuid::new_v4();
+        let mut fields = ash_core::FieldMap::new();
+        fields.insert("id".into(), ash_core::Value::Uuid(id));
+        fields.insert("email".into(), ash_core::Value::String(email.into()));
+        fields.insert("org_id".into(), ash_core::Value::Uuid(org));
+        fields.insert("slug".into(), ash_core::Value::String(slug.into()));
+        fields.insert("display_name".into(), ash_core::Value::String(slug.into()));
+        fields.insert("points".into(), ash_core::Value::Int(0));
+        (id, fields)
+    };
+    let (first, first_row) = row("shared@example.com", "first");
+    let (second, second_row) = row("shared@example.com", "second");
+    let table = std::collections::HashMap::from([(first, first_row), (second, second_row)]);
+    let ctx = Context::new(Memory::from_tables(std::collections::HashMap::from([(
+        "Account".to_string(),
+        table,
+    )])));
+
+    let account = Account::get(&ctx, first).await.unwrap();
+    let renamed = account
+        .update_profile_on(&ctx)
+        .display_name("Renamed".to_string())
+        .await
+        .expect("an update that leaves the email alone isn't checked against it");
+    assert_eq!(renamed.display_name, "Renamed");
+
+    // Changing an identity's field is still checked.
+    let other = Account::register(&ctx)
+        .email("other@example.com")
+        .org_id(org)
+        .slug("other")
+        .display_name("Other")
+        .points(0)
+        .await
+        .unwrap();
+    let err = other
+        .change_email_on(&ctx)
+        .email("shared@example.com".to_string())
+        .await
+        .expect_err("a changed email that clashes is refused");
+    assert!(
+        matches!(err, Error::IdentityConflict { identity: "unique_email", .. }),
+        "{err:?}"
+    );
 }

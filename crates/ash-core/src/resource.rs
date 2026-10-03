@@ -313,7 +313,11 @@ impl ResourceDef {
     /// read of the resource sees them: relationship loads, aggregates, and filters that
     /// reach it through a relationship.
     pub fn primary_read_filter(&self) -> Option<crate::filter::Filter> {
-        let read = self.primary_read()?;
+        self.read_filter(self.primary_read()?)
+    }
+
+    /// The filters `read`'s preparations add: the records it reaches.
+    pub fn read_filter(&self, read: &crate::action::ActionDef) -> Option<crate::filter::Filter> {
         let filters: Vec<crate::filter::Filter> = read
             .preparations
             .iter()
@@ -457,7 +461,13 @@ pub enum AttrType {
     String,
     Integer,
     Boolean,
-    Atom { one_of: &'static [&'static str] },
+    /// One of a fixed set of values. A named atom is an enum type of its own (an
+    /// `AshEnum`, as an `Ash.Type.Enum` in Elixir): GraphQL gives it an enum type of that
+    /// name. An unnamed one is just constrained text there, as Ash's `:atom` is.
+    Atom {
+        one_of: &'static [&'static str],
+        name: Option<&'static str>,
+    },
     Map,
     Array,
     UtcDatetime { precision: crate::types::TimePrecision },

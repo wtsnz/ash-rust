@@ -14,12 +14,15 @@ pub mod snapshot;
 
 pub use compiler::{CompiledSql, QueryCompiler, column, ident};
 pub use dialect::{
-    PostgresDialect, SqlDialect, SqliteDialect, TextMatch, glob_pattern, like_pattern,
+    AggregateStrategy, PostgresDialect, SqlDialect, SqliteDialect, TextMatch, glob_pattern, like_pattern,
 };
-pub use diff::{SchemaOperation, diff_snapshots, diff_snapshots_with_renames, diff_tables};
+pub use diff::{
+    SchemaOperation, defer_forward_references, diff_snapshots, diff_snapshots_with_renames,
+    diff_tables,
+};
 pub use generator::{
-    MigrationFiles, emit_sql, generate_migration, generate_migration_version, required_extensions,
-    generate_migration_with_version,
+    MigrationFiles, emit_add_reference, emit_create_table, emit_sql, generate_migration,
+    generate_migration_version, required_extensions, generate_migration_with_version,
 };
 pub use migrator::{MemoryMigrationExecutor, MigrationExecutor, MigrationFile, Migrator};
 pub use param::{SqlParam, values_to_json_array};

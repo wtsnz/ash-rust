@@ -15,12 +15,58 @@ pub struct Sort {
 pub struct CompiledQuery {
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
+    /// The attributes to read, as Ash's `select`: `None` reads every one. The primary key
+    /// is always read. A record read with a selection lacks the attributes left out.
+    pub select: Option<Vec<String>>,
+    /// The actor the read runs as. Aggregates count only the related rows the actor may
+    /// read, as Ash authorizes an aggregate's query by default.
+    pub actor: Option<crate::actor::Actor>,
     pub calculations: Vec<String>,
     pub calculation_args: std::collections::HashMap<String, FieldMap>,
     pub aggregates: Vec<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub tenant: Option<String>,
+}
+
+/// How a row of a relationship's destination relates to the key it's read for.
+#[derive(Clone, Copy, Debug)]
+pub enum PerKey<'a> {
+    /// The row's own attribute holds the key: has_many, has_one, belongs_to.
+    Attribute(&'a str),
+    /// A join resource links the key to the row: many_to_many. The join rows are those
+    /// `filter` selects (the join resource's read, as the actor sees it), each holding the
+    /// key in `source` and the row's `attribute` in `destination`.
+    Through {
+        resource: &'a ResourceDef,
+        filter: Option<&'a Filter>,
+        source: &'a str,
+        destination: &'a str,
+        attribute: &'a str,
+    },
+}
+
+impl CompiledQuery {
+    /// Whether the query reads `attribute` of `resource`: it's selected, or the primary
+    /// key, or the query selects everything, or it asks for a calculation only Rust can
+    /// compute, which reads whatever of the record it likes.
+    pub fn reads(&self, resource: &ResourceDef, attribute: &crate::resource::AttributeDef) -> bool {
+        attribute.primary_key
+            || self
+                .select
+                .as_ref()
+                .is_none_or(|select| select.iter().any(|name| name == attribute.name))
+            || self.custom_calculations(resource).next().is_some()
+    }
+
+    /// The calculations the query asks for that only Rust can compute: a SQL data layer
+    /// computes them from the record it reads, after reading it.
+    pub fn custom_calculations<'a>(&'a self, resource: &'a ResourceDef) -> impl Iterator<Item = &'a crate::expr::CalculationDef> + 'a {
+        self.calculations
+            .iter()
+            .filter_map(|name| resource.calculation(name))
+            .filter(|calc| calc.expr.is_custom())
+    }
 }
 
 #[diagnostic::on_unimplemented(
@@ -60,6 +106,88 @@ pub trait DataLayer: Send + Sync {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send;
+
+    /// Whether this data layer runs updates as one statement, checking conditions and
+    /// raising their errors within it, as Ash's data layers that can `update_query` and
+    /// `expr_error`. One that can't has updates read their record first.
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// Updates the records `query` selects as `update` says, in one statement: checks
+    /// each record against the update's conditions, in order, failing with the first
+    /// that holds, then sets the update's values, every one computed from the record as
+    /// it was. Returns the updated records.
+    fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+        _update: &crate::atomic::AtomicUpdate,
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        std::future::ready(Err(Error::Invalid(format!(
+            "this data layer can't update {} atomically",
+            resource.name
+        ))))
+    }
+
+    /// Whether this data layer runs destroys as one statement, checking conditions and
+    /// raising their errors within it, as Ash's data layers that can `destroy_query` and
+    /// `expr_error`. One that can't has destroys read their record first.
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// Deletes the records `query` selects in one statement: checks each record against
+    /// `conditions`, in order, failing with the first that holds, then deletes them all.
+    /// Returns the deleted records.
+    fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+        _conditions: &[crate::atomic::AtomicCondition],
+    ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        std::future::ready(Err(Error::Invalid(format!(
+            "this data layer can't destroy {} atomically",
+            resource.name
+        ))))
+    }
+
+    /// Whether this data layer runs a read of `resource` once for each of many keys in one
+    /// statement, as AshPostgres loads a relationship with a lateral join, its rows related
+    /// to the keys `by` says how: a join resource must be in the same store. One that
+    /// can't has a relationship's limit and offset applied to each source's rows in
+    /// memory, as Ash does for a data layer without lateral joins.
+    fn can_run_query_per_key(&self, _resource: &ResourceDef, _by: &PerKey<'_>) -> bool {
+        false
+    }
+
+    /// The rows of `resource` related to each of `keys`, read by `query` once per key:
+    /// its filter and sort, and its limit and offset applying to each key's rows, as a
+    /// lateral join applies them. `by` says how a row relates to a key. Returns each key's
+    /// rows, in the order of `keys`, a key given twice getting its rows twice.
+    fn run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        _query: &CompiledQuery,
+        _by: &PerKey<'_>,
+        _keys: &[crate::value::Value],
+    ) -> impl Future<Output = Result<Vec<Vec<FieldMap>>>> + Send {
+        std::future::ready(Err(Error::Invalid(format!(
+            "this data layer can't read {} once per key",
+            resource.name
+        ))))
+    }
+
+    /// How many records `query` would return, as Ash's data layers count with an
+    /// aggregate query. A data layer that can count without reading the records (a SQL
+    /// `COUNT(*)`) should; by default it reads them.
+    fn count(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+    ) -> impl Future<Output = Result<usize>> + Send {
+        async move { Ok(self.run_query(resource, query).await?.len()) }
+    }
 
     fn upsert(
         &self,
@@ -102,6 +230,25 @@ pub trait DataLayer: Send + Sync {
                 self.destroy(resource, tenant, *id).await?;
             }
             Ok(())
+        }
+    }
+
+    /// Writes several updates together: each row's id and the attributes it changes, as
+    /// [`update`](Self::update) takes them. Each row has its own result, in order, so a
+    /// row that's gone fails alone; the outer error is for the batch as a whole. A data
+    /// layer that can write the batch at once (one statement, one round trip) should.
+    fn bulk_update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        rows: Vec<(Uuid, FieldMap)>,
+    ) -> impl Future<Output = Result<Vec<Result<FieldMap>>>> + Send {
+        async move {
+            let mut results = Vec::with_capacity(rows.len());
+            for (id, fields) in rows {
+                results.push(self.update(resource, tenant, id, fields).await);
+            }
+            Ok(results)
         }
     }
 }

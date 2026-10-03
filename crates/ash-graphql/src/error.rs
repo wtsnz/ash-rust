@@ -1,8 +1,15 @@
 use ash_core::Error as AshError;
-use async_graphql::dynamic::*;
 use async_graphql::Value as GqlValue;
+use async_graphql::dynamic::*;
 
-/// Structured user error payload representing business validation, authorization, or conflict failures.
+use crate::names::camel;
+
+/// The GraphQL type a mutation's errors are, as AshGraphql names it.
+pub const MUTATION_ERROR: &str = "MutationError";
+
+/// An error a mutation reports, rather than raising: a validation, authorization or
+/// conflict failure, with Ash's error code (`invalid_attribute`, `required`,
+/// `not_found`, …) and the field it's about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserError {
     pub message: String,
@@ -11,102 +18,71 @@ pub struct UserError {
 }
 
 impl UserError {
-    /// Converts an [`ash_core::Error`] into a structured [`UserError`].
+    /// The error Ash would report for `err`.
     pub fn from_ash_error(err: &AshError) -> Self {
-        match err {
-            AshError::Forbidden => Self {
-                message: "Forbidden: insufficient permissions to perform action".into(),
-                field: None,
-                code: "FORBIDDEN".into(),
-            },
-            AshError::NotFound => Self {
-                message: "Record not found".into(),
-                field: Some("id".into()),
-                code: "NOT_FOUND".into(),
-            },
-            AshError::Validation { field, message }
-            | AshError::Constraint { field, message } => Self {
-                message: message.clone(),
-                field: Some(field.clone()),
-                code: "VALIDATION_FAILED".into(),
-            },
-            AshError::Missing { field } => Self {
-                message: format!("Required field `{field}` is missing"),
-                field: Some(field.clone()),
-                code: "REQUIRED_FIELD_MISSING".into(),
-            },
-            AshError::StaleRecord { resource, id } => Self {
-                message: format!(
-                    "Resource `{resource}` with id `{id}` was modified concurrently"
-                ),
-                field: Some("version".into()),
-                code: "STALE_RECORD".into(),
-            },
+        let (message, field, code) = match err {
+            AshError::Forbidden => (
+                "forbidden".to_string(),
+                None,
+                "forbidden",
+            ),
+            AshError::NotFound => ("could not be found".to_string(), Some("id".to_string()), "not_found"),
+            AshError::Validation { field, message } | AshError::Constraint { field, message } => {
+                (message.clone(), Some(field.clone()), "invalid_attribute")
+            }
+            AshError::Missing { field } => ("is required".to_string(), Some(field.clone()), "required"),
+            AshError::StaleRecord { resource, id } => (
+                format!("{resource} {id} was changed by someone else"),
+                Some("version".to_string()),
+                "stale_record",
+            ),
             AshError::IdentityConflict {
-                identity, message, ..
-            } => Self {
-                message: message.clone(),
-                field: Some(identity.to_string()),
-                code: "IDENTITY_CONFLICT".into(),
-            },
-            other => Self {
-                message: other.to_string(),
-                field: None,
-                code: "INTERNAL_ERROR".into(),
-            },
+                fields, message, ..
+            } => (
+                message.clone(),
+                fields.first().cloned(),
+                "invalid_attribute",
+            ),
+            other => (other.to_string(), None, "unknown"),
+        };
+        Self {
+            message,
+            field,
+            code: code.to_string(),
         }
     }
 }
 
-/// Registers the shared `UserError` GraphQL object type.
+/// Registers `MutationError { message, shortMessage, vars, code, fields, path }`.
 pub fn register_user_error(builder: SchemaBuilder) -> SchemaBuilder {
-    let user_error_obj = Object::new("UserError")
-        .field(Field::new(
-            "message",
-            TypeRef::named_nn(TypeRef::STRING),
-            |ctx| {
+    let error = |ctx: &ResolverContext<'_>| ctx.parent_value.downcast_ref::<UserError>().cloned();
+    let text = |value: String| Some(FieldValue::value(GqlValue::String(value)));
+    builder.register(
+        Object::new(MUTATION_ERROR)
+            .field(Field::new("message", TypeRef::named(TypeRef::STRING), move |ctx| {
+                FieldFuture::new(async move { Ok(error(&ctx).and_then(|e| text(e.message))) })
+            }))
+            .field(Field::new("shortMessage", TypeRef::named(TypeRef::STRING), move |ctx| {
+                FieldFuture::new(async move { Ok(error(&ctx).and_then(|e| text(e.message))) })
+            }))
+            .field(Field::new("vars", TypeRef::named("Json"), move |_ctx| {
                 FieldFuture::new(async move {
-                    if let Some(err) = ctx.parent_value.downcast_ref::<UserError>() {
-                        Ok(Some(FieldValue::value(GqlValue::String(
-                            err.message.clone(),
-                        ))))
-                    } else {
-                        Ok(Some(FieldValue::value(GqlValue::String(String::new()))))
-                    }
+                    Ok(Some(FieldValue::value(GqlValue::Object(Default::default()))))
                 })
-            },
-        ))
-        .field(Field::new(
-            "field",
-            TypeRef::named(TypeRef::STRING),
-            |ctx| {
+            }))
+            .field(Field::new("code", TypeRef::named(TypeRef::STRING), move |ctx| {
+                FieldFuture::new(async move { Ok(error(&ctx).and_then(|e| text(e.code))) })
+            }))
+            .field(Field::new("fields", TypeRef::named_nn_list(TypeRef::STRING), move |ctx| {
                 FieldFuture::new(async move {
-                    if let Some(err) = ctx.parent_value.downcast_ref::<UserError>() {
-                        match &err.field {
-                            Some(f) => Ok(Some(FieldValue::value(GqlValue::String(f.clone())))),
-                            None => Ok(None),
-                        }
-                    } else {
-                        Ok(None)
-                    }
+                    let fields = error(&ctx).and_then(|e| e.field).map(|f| camel(&f));
+                    Ok(Some(FieldValue::list(
+                        fields.into_iter().map(|f| FieldValue::value(GqlValue::String(f))),
+                    )))
                 })
-            },
-        ))
-        .field(Field::new(
-            "code",
-            TypeRef::named_nn(TypeRef::STRING),
-            |ctx| {
-                FieldFuture::new(async move {
-                    if let Some(err) = ctx.parent_value.downcast_ref::<UserError>() {
-                        Ok(Some(FieldValue::value(GqlValue::String(err.code.clone()))))
-                    } else {
-                        Ok(Some(FieldValue::value(GqlValue::String(
-                            "UNKNOWN".into(),
-                        ))))
-                    }
-                })
-            },
-        ));
-
-    builder.register(user_error_obj)
+            }))
+            .field(Field::new("path", TypeRef::named_nn_list(TypeRef::STRING), move |_ctx| {
+                FieldFuture::new(async move { Ok(None::<FieldValue>) })
+            })),
+    )
 }

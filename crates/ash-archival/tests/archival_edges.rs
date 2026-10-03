@@ -356,16 +356,19 @@ async fn graphql_cannot_destroy_an_archived_record_again() {
         .finish::<Memory>()
         .expect("Failed to build schema");
     let destroy = format!(
-        r#"mutation {{ destroyLedger(input: {{ id: "{}" }}) {{ success errors {{ message }} }} }}"#,
+        r#"mutation {{ destroyLedger(id: "{}") {{ errors {{ message code }} }} }}"#,
         ledger.id
     );
 
     let first = schema.execute(Request::new(destroy.clone()).data(ctx.clone())).await;
-    assert_eq!(first.data.into_json().unwrap()["destroyLedger"]["success"], true);
+    assert_eq!(first.data.into_json().unwrap()["destroyLedger"]["errors"], serde_json::json!([]));
     let archived_at = stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at");
 
     let again = schema.execute(Request::new(destroy).data(ctx.clone())).await;
-    assert_eq!(again.data.into_json().unwrap()["destroyLedger"]["success"], false);
+    assert_eq!(
+        again.data.into_json().unwrap()["destroyLedger"]["errors"][0]["code"],
+        "not_found"
+    );
     assert_eq!(stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at"), archived_at);
 
     // The Rust API agrees.
