@@ -25,12 +25,16 @@ Each entry is a gap, what the desk does about it for now, and its status.
 
 Behaviours of the Elixir packages the comparison works around. ash-rust doesn't copy them.
 
-- **AshTypescript 0.19.0 loads a relationship without the actor.** Each nested selection
-  is read with `Ash.Query.for_read(read_action)` and no actor (`field_selector.ex`), so the
-  related resource's read policies see no one: an agent's, or even an admin's, nested
-  internal comments are filtered out as an anonymous reader's would be. ash-rust reads
-  them as the actor, as AshGraphql does. `parity` reads nested comments as a viewer, or
-  filtered to public ones.
+- **AshTypescript 0.19.0 reads a relationship selected with options without the actor.**
+  A nested selection written as options (`{"comments": {"fields": [...], "sort": ...}}`,
+  with any of `filter`, `sort`, `page`, `limit`, `offset`) is built as
+  `Ash.Query.for_read(read_action)` with no actor (`field_selector.ex`). Ash skips its
+  own `for_read` for an already validated query when loading it, so the parent's actor
+  never reaches it: the related resource's read policies see no one, and an agent's, or
+  even an admin's, internal comments are filtered out. Under `authorize :when_requested`
+  the nested read isn't authorized at all. The plain form (`{"comments": [...]}`) is read
+  as the actor. ash-rust reads both as the actor, as AshGraphql does. `parity` reads
+  nested comments with options as a viewer, or filtered to public ones.
 - **AshTypescript answers an AshStateMachine `NoMatchingTransition` as `internal_error`**,
   having no error protocol implementation for it. ash-rust answers the same.
 - **AshTypescript's generated types refuse `count` on a keyset page** (`count?: never`)
