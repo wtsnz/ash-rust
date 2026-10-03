@@ -88,7 +88,8 @@ fn test_sqlite_query_compilation() {
     assert!(sql.contains(
         "WHERE (\"status\" = ? AND (\"representative_id\" IS NULL OR \"priority\" > ?))"
     ));
-    assert!(sql.contains("ORDER BY \"priority\" ASC, \"subject\" DESC"));
+    // SQLite sorts nulls first ascending; Ash sorts them last, and first descending.
+    assert!(sql.contains("ORDER BY \"priority\" ASC NULLS LAST, \"subject\" DESC NULLS FIRST"));
     assert!(sql.contains("LIMIT ? OFFSET ?"));
 
     // Check placeholder in SQLite is ?
@@ -342,7 +343,7 @@ fn test_keyset_cursor_compilation() {
     assert!(
         compiled_select
             .sql
-            .contains("ORDER BY \"priority\" DESC, \"subject\" ASC, \"id\" ASC"),
+            .contains("ORDER BY \"priority\" DESC NULLS FIRST, \"subject\" ASC NULLS LAST, \"id\" ASC NULLS LAST"),
         "Cursor queries must order deterministically with PK tie-breaker, got: {}",
         compiled_select.sql
     );
