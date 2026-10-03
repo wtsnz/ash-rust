@@ -138,6 +138,7 @@ export type TicketResourceSchema = {
   version: number;
   viewCount: number;
   weight: number | null;
+  scaledPriority: { __type: "ComplexCalculation"; __returnType: number | null; __args: { factor: number }; };
   assignee: { __type: "Relationship"; __resource: AgentResourceSchema | null; };
   author: { __type: "Relationship"; __resource: AgentResourceSchema | null; };
   comments: { __type: "Relationship"; __array: true; __resource: CommentResourceSchema; __pagination: "keyset"; __filterInput: CommentFilterInput; __sortField: CommentSortField; };
@@ -612,6 +613,17 @@ export type TicketFilterInput = {
     stringStartsWith?: string;
   };
 
+  scaledPriority?: {
+    isNil?: boolean;
+    eq?: number;
+    notEq?: number;
+    in?: Array<number>;
+    lessThan?: number;
+    greaterThan?: number;
+    lessThanOrEqual?: number;
+    greaterThanOrEqual?: number;
+  };
+
   status?: {
     eq?: "closed" | "new" | "open" | "pending" | "resolved";
     notEq?: "closed" | "new" | "open" | "pending" | "resolved";
@@ -710,7 +722,7 @@ export type CommentFilterField = (typeof commentFilterFields)[number];
 export const tagFilterFields = ["id", "name", "org"] as const;
 export type TagFilterField = (typeof tagFilterFields)[number];
 
-export const ticketFilterFields = ["assigneeId", "authorId", "body", "commentCount", "confidential", "hasInternalNotes", "id", "insertedAt", "org", "priority", "publicCommentCount", "reopenCount", "requesterEmail", "status", "subject", "subjectLength", "updatedAt", "version", "viewCount", "weight", "assignee", "author", "comments", "tags"] as const;
+export const ticketFilterFields = ["assigneeId", "authorId", "body", "commentCount", "confidential", "hasInternalNotes", "id", "insertedAt", "org", "priority", "publicCommentCount", "reopenCount", "requesterEmail", "scaledPriority", "status", "subject", "subjectLength", "updatedAt", "version", "viewCount", "weight", "assignee", "author", "comments", "tags"] as const;
 export type TicketFilterField = (typeof ticketFilterFields)[number];
 
 
@@ -726,7 +738,7 @@ export type CommentSortField = (typeof commentSortFields)[number];
 export const tagSortFields = ["id", "name", "org"] as const;
 export type TagSortField = (typeof tagSortFields)[number];
 
-export const ticketSortFields = ["assigneeId", "authorId", "body", "commentCount", "confidential", "hasInternalNotes", "id", "insertedAt", "org", "priority", "publicCommentCount", "reopenCount", "requesterEmail", "status", "subject", "subjectLength", "updatedAt", "version", "viewCount", "weight"] as const;
+export const ticketSortFields = ["assigneeId", "authorId", "body", "commentCount", "confidential", "hasInternalNotes", "id", "insertedAt", "org", "priority", "publicCommentCount", "reopenCount", "requesterEmail", "scaledPriority", "status", "subject", "subjectLength", "updatedAt", "version", "viewCount", "weight"] as const;
 export type TicketSortField = (typeof ticketSortFields)[number];
 
 
