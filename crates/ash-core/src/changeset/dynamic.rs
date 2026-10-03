@@ -134,7 +134,7 @@ impl DynamicChangeset {
         forced: FieldMap,
     ) -> Result<Self> {
         expect_kind(action, ActionKind::Create)?;
-        let (mut fields, arguments) = split_input(action, input)?;
+        let (mut fields, arguments) = split_input(resource, action, input)?;
         fields.extend(forced);
         prepare_create_fields(resource, &mut fields);
         let mut changeset = Self::new(resource, action, fields, arguments, None);
@@ -167,7 +167,7 @@ impl DynamicChangeset {
         forced: FieldMap,
     ) -> Result<Self> {
         expect_kind(action, ActionKind::Update)?;
-        let (accepted, arguments) = split_input(action, input)?;
+        let (accepted, arguments) = split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted.clone());
         fields.extend(forced);
@@ -212,7 +212,7 @@ impl DynamicChangeset {
         input: FieldMap,
     ) -> Result<Self> {
         expect_kind(action, ActionKind::Destroy)?;
-        let (accepted, arguments) = crate::pipeline::split_input(action, input)?;
+        let (accepted, arguments) = crate::pipeline::split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted);
         let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
@@ -240,7 +240,7 @@ impl DynamicChangeset {
         input: FieldMap,
     ) -> Result<FieldMap> {
         expect_kind(action, ActionKind::Create)?;
-        let (mut fields, arguments) = split_input(action, input)?;
+        let (mut fields, arguments) = split_input(resource, action, input)?;
         prepare_create_fields(resource, &mut fields);
         crate::pipeline::apply_changes(&mut fields, action, None, &arguments)?;
         validate(resource, &mut fields)?;
@@ -257,7 +257,7 @@ impl DynamicChangeset {
         input: FieldMap,
     ) -> Result<FieldMap> {
         expect_kind(action, ActionKind::Update)?;
-        let (accepted, arguments) = split_input(action, input)?;
+        let (accepted, arguments) = split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted);
         prepare_update_fields(resource, &existing, &mut fields);

@@ -55,13 +55,17 @@ pub fn pk_name(def: &ResourceDef) -> Result<&'static str> {
         .ok_or(Error::NoPrimaryKey(def.name))
 }
 
-pub fn split_input(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
+pub fn split_input(resource: &ResourceDef, action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
     let mut fields = FieldMap::new();
     let mut arguments = FieldMap::new();
-    for (field, value) in input {
+    for (field, mut value) in input {
         if action.accept.contains(&field.as_str()) {
+            if let Some(attribute) = resource.attribute(&field) {
+                cast_text(attribute.ty, &mut value);
+            }
             fields.insert(field, value);
-        } else if action.has_argument(&field) {
+        } else if let Some(arg) = action.arguments.iter().find(|arg| arg.name == field) {
+            cast_text(arg.ty, &mut value);
             arguments.insert(field, value);
         } else {
             return Err(Error::NotAccepted {
@@ -71,7 +75,7 @@ pub fn split_input(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, Fie
         }
     }
     for arg in action.arguments {
-        if !arg.allow_nil && !arguments.contains_key(arg.name) {
+        if !arg.allow_nil && arguments.get(arg.name).is_none_or(Value::is_null) {
             return Err(Error::Missing {
                 field: arg.name.to_string(),
             });
@@ -80,11 +84,22 @@ pub fn split_input(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, Fie
     Ok((fields, arguments))
 }
 
-#[allow(dead_code)]
-pub fn accept(action: &ActionDef, input: FieldMap) -> Result<FieldMap> {
-    let (fields, _args) = split_input(action, input)?;
-    Ok(fields)
+/// Text as Ash's string types cast it by default: trimmed, and nil when that leaves
+/// nothing (`trim?: true`, `allow_empty?: false`).
+fn cast_text(ty: AttrType, value: &mut Value) {
+    if !matches!(ty, AttrType::String | AttrType::CiString) {
+        return;
+    }
+    if let Value::String(text) = value {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            *value = Value::Null;
+        } else if trimmed.len() != text.len() {
+            *text = trimmed.to_string();
+        }
+    }
 }
+
 
 pub fn generate_pk(def: &ResourceDef, fields: &mut FieldMap) {
     if let Some(pk) = def.primary_key()

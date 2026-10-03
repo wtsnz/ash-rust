@@ -168,7 +168,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
         ctx.data.can_destroy_atomically(resource)
     };
     if atomic {
-        let planned = crate::pipeline::split_input(action, input.clone()).and_then(|(accepted, arguments)| {
+        let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
             let plan = super::atomic::plan_update(
                 resource,
                 action,
@@ -312,7 +312,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
     if ctx.data.can_update_atomically(resource) {
-        let planned = crate::pipeline::split_input(action, input.clone()).and_then(|(accepted, arguments)| {
+        let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
             let plan = super::atomic::plan_update(
                 resource,
                 action,
