@@ -123,7 +123,7 @@ pub fn register_action_input(
 fn failed(err: &AshError) -> Option<FieldValue<'static>> {
     Some(FieldValue::owned_any(MutationPayload {
         result: None,
-        errors: vec![UserError::from_ash_error(err)],
+        errors: err.each().into_iter().map(UserError::from_ash_error).collect(),
     }))
 }
 

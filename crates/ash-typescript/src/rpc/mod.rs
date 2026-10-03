@@ -271,7 +271,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     pub async fn run(&self, ctx: &Context<D>, request: &Json) -> Json {
         match self.answer(ctx, request).await {
             Ok(data) => json!({ "success": true, "data": data }),
-            Err(failures) => json!({ "success": false, "errors": failures.iter().map(Failure::to_json).collect::<Vec<_>>() }),
+            Err(failures) => json!({ "success": false, "errors": failures.iter().flat_map(Failure::all_json).collect::<Vec<_>>() }),
         }
     }
 
@@ -285,6 +285,12 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// An ash-core error as AshTypescript reports it; one it has no shape for, as an
     /// internal error the server is told of.
     fn failure(&self, err: Error) -> Failure {
+        if let Error::Multiple(errors) = err {
+            let mut failures = errors.into_iter().map(|error| self.failure(error));
+            let mut first = failures.next().unwrap_or_else(|| self.failure(Error::Invalid("no errors".into())));
+            first.rest.extend(failures);
+            return first;
+        }
         Failure::from_error(&err).unwrap_or_else(|| {
             let id = uuid::Uuid::new_v4().to_string();
             if let Some(report) = &self.on_error {

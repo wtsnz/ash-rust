@@ -1379,6 +1379,7 @@ fn map_sqlx_resource(err: sqlx::Error, resource: &ResourceDef) -> Error {
                 return Error::Validation {
                     field: "validation".to_string(),
                     message: db_err.message().to_string(),
+                    vars: Vec::new(),
                 };
             }
             "40P01" => {

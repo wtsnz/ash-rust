@@ -15,6 +15,7 @@ fn not_locked(ctx: &ValidationContext<'_>) -> Result<()> {
         Some(Value::Bool(true)) => Err(Error::Validation {
             field: "locked".into(),
             message: "is locked".into(),
+            vars: Vec::new(),
         }),
         _ => Ok(()),
     }

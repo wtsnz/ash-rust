@@ -235,6 +235,7 @@ pub(crate) fn plan_update(
         ));
     }
 
+    let mut failed = Vec::new();
     for validation in action.validations {
         let field = match validation {
             Validation::Present { field }
@@ -259,11 +260,17 @@ pub(crate) fn plan_update(
         let context = AtomicContext { resource, action, actor, tenant, arguments, update: &update };
         let value = context.value_of(field);
         match value.known() {
-            // The value it'll hold is known: check it now.
-            Some(value) => check_builtin_validation(validation, Some(value))?,
+            // The value it'll hold is known: check it now, every one, as Ash reports
+            // every validation a changeset fails.
+            Some(value) => {
+                if let Err(error) = check_builtin_validation(validation, Some(value)) {
+                    failed.push(error);
+                }
+            }
             None => update.conditions.extend(builtin_conditions(resource, validation, value)),
         }
     }
+    Error::collect(failed)?;
 
     if allowed == Filter::False {
         return Err(Error::Forbidden);
@@ -328,15 +335,14 @@ fn builtin_conditions(resource: &ResourceDef, validation: &Validation, value: At
             .is_some_and(|attr| matches!(attr.ty, AttrType::String | AttrType::CiString)),
         _ => false,
     };
-    let condition = |fails_when: AtomicExpr, field: &'static str, message: String| {
-        AtomicCondition::failing_with(fails_when, move || Error::Validation {
-            field: field.to_string(),
-            message: message.clone(),
-        })
+    // Each fails with the validation's own error, as Ash describes it.
+    let builtin = *validation;
+    let condition = move |fails_when: AtomicExpr| {
+        AtomicCondition::failing_with(fails_when, move || builtin.error().expect("a built-in validation"))
     };
     let boxed = Box::new;
     match validation {
-        Validation::Present { field } => {
+        Validation::Present { .. } => {
             let blank = if text {
                 AtomicExpr::Or(vec![
                     AtomicExpr::IsNil(boxed(value.clone())),
@@ -345,50 +351,30 @@ fn builtin_conditions(resource: &ResourceDef, validation: &Validation, value: At
             } else {
                 AtomicExpr::IsNil(boxed(value))
             };
-            vec![condition(blank, field, "must be present".into())]
+            vec![condition(blank)]
         }
-        Validation::StringLength { field, min, max } if text => {
+        Validation::StringLength { min, max, .. } if text => {
             let length = || boxed(AtomicExpr::StringLength(boxed(value.clone())));
             let mut conditions = Vec::new();
             if let Some(min) = min {
-                conditions.push(condition(
-                    AtomicExpr::Lt(length(), boxed(AtomicExpr::value(*min as i64))),
-                    field,
-                    format!("must be at least {min} characters"),
-                ));
+                conditions.push(condition(AtomicExpr::Lt(length(), boxed(AtomicExpr::value(*min as i64)))));
             }
             if let Some(max) = max {
-                conditions.push(condition(
-                    AtomicExpr::Gt(length(), boxed(AtomicExpr::value(*max as i64))),
-                    field,
-                    format!("must be at most {max} characters"),
-                ));
+                conditions.push(condition(AtomicExpr::Gt(length(), boxed(AtomicExpr::value(*max as i64)))));
             }
             conditions
         }
-        Validation::OneOf { field, allowed } => vec![condition(
-            AtomicExpr::Not(boxed(AtomicExpr::In(
-                boxed(value),
-                allowed.iter().map(|v| Value::String((*v).to_string())).collect(),
-            ))),
-            field,
-            format!("must be one of: {}", allowed.join(", ")),
-        )],
-        Validation::Numericality { field, min, max } => {
+        Validation::OneOf { allowed, .. } => vec![condition(AtomicExpr::Not(boxed(AtomicExpr::In(
+            boxed(value),
+            allowed.iter().map(|v| Value::String((*v).to_string())).collect(),
+        ))))],
+        Validation::Numericality { min, max, .. } => {
             let mut conditions = Vec::new();
             if let Some(min) = min {
-                conditions.push(condition(
-                    AtomicExpr::Lt(boxed(value.clone()), boxed(AtomicExpr::value(*min))),
-                    field,
-                    format!("must be at least {min}"),
-                ));
+                conditions.push(condition(AtomicExpr::Lt(boxed(value.clone()), boxed(AtomicExpr::value(*min)))));
             }
             if let Some(max) = max {
-                conditions.push(condition(
-                    AtomicExpr::Gt(boxed(value.clone()), boxed(AtomicExpr::value(*max))),
-                    field,
-                    format!("must be at most {max}"),
-                ));
+                conditions.push(condition(AtomicExpr::Gt(boxed(value.clone()), boxed(AtomicExpr::value(*max)))));
             }
             conditions
         }

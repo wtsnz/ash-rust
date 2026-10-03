@@ -27,9 +27,9 @@ impl UserError {
                 "forbidden",
             ),
             AshError::NotFound => ("could not be found".to_string(), Some("id".to_string()), "not_found"),
-            AshError::Validation { field, message } | AshError::Constraint { field, message } => {
-                (message.clone(), Some(field.clone()), "invalid_attribute")
-            }
+            // A validation's message with its vars filled in, as AshGraphql writes it.
+            AshError::Validation { field, .. } => (err.message(), Some(field.clone()), "invalid_attribute"),
+            AshError::Constraint { field, message } => (message.clone(), Some(field.clone()), "invalid_attribute"),
             AshError::Missing { field } => ("is required".to_string(), Some(field.clone()), "required"),
             AshError::StaleRecord { resource, id } => (
                 format!("{resource} {id} was changed by someone else"),

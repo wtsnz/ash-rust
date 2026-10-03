@@ -268,91 +268,42 @@ pub fn run_validations_with_context(
     arguments: &FieldMap,
 ) -> Result<()> {
     let get_val = |f: &str| fields.get(f).or_else(|| arguments.get(f));
+    // Every validation runs, and every failure is reported, as Ash's are.
+    let mut errors = Vec::new();
     for validation in action.validations {
-        match validation {
+        let ctx = crate::action::ValidationContext { record, fields, actor, tenant, metadata, arguments };
+        let result = match validation {
             Validation::Present { field }
             | Validation::StringLength { field, .. }
             | Validation::OneOf { field, .. }
-            | Validation::Numericality { field, .. } => {
-                check_builtin_validation(validation, get_val(field))?;
-            }
-            Validation::Custom(c) => {
-                let ctx = crate::action::ValidationContext {
-                    record,
-                    fields,
-                    actor,
-                    tenant,
-                    metadata,
-                    arguments,
-                };
-                c.validate(&ctx)?;
-            }
-            Validation::Func(f) => {
-                let ctx = crate::action::ValidationContext {
-                    record,
-                    fields,
-                    actor,
-                    tenant,
-                    metadata,
-                    arguments,
-                };
-                f(&ctx)?;
-            }
+            | Validation::Numericality { field, .. } => check_builtin_validation(validation, get_val(field)),
+            Validation::Custom(c) => c.validate(&ctx),
+            Validation::Func(f) => f(&ctx),
+        };
+        if let Err(error) = result {
+            errors.push(error);
         }
     }
-    Ok(())
+    Error::collect(errors)
 }
 
 /// Checks a built-in validation (`present`, `string_length`, `one_of`, `numericality`)
 /// against the value it validates, as its field will hold it.
 pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&Value>) -> Result<()> {
-    match validation {
-        Validation::Present { field } => match value {
-            None | Some(Value::Null) => {
-                return Err(Error::Validation {
-                    field: (*field).to_string(),
-                    message: "must be present".to_string(),
-                });
-            }
-            Some(Value::String(s)) if s.trim().is_empty() => {
-                return Err(Error::Validation {
-                    field: (*field).to_string(),
-                    message: "must be present".to_string(),
-                });
-            }
-            _ => {}
+    let fails = match *validation {
+        Validation::Present { .. } => match value {
+            None | Some(Value::Null) => true,
+            Some(Value::String(s)) => s.trim().is_empty(),
+            _ => false,
         },
-        Validation::StringLength { field, min, max } => {
-            if let Some(Value::String(s)) = value {
-                let char_count = s.chars().count();
-                if let Some(min_val) = min
-                    && char_count < *min_val
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at least {min_val} characters"),
-                    });
-                }
-                if let Some(max_val) = max
-                    && char_count > *max_val
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at most {max_val} characters"),
-                    });
-                }
+        Validation::StringLength { min, max, .. } => match value {
+            Some(Value::String(s)) => {
+                let length = s.chars().count();
+                min.is_some_and(|min| length < min) || max.is_some_and(|max| length > max)
             }
-        }
-        Validation::OneOf { field, allowed } => {
-            if let Some(Value::String(s)) = value
-                && !allowed.contains(&s.as_str())
-            {
-                return Err(Error::Validation {
-                    field: (*field).to_string(),
-                    message: format!("must be one of: {}", allowed.join(", ")),
-                });
-            }
-        }
+            _ => false,
+        },
+        Validation::OneOf { allowed, .. } => matches!(value, Some(Value::String(s)) if !allowed.contains(&s.as_str())),
         Validation::Numericality { field, min, max } => {
             // Integers, and floats and decimals stored as their text, as Ash's
             // numericality checks every kind of number.
@@ -361,42 +312,18 @@ pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&V
                 Some(Value::Int(n)) => Some(*n as f64),
                 Some(Value::String(text)) => match text.parse::<f64>() {
                     Ok(n) if n.is_finite() => Some(n),
-                    _ => {
-                        return Err(Error::Validation {
-                            field: (*field).to_string(),
-                            message: "must be a number".to_string(),
-                        });
-                    }
+                    _ => return Err(Error::validation(field, "must be a number", Vec::new())),
                 },
-                Some(_) => {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: "must be a number".to_string(),
-                    });
-                }
+                Some(_) => return Err(Error::validation(field, "must be a number", Vec::new())),
             };
-            if let Some(n) = number {
-                if let Some(min_val) = min
-                    && n < *min_val as f64
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at least {min_val}"),
-                    });
-                }
-                if let Some(max_val) = max
-                    && n > *max_val as f64
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at most {max_val}"),
-                    });
-                }
-            }
+            number.is_some_and(|n| min.is_some_and(|min| n < min as f64) || max.is_some_and(|max| n > max as f64))
         }
-        Validation::Custom(_) | Validation::Func(_) => {}
+        Validation::Custom(_) | Validation::Func(_) => false,
+    };
+    match validation.error() {
+        Some(error) if fails => Err(error),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 pub fn and_filters(left: Option<Filter>, right: Option<Filter>) -> Option<Filter> {

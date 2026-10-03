@@ -97,7 +97,9 @@ impl IntoResponse for Failure {
             Error::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Error::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Error::StaleRecord { .. } => (StatusCode::CONFLICT, "stale_record"),
-            Error::Validation { .. } | Error::Invalid(_) | Error::Missing { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "invalid"),
+            Error::Validation { .. } | Error::Invalid(_) | Error::Missing { .. } | Error::Multiple(_) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "invalid")
+            }
             Error::TenantRequired { .. } => (StatusCode::BAD_REQUEST, "tenant_required"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "error"),
         };

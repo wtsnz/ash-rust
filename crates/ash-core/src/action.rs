@@ -656,6 +656,68 @@ pub enum Validation {
     Func(fn(&ValidationContext<'_>) -> Result<()>),
 }
 
+impl Validation {
+    /// The error a built-in validation fails with, as Ash describes it: its message a
+    /// template, with its vars (`must have length of between %{min} and %{max}`). `None`
+    /// for a custom validation, which gives its own.
+    pub fn error(&self) -> Option<Error> {
+        use crate::value::Value;
+        let text = |text: &str| Value::String(text.to_string());
+        let number = |n: Option<i64>| n.map_or(Value::Null, Value::Int);
+        Some(match *self {
+            Self::Present { field } => Error::validation(
+                field,
+                "must be present",
+                vec![
+                    ("attributes".into(), Value::Array(vec![text(field)])),
+                    ("exactly".into(), Value::Int(1)),
+                    ("fields".into(), Value::Array(vec![text(field)])),
+                    ("keys".into(), text(field)),
+                ],
+            ),
+            Self::StringLength { field, min, max } => {
+                let (message, vars) = match (min, max) {
+                    (Some(min), Some(max)) => (
+                        "must have length of between %{min} and %{max}",
+                        vec![("min".into(), Value::Int(min as i64)), ("max".into(), Value::Int(max as i64))],
+                    ),
+                    (Some(min), None) => ("must have length of at least %{min}", vec![("min".into(), Value::Int(min as i64))]),
+                    (None, Some(max)) => ("must have length of no more than %{max}", vec![("max".into(), Value::Int(max as i64))]),
+                    (None, None) => return None,
+                };
+                Error::validation(field, message, vars)
+            }
+            Self::OneOf { field, allowed } => {
+                Error::validation(field, "expected one of %{values}", vec![("values".into(), text(&allowed.join(", ")))])
+            }
+            // As Ash's `compare`, with bounds it may and may not be at.
+            Self::Numericality { field, min, max } => {
+                let mut parts = Vec::new();
+                if min.is_some() {
+                    parts.push("must be greater than or equal to %{greater_than_or_equal_to}");
+                }
+                if max.is_some() {
+                    parts.push("must be less than or equal to %{less_than_or_equal_to}");
+                }
+                Error::validation(
+                    field,
+                    parts.join(" and "),
+                    vec![
+                        ("greater_than".into(), Value::Null),
+                        ("less_than".into(), Value::Null),
+                        ("greater_than_or_equal_to".into(), number(min)),
+                        ("less_than_or_equal_to".into(), number(max)),
+                        ("is_equal".into(), Value::Null),
+                        ("is_not_equal".into(), Value::Null),
+                        ("is_nil".into(), Value::Null),
+                    ],
+                )
+            }
+            Self::Custom(_) | Self::Func(_) => return None,
+        })
+    }
+}
+
 impl std::fmt::Debug for Validation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

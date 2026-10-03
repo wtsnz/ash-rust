@@ -47,6 +47,7 @@ impl CustomChange for HashPasswordChange {
                 return Err(Error::Validation {
                     field: self.password_argument.to_string(),
                     message: "password is required".to_string(),
+                    vars: Vec::new(),
                 });
             }
         };
@@ -63,6 +64,7 @@ impl CustomChange for HashPasswordChange {
                     return Err(Error::Validation {
                         field: conf_arg.to_string(),
                         message: "password confirmation does not match password".to_string(),
+                        vars: Vec::new(),
                     });
                 }
             }
@@ -74,6 +76,7 @@ impl CustomChange for HashPasswordChange {
             .map_err(|e| Error::Validation {
                 field: self.password_argument.to_string(),
                 message: e.to_string(),
+                vars: Vec::new(),
             })?;
 
         ctx.fields
