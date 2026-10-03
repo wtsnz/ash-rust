@@ -1770,9 +1770,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
-    /// Updates `rows`, which all set `columns`, in one statement:
-    /// `UPDATE t SET c = v.c, … FROM (VALUES …) AS v(…) WHERE t.pk = v.pk RETURNING t.*`.
-    /// For dialects with `VALUES` column aliases and `RETURNING` (Postgres).
+    /// Updates `rows` in one statement, each row writing only the `columns` it sets:
+    /// `UPDATE t SET c = v.c, d = CASE WHEN v.set_d THEN v.d ELSE t.d END, … FROM (VALUES …)
+    /// AS v(…) WHERE t.pk = v.pk RETURNING t.*`. A column every row sets is written
+    /// outright; one only some rows set carries a flag per row, so a row that doesn't set
+    /// it keeps what's stored, whatever was written there since it was read. For dialects
+    /// with `VALUES` column aliases and `RETURNING` (Postgres).
     pub fn compile_bulk_update(
         &mut self,
         resource: &ResourceDef,
@@ -1786,20 +1789,33 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk_col = ident(self.dialect, pk.name)?;
         let mut aliases = vec![pk_col.clone()];
         let mut set_clauses = Vec::with_capacity(columns.len());
+        // Each column's attribute, and whether only some rows set it.
         let mut types = Vec::with_capacity(columns.len());
-        for column in columns {
+        for (i, column) in columns.iter().enumerate() {
             let attr = resource
                 .attribute(column)
                 .ok_or_else(|| Error::Invalid(format!("{} has no attribute {column}", resource.name)))?;
             let col = ident(self.dialect, attr.name)?;
-            set_clauses.push(format!("{col} = \"v\".{col}"));
+            let partial = rows.iter().any(|(_, fields)| !fields.contains_key(attr.name));
+            if partial {
+                let flag = ident(self.dialect, &format!("__ash_set_{i}"))?;
+                set_clauses.push(format!(
+                    "{col} = CASE WHEN \"v\".{flag} THEN \"v\".{col} ELSE {table}.{col} END"
+                ));
+                aliases.push(flag);
+            } else {
+                set_clauses.push(format!("{col} = \"v\".{col}"));
+            }
             aliases.push(col);
-            types.push((attr.name, attr.ty));
+            types.push((attr.name, attr.ty, partial));
         }
         let mut values = Vec::with_capacity(rows.len());
         for (id, fields) in rows {
             let mut tuple = vec![self.bind_typed(pk.ty, Value::Uuid(*id))];
-            for (name, ty) in &types {
+            for (name, ty, partial) in &types {
+                if *partial {
+                    tuple.push(if fields.contains_key(*name) { "TRUE" } else { "FALSE" }.to_string());
+                }
                 let value = fields.get(*name).cloned().unwrap_or(Value::Null);
                 tuple.push(self.bind_typed(*ty, value));
             }

@@ -162,6 +162,35 @@ fn test_postgres_insert_update_upsert_returning() {
     ));
 }
 
+/// A bulk update is one statement however its rows differ: a column every row sets is
+/// written outright, and one only some rows set is written where a row's flag says so,
+/// keeping what's stored elsewhere.
+#[test]
+fn test_postgres_bulk_update_is_one_statement_for_rows_that_differ() {
+    let dialect = PostgresDialect;
+    let (closed, triaged) = (Uuid::new_v4(), Uuid::new_v4());
+    let mut closes = ash_core::FieldMap::new();
+    closes.insert("status".into(), Value::String("closed".into()));
+    let mut triages = closes.clone();
+    triages.insert("priority".into(), Value::Int(2));
+
+    let compiled = QueryCompiler::new(&dialect)
+        .compile_bulk_update(&TICKET_DEF, &["status", "priority"], &[(closed, &closes), (triaged, &triages)])
+        .unwrap();
+    assert!(compiled.sql.starts_with("UPDATE \"tickets\" SET \"status\" = \"v\".\"status\", \"priority\" = CASE WHEN \"v\".\"__ash_set_1\" THEN \"v\".\"priority\" ELSE \"tickets\".\"priority\" END FROM (VALUES "), "{}", compiled.sql);
+    assert!(compiled.sql.ends_with(") AS \"v\" (\"id\", \"status\", \"__ash_set_1\", \"priority\") WHERE \"tickets\".\"id\" = \"v\".\"id\" RETURNING \"tickets\".*"), "{}", compiled.sql);
+    assert!(compiled.sql.contains(", FALSE, ") && compiled.sql.contains(", TRUE, "), "{}", compiled.sql);
+    // Each row binds its key and a value per column, set or not.
+    assert_eq!(compiled.params.len(), 6);
+
+    // Rows that all set the same columns need no flags.
+    let compiled = QueryCompiler::new(&dialect)
+        .compile_bulk_update(&TICKET_DEF, &["status"], &[(closed, &closes), (triaged, &closes)])
+        .unwrap();
+    assert!(!compiled.sql.contains("CASE"), "{}", compiled.sql);
+    assert_eq!(compiled.params.len(), 4);
+}
+
 #[test]
 fn test_create_table_ddl_compilation() {
     let sqlite_ddl = QueryCompiler::new(&SqliteDialect)
