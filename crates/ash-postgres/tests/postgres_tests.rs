@@ -1338,6 +1338,52 @@ async fn test_postgres_counted_page_in_and_out_of_a_transaction() {
     assert_eq!(in_transaction, (2, Some(5)));
 }
 
+/// A page and its count, sent down one connection together, read what each would alone,
+/// in and out of a transaction.
+#[tokio::test]
+async fn test_postgres_reads_a_page_and_its_count_together() {
+    use ash_core::{CompiledQuery, Context, Resource, Sort};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg.clone());
+    let run = Uuid::new_v4().simple().to_string();
+    for i in 0..5 {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}-{i}"))
+            .lng(-97.7)
+            .speed_kph(10 * i)
+            .status(run.clone())
+            .await
+            .unwrap();
+    }
+    let count = CompiledQuery {
+        filter: Some(Filter::eq("status", run.clone())),
+        ..CompiledQuery::default()
+    };
+    let page = CompiledQuery {
+        sort: vec![Sort { field: "speed_kph".into(), descending: true }],
+        limit: Some(2),
+        ..count.clone()
+    };
+    let read = |pg: Postgres| {
+        let (page, count) = (page.clone(), count.clone());
+        async move {
+            let (records, counted) = pg.run_query_with_count(&PgVehicle::DEF, &page, &count).await?;
+            let speeds: Vec<Value> = records.iter().map(|r| r["speed_kph"].clone()).collect();
+            Ok::<_, ash_core::Error>((speeds, counted))
+        }
+    };
+    let expected = (vec![Value::Int(40), Value::Int(30)], 5);
+    assert_eq!(read(pg.clone()).await.unwrap(), expected);
+    let in_transaction = pg.transaction(|tx| read(tx.clone())).await.unwrap();
+    assert_eq!(in_transaction, expected);
+}
+
 /// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.
 #[tokio::test]
 async fn test_postgres_like_and_ilike() {

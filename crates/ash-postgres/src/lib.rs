@@ -630,6 +630,37 @@ impl DataLayer for Postgres {
         Ok(count as usize)
     }
 
+    /// The page and its count down one connection together: tokio-postgres pipelines
+    /// statements sent at once on a connection, so both go out before either answers.
+    async fn run_query_with_count(
+        &self,
+        resource: &ResourceDef,
+        page: &CompiledQuery,
+        count: &CompiledQuery,
+    ) -> Result<(Vec<FieldMap>, usize)> {
+        let dialect = PostgresDialect;
+        let page_sql = QueryCompiler::new(&dialect).compile_select(resource, page)?;
+        let count_sql = QueryCompiler::new(&dialect).compile_count(resource, count)?;
+        let (page_params, count_params) = (Params::of(&page_sql.params), Params::of(&count_sql.params));
+        let conn = self.conn().await.map_err(map_failure)?;
+        let (page_statement, count_statement) = futures_util::future::try_join(
+            conn.prepare_typed_cached(&page_sql.sql, &page_params.types),
+            conn.prepare_typed_cached(&count_sql.sql, &count_params.types),
+        )
+        .await
+        .map_err(map_pg)?;
+        let (rows, counted) = futures_util::future::try_join(
+            conn.query(&page_statement, &page_params.refs()),
+            conn.query_one(&count_statement, &count_params.refs()),
+        )
+        .await
+        .map_err(map_pg)?;
+        let plan = RowPlan::new(&rows, resource, page);
+        let records = rows.iter().map(|row| plan.read(row)).collect::<Result<Vec<_>>>()?;
+        let counted: i64 = counted.try_get(0).map_err(map_pg)?;
+        Ok((records, counted as usize))
+    }
+
     fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
         true
     }
