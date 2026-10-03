@@ -50,9 +50,15 @@ impl Postgres {
     }
 
     /// Connects to PostgreSQL using custom [`PgConnectOptions`].
+    ///
+    /// A connection isn't pinged as it's checked out, as Postgrex doesn't ping one for
+    /// Ash: each statement checks one out, so a ping there was a round trip for every
+    /// statement. sqlx still pings each connection as it's returned, so a broken one
+    /// doesn't go back to the pool; one that dies while idle fails the next statement.
     pub async fn connect_with(options: PgConnectOptions) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(20)
+            .test_before_acquire(false)
             .connect_with(options)
             .await
             .map_err(map_sqlx)?;
