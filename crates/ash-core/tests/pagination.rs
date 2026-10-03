@@ -439,6 +439,7 @@ fn keyset_sort_breaks_ties_as_ash_does() {
             .map(|(field, descending)| Sort {
                 field: field.to_string(),
                 descending: *descending,
+                guard: None,
             })
             .collect()
     };

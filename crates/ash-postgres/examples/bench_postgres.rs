@@ -256,6 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sort: vec![Sort {
             field: "priority".to_string(),
             descending: true,
+            guard: None,
         }],
         limit: Some(50),
         ..CompiledQuery::default()

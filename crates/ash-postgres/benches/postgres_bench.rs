@@ -205,6 +205,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
         sort: vec![Sort {
             field: "priority".to_string(),
             descending: true,
+            guard: None,
         }],
         limit: Some(50),
         ..CompiledQuery::default()

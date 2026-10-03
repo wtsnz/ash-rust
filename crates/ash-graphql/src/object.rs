@@ -181,7 +181,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                 let query = if to_one {
                     RelatedQuery::default()
                 } else {
-                    related_query(dest_res, ctx.args.iter().map(|(name, value)| (name.as_str(), value.as_value())))?
+                    related_query(dest_res, request_actor::<D>(&ctx), ctx.args.iter().map(|(name, value)| (name.as_str(), value.as_value())))?
                 };
                 let shaped = query.filter.is_some()
                     || !query.sort.is_empty()
