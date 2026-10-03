@@ -108,7 +108,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self.sort.push(Sort {
             field: field.as_field().to_string(),
             descending,
-            guard: None,
+            ..Default::default()
         });
         self
     }
@@ -371,7 +371,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
 
         if is_before {
             for s in &mut self.sort {
-                s.descending = !s.descending;
+                *s = s.reversed();
             }
         }
 

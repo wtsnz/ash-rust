@@ -753,7 +753,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
 
     let query = CompiledQuery {
         filter: Some(ours),
-        sort: vec![ash_core::Sort { field: "total".into(), descending: false, guard: None }],
+        sort: vec![ash_core::Sort { field: "total".into(), descending: false, ..Default::default() }],
         aggregates: vec!["total".into()],
         ..CompiledQuery::default()
     };

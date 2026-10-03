@@ -71,7 +71,7 @@ async fn memory_compares_like_the_column_type() {
     let by_weight = Sort {
         field: "weight".into(),
         descending: false,
-        guard: None,
+        ..Default::default()
     };
     assert_eq!(ids(&memory, None, vec![by_weight]).await, [1, 2, 3]);
     assert_eq!(ids(&memory, Some(Filter::eq("weight", "9.50")), vec![]).await, [1]);
