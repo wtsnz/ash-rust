@@ -65,6 +65,19 @@ pub type GenericRunner<D> = Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'stati
 /// Told of each error AshTypescript has no shape for, with the id its client was given.
 pub type ErrorReporter = Arc<dyn Fn(&str, &Error) + Send + Sync>;
 
+/// Rewrites an error before the client sees it, or drops it (`None`), as AshTypescript's
+/// `error_handler` does, given the RPC action it came from.
+pub type ErrorHandler = Arc<dyn Fn(Failure, &ErrorSource) -> Option<Failure> + Send + Sync>;
+
+/// Where an error came from: the RPC action's resource and action, when the request
+/// named one.
+#[derive(Clone, Debug, Default)]
+pub struct ErrorSource {
+    pub rpc_action: Option<String>,
+    pub resource: Option<&'static str>,
+    pub action: Option<&'static str>,
+}
+
 /// How an update or destroy names its record: by primary key, or by one of the
 /// resource's identities.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,11 +194,13 @@ pub struct Rpc<D> {
     actions: HashMap<String, RpcAction<D>>,
     not_found_error: bool,
     on_error: Option<ErrorReporter>,
+    error_handler: Option<ErrorHandler>,
+    show_raised_errors: bool,
 }
 
 impl<D> Default for Rpc<D> {
     fn default() -> Self {
-        Self { actions: HashMap::new(), not_found_error: true, on_error: None }
+        Self { actions: HashMap::new(), not_found_error: true, on_error: None, error_handler: None, show_raised_errors: false }
     }
 }
 
@@ -266,13 +281,48 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         self
     }
 
+    /// Rewrites each error before the client sees it, or drops it, as AshTypescript's
+    /// domain `error_handler` does.
+    pub fn error_handler(mut self, handle: impl Fn(Failure, &ErrorSource) -> Option<Failure> + Send + Sync + 'static) -> Self {
+        self.error_handler = Some(Arc::new(handle));
+        self
+    }
+
+    /// AshTypescript's `show_raised_errors?`: an error it has no shape for shows what it
+    /// says, not only its id.
+    pub fn show_raised_errors(mut self, show: bool) -> Self {
+        self.show_raised_errors = show;
+        self
+    }
+
     /// Runs `request` in `ctx`, its `tenant` overriding the context's, and answers as
     /// AshTypescript does.
     pub async fn run(&self, ctx: &Context<D>, request: &Json) -> Json {
         match self.answer(ctx, request).await {
             Ok(data) => json!({ "success": true, "data": data }),
-            Err(failures) => json!({ "success": false, "errors": failures.iter().flat_map(Failure::all_json).collect::<Vec<_>>() }),
+            Err(failures) => json!({ "success": false, "errors": self.report(failures, request) }),
         }
+    }
+
+    /// `failures`, each with those reported with it, as the client sees them: through
+    /// the error handler.
+    fn report(&self, failures: Vec<Failure>, request: &Json) -> Vec<Json> {
+        let name = request["action"].as_str();
+        let rpc = name.and_then(|name| self.actions.get(name));
+        let source = ErrorSource {
+            rpc_action: name.map(str::to_string),
+            resource: rpc.map(|rpc| rpc.resource.name),
+            action: rpc.map(|rpc| rpc.action.name),
+        };
+        failures
+            .into_iter()
+            .flat_map(Failure::flatten)
+            .filter_map(|failure| match &self.error_handler {
+                Some(handle) => handle(failure, &source),
+                None => Some(failure),
+            })
+            .map(|failure| failure.to_json())
+            .collect()
     }
 
     /// An error of running `action`, as AshTypescript reports it: a missing field named
@@ -296,15 +346,107 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             if let Some(report) = &self.on_error {
                 report(&id, &err);
             }
-            Failure::internal(id)
+            let mut failure = Failure::internal(id);
+            if self.show_raised_errors {
+                failure.message = err.to_string();
+            }
+            failure
         })
+    }
+
+    /// Validates `request` without running it, as AshTypescript's `validate_action` does
+    /// (`POST /rpc/validate`): checked as a run would check it, then its input as a form
+    /// validates one, every problem reported against its field. An update or destroy's
+    /// record is found first. Nothing is written, nor authorized.
+    pub async fn validate(&self, ctx: &Context<D>, request: &Json) -> Json {
+        match self.validation(ctx, request).await {
+            Ok(()) => json!({ "success": true }),
+            Err(failures) => json!({ "success": false, "errors": self.report(failures, request) }),
+        }
+    }
+
+    async fn validation(&self, ctx: &Context<D>, request: &Json) -> Result<(), Vec<Failure>> {
+        let Parsed { rpc, ctx, input, .. } = self.parse(ctx, request, true).map_err(|failure| vec![failure])?;
+        let (resource, action) = (rpc.resource, rpc.action);
+        // Each value cast to its field's type, as a form casts it.
+        let Json::Object(given) = &input else { return Ok(()) };
+        let mut problems = Vec::new();
+        let mut cast = FieldMap::new();
+        for (name, value) in given {
+            let ty = action
+                .arguments
+                .iter()
+                .find(|arg| arg.name == name)
+                .map(|arg| arg.ty)
+                .or_else(|| action.accept.contains(&name.as_str()).then(|| resource.attribute(name).map(|attr| attr.ty)).flatten());
+            let Some(ty) = ty else { continue };
+            match value_input(ty, value) {
+                Ok(value) => {
+                    cast.insert(name.clone(), value);
+                }
+                Err(_) => problems.push(Error::TypeMismatch { field: name.clone(), expected: ty.name().to_string(), got: value.to_string() }),
+            }
+        }
+        let invalid: Vec<String> = problems.iter().filter_map(|p| match p { Error::TypeMismatch { field, .. } => Some(field.clone()), _ => None }).collect();
+        let existing = match action.kind {
+            ActionKind::Update | ActionKind::Destroy => {
+                let id = self.identity(&ctx, rpc, request.get("identity")).await.map_err(|failure| vec![failure])?;
+                Some(self.found(&ctx, rpc, id).await.map_err(|failure| vec![failure])?)
+            }
+            _ => None,
+        };
+        match action.kind {
+            ActionKind::Create | ActionKind::Update | ActionKind::Destroy => {
+                problems.extend(ash_core::DynamicChangeset::problems(&ctx, resource, action, existing, cast));
+            }
+            // A read or generic action: its arguments, each it requires given.
+            _ => problems.extend(
+                action
+                    .arguments
+                    .iter()
+                    .filter(|arg| !arg.allow_nil && cast.get(arg.name).is_none_or(Value::is_null) && !invalid.iter().any(|field| field == arg.name))
+                    .map(|arg| Error::Missing { field: arg.name.to_string() }),
+            ),
+        }
+        // A value that isn't of its type is invalid, not missing too.
+        problems.retain(|problem| !matches!(problem, Error::Missing { field } if invalid.contains(field)));
+        if problems.is_empty() {
+            return Ok(());
+        }
+        Err(problems.into_iter().map(|problem| self.form_failure(problem)).collect())
+    }
+
+    /// A problem a form finds, as AshTypescript reports it: an invalid attribute, its
+    /// message filled in, at its field.
+    fn form_failure(&self, problem: Error) -> Failure {
+        let (field, message) = match &problem {
+            Error::Validation { field, .. } => (field.clone(), problem.message()),
+            Error::Missing { field } => (field.clone(), "is required".to_string()),
+            Error::TypeMismatch { field, .. } => (field.clone(), "is invalid".to_string()),
+            _ => return self.failure(problem),
+        };
+        Failure::form_error(&to_camel_case(&field), message)
+    }
+
+    /// Record `id`, as the read the action finds records through finds it.
+    async fn found(&self, ctx: &Context<D>, rpc: &RpcAction<D>, id: uuid::Uuid) -> Result<FieldMap, Failure> {
+        let resource = rpc.resource;
+        let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
+        let read = rpc.read.or_else(|| resource.primary_read()).ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
+        let query = CompiledQuery { filter: Some(Filter::eq(pk, Value::Uuid(id))), tenant: ctx.tenant.clone(), limit: Some(1), ..CompiledQuery::default() };
+        let scoped = ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query).map_err(|e| self.failure(e))?;
+        let rows = ctx.data.run_query(resource, &scoped).await.map_err(|e| self.failure(e))?;
+        rows.into_iter().next().ok_or_else(|| Failure::new("not_found", "Not found", format!("record with id: {:?} not found", id.to_string())))
     }
 
     async fn answer(&self, ctx: &Context<D>, request: &Json) -> Result<Json, Vec<Failure>> {
         self.answer_one(ctx, request).await.map_err(|failure| vec![failure])
     }
 
-    async fn answer_one(&self, ctx: &Context<D>, request: &Json) -> Result<Json, Failure> {
+    /// `request` checked as AshTypescript checks one before running it: the action it
+    /// names, what that action needs and can't take, what it selects, its input's shape,
+    /// a get's `getBy` and a read's page. Validating it, a read needn't select anything.
+    fn parse<'a>(&'a self, ctx: &Context<D>, request: &Json, validating: bool) -> Result<Parsed<'a, D>, Failure> {
         let name = request["action"].as_str().unwrap_or_default();
         let rpc = self.actions.get(name).ok_or_else(|| Failure::action_not_found(name))?;
         let (resource, action, options) = (rpc.resource, rpc.action, &rpc.options);
@@ -317,7 +459,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         // What the action needs, and what it can't take.
         let read = action.kind == ActionKind::Read;
         let get = read && (options.get || !options.get_by.is_empty());
-        if read {
+        if read && !validating {
             match request.get("fields") {
                 None | Some(Json::Null) => return Err(Failure::missing_required_parameter("fields")),
                 Some(Json::Array(items)) if items.is_empty() => return Err(Failure::empty_fields_array()),
@@ -344,6 +486,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let rules = Rules { actor: ctx.actor.as_ref(), enable_filter: options.enable_filter, enable_sort: options.enable_sort, loads: &options.loads };
         let selection = match given("fields") {
             None => Selection::default(),
+            Some(Json::Array(items)) if validating && items.is_empty() => Selection::default(),
             Some(fields) => Selection::parse(resource, fields, &[], &rules)?,
         };
 
@@ -358,7 +501,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             None => None,
             Some(page) => Some(PageRequest::parse(page)?),
         };
-        let input = action_input(resource, action, &snake_input(&raw_input)).map_err(|e| self.failure_of(action, e))?;
+        Ok(Parsed { rpc, ctx, get, selection, input: snake_input(&raw_input), get_by, page })
+    }
+
+    async fn answer_one(&self, ctx: &Context<D>, request: &Json) -> Result<Json, Failure> {
+        let Parsed { rpc, ctx, get, selection, input: raw_input, get_by, page } = self.parse(ctx, request, false)?;
+        let (resource, action, options) = (rpc.resource, rpc.action, &rpc.options);
+        let name = request["action"].as_str().unwrap_or_default();
+        let input = action_input(resource, action, &raw_input).map_err(|e| self.failure_of(action, e))?;
 
         match action.kind {
             ActionKind::Read if get => {
@@ -546,7 +696,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             let rows = read_rows(ctx, resource, selection, scoped).await.map_err(|e| self.failure(e))?;
             return Ok(Json::Array(self.render(ctx, resource, rows, selection).await?));
         };
-        let limit = pagination.max_page_size.map_or(limit, |max| limit.min(max));
+        // The smallest of the page's size, the read's own limit and its largest page, as
+        // Ash takes it.
+        let limit = [Some(limit), scoped.limit, pagination.max_page_size].into_iter().flatten().min().unwrap_or(limit);
         let count = if page.count == Some(true) || (pagination.countable == Countable::ByDefault && page.count != Some(false)) {
             let counted = CompiledQuery { sort: Vec::new(), ..scoped.clone() };
             Some(ctx.data.count(resource, &counted).await.map_err(|e| self.failure(e))?)
@@ -769,6 +921,18 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 }
 
+/// A request, checked: the action it runs, in the context it runs in, what it selects,
+/// its input with snake_case names, a get's filters and a read's page.
+struct Parsed<'a, D> {
+    rpc: &'a RpcAction<D>,
+    ctx: Context<D>,
+    get: bool,
+    selection: Selection,
+    input: Json,
+    get_by: Vec<Filter>,
+    page: Option<PageRequest>,
+}
+
 struct KeysetPage {
     results: Vec<Json>,
     has_more: bool,
@@ -882,9 +1046,8 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
 
 #[cfg(feature = "axum")]
 pub mod axum {
-    //! `POST /rpc/run`, each request running as the context `context` makes of its
-    //! headers: its actor and tenant. AshTypescript's `/rpc/validate`, which validates
-    //! input without running the action, isn't served yet.
+    //! `POST /rpc/run` and `POST /rpc/validate`, each request in the context `context`
+    //! makes of its headers: its actor and tenant.
 
     use std::sync::Arc;
 
@@ -913,7 +1076,17 @@ pub mod axum {
         let served = Arc::new(Served { rpc, context: Arc::new(context) });
         Router::new()
             .route("/rpc/run", post(run::<D>))
+            .route("/rpc/validate", post(validate::<D>))
             .with_state(served)
+    }
+
+    async fn validate<D: TransactionSupport + 'static>(
+        State(served): State<Arc<Served<D>>>,
+        headers: HeaderMap,
+        Json(request): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        let ctx = (served.context)(&headers);
+        Json(served.rpc.validate(&ctx, &request).await)
     }
 
     async fn run<D: TransactionSupport + 'static>(
