@@ -21,6 +21,7 @@ defmodule Supportdesk.MixProject do
       {:ash_postgres, "~> 2.13"},
       {:ash_graphql, "~> 1.12"},
       {:ash_state_machine, "~> 0.2"},
+      {:ash_typescript, "~> 0.19"},
       {:absinthe, "~> 1.12"},
       {:absinthe_plug, "~> 1.5"},
       {:absinthe_graphql_ws, "~> 0.3"},

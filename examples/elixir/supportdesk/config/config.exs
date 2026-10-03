@@ -6,6 +6,16 @@ config :supportdesk,
 
 config :ash, :disable_async?, false
 
+# AshTypescript's RPC: `/rpc/run` runs an action by name; its TypeScript client is generated
+# where the benchmark's client reads it.
+config :ash_typescript,
+  manifest: Supportdesk.AshTypescriptManifest,
+  output_file: "../../supportdesk/client/ash_rpc.ts",
+  run_endpoint: "/rpc/run",
+  validate_endpoint: "/rpc/validate",
+  input_field_formatter: :camel_case,
+  output_field_formatter: :camel_case
+
 # Count string length in codepoints, as SQL data layers do.
 config :ash, default_string_length_count: :codepoints
 

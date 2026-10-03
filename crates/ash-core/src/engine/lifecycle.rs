@@ -116,8 +116,9 @@ pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
 /// statement when the data layer can and the action allows, with no read first: a hard
 /// destroy as a delete, its validations, policies and the version checked in it; a soft
 /// destroy as an update (failing when it must be atomic and can't be). Otherwise it reads
-/// the record and destroys that. Returns the record as it was deleted, or as a soft
-/// destroy stored it.
+/// the record and destroys that. Either way the read action's policies decide which
+/// records it finds, as [`update_dynamic_expecting`]'s do. Returns the record as it was
+/// deleted, or as a soft destroy stored it.
 pub async fn destroy_dynamic_by_id<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
@@ -126,6 +127,7 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
     expected_version: Option<i64>,
 ) -> Result<FieldMap> {
     expect_kind(action, ActionKind::Destroy)?;
+    let scope = super::atomic::read_scope(resource, action, ctx.actor.as_ref())?;
     let atomic = if action.soft {
         ctx.data.can_update_atomically(resource)
     } else {
@@ -144,10 +146,10 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
                 expected_version: expected_version.map(|version| (id, version)),
                 collect_hooks: true,
             },
-        )?;
-        match planned {
+        );
+        match found_first(ctx, resource, id, &scope, planned).await? {
             Ok(plan) => {
-                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan).await;
+                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan, scope).await;
             }
             // Only a soft destroy must be atomic, as in Ash: a hard one reads first.
             Err(reason) if action.soft && action.require_atomic => {
@@ -160,7 +162,7 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
             Err(_) => {}
         }
     }
-    let existing = read_visible(ctx, resource, id).await?;
+    let existing = read_visible(ctx, resource, id, scope).await?;
     if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
         && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
     {
@@ -170,11 +172,35 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
     destroy_dynamic_with(ctx, resource, action, id, &existing, &cascade).await
 }
 
+/// A plan for an update or destroy by id, unless its policies forbid it whatever the
+/// record: then the record must be found first, as Ash finds it before the change's
+/// policies refuse it (they're part of its statement), so that one the actor can't read
+/// is [`Error::NotFound`] even where the change is forbidden too. Invalid input fails
+/// first, as it does in Ash.
+async fn found_first<D: DataLayer, T>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    id: Uuid,
+    scope: &Option<Filter>,
+    planned: Result<T>,
+) -> Result<T> {
+    if matches!(planned, Err(Error::Forbidden)) {
+        read_visible(ctx, resource, id, scope.clone()).await?;
+    }
+    planned
+}
+
 /// Record `id` as a read in `ctx` would see it: not another tenant's, nor one its
-/// primary read hides.
-async fn read_visible<D: DataLayer>(ctx: &Context<D>, resource: &'static ResourceDef, id: Uuid) -> Result<FieldMap> {
+/// primary read hides, nor one outside `scope`.
+async fn read_visible<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    id: Uuid,
+    scope: Option<Filter>,
+) -> Result<FieldMap> {
     let pk = pk_name(resource)?;
     let (filter, tenant) = crate::pipeline::visible_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
+    let filter = crate::pipeline::and_filters(filter, scope);
     ctx.data
         .run_query(resource, &CompiledQuery { filter, tenant, actor: ctx.actor.clone(), ..CompiledQuery::default() })
         .await?
@@ -211,7 +237,9 @@ pub async fn update_dynamic<D: DataLayer>(
 /// else [`Error::StaleRecord`]. As in Ash, it runs as one statement when the data layer
 /// can and the action allows: the update by id, with its validations, policies and the
 /// version checked in it, and no read first. Otherwise it reads the record, as the
-/// context sees it, and updates that.
+/// context sees it, and updates that. Either way it finds the record as AshGraphql and
+/// AshTypescript do, through the read action, whose policies the actor must pass: one it
+/// can't read is [`Error::NotFound`].
 pub async fn update_dynamic_expecting<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
@@ -221,35 +249,38 @@ pub async fn update_dynamic_expecting<D: DataLayer>(
     expected_version: Option<i64>,
 ) -> Result<FieldMap> {
     expect_kind(action, ActionKind::Update)?;
+    let scope = super::atomic::read_scope(resource, action, ctx.actor.as_ref())?;
     if ctx.data.can_update_atomically(resource) {
-        let (accepted, arguments) = crate::pipeline::split_input(action, input.clone())?;
-        let planned = super::atomic::plan_update(
-            resource,
-            action,
-            super::atomic::PlanInput {
-                actor: ctx.actor.as_ref(),
-                tenant: ctx.tenant(),
-                sets: accepted,
-                arguments: &arguments,
-                expected_version: expected_version.map(|version| (id, version)),
-                collect_hooks: true,
-            },
-        )?;
-        match planned {
-            Ok(plan) => {
-                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan).await;
+        let planned = crate::pipeline::split_input(action, input.clone()).and_then(|(accepted, arguments)| {
+            let plan = super::atomic::plan_update(
+                resource,
+                action,
+                super::atomic::PlanInput {
+                    actor: ctx.actor.as_ref(),
+                    tenant: ctx.tenant(),
+                    sets: accepted,
+                    arguments: &arguments,
+                    expected_version: expected_version.map(|version| (id, version)),
+                    collect_hooks: true,
+                },
+            )?;
+            Ok((plan, arguments))
+        });
+        match found_first(ctx, resource, id, &scope, planned).await? {
+            (Ok(plan), arguments) => {
+                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan, scope).await;
             }
-            Err(reason) if action.require_atomic => {
+            (Err(reason), _) if action.require_atomic => {
                 return Err(Error::MustBeAtomic {
                     resource: resource.name,
                     action: action.name,
                     reason,
                 });
             }
-            Err(_) => {}
+            (Err(_), _) => {}
         }
     }
-    let existing = read_visible(ctx, resource, id).await?;
+    let existing = read_visible(ctx, resource, id, scope).await?;
     if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
         && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
     {

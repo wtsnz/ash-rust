@@ -1,8 +1,8 @@
 # Supportdesk
 
 A multi-tenant support desk, built twice, here on ash-rust and in
-[`examples/elixir/supportdesk`](../elixir/supportdesk) on Ash with AshPostgres and
-AshGraphql, to benchmark real-world Ash features against each other: policies and field
+[`examples/elixir/supportdesk`](../elixir/supportdesk) on Ash with AshPostgres,
+AshGraphql and AshTypescript, to benchmark real-world Ash features against each other: policies and field
 policies under an actor, multitenancy, calculations and aggregates in filters and sorts,
 relationship loading, keyset pages with counts, validations and changes, managed
 relationships, a state machine, atomic updates, optimistic locking, a generic action in a
@@ -62,6 +62,13 @@ Both apps serve the same API on `PORT` (default 4000):
   `count`, `filter`, `sort`), the other resources' `get` and `list`, and each create,
   update and destroy action as a mutation.
 - `GET /graphql/ws`: subscriptions: `ticketCreated`, `ticketUpdated`, `ticketDestroyed`.
+- `POST /rpc/run`: AshTypescript's RPC, the Elixir desk's `typescript_rpc` actions run by
+  name: `list_tickets`, `get_ticket` (by `id`), `open_ticket`, `assign_ticket`,
+  `start_ticket`, `hold_ticket`, `resolve_ticket`, `reopen_ticket`, `close_ticket`,
+  `view_ticket`, `edit_ticket`, `destroy_ticket`, `route_ticket`, `list_comments`,
+  `create_comment`, `list_agents`, `list_tags` and `list_audit_events`. The Elixir desk
+  generates the TypeScript client for them, [`client/ash_rpc.ts`](client/ash_rpc.ts)
+  (`mix ash_typescript.codegen`), which works against either desk.
 - `POST /api/route`, `POST /api/bulk`, `POST /api/edit`: JSON for what AshGraphql serves
   but ash-graphql doesn't yet (generic actions, managed relationship inputs), and for a
   client-held lock version: `route` runs the generic action; `bulk` creates, assigns and
@@ -110,5 +117,13 @@ cargo run --release -p supportdesk --bin parity -- \
 sends both apps the same requests, each as an admin, an agent and a viewer, and compares
 the answers: reads (an inbox and its second page, a dashboard filtered and sorted by
 aggregates and calculations, nested relationships with limits), mutations and their
-failures, the JSON endpoints, and a subscription. Both must have just loaded the fixture.
-Where ash-rust still falls short of Ash, [GAPS.md](GAPS.md) says how.
+failures, RPC actions and their failures, the JSON endpoints, and a subscription. Both
+must have just loaded the fixture. Where ash-rust still falls short of Ash, or Ash's
+packages behave unexpectedly, [GAPS.md](GAPS.md) says how.
+
+```bash
+node client/smoke.ts --rust http://127.0.0.1:4701 --elixir http://127.0.0.1:4702 --fixture /tmp/fixture.json
+```
+
+does the same through the generated TypeScript client (Node 22.18 or later runs it as it
+is).

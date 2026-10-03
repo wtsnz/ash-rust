@@ -3,7 +3,7 @@ defmodule Supportdesk.Desk.Comment do
   use Ash.Resource,
     domain: Supportdesk.Desk,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshGraphql.Resource],
+    extensions: [AshGraphql.Resource, AshTypescript.Resource],
     authorizers: [Ash.Policy.Authorizer]
 
   postgres do
@@ -61,6 +61,10 @@ defmodule Supportdesk.Desk.Comment do
     create :seed do
       accept [:id, :org, :ticket_id, :author_id, :body, :internal, :inserted_at, :updated_at]
     end
+  end
+
+  typescript do
+    type_name "Comment"
   end
 
   graphql do

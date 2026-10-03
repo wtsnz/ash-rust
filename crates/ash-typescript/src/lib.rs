@@ -3,6 +3,7 @@ pub mod config;
 pub mod generator;
 pub mod live;
 pub mod react;
+pub mod rpc;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;
 pub mod types;

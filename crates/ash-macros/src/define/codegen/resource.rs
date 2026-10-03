@@ -1,7 +1,7 @@
 use super::calculations::calc_expr_to_tokens;
 use super::policies::lit_to_const_value;
 use crate::ast_helpers::{
-    is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake, snake_case,
+    argument_attr_type, is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake, snake_case,
 };
 use crate::define::ast::{AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition};
 use proc_macro2::TokenStream;
@@ -391,19 +391,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 .map(|arg| {
                     let arg_name = arg.name.to_string();
                     let arg_ty = &arg.ty;
-                    let arg_inner = option_inner(arg_ty).unwrap_or(arg_ty);
                     let arg_allow_nil = option_inner(arg_ty).is_some();
-                    let arg_type_tok = if is_string(arg_inner) {
-                        quote! { ::ash_core::AttrType::String }
-                    } else if is_integer(arg_inner) {
-                        quote! { ::ash_core::AttrType::Integer }
-                    } else if is_bool(arg_inner) {
-                        quote! { ::ash_core::AttrType::Boolean }
-                    } else if is_uuid(arg_inner) {
-                        quote! { ::ash_core::AttrType::Uuid }
-                    } else {
-                        quote! { ::ash_core::AttrType::String }
-                    };
+                    let arg_type_tok = argument_attr_type(arg_ty);
                     quote! {
                         ::ash_core::ArgumentDef {
                             name: #arg_name,
