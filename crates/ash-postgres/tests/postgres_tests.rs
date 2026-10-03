@@ -1315,6 +1315,42 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
     assert_eq!(stored, expected);
 }
 
+/// A counted page reads its count alongside the page; in a transaction, whose one
+/// connection takes them in turn, it counts and pages as it does outside one.
+#[tokio::test]
+async fn test_postgres_counted_page_in_and_out_of_a_transaction() {
+    use ash_core::{Context, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().simple().to_string();
+    for i in 0..5 {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}-{i}"))
+            .lng(-97.7)
+            .speed_kph(0)
+            .status(run.clone())
+            .await
+            .unwrap();
+    }
+    let page = |ctx: Context<Postgres>, run: String| async move {
+        let page = PgVehicle::query(&ctx)
+            .filter(Filter::eq("status", run))
+            .page_offset(2, 0, true)
+            .await?;
+        Ok::<_, ash_core::Error>((page.results.len(), page.total_count))
+    };
+
+    assert_eq!(page(ctx.clone(), run.clone()).await.unwrap(), (2, Some(5)));
+    let in_transaction = ctx.transaction(|tx| page(tx, run.clone())).await.unwrap();
+    assert_eq!(in_transaction, (2, Some(5)));
+}
+
 /// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.
 #[tokio::test]
 async fn test_postgres_like_and_ilike() {

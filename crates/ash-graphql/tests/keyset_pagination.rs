@@ -153,3 +153,62 @@ async fn paging_arguments_that_contradict_are_refused() {
         assert_eq!(res.errors.first().map(|e| e.message.as_str()), Some(message), "{args}");
     }
 }
+
+/// Memory, with every read taking a while, noting the most reads ever under way at once.
+#[derive(Clone, Default)]
+struct Slow {
+    inner: Memory,
+    reading: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    most: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Slow {
+    async fn read<T>(&self, read: impl Future<Output = T>) -> T {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = self.reading.fetch_add(1, SeqCst) + 1;
+        self.most.fetch_max(now, SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let out = read.await;
+        self.reading.fetch_sub(1, SeqCst);
+        out
+    }
+}
+
+impl DataLayer for Slow {
+    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid, fields: FieldMap) -> ash_core::Result<FieldMap> {
+        self.inner.create(resource, tenant, id, fields).await
+    }
+
+    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid, fields: FieldMap) -> ash_core::Result<FieldMap> {
+        self.inner.update(resource, tenant, id, fields).await
+    }
+
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> ash_core::Result<()> {
+        self.inner.destroy(resource, tenant, id).await
+    }
+
+    async fn run_query(&self, resource: &ResourceDef, query: &ash_core::CompiledQuery) -> ash_core::Result<Vec<FieldMap>> {
+        self.read(self.inner.run_query(resource, query)).await
+    }
+
+    async fn count(&self, resource: &ResourceDef, query: &ash_core::CompiledQuery) -> ash_core::Result<usize> {
+        self.read(self.inner.count(resource, query)).await
+    }
+}
+
+/// A page's count is read alongside the page, as Ash reads it, not before it.
+#[tokio::test]
+async fn a_page_reads_its_count_alongside_its_records() {
+    let slow = Slow::default();
+    seed_tickets(&slow.inner).await;
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .finish::<Slow>()
+        .expect("Failed to build schema");
+    let query = "{ listTickets(sort: [{ field: PRIORITY }], first: 2) { count results { priority } } }";
+    let res = schema.execute(Request::new(query).data(Context::new(slow.clone()))).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let page = res.data.into_json().unwrap()["listTickets"].clone();
+    assert_eq!(page["count"], 5);
+    assert_eq!(page["results"].as_array().unwrap().len(), 2);
+    assert_eq!(slow.most.load(std::sync::atomic::Ordering::SeqCst), 2, "the count and the page are read at once");
+}
