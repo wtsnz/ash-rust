@@ -524,7 +524,11 @@ impl Failure {
             // A validation's message a template, its vars beside it, as Ash's.
             Error::Validation { field, message, vars } => {
                 let field = to_camel_case(field);
-                let mut failure = Self::new("invalid_attribute", "Invalid attribute", message.clone()).fields(vec![field.clone()]);
+                // Its vars named as the client names fields, in the template too.
+                let message = vars.iter().fold(message.clone(), |message, (name, _)| {
+                    message.replace(&format!("%{{{name}}}"), &format!("%{{{}}}", to_camel_case(name)))
+                });
+                let mut failure = Self::new("invalid_attribute", "Invalid attribute", message).fields(vec![field.clone()]);
                 failure.vars = vars.iter().map(|(name, value)| (to_camel_case(name), value.to_plain_json())).collect();
                 failure.vars.insert("field".into(), json!(field));
                 failure
