@@ -49,7 +49,7 @@ mod post {
                 draft: bool [default: false];
                 score: i64 [default: 0];
                 writer_id: Option<Uuid>;
-                /// Only editors read it.
+                /// Only editors, and the post's writer, read it.
                 editor_note: Option<String>;
             }
 
@@ -88,6 +88,7 @@ mod post {
             field_policies {
                 field editor_note {
                     authorize_if actor_attribute_equals(role, "editor");
+                    authorize_if relates_to_actor(writer_id);
                 }
             }
 
@@ -156,6 +157,7 @@ fn rpc() -> Rpc<Memory> {
 struct Blog {
     ctx: Context<Memory>,
     rpc: Rpc<Memory>,
+    writer: Uuid,
     published: Vec<Uuid>,
     draft: Uuid,
 }
@@ -188,7 +190,7 @@ impl Blog {
             Note::create(&ctx).post_id(published[1]).body(body).await.unwrap();
         }
         let draft = Post::publish(&editor).id(Uuid::new_v4()).title("Unfinished").draft(true).await.unwrap().id;
-        Self { ctx, rpc: rpc(), published, draft }
+        Self { ctx, rpc: rpc(), writer: writer.id, published, draft }
     }
 
     async fn run(&self, actor: Actor, request: Json) -> Json {
@@ -374,3 +376,12 @@ async fn filters_and_sorts_read_hidden_fields_as_null() {
     );
 }
 
+// A field policy checks fields of the record the client didn't select: the writer reads
+// its own notes, selecting nothing but them.
+#[tokio::test]
+async fn field_policies_check_fields_not_selected() {
+    let blog = Blog::new().await;
+    let writer = Actor::new(blog.writer).with_attr("role", Value::from("reader"));
+    let answer = blog.run(writer, json!({ "action": "list_posts", "fields": ["editorNote"], "sort": "score" })).await;
+    assert_eq!(answer["data"], json!([{ "editorNote": "cut" }, { "editorNote": "keep" }, { "editorNote": null }]));
+}

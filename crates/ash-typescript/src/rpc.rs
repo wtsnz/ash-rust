@@ -336,8 +336,9 @@ impl Selection {
         self.fields.iter().filter(|name| matches(name)).cloned().collect()
     }
 
-    /// The attributes a read must select: those chosen, the primary key, and each chosen
-    /// relationship's key on this side.
+    /// The attributes a read must select: those chosen, the primary key, those the field
+    /// policies check (redacting the record reads them), and each chosen relationship's
+    /// key on this side.
     fn attributes(&self, resource: &ResourceDef) -> Vec<String> {
         let mut attrs: Vec<String> = self.of(|name| resource.attribute(name).is_some());
         let mut keep = |name: &str| {
@@ -347,6 +348,9 @@ impl Selection {
         };
         if let Some(pk) = resource.primary_key() {
             keep(pk.name);
+        }
+        for field in ash_core::field_policy_fields(resource) {
+            keep(field);
         }
         for (rel_name, _) in &self.relationships {
             if let Some(rel) = resource.relationship(rel_name)
