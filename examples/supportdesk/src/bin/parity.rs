@@ -376,6 +376,15 @@ async fn listen_once(desk: &Desk, who: &As, ticket: &str) -> Value {
     };
     let send = |value: Value| Message::Text(value.to_string().into());
     socket.send(send(json!({ "type": "connection_init", "payload": {} }))).await.unwrap();
+    // Subscribe once the server has accepted the connection, as the protocol has it.
+    let acked = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(acked, socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) if text.contains("connection_ack") => break,
+            Ok(Some(Ok(_))) => {}
+            _ => return json!(format!("{} never acknowledged the socket", desk.name)),
+        }
+    }
     let query = "subscription { ticketUpdated { updated { id viewCount } } }";
     socket.send(send(json!({ "id": "1", "type": "subscribe", "payload": { "query": query } }))).await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
