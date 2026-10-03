@@ -4,7 +4,7 @@ use syn::Result;
 use syn::spanned::Spanned;
 
 use super::super::policies::lit_to_const_value;
-use crate::ast_helpers::{is_bool, is_integer, is_string, is_uuid, option_inner};
+use crate::ast_helpers::argument_attr_type;
 use crate::define::ast::{ChangeSpec, PreparationSpec, ResourceDefinition, ValidationSpec};
 
 pub(crate) fn filter_expr_to_tokens(expr: &syn::Expr, resource: &syn::Ident) -> TokenStream {
@@ -109,18 +109,7 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                 .map(|arg| {
                     let name_str = arg.name.to_string();
                     let allow_nil = arg.allow_nil;
-                    let inner = option_inner(&arg.ty).unwrap_or(&arg.ty);
-                    let ty_tokens = if is_uuid(inner) {
-                        quote! { ::ash_core::AttrType::Uuid }
-                    } else if is_string(inner) {
-                        quote! { ::ash_core::AttrType::String }
-                    } else if is_integer(inner) {
-                        quote! { ::ash_core::AttrType::Integer }
-                    } else if is_bool(inner) {
-                        quote! { ::ash_core::AttrType::Boolean }
-                    } else {
-                        quote! { ::ash_core::AttrType::String }
-                    };
+                    let ty_tokens = argument_attr_type(&arg.ty);
                     quote! {
                         ::ash_core::ArgumentDef {
                             name: #name_str,

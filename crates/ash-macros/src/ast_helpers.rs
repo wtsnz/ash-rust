@@ -1,3 +1,5 @@
+use proc_macro2::TokenStream;
+use quote::quote;
 use syn::{Expr, ExprLit, GenericArgument, Ident, Lit, PathArguments, Result, Type, TypePath};
 
 pub fn screaming_snake(name: &str) -> String {
@@ -87,6 +89,28 @@ pub fn is_integer(ty: &Type) -> bool {
                     | "usize"
             )
         })
+}
+
+/// The `AttrType` an action or calculation argument of type `ty` takes (`Option` making
+/// it optional, not changing its type): a list for a `Vec`, a map for a `FieldMap` or
+/// other map, and otherwise the type's own, as an attribute of that type has it.
+pub fn argument_attr_type(ty: &Type) -> TokenStream {
+    let inner = option_inner(ty).unwrap_or(ty);
+    if is_uuid(inner) {
+        quote! { ::ash_core::AttrType::Uuid }
+    } else if is_string(inner) {
+        quote! { ::ash_core::AttrType::String }
+    } else if is_integer(inner) {
+        quote! { ::ash_core::AttrType::Integer }
+    } else if is_bool(inner) {
+        quote! { ::ash_core::AttrType::Boolean }
+    } else if vec_inner(inner).is_some() {
+        quote! { ::ash_core::AttrType::Array }
+    } else if last_ident(inner).is_some_and(|i| matches!(i.to_string().as_str(), "FieldMap" | "HashMap" | "BTreeMap" | "Map")) {
+        quote! { ::ash_core::AttrType::Map }
+    } else {
+        quote! { <#inner as ::ash_core::AshType>::ATTR_TYPE }
+    }
 }
 
 pub fn generic_arg0(ty: &Type) -> Option<&Type> {
