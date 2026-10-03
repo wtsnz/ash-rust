@@ -88,6 +88,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut soft = false;
     let mut require_atomic = true;
     let mut atomic_upgrade_with = None;
+    let mut pagination = None;
     let mut cascade_destroy = Vec::new();
     let mut run_expr = None;
     let mut accept_kw = None;
@@ -392,6 +393,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     atomic_upgrade_with = Some(body.parse::<Ident>()?);
                     require_semi(&body, errors, "`atomic_upgrade_with`");
                 }
+                "pagination" => {
+                    if kind != ActionKind::Read {
+                        errors.push(Error::new_spanned(&item_ident, "`pagination` only applies to read actions"));
+                    }
+                    pagination = Some(parse_pagination(&body)?);
+                    require_semi(&body, errors, "`pagination`");
+                }
                 "cascade_destroy" => {
                     if kind != ActionKind::Destroy {
                         errors.push(Error::new_spanned(
@@ -467,6 +475,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         "cascade_destroy",
                         "require_atomic",
                         "atomic_upgrade_with",
+                        "pagination",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &item_ident,
@@ -504,6 +513,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         soft,
         require_atomic,
         atomic_upgrade_with,
+        pagination,
         cascade_destroy,
     })
 }
@@ -1028,4 +1038,58 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
             "expected `(...)` or `: ...` after preparation name",
         ))
     }
+}
+
+/// `keyset: true, offset: false, countable: by_default, default_limit: 25,
+/// max_page_size: 100, required: false`, up to the `;`.
+fn parse_pagination(input: syn::parse::ParseStream) -> Result<crate::define::ast::PaginationSpec> {
+    let mut spec = crate::define::ast::PaginationSpec::default();
+    while !input.is_empty() && !input.peek(Token![;]) {
+        let key: Ident = input.parse()?;
+        let _: Token![:] = input.parse()?;
+        let flag = |input: syn::parse::ParseStream| -> Result<bool> { Ok(input.parse::<syn::LitBool>()?.value) };
+        match key.to_string().as_str() {
+            "keyset" => spec.keyset = flag(input)?,
+            "offset" => spec.offset = flag(input)?,
+            "required" => spec.required = Some(flag(input)?),
+            "countable" => {
+                let value = if input.peek(syn::LitBool) {
+                    let lit: syn::LitBool = input.parse()?;
+                    Ident::new(if lit.value { "true" } else { "false" }, lit.span)
+                } else {
+                    let ident: Ident = input.parse()?;
+                    if ident != "by_default" {
+                        return Err(Error::new_spanned(ident, "expected `true`, `false` or `by_default`"));
+                    }
+                    ident
+                };
+                spec.countable = Some(value);
+            }
+            "default_limit" => spec.default_limit = Some(input.parse()?),
+            "max_page_size" => {
+                spec.max_page_size = Some(if input.peek(Ident) {
+                    let ident: Ident = input.parse()?;
+                    if ident != "nil" {
+                        return Err(Error::new_spanned(ident, "expected a number or `nil`"));
+                    }
+                    None
+                } else {
+                    Some(input.parse()?)
+                });
+            }
+            _ => {
+                return Err(Error::new_spanned(
+                    key,
+                    "expected `keyset`, `offset`, `countable`, `default_limit`, `max_page_size` or `required`",
+                ));
+            }
+        }
+        if input.peek(Token![,]) {
+            let _: Token![,] = input.parse()?;
+        }
+    }
+    if !spec.keyset && !spec.offset {
+        return Err(input.error("pagination needs `keyset: true` or `offset: true`"));
+    }
+    Ok(spec)
 }

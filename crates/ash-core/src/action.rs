@@ -274,6 +274,81 @@ pub struct ActionDef {
     /// which records it reaches, as Ash's `atomic_upgrade_with`; the primary read when
     /// `None`.
     pub atomic_upgrade_with: Option<&'static str>,
+    /// For a read: how it pages, as Ash's `pagination`. `None`: it doesn't.
+    pub pagination: Option<Pagination>,
+}
+
+/// How a read action pages, as Ash's `pagination` declares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pagination {
+    /// Pages after or before a record's keyset.
+    pub keyset: bool,
+    /// Pages by offset.
+    pub offset: bool,
+    /// Whether a page may count every record its read finds.
+    pub countable: Countable,
+    /// The page size when a page doesn't give one.
+    pub default_limit: Option<usize>,
+    /// The largest page; a larger limit is cut to it. Ash's default is 250.
+    pub max_page_size: Option<usize>,
+    /// Whether every read pages (with the default limit when none is given). Ash's
+    /// default.
+    pub required: bool,
+}
+
+/// Whether a page may count its read's records, as Ash's `countable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Countable {
+    No,
+    /// When the page asks.
+    Yes,
+    /// Unless the page asks not to.
+    ByDefault,
+}
+
+impl Pagination {
+    /// Keyset pages, with Ash's defaults otherwise.
+    pub const fn keyset() -> Self {
+        Self {
+            keyset: true,
+            offset: false,
+            countable: Countable::No,
+            default_limit: None,
+            max_page_size: Some(250),
+            required: true,
+        }
+    }
+
+    /// Offset pages, with Ash's defaults otherwise.
+    pub const fn offset() -> Self {
+        Self { keyset: false, offset: true, ..Self::keyset() }
+    }
+
+    /// Offset pages as well.
+    pub const fn and_offset(mut self) -> Self {
+        self.offset = true;
+        self
+    }
+
+    pub const fn countable(mut self, countable: Countable) -> Self {
+        self.countable = countable;
+        self
+    }
+
+    pub const fn default_limit(mut self, limit: usize) -> Self {
+        self.default_limit = Some(limit);
+        self
+    }
+
+    pub const fn max_page_size(mut self, max: Option<usize>) -> Self {
+        self.max_page_size = max;
+        self
+    }
+
+    pub const fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
 }
 
 impl ActionDef {
@@ -292,6 +367,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -310,6 +386,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -328,6 +405,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -346,6 +424,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -364,6 +443,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -409,6 +489,12 @@ impl ActionDef {
     /// [`atomic_upgrade_with`](Self::atomic_upgrade_with).
     pub const fn atomic_upgrade_with(mut self, read: &'static str) -> Self {
         self.atomic_upgrade_with = Some(read);
+        self
+    }
+
+    /// How a read pages, as Ash's `pagination`.
+    pub const fn pagination(mut self, pagination: Pagination) -> Self {
+        self.pagination = Some(pagination);
         self
     }
 
