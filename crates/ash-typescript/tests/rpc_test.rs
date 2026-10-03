@@ -3,7 +3,7 @@
 
 use ash_core::{Actor, Context, Value};
 use ash_memory::Memory;
-use ash_typescript::rpc::Rpc;
+use ash_typescript::rpc::{Identity, Rpc};
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
@@ -64,6 +64,11 @@ mod post {
 
             calculations {
                 doubled: i64 = score * 2;
+                boosted(by: i64): i64 = score + arg(by);
+            }
+
+            identities {
+                identity by_title: [title];
             }
 
             policies {
@@ -83,6 +88,10 @@ mod post {
                 policy action_type(destroy) {
                     authorize_if actor_attribute_equals(role, "editor");
                 }
+
+                policy action(summarize) {
+                    authorize_if actor_attribute_equals(role, "editor");
+                }
             }
 
             field_policies {
@@ -93,7 +102,10 @@ mod post {
             }
 
             actions {
-                read read { primary; }
+                read read {
+                    primary;
+                    pagination keyset: true, countable: true, required: false;
+                }
 
                 create publish {
                     primary;
@@ -103,11 +115,20 @@ mod post {
                     change manage_relationship(notes, create);
                 }
 
+                read recent {
+                    pagination keyset: true, default_limit: 2, max_page_size: 2;
+                }
+
                 update rescore {
                     accept [score];
                 }
 
                 destroy remove { primary; }
+
+                generic summarize {
+                    argument word: String;
+                    returns String;
+                }
             }
         }
     }
@@ -134,7 +155,10 @@ mod note {
             }
 
             actions {
-                read read { primary; }
+                read read {
+                    primary;
+                    pagination keyset: true, countable: true, required: false;
+                }
                 create create { primary; accept [post_id, body]; }
             }
         }
@@ -152,6 +176,13 @@ fn rpc() -> Rpc<Memory> {
         .action::<Post>("publish_post", "publish")
         .action::<Post>("rescore_post", "rescore")
         .action::<Post>("remove_post", "remove")
+        .action::<Post>("recent_posts", "recent")
+        .action_with::<Post>("rescore_by_title", "rescore", |o| o.identities(vec![Identity::Named("by_title")]))
+        .action_with::<Post>("find_post", "read", |o| o.get_by(&["title"]).not_found_error(false))
+        .action_with::<Post>("browse_posts", "read", |o| o.enable_filter(false).denied_loads(&["notes"]))
+        .generic::<Post, _, _>("summarize", "summarize", |_, input| async move {
+            Ok(Value::from(format!("summary: {}", input.get("word").and_then(Value::as_str).unwrap_or_default())))
+        })
 }
 
 struct Blog {
@@ -327,10 +358,13 @@ async fn an_update_finds_its_record_through_the_read() {
 #[tokio::test]
 async fn a_destroy_answers_what_it_selects() {
     let blog = Blog::new().await;
-    let removed = blog.run(editor(), json!({ "action": "remove_post", "identity": blog.published[2], "fields": ["title"] })).await;
-    assert_eq!(removed, json!({ "success": true, "data": { "title": "Post 3" } }));
+    let removed = blog
+        .run(editor(), json!({ "action": "remove_post", "identity": blog.published[2], "fields": ["title", "doubled"] }))
+        .await;
+    assert_eq!(removed, json!({ "success": true, "data": { "title": "Post 3", "doubled": 6 } }));
+    // Nothing left to destroy: a bulk destroy of no records, which succeeds.
     let again = blog.run(editor(), json!({ "action": "remove_post", "identity": blog.published[2] })).await;
-    assert_eq!(error_types(&again), ["not_found"]);
+    assert_eq!(again, json!({ "success": true, "data": {} }));
 }
 
 #[tokio::test]
@@ -384,4 +418,191 @@ async fn field_policies_check_fields_not_selected() {
     let writer = Actor::new(blog.writer).with_attr("role", Value::from("reader"));
     let answer = blog.run(writer, json!({ "action": "list_posts", "fields": ["editorNote"], "sort": "score" })).await;
     assert_eq!(answer["data"], json!([{ "editorNote": "cut" }, { "editorNote": "keep" }, { "editorNote": null }]));
+}
+
+#[tokio::test]
+async fn requests_are_checked_as_ash_typescript_checks_them() {
+    let blog = Blog::new().await;
+    let id = blog.published[0];
+    let cases = [
+        (json!({ "action": "list_posts" }), "missing_required_parameter"),
+        (json!({ "action": "list_posts", "fields": [] }), "empty_fields_array"),
+        (json!({ "action": "list_posts", "fields": "title" }), "invalid_fields_type"),
+        (json!({ "action": "list_posts", "fields": ["title", "title"] }), "duplicate_field"),
+        (json!({ "action": "list_posts", "fields": ["title"], "input": null }), "invalid_input_format"),
+        (json!({ "action": "list_posts", "fields": ["title"], "page": { "size": 2 } }), "invalid_pagination"),
+        (json!({ "action": "list_posts", "fields": ["title"], "page": 2 }), "invalid_pagination"),
+        (json!({ "action": "get_post", "fields": ["title"] }), "missing_required_input"),
+        (json!({ "action": "get_post", "fields": ["title"], "getBy": { "id": id, "title": "x" } }), "unexpected_get_by_fields"),
+        (json!({ "action": "get_post", "fields": ["title"], "getBy": { "id": { "eq": id } } }), "invalid_get_by"),
+        (json!({ "action": "get_post", "fields": ["title"], "getBy": { "id": id }, "filter": { "score": { "eq": 1 } } }), "filter_not_supported"),
+        (json!({ "action": "rescore_post", "identity": id, "sort": "score" }), "sort_not_supported"),
+        (json!({ "action": "rescore_post", "identity": id, "page": { "limit": 1 } }), "pagination_not_supported"),
+        (json!({ "action": "rescore_post", "input": { "score": 1 } }), "missing_identity"),
+        (json!({ "action": "list_posts", "fields": [{ "title": ["x"] }] }), "field_does_not_support_nesting"),
+        (json!({ "action": "list_posts", "fields": [{ "noteCount": ["x"] }] }), "invalid_field_selection"),
+        (json!({ "action": "list_posts", "fields": [{ "writer": { "fields": ["name"], "limit": 1 } }] }), "invalid_query_opts"),
+        (json!({ "action": "list_posts", "fields": [{ "notes": { "fields": ["body"], "page": { "limit": 1 }, "limit": 1 } }] }), "invalid_query_opts"),
+        (json!({ "action": "list_posts", "fields": [{ "notes": [] }] }), "requires_field_selection"),
+    ];
+    for (request, expected) in cases {
+        let answer = blog.run(editor(), request.clone()).await;
+        assert_eq!(error_types(&answer), [expected], "{request}");
+    }
+}
+
+#[tokio::test]
+async fn pages_follow_the_actions_pagination() {
+    let blog = Blog::new().await;
+    // A read that must page pages with its default limit unasked, and never more than
+    // its largest page.
+    let unasked = blog.run(editor(), json!({ "action": "recent_posts", "fields": ["title"], "sort": "score" })).await;
+    assert_eq!(unasked["data"]["type"], "keyset");
+    assert_eq!(unasked["data"]["limit"], 2);
+    let large = blog.run(editor(), json!({ "action": "recent_posts", "fields": ["title"], "sort": "score", "page": { "limit": 10 } })).await;
+    assert_eq!(large["data"]["results"].as_array().unwrap().len(), 2);
+    // Counting a read that can't be counted fails.
+    let counted = blog.run(editor(), json!({ "action": "recent_posts", "fields": ["title"], "page": { "limit": 1, "count": true } })).await;
+    assert_eq!(error_types(&counted), ["invalid_page"]);
+    // A cursor that isn't one fails.
+    let garbage = blog.run(editor(), json!({ "action": "list_posts", "fields": ["title"], "page": { "limit": 1, "after": "garbage" } })).await;
+    assert_eq!(error_types(&garbage), ["invalid_keyset"]);
+    // One that needn't page, unasked, doesn't.
+    let list = blog.run(reader(), json!({ "action": "list_posts", "fields": ["title"], "sort": "score" })).await;
+    assert!(list["data"].is_array(), "{list}");
+}
+
+#[tokio::test]
+async fn calculations_take_arguments() {
+    let blog = Blog::new().await;
+    let boosted = blog
+        .run(reader(), json!({ "action": "list_posts", "fields": ["title", { "boosted": { "args": { "by": 10 } } }], "sort": "score" }))
+        .await;
+    assert_eq!(boosted["data"], json!([{ "title": "Post 1", "boosted": 11 }, { "title": "Post 2", "boosted": 12 }, { "title": "Post 3", "boosted": 13 }]));
+    let bare = blog.run(reader(), json!({ "action": "list_posts", "fields": ["boosted"] })).await;
+    assert_eq!(error_types(&bare), ["invalid_field_format"]);
+    let missing = blog.run(reader(), json!({ "action": "list_posts", "fields": [{ "boosted": { "args": {} } }] })).await;
+    assert_eq!(error_types(&missing), ["invalid_calculation_args"]);
+    let extra = blog.run(reader(), json!({ "action": "list_posts", "fields": [{ "doubled": { "args": { "by": 1 } } }] })).await;
+    assert_eq!(error_types(&extra), ["invalid_calculation_args"]);
+}
+
+#[tokio::test]
+async fn relationships_come_as_pages() {
+    let blog = Blog::new().await;
+    let request = |page: Json| {
+        json!({
+            "action": "get_post", "getBy": { "id": blog.published[1] },
+            "fields": ["title", { "notes": { "fields": ["body"], "sort": "body", "page": page } }],
+        })
+    };
+    let first = blog.run(reader(), request(json!({ "limit": 1, "count": true }))).await;
+    let notes = &first["data"]["notes"];
+    assert_eq!(notes["type"], "keyset");
+    assert_eq!(notes["results"], json!([{ "body": "first" }]));
+    assert_eq!((notes["hasMore"].clone(), notes["count"].clone()), (json!(true), json!(2)));
+    let next = blog.run(reader(), request(json!({ "limit": 1, "after": notes["nextPage"] }))).await;
+    assert_eq!(next["data"]["notes"]["results"], json!([{ "body": "second" }]));
+    assert_eq!(next["data"]["notes"]["hasMore"], false);
+    // A keyset read takes no offset.
+    let offset = blog.run(reader(), request(json!({ "limit": 1, "offset": 1 }))).await;
+    assert_eq!(error_types(&offset), ["invalid_pagination"]);
+}
+
+#[tokio::test]
+async fn updates_name_their_record_by_an_identity() {
+    let blog = Blog::new().await;
+    let rescored = blog
+        .run(editor(), json!({ "action": "rescore_by_title", "identity": { "title": "Post 2" }, "input": { "score": 7 }, "fields": ["title", "score"] }))
+        .await;
+    assert_eq!(rescored["data"], json!({ "title": "Post 2", "score": 7 }));
+    let unknown = blog.run(editor(), json!({ "action": "rescore_by_title", "identity": { "score": 1 }, "input": { "score": 7 } })).await;
+    assert_eq!(error_types(&unknown), ["invalid_identity"]);
+    let missing = blog.run(editor(), json!({ "action": "rescore_by_title", "identity": { "title": "Nope" }, "input": { "score": 7 } })).await;
+    assert_eq!(error_types(&missing), ["not_found"]);
+}
+
+#[tokio::test]
+async fn actions_take_ash_typescripts_options() {
+    let blog = Blog::new().await;
+    // `not_found_error?: false`: a get that finds nothing answers null.
+    let none = blog.run(reader(), json!({ "action": "find_post", "getBy": { "title": "Nope" }, "fields": ["title"] })).await;
+    assert_eq!(none, json!({ "success": true, "data": null }));
+    let found = blog.run(reader(), json!({ "action": "find_post", "getBy": { "title": "Post 3" }, "fields": ["score"] })).await;
+    assert_eq!(found["data"], json!({ "score": 3 }));
+    // `enable_filter?: false` and `denied_loads`.
+    let filtered = blog.run(reader(), json!({ "action": "browse_posts", "fields": ["title"], "filter": { "score": { "eq": 1 } } })).await;
+    assert_eq!(error_types(&filtered), ["filter_not_supported"]);
+    let denied = blog.run(reader(), json!({ "action": "browse_posts", "fields": ["title", { "notes": ["body"] }] })).await;
+    assert_eq!(error_types(&denied), ["load_denied"]);
+}
+
+#[tokio::test]
+async fn generic_actions_are_authorized() {
+    let blog = Blog::new().await;
+    let request = json!({ "action": "summarize", "input": { "word": "hello" } });
+    assert_eq!(error_types(&blog.run(reader(), request.clone()).await), ["forbidden"]);
+    assert_eq!(blog.run(editor(), request).await, json!({ "success": true, "data": "summary: hello" }));
+    let missing = blog.run(editor(), json!({ "action": "summarize", "input": {} })).await;
+    assert_eq!(error_types(&missing), ["required"]);
+}
+
+#[tokio::test]
+async fn requests_validate_without_running() {
+    let blog = Blog::new().await;
+    let validate = |actor: Actor, request: Json| {
+        let blog = &blog;
+        async move { blog.rpc.validate(&blog.ctx.with_actor(actor), &request).await }
+    };
+    // Every problem, at its field, its message filled in.
+    let invalid = validate(editor(), json!({ "action": "publish_post", "input": { "title": "x", "score": "high" } })).await;
+    let mut problems: Vec<(String, String)> = invalid["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["fields"][0].as_str().unwrap().to_string(), e["message"].as_str().unwrap().to_string()))
+        .collect();
+    problems.sort();
+    assert_eq!(problems, [("score".into(), "is invalid".into()), ("title".into(), "must have length of at least 3".into())]);
+    assert_eq!(invalid["errors"][0]["path"], json!([invalid["errors"][0]["fields"][0]]));
+    // Nothing written, nor authorized: a reader validates a publish.
+    let valid = validate(reader(), json!({ "action": "publish_post", "input": { "title": "Fine" } })).await;
+    assert_eq!(valid, json!({ "success": true }));
+    assert_eq!(blog.run(editor(), json!({ "action": "list_posts", "fields": ["title"], "filter": { "title": { "eq": "Fine" } } })).await["data"], json!([]));
+    // An update's record is found first.
+    let missing = validate(editor(), json!({ "action": "rescore_post", "identity": Uuid::new_v4(), "input": { "score": 1 } })).await;
+    assert_eq!(error_types(&missing), ["not_found"]);
+    let found = validate(editor(), json!({ "action": "rescore_post", "identity": blog.published[0], "input": { "score": "x" } })).await;
+    assert_eq!(found["errors"][0]["message"], "is invalid");
+    // A read needs no fields to validate, but its request is checked as a run's.
+    assert_eq!(validate(reader(), json!({ "action": "list_posts" })).await, json!({ "success": true }));
+    assert_eq!(error_types(&validate(reader(), json!({ "action": "nope" })).await), ["action_not_found"]);
+}
+
+#[tokio::test]
+async fn errors_pass_through_the_error_handler() {
+    let blog = Blog::new().await;
+    let rpc = rpc()
+        .error_handler(|mut failure, source| {
+            if failure.kind == "forbidden" {
+                return None;
+            }
+            failure.message = format!("{}: {}", source.rpc_action.as_deref().unwrap_or("?"), failure.message);
+            Some(failure)
+        })
+        .show_raised_errors(true);
+    let ctx = blog.ctx.with_actor(reader());
+    let unknown = rpc.run(&ctx, &json!({ "action": "list_posts", "fields": ["nope"] })).await;
+    assert_eq!(unknown["errors"][0]["message"], "list_posts: Unknown field %{field} for resource %{resource}");
+    let forbidden = rpc.run(&ctx, &json!({ "action": "rescore_post", "identity": blog.published[0], "input": { "score": 1 } })).await;
+    assert_eq!(forbidden, json!({ "success": false, "errors": [] }));
+}
+
+#[tokio::test]
+async fn booleans_cast_from_text_as_ash_casts_them() {
+    let blog = Blog::new().await;
+    let request = |draft: Json| json!({ "action": "list_posts", "fields": ["title"], "filter": { "draft": { "eq": draft } } });
+    assert_eq!(blog.run(editor(), request(json!("true"))).await["data"], json!([{ "title": "Unfinished" }]));
+    let bad = blog.run(editor(), request(json!("yes"))).await;
+    assert_eq!(bad["success"], false);
 }

@@ -301,6 +301,34 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
             let read = read.to_string();
             builder_chain = quote! { #builder_chain.atomic_upgrade_with(#read) };
         }
+        if let Some(spec) = &act.pagination {
+            let (keyset, offset) = (spec.keyset, spec.offset);
+            let countable = match spec.countable.as_ref().map(|ident| ident.to_string()) {
+                Some(value) if value == "true" => quote! { ::ash_core::Countable::Yes },
+                Some(value) if value == "by_default" => quote! { ::ash_core::Countable::ByDefault },
+                _ => quote! { ::ash_core::Countable::No },
+            };
+            let default_limit = match &spec.default_limit {
+                Some(limit) => quote! { ::std::option::Option::Some(#limit) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let max_page_size = match &spec.max_page_size {
+                Some(Some(max)) => quote! { ::std::option::Option::Some(#max) },
+                Some(None) => quote! { ::std::option::Option::None },
+                None => quote! { ::std::option::Option::Some(250) },
+            };
+            let required = spec.required.unwrap_or(true);
+            builder_chain = quote! {
+                #builder_chain.pagination(::ash_core::Pagination {
+                    keyset: #keyset,
+                    offset: #offset,
+                    countable: #countable,
+                    default_limit: #default_limit,
+                    max_page_size: #max_page_size,
+                    required: #required,
+                })
+            };
+        }
         if !act.require_atomic {
             builder_chain = quote! { #builder_chain.require_atomic(false) };
         }

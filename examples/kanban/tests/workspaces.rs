@@ -74,7 +74,7 @@ async fn test_workspace_member_role_validation() {
         .unwrap_err();
 
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, message, .. } => {
             assert_eq!(field, "role");
             assert!(message.contains("one of"));
         }

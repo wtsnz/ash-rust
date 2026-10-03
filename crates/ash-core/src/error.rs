@@ -31,9 +31,13 @@ pub enum Error {
         field: String,
         message: String,
     },
+    /// A value an action's validations refuse, as Ash's `InvalidAttribute`: `message`
+    /// is a template, its `%{var}`s filled from `vars` (see [`Error::message`]), as Ash
+    /// writes a validation's message.
     Validation {
         field: String,
         message: String,
+        vars: Vec<(String, crate::value::Value)>,
     },
     NoPrimaryKey(&'static str),
     NoPrimaryRead(&'static str),
@@ -74,9 +78,64 @@ pub enum Error {
         resource: &'static str,
     },
     Authentication(String),
+    /// Several errors at once, as Ash reports every validation a changeset fails.
+    Multiple(Vec<Error>),
+}
+
+/// `template` with each `%{var}` replaced by its value in `vars`.
+pub fn interpolate(template: &str, vars: &[(String, crate::value::Value)]) -> String {
+    let mut out = template.to_string();
+    for (name, value) in vars {
+        let text = match value {
+            crate::value::Value::Null => "nil".to_string(),
+            crate::value::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        out = out.replace(&format!("%{{{name}}}"), &text);
+    }
+    out
 }
 
 impl Error {
+    /// A validation's error: `message` a template, its `%{var}`s filled from `vars`.
+    pub fn validation(field: impl Into<String>, message: impl Into<String>, vars: Vec<(String, crate::value::Value)>) -> Self {
+        Self::Validation { field: field.into(), message: message.into(), vars }
+    }
+
+    /// `errors` as one error: none at all, one as itself, more as [`Error::Multiple`].
+    pub fn collect(mut errors: Vec<Error>) -> std::result::Result<(), Error> {
+        match errors.len() {
+            0 => Ok(()),
+            1 => Err(errors.remove(0)),
+            _ => Err(Self::Multiple(errors)),
+        }
+    }
+
+    /// The errors this one holds, by value: its own several, or itself.
+    pub fn into_each(self) -> Vec<Error> {
+        match self {
+            Self::Multiple(errors) => errors.into_iter().flat_map(Error::into_each).collect(),
+            other => vec![other],
+        }
+    }
+
+    /// Each error this one holds: its own several, or itself.
+    pub fn each(&self) -> Vec<&Error> {
+        match self {
+            Self::Multiple(errors) => errors.iter().flat_map(Error::each).collect(),
+            other => vec![other],
+        }
+    }
+
+    /// What a person reads of the error: a validation's message with its vars filled in.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Validation { message, vars, .. } => interpolate(message, vars),
+            Self::Constraint { message, .. } => message.clone(),
+            other => other.to_string(),
+        }
+    }
+
     pub fn multi_step(&self) -> Option<&str> {
         match self {
             Self::Multi { step, .. } => Some(step.as_str()),
@@ -118,8 +177,8 @@ impl fmt::Display for Error {
             Self::Constraint { field, message } => {
                 write!(f, "attribute `{field}` {message}")
             }
-            Self::Validation { field, message } => {
-                write!(f, "validation failed on `{field}`: {message}")
+            Self::Validation { field, message, vars } => {
+                write!(f, "validation failed on `{field}`: {}", interpolate(message, vars))
             }
             Self::NoPrimaryKey(resource) => write!(f, "resource {resource} has no primary key"),
             Self::NoPrimaryRead(resource) => {
@@ -173,6 +232,10 @@ impl fmt::Display for Error {
                 write!(f, "tenant is required for resource `{resource}`")
             }
             Self::Authentication(msg) => write!(f, "authentication error: {msg}"),
+            Self::Multiple(errors) => {
+                let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
+                write!(f, "{}", messages.join("; "))
+            }
         }
     }
 }

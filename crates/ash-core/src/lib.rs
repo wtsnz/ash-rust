@@ -35,7 +35,7 @@ pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
     DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, PersistKind,
-    PreparationDef, Validation, ValidationContext,
+    Countable, Pagination, PreparationDef, Validation, ValidationContext,
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
@@ -53,9 +53,9 @@ pub use data_layer::{
     CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
 pub use engine::{
-    KeysetCursor, Page, Query, build_keyset_filter, keyset_values, create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_existing,
+    KeysetCursor, Page, Query, build_keyset_filter, keyset_values, create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via, destroy_existing,
     RelatedQuery, get, handle_managed_relationships, insert, load_related, load_related_query, manual_create, query, record_visible,
-    keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_expecting, update_existing, update_existing_dynamic,
+    keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_expecting, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};

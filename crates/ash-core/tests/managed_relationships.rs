@@ -578,10 +578,11 @@ async fn test_managed_relationship_atomic_rollback_on_child_error() -> Result<()
 
     // Must return an error due to LineItem numericality validation
     assert!(res.is_err());
+    let text = res.as_ref().err().map(Error::message).unwrap_or_default();
     match res {
-        Err(Error::Validation { field, message }) => {
+        Err(Error::Validation { field, .. }) => {
             assert_eq!(field, "price");
-            assert!(message.contains("at least 0"));
+            assert_eq!(text, "must be greater than or equal to 0");
         }
         other => panic!("expected Validation on child, got {other:?}"),
     }

@@ -58,7 +58,7 @@ pub(crate) async fn run_atomic_destroy<D: crate::data_layer::DataLayer>(
 
 /// The read that finds the record an update or destroy of `action` changes: the one it
 /// upgrades with, else the primary read.
-fn finding_read(resource: &'static ResourceDef, action: &ActionDef) -> Result<Option<&'static ActionDef>> {
+pub(crate) fn finding_read(resource: &'static ResourceDef, action: &ActionDef) -> Result<Option<&'static ActionDef>> {
     match action.atomic_upgrade_with {
         Some(name) => resource.action(name).map(Some).ok_or_else(|| Error::UnknownAction {
             resource: resource.name,
@@ -68,20 +68,22 @@ fn finding_read(resource: &'static ResourceDef, action: &ActionDef) -> Result<Op
     }
 }
 
-/// The records `actor` may read through the read that finds an update's or destroy's
-/// record by id: that read's policies, as a filter. AshGraphql and AshTypescript find
-/// the record so, running the update or destroy over a query of the read action
-/// (`Ash.bulk_update(query, ...)`), whose read policies filter what it finds: a record
-/// the actor can't read isn't found.
-pub(crate) fn read_scope(resource: &'static ResourceDef, action: &ActionDef, actor: Option<&Actor>) -> Result<Option<Filter>> {
-    match finding_read(resource, action)? {
-        Some(read) => crate::policy::compile_read_filter(resource, read, actor),
-        None => Ok(None),
-    }
+/// The records `actor` may read through `read`, the read that finds an update's or
+/// destroy's record by id: its filters and its policies, as a filter. AshGraphql and
+/// AshTypescript find the record so, running the update or destroy over a query of the
+/// read action (`Ash.bulk_update(query, ...)`), whose policies filter what it finds: a
+/// record the actor can't read isn't found. `None` where there's no read.
+pub(crate) fn read_scope(resource: &'static ResourceDef, read: Option<&ActionDef>, actor: Option<&Actor>) -> Result<Option<Filter>> {
+    let Some(read) = read else {
+        return Ok(None);
+    };
+    let policies = crate::policy::compile_read_filter(resource, read, actor)?;
+    Ok(Some(Filter::and(resource.read_filter(read).into_iter().chain(policies))))
 }
 
 /// The query selecting record `id` for an atomic statement of `action`: by its primary
-/// key, through the read `action` upgrades with, in the context's tenant, within `scope`.
+/// key, in the context's tenant, within `scope`, the read that finds it; or, given none,
+/// through the read `action` upgrades with.
 fn atomic_query<D>(
     ctx: &crate::context::Context<D>,
     resource: &'static ResourceDef,
@@ -92,9 +94,13 @@ fn atomic_query<D>(
     let pk = pk_name(resource)?;
     let (filter, tenant) =
         crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
-    let read = finding_read(resource, action)?;
-    let filter = crate::pipeline::and_filters(filter, read.and_then(|read| resource.read_filter(read)));
-    let filter = crate::pipeline::and_filters(filter, scope.cloned());
+    let filter = match scope {
+        Some(scope) => crate::pipeline::and_filters(filter, Some(scope.clone())),
+        None => {
+            let read = finding_read(resource, action)?;
+            crate::pipeline::and_filters(filter, read.and_then(|read| resource.read_filter(read)))
+        }
+    };
     Ok(crate::data_layer::CompiledQuery {
         filter,
         tenant,
@@ -219,15 +225,17 @@ pub(crate) fn plan_update(
     }
 
     // The write policies, against the record as stored, as Ash authorizes an atomic update.
-    match write_filter(resource, action, actor)? {
-        Filter::True => {}
-        Filter::False => return Err(Error::Forbidden),
-        allowed => update.conditions.push(AtomicCondition::failing_with(
-            AtomicExpr::not_true(AtomicExpr::Filter(allowed)),
+    // Policies no record passes refuse it once its validations have passed on what it
+    // sets, as Ash validates a changeset's input before authorizing it.
+    let allowed = write_filter(resource, action, actor)?;
+    if !matches!(allowed, Filter::True | Filter::False) {
+        update.conditions.push(AtomicCondition::failing_with(
+            AtomicExpr::not_true(AtomicExpr::Filter(allowed.clone())),
             || Error::Forbidden,
-        )),
+        ));
     }
 
+    let mut failed = Vec::new();
     for validation in action.validations {
         let field = match validation {
             Validation::Present { field }
@@ -252,10 +260,20 @@ pub(crate) fn plan_update(
         let context = AtomicContext { resource, action, actor, tenant, arguments, update: &update };
         let value = context.value_of(field);
         match value.known() {
-            // The value it'll hold is known: check it now.
-            Some(value) => check_builtin_validation(validation, Some(value))?,
+            // The value it'll hold is known: check it now, every one, as Ash reports
+            // every validation a changeset fails.
+            Some(value) => {
+                if let Err(error) = check_builtin_validation(validation, Some(value)) {
+                    failed.push(error);
+                }
+            }
             None => update.conditions.extend(builtin_conditions(resource, validation, value)),
         }
+    }
+    Error::collect(failed)?;
+
+    if allowed == Filter::False {
+        return Err(Error::Forbidden);
     }
 
     if let (Some(version), Some((id, expected))) = (lock, expected_version) {
@@ -317,15 +335,14 @@ fn builtin_conditions(resource: &ResourceDef, validation: &Validation, value: At
             .is_some_and(|attr| matches!(attr.ty, AttrType::String | AttrType::CiString)),
         _ => false,
     };
-    let condition = |fails_when: AtomicExpr, field: &'static str, message: String| {
-        AtomicCondition::failing_with(fails_when, move || Error::Validation {
-            field: field.to_string(),
-            message: message.clone(),
-        })
+    // Each fails with the validation's own error, as Ash describes it.
+    let builtin = *validation;
+    let condition = move |fails_when: AtomicExpr| {
+        AtomicCondition::failing_with(fails_when, move || builtin.error().expect("a built-in validation"))
     };
     let boxed = Box::new;
     match validation {
-        Validation::Present { field } => {
+        Validation::Present { .. } => {
             let blank = if text {
                 AtomicExpr::Or(vec![
                     AtomicExpr::IsNil(boxed(value.clone())),
@@ -334,50 +351,30 @@ fn builtin_conditions(resource: &ResourceDef, validation: &Validation, value: At
             } else {
                 AtomicExpr::IsNil(boxed(value))
             };
-            vec![condition(blank, field, "must be present".into())]
+            vec![condition(blank)]
         }
-        Validation::StringLength { field, min, max } if text => {
+        Validation::StringLength { min, max, .. } if text => {
             let length = || boxed(AtomicExpr::StringLength(boxed(value.clone())));
             let mut conditions = Vec::new();
             if let Some(min) = min {
-                conditions.push(condition(
-                    AtomicExpr::Lt(length(), boxed(AtomicExpr::value(*min as i64))),
-                    field,
-                    format!("must be at least {min} characters"),
-                ));
+                conditions.push(condition(AtomicExpr::Lt(length(), boxed(AtomicExpr::value(*min as i64)))));
             }
             if let Some(max) = max {
-                conditions.push(condition(
-                    AtomicExpr::Gt(length(), boxed(AtomicExpr::value(*max as i64))),
-                    field,
-                    format!("must be at most {max} characters"),
-                ));
+                conditions.push(condition(AtomicExpr::Gt(length(), boxed(AtomicExpr::value(*max as i64)))));
             }
             conditions
         }
-        Validation::OneOf { field, allowed } => vec![condition(
-            AtomicExpr::Not(boxed(AtomicExpr::In(
-                boxed(value),
-                allowed.iter().map(|v| Value::String((*v).to_string())).collect(),
-            ))),
-            field,
-            format!("must be one of: {}", allowed.join(", ")),
-        )],
-        Validation::Numericality { field, min, max } => {
+        Validation::OneOf { allowed, .. } => vec![condition(AtomicExpr::Not(boxed(AtomicExpr::In(
+            boxed(value),
+            allowed.iter().map(|v| Value::String((*v).to_string())).collect(),
+        ))))],
+        Validation::Numericality { min, max, .. } => {
             let mut conditions = Vec::new();
             if let Some(min) = min {
-                conditions.push(condition(
-                    AtomicExpr::Lt(boxed(value.clone()), boxed(AtomicExpr::value(*min))),
-                    field,
-                    format!("must be at least {min}"),
-                ));
+                conditions.push(condition(AtomicExpr::Lt(boxed(value.clone()), boxed(AtomicExpr::value(*min)))));
             }
             if let Some(max) = max {
-                conditions.push(condition(
-                    AtomicExpr::Gt(boxed(value.clone()), boxed(AtomicExpr::value(*max))),
-                    field,
-                    format!("must be at most {max}"),
-                ));
+                conditions.push(condition(AtomicExpr::Gt(boxed(value.clone()), boxed(AtomicExpr::value(*max)))));
             }
             conditions
         }

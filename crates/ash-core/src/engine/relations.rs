@@ -59,6 +59,8 @@ pub struct RelatedQuery {
     /// The destination's aggregates and calculations to load with its rows.
     pub aggregates: Vec<String>,
     pub calculations: Vec<String>,
+    /// The arguments each calculation that takes them is loaded with.
+    pub calculation_args: std::collections::HashMap<String, FieldMap>,
 }
 
 impl RelatedQuery {
@@ -279,6 +281,7 @@ fn related_read<D>(
             select: shape.select.clone(),
             aggregates: shape.aggregates.clone(),
             calculations: shape.calculations.clone(),
+            calculation_args: shape.calculation_args.clone(),
             tenant: ctx.tenant.clone(),
             ..CompiledQuery::default()
         },

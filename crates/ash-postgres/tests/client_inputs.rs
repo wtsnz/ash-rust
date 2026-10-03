@@ -1,7 +1,7 @@
 //! A client's filters and sorts as Ash runs them, in memory, SQLite and Postgres alike:
 //! a field a field policy hides reads as null where it's hidden, so neither finds nor
 //! orders records by values the actor can't see; and keyset pages walk nullable sorts,
-//! nulls last ascending and first descending.
+//! nulls last ascending and first descending unless a sort places them otherwise.
 
 use ash_core::{
     Actor, CompiledQuery, Context, DataLayer, FieldMap, Filter, Resource, Sort, Value, build_keyset_filter,
@@ -53,7 +53,7 @@ fn member(id: Uuid) -> Actor {
 }
 
 fn sort(field: &str, descending: bool) -> Sort {
-    Sort { field: field.into(), descending, guard: None }
+    Sort { field: field.into(), descending, ..Default::default() }
 }
 
 /// The notes `query` reads, as `actor` may see them.
@@ -79,7 +79,7 @@ async fn found<D: DataLayer>(data: &D, actor: &Actor, scope: &Filter, filter: Fi
 async fn walk<D: DataLayer>(data: &D, actor: &Actor, scope: &Filter, sorts: Vec<Sort>, forward: bool) -> Vec<Uuid> {
     let sorts = keyset_sort(&Note::DEF, guard_input_sort(&Note::DEF, Some(actor), sorts).unwrap());
     let read_sorts: Vec<Sort> =
-        sorts.iter().map(|s| Sort { descending: s.descending == forward, ..s.clone() }).collect();
+        sorts.iter().map(|s| if forward { s.clone() } else { s.reversed() }).collect();
     let mut seen = Vec::new();
     let mut last: Option<FieldMap> = None;
     loop {
@@ -137,6 +137,10 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     for forward in [true, false] {
         assert_eq!(walk(&data, &owner, scope, vec![sort("rank", false)], forward).await, [n1, n4, n3, n2, n5], "forward {forward}");
         assert_eq!(walk(&data, &owner, scope, vec![sort("rank", true)], forward).await, [n2, n5, n3, n4, n1], "forward {forward}");
+        // Or where the sort puts them: Ash's `++rank` and `--rank`.
+        let nulls = |descending, first| vec![Sort { nulls_first: Some(first), ..sort("rank", descending) }];
+        assert_eq!(walk(&data, &owner, scope, nulls(false, true), forward).await, [n2, n5, n1, n4, n3], "forward {forward}");
+        assert_eq!(walk(&data, &owner, scope, nulls(true, false), forward).await, [n3, n4, n1, n2, n5], "forward {forward}");
         // A hidden secret sorts as null: the owner's own first, then the rest by id.
         assert_eq!(walk(&data, &owner, scope, vec![sort("secret", false)], forward).await, [n1, n2, n3, n4, n5], "forward {forward}");
         assert_eq!(walk(&data, &owner, scope, vec![sort("secret", true)], forward).await, [n3, n4, n5, n2, n1], "forward {forward}");

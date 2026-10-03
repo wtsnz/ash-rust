@@ -15,13 +15,23 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 8 | A redacted field comes back null with no error. AshGraphql also reports it, as a `forbidden_field` error with the field's path, alongside the null. | `parity` counts AshGraphql's `forbidden_field` errors and leaves them out of the comparison. | open |
 | 9 | An action's or calculation's argument was declared as text unless it was a UUID, text, an integer or a boolean: a list or a map argument refused the list or map a client sent. | — | fixed in this branch |
 | 10 | An argument takes no default, as Ash's `default: []` does. | `comments` is optional in the Rust desk, where the Elixir one defaults it to `[]`. | open |
-| 11 | Validation stops at the first invalid field. Ash reports every one. | `parity`'s invalid inputs have one invalid field each. | open |
+| 11 | Validation stops at the first invalid field. Ash reports every one. | — | fixed in this branch: every failure reported (`Error::Multiple`) |
 | 12 | An update or destroy by id ignored the read action's policies. AshGraphql and AshTypescript find the record through the read action as the actor (`Ash.bulk_update` over its query), so one the actor can't read is not found, not forbidden. | — | fixed in this branch, for GraphQL and RPC alike |
-| 13 | A list attribute or argument (`AttrType::Array`) has no element type, so GraphQL serves a list of maps as `[String]`, where AshGraphql serves `{:array, :map}` as `[Json]`. | — | open |
-| 14 | No `/rpc/validate`, AshTypescript's validation of an action's input without running it. | The generated client doesn't call it (validation functions aren't generated). | open |
+| 13 | A list attribute or argument (`AttrType::Array`) has no element type, so GraphQL serves a list of maps as `[String]`, where AshGraphql serves `{:array, :map}` as `[Json]`. | — | open (also: no `has` filter operator on lists) |
+| 14 | No `/rpc/validate`, AshTypescript's validation of an action's input without running it. | — | fixed in this branch: `Rpc::validate`, `POST /rpc/validate` |
 | 15 | ash-typescript doesn't generate AshTypescript's typed RPC client (a function per `rpc_action`). | The benchmark drives both desks through the client the Elixir desk generates, `client/ash_rpc.ts`. | open |
 | 16 | Field policies didn't guard a client's filter or sort: a viewer filtering tickets by `requester_email` found them by the hidden value. Ash reads a client's reference to a hidden field as null where it's hidden (`if <policy> then field else nil`). | — | fixed in this branch, for GraphQL and RPC alike |
 | 17 | Nulls sorted first ascending in memory and SQLite, last in Postgres, and keyset pages couldn't walk past a null. Ash sorts them last ascending and first descending everywhere, and its keysets step over them. | — | fixed in this branch |
+| 18 | Text was stored as given. Ash's string types trim it and read blank text as nil (`trim?`, `allow_empty?` false by default). | — | fixed in this branch (Ash's defaults; the constraints themselves aren't modeled) |
+| 19 | Validation messages were ash-rust's own, interpolated. Ash's are templates with vars (`must have length of between %{min} and %{max}`), which AshTypescript sends as they are and AshGraphql fills in. | — | fixed in this branch |
+| 20 | A caller's sort replaced the read's prepared sort. Ash appends one to the other: after a code interface's or AshGraphql's sort, before AshTypescript's (which sorts after running the read's preparations). | — | fixed in this branch |
+| 21 | An atomic update a policy refused whatever the record was refused before its validations ran. Ash validates a changeset's input first. | — | fixed in this branch |
+| 22 | Read actions had no `pagination` declaration. | — | fixed in this branch for the DSL and RPC; ash-graphql still pages every read, where AshGraphql serves an unpaginated action as a list |
+| 23 | No action metadata (`metadata :name, :type`, `show_metadata`, `metadataFields`). | — | open |
+| 24 | No `field_names`/`argument_names` mappings, nor `typed_query`, AshTypescript's Phoenix channels or client hooks. | — | open (most belong with the client generator, 15) |
+| 25 | RPC can't select fields within an embedded resource, typed map or union: they come back whole. | — | open |
+| 26 | A float inside a map comes back as text: `Value` has no float. | — | open |
+| 27 | Primary keys are UUIDs only. | — | open |
 
 ## What the twin found in Ash's packages
 
@@ -41,3 +51,10 @@ Behaviours of the Elixir packages the comparison works around. ash-rust doesn't 
   having no error protocol implementation for it. ash-rust answers the same.
 - **AshTypescript's generated types refuse `count` on a keyset page** (`count?: never`)
   though the action is `countable` and the server counts it.
+- **AshTypescript has no shape for several Ash errors**, an unknown input key, an
+  unknown filter field or operator, a malformed UUID, a calculation argument of the
+  wrong type among them, and answers each as an `internal_error` with only an id.
+  ash-rust says what's wrong (`invalid_argument`, `invalid`,
+  `invalid_calculation_args`), so those answers differ on purpose. So does a page
+  request a read can't count or that lacks a limit it needs: `invalid_page`, where
+  Ash's errors have no shape either.

@@ -268,6 +268,21 @@ pub struct ActionSpec {
     /// `atomic_upgrade_with <read>;`: the read an atomic update reaches records through.
     pub atomic_upgrade_with: Option<Ident>,
     pub cascade_destroy: Vec<Ident>,
+    /// `pagination keyset: true, countable: true, required: false;`: how a read pages.
+    pub pagination: Option<PaginationSpec>,
+}
+
+/// A read's `pagination` options, as Ash names them.
+#[derive(Default)]
+pub struct PaginationSpec {
+    pub keyset: bool,
+    pub offset: bool,
+    /// `true`, `false` or `by_default`.
+    pub countable: Option<Ident>,
+    pub default_limit: Option<syn::LitInt>,
+    /// A number, or `nil` for no maximum.
+    pub max_page_size: Option<Option<syn::LitInt>>,
+    pub required: Option<bool>,
 }
 
 pub struct ArgumentSpec {

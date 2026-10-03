@@ -18,6 +18,7 @@ pub mod tenant_models {
                 return Err(Error::Validation {
                     field: "tenant".to_string(),
                     message: "tenant context is required".to_string(),
+                    vars: Vec::new(),
                 });
             }
             Ok(())
@@ -129,7 +130,7 @@ async fn test_validation_and_change_context_tenant_propagation() {
         .unwrap_err();
 
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, message, .. } => {
             assert_eq!(field, "tenant");
             assert_eq!(message, "tenant context is required");
         }

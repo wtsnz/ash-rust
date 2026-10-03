@@ -8,7 +8,8 @@
 //!   related resource's filter, and `and`, `or` and `not` take lists of filters (`not`
 //!   excluding records matching all of its).
 //! - A sort is text: fields separated by commas, each `field` or `+field` ascending,
-//!   `-field` descending (`++` and `--` too, as Ash takes them).
+//!   `-field` descending, `++field` ascending with nulls first and `--field` descending
+//!   with nulls last, as Ash takes them.
 //! - A value is cast to its field's type: a UUID from its text, an integer from a number,
 //!   text as text (validation canonicalizes it as it writes).
 
@@ -44,8 +45,14 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         (AttrType::Integer, Json::Number(n)) => Value::Int(n.as_i64().ok_or_else(mismatch)?),
         (AttrType::Integer, Json::String(text)) => Value::Int(text.parse().map_err(|_| mismatch())?),
         (AttrType::Boolean, Json::Bool(b)) => Value::Bool(*b),
+        // As Ash's boolean casts text.
+        (AttrType::Boolean, Json::String(text)) => match text.as_str() {
+            "true" | "1" => Value::Bool(true),
+            "false" | "0" => Value::Bool(false),
+            _ => return Err(mismatch()),
+        },
         (AttrType::Float | AttrType::Decimal, Json::Number(n)) => Value::String(n.to_string()),
-        (AttrType::Map | AttrType::Array, json) => Value::from_plain_json(json.clone()),
+        (AttrType::Map, json @ Json::Object(_)) | (AttrType::Array, json @ Json::Array(_)) => Value::from_plain_json(json.clone()),
         (AttrType::Atom { one_of, .. }, Json::String(text)) => Value::String(
             one_of
                 .iter()
@@ -161,12 +168,14 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(|part| {
-            let (descending, field) = match part {
-                p if p.starts_with("--") => (true, &p[2..]),
-                p if p.starts_with("++") => (false, &p[2..]),
-                p if p.starts_with('-') => (true, &p[1..]),
-                p if p.starts_with('+') => (false, &p[1..]),
-                p => (false, p),
+            // `++` and `--` place nulls against the direction's default, as Ash's
+            // `asc_nils_first` and `desc_nils_last`.
+            let (descending, nulls_first, field) = match part {
+                p if p.starts_with("--") => (true, Some(false), &p[2..]),
+                p if p.starts_with("++") => (false, Some(true), &p[2..]),
+                p if p.starts_with('-') => (true, None, &p[1..]),
+                p if p.starts_with('+') => (false, None, &p[1..]),
+                p => (false, None, p),
             };
             if field_type(resource, field).is_none() {
                 return Err(invalid(format!("no field `{field}` to sort {} by", resource.name)));
@@ -174,7 +183,8 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
             Ok(Sort {
                 field: field.to_string(),
                 descending,
-                guard: None,
+                nulls_first,
+                ..Default::default()
             })
         })
         .collect()
@@ -182,7 +192,7 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
 
 /// A client's input to `action` on `resource`, as the action takes it: each accepted
 /// attribute and argument, cast to its type. Anything else is refused, as Ash refuses
-/// input an action doesn't take.
+/// input an action doesn't take, and so is input lacking an argument that may not be nil.
 pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, json: &Json) -> Result<FieldMap> {
     let mut input = FieldMap::new();
     let Json::Object(given) = json else {
@@ -199,7 +209,16 @@ pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, j
                 field: name.clone(),
                 action: action.name,
             })?;
-        input.insert(name.clone(), value_input(ty, value)?);
+        let value = value_input(ty, value).map_err(|_| Error::TypeMismatch {
+            field: name.clone(),
+            expected: ty.name().to_string(),
+            got: value.to_string(),
+        })?;
+        input.insert(name.clone(), value);
+    }
+    // An argument that may not be nil must be given, as Ash requires it.
+    if let Some(arg) = action.arguments.iter().find(|arg| !arg.allow_nil && input.get(arg.name).is_none_or(Value::is_null)) {
+        return Err(Error::Missing { field: arg.name.to_string() });
     }
     Ok(input)
 }

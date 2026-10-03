@@ -274,6 +274,81 @@ pub struct ActionDef {
     /// which records it reaches, as Ash's `atomic_upgrade_with`; the primary read when
     /// `None`.
     pub atomic_upgrade_with: Option<&'static str>,
+    /// For a read: how it pages, as Ash's `pagination`. `None`: it doesn't.
+    pub pagination: Option<Pagination>,
+}
+
+/// How a read action pages, as Ash's `pagination` declares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pagination {
+    /// Pages after or before a record's keyset.
+    pub keyset: bool,
+    /// Pages by offset.
+    pub offset: bool,
+    /// Whether a page may count every record its read finds.
+    pub countable: Countable,
+    /// The page size when a page doesn't give one.
+    pub default_limit: Option<usize>,
+    /// The largest page; a larger limit is cut to it. Ash's default is 250.
+    pub max_page_size: Option<usize>,
+    /// Whether every read pages (with the default limit when none is given). Ash's
+    /// default.
+    pub required: bool,
+}
+
+/// Whether a page may count its read's records, as Ash's `countable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Countable {
+    No,
+    /// When the page asks.
+    Yes,
+    /// Unless the page asks not to.
+    ByDefault,
+}
+
+impl Pagination {
+    /// Keyset pages, with Ash's defaults otherwise.
+    pub const fn keyset() -> Self {
+        Self {
+            keyset: true,
+            offset: false,
+            countable: Countable::No,
+            default_limit: None,
+            max_page_size: Some(250),
+            required: true,
+        }
+    }
+
+    /// Offset pages, with Ash's defaults otherwise.
+    pub const fn offset() -> Self {
+        Self { keyset: false, offset: true, ..Self::keyset() }
+    }
+
+    /// Offset pages as well.
+    pub const fn and_offset(mut self) -> Self {
+        self.offset = true;
+        self
+    }
+
+    pub const fn countable(mut self, countable: Countable) -> Self {
+        self.countable = countable;
+        self
+    }
+
+    pub const fn default_limit(mut self, limit: usize) -> Self {
+        self.default_limit = Some(limit);
+        self
+    }
+
+    pub const fn max_page_size(mut self, max: Option<usize>) -> Self {
+        self.max_page_size = max;
+        self
+    }
+
+    pub const fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
 }
 
 impl ActionDef {
@@ -292,6 +367,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -310,6 +386,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -328,6 +405,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -346,6 +424,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -364,6 +443,7 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
         }
     }
 
@@ -409,6 +489,12 @@ impl ActionDef {
     /// [`atomic_upgrade_with`](Self::atomic_upgrade_with).
     pub const fn atomic_upgrade_with(mut self, read: &'static str) -> Self {
         self.atomic_upgrade_with = Some(read);
+        self
+    }
+
+    /// How a read pages, as Ash's `pagination`.
+    pub const fn pagination(mut self, pagination: Pagination) -> Self {
+        self.pagination = Some(pagination);
         self
     }
 
@@ -568,6 +654,68 @@ pub enum Validation {
     },
     Custom(&'static dyn CustomValidation),
     Func(fn(&ValidationContext<'_>) -> Result<()>),
+}
+
+impl Validation {
+    /// The error a built-in validation fails with, as Ash describes it: its message a
+    /// template, with its vars (`must have length of between %{min} and %{max}`). `None`
+    /// for a custom validation, which gives its own.
+    pub fn error(&self) -> Option<Error> {
+        use crate::value::Value;
+        let text = |text: &str| Value::String(text.to_string());
+        let number = |n: Option<i64>| n.map_or(Value::Null, Value::Int);
+        Some(match *self {
+            Self::Present { field } => Error::validation(
+                field,
+                "must be present",
+                vec![
+                    ("attributes".into(), Value::Array(vec![text(field)])),
+                    ("exactly".into(), Value::Int(1)),
+                    ("fields".into(), Value::Array(vec![text(field)])),
+                    ("keys".into(), text(field)),
+                ],
+            ),
+            Self::StringLength { field, min, max } => {
+                let (message, vars) = match (min, max) {
+                    (Some(min), Some(max)) => (
+                        "must have length of between %{min} and %{max}",
+                        vec![("min".into(), Value::Int(min as i64)), ("max".into(), Value::Int(max as i64))],
+                    ),
+                    (Some(min), None) => ("must have length of at least %{min}", vec![("min".into(), Value::Int(min as i64))]),
+                    (None, Some(max)) => ("must have length of no more than %{max}", vec![("max".into(), Value::Int(max as i64))]),
+                    (None, None) => return None,
+                };
+                Error::validation(field, message, vars)
+            }
+            Self::OneOf { field, allowed } => {
+                Error::validation(field, "expected one of %{values}", vec![("values".into(), text(&allowed.join(", ")))])
+            }
+            // As Ash's `compare`, with bounds it may and may not be at.
+            Self::Numericality { field, min, max } => {
+                let mut parts = Vec::new();
+                if min.is_some() {
+                    parts.push("must be greater than or equal to %{greater_than_or_equal_to}");
+                }
+                if max.is_some() {
+                    parts.push("must be less than or equal to %{less_than_or_equal_to}");
+                }
+                Error::validation(
+                    field,
+                    parts.join(" and "),
+                    vec![
+                        ("greater_than".into(), Value::Null),
+                        ("less_than".into(), Value::Null),
+                        ("greater_than_or_equal_to".into(), number(min)),
+                        ("less_than_or_equal_to".into(), number(max)),
+                        ("is_equal".into(), Value::Null),
+                        ("is_not_equal".into(), Value::Null),
+                        ("is_nil".into(), Value::Null),
+                    ],
+                )
+            }
+            Self::Custom(_) | Self::Func(_) => return None,
+        })
+    }
 }
 
 impl std::fmt::Debug for Validation {

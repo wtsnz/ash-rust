@@ -51,6 +51,7 @@ resource! {
         actions {
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
             }
 
             create create {

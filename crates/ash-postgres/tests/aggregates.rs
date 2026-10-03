@@ -143,7 +143,7 @@ async fn scenario<D: DataLayer>(data: D) {
     }
 
     let ours = Filter::starts_with("name", run.clone());
-    let by_name = vec![Sort { field: "name".into(), descending: false, guard: None }];
+    let by_name = vec![Sort { field: "name".into(), descending: false, ..Default::default() }];
     let read = |query: CompiledQuery| {
         let data = &data;
         async move { data.run_query(&LIBRARY, &query).await.unwrap() }
@@ -190,8 +190,8 @@ async fn scenario<D: DataLayer>(data: D) {
     let rows = read(CompiledQuery {
         filter: Some(ours),
         sort: vec![
-            Sort { field: "book_count".into(), descending: true, guard: None },
-            Sort { field: "name".into(), descending: false, guard: None },
+            Sort { field: "book_count".into(), descending: true, ..Default::default() },
+            Sort { field: "name".into(), descending: false, ..Default::default() },
         ],
         aggregates: vec!["reader_count".into()],
         limit: Some(2),

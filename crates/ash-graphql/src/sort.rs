@@ -17,8 +17,8 @@ pub fn resource_sort_input_name(resource_name: &str) -> String {
     format!("{resource_name}SortInput")
 }
 
-/// The shared `SortOrder` enum. ash-core doesn't place nulls, so the `*_NULLS_*` orders
-/// sort as their direction does.
+/// The shared `SortOrder` enum: a direction, and where nulls go (by default last
+/// ascending and first descending).
 pub fn register_sort_order(builder: SchemaBuilder) -> SchemaBuilder {
     let mut order = Enum::new("SortOrder");
     for item in ["DESC", "DESC_NULLS_FIRST", "DESC_NULLS_LAST", "ASC", "ASC_NULLS_FIRST", "ASC_NULLS_LAST"] {
@@ -82,14 +82,23 @@ pub fn parse_resource_sort(
         let field = sort_fields(resource)
             .find(|field| upper_snake(field) == wanted)
             .ok_or_else(|| async_graphql::Error::new(format!("Unknown sort field `{wanted}`")))?;
-        let descending = match obj.get("order") {
-            Some(order) if !matches!(order, GqlValue::Null) => enum_name(order)?.starts_with("DESC"),
-            _ => false,
+        let order = match obj.get("order") {
+            Some(order) if !matches!(order, GqlValue::Null) => enum_name(order)?,
+            _ => "ASC",
+        };
+        let descending = order.starts_with("DESC");
+        let nulls_first = if order.ends_with("_NULLS_FIRST") {
+            Some(true)
+        } else if order.ends_with("_NULLS_LAST") {
+            Some(false)
+        } else {
+            None
         };
         sorts.push(Sort {
             field: field.to_string(),
             descending,
-            guard: None,
+            nulls_first,
+            ..Default::default()
         });
     }
     ash_core::guard_input_sort(resource, actor, sorts).map_err(|e| async_graphql::Error::new(e.to_string()))

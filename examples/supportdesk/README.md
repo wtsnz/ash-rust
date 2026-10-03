@@ -68,7 +68,8 @@ Both apps serve the same API on `PORT` (default 4000):
   `view_ticket`, `edit_ticket`, `destroy_ticket`, `route_ticket`, `list_comments`,
   `create_comment`, `list_agents`, `list_tags` and `list_audit_events`. The Elixir desk
   generates the TypeScript client for them, [`client/ash_rpc.ts`](client/ash_rpc.ts)
-  (`mix ash_typescript.codegen`), which works against either desk.
+  (`mix ash_typescript.codegen`), which works against either desk. `POST /rpc/validate`
+  validates a request's input without running it.
 - `POST /api/route`, `POST /api/bulk`, `POST /api/edit`: JSON for what AshGraphql serves
   but ash-graphql doesn't yet (generic actions, managed relationship inputs), and for a
   client-held lock version: `route` runs the generic action; `bulk` creates, assigns and
@@ -117,7 +118,9 @@ cargo run --release -p supportdesk --bin parity -- \
 sends both apps the same requests, each as an admin, an agent and a viewer, and compares
 the answers: reads (an inbox and its second page, a dashboard filtered and sorted by
 aggregates and calculations, nested relationships with limits), mutations and their
-failures, RPC actions and their failures, the JSON endpoints, and a subscription. Both
+failures, RPC actions and their failures (every error compared whole: its type,
+message template, vars, fields, path and details), RPC validation, the JSON endpoints,
+and a subscription. Both
 must have just loaded the fixture. Where ash-rust still falls short of Ash, or Ash's
 packages behave unexpectedly, [GAPS.md](GAPS.md) says how.
 

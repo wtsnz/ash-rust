@@ -62,8 +62,9 @@ async fn validation_present_and_string_length() {
         .price(500)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "name");
             assert!(message.contains("must be present"), "unexpected message: {message}");
         }
@@ -77,8 +78,9 @@ async fn validation_present_and_string_length() {
         .price(500)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "name");
             assert!(message.contains("must be present"), "unexpected message: {message}");
         }
@@ -92,10 +94,11 @@ async fn validation_present_and_string_length() {
         .price(500)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message.contains("at least 3 characters"), "unexpected message: {message}");
+            assert!(message == "must have length of between 3 and 20", "unexpected message: {message}");
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -107,10 +110,11 @@ async fn validation_present_and_string_length() {
         .price(500)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message.contains("at most 20 characters"), "unexpected message: {message}");
+            assert!(message == "must have length of between 3 and 20", "unexpected message: {message}");
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -137,10 +141,11 @@ async fn validation_one_of() {
         .price(5)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "category");
-            assert!(message.contains("must be one of: electronics, books, clothing"), "unexpected: {message}");
+            assert!(message == "expected one of electronics, books, clothing", "unexpected: {message}");
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -158,10 +163,11 @@ async fn validation_numericality() {
         .price(0)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "price");
-            assert!(message.contains("at least 1"), "unexpected: {message}");
+            assert!(message == "must be greater than or equal to 1 and must be less than or equal to 10000", "unexpected: {message}");
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -173,10 +179,11 @@ async fn validation_numericality() {
         .price(50000)
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "price");
-            assert!(message.contains("at most 10000"), "unexpected: {message}");
+            assert!(message == "must be greater than or equal to 1 and must be less than or equal to 10000", "unexpected: {message}");
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -224,10 +231,11 @@ async fn helpdesk_ticket_and_representative_validations() {
         .subject("x")
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "subject");
-            assert!(message.contains("at least 2 characters"));
+            assert!(message == "must have length of at least 2");
         }
         other => panic!("expected validation error, got {:?}", other),
     }
@@ -237,8 +245,9 @@ async fn helpdesk_ticket_and_representative_validations() {
         .open_ticket("")
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "subject");
             assert!(message.contains("must be present"));
         }
@@ -258,10 +267,11 @@ async fn helpdesk_ticket_and_representative_validations() {
         .create_representative("A")
         .await
         .unwrap_err();
+    let message = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message.contains("at least 2 characters"));
+            assert!(message == "must have length of at least 2");
         }
         other => panic!("expected validation error, got {:?}", other),
     }

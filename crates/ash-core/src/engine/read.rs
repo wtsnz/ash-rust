@@ -13,8 +13,8 @@ use crate::value::FieldMap;
 
 /// The caller's `query` as a read through `action` runs it:
 ///
-/// - the action's filter preparations, and its sort, limit and offset where the caller
-///   gave none;
+/// - the action's filter preparations, its sort after the caller's, and its limit and
+///   offset where the caller gave none;
 /// - an equality filter for each argument that names an attribute;
 /// - the actor's read policies, or `Forbidden` when none covers the action;
 /// - the tenant scope for `query.tenant`, or `TenantRequired` when a tenant-scoped
@@ -35,7 +35,7 @@ pub fn scope_read(
             PreparationDef::Sort { field, descending } => prepared_sort.push(Sort {
                 field: field.to_string(),
                 descending,
-                guard: None,
+                ..Default::default()
             }),
             PreparationDef::Limit(limit) => {
                 query.limit.get_or_insert(limit);
@@ -45,8 +45,13 @@ pub fn scope_read(
             }
         }
     }
-    if query.sort.is_empty() {
-        query.sort = prepared_sort;
+    // The query's sort, then the action's on fields it doesn't sort by, as Ash appends
+    // what a read's preparations sort by to a query that already sorts (as a code
+    // interface's or AshGraphql's does).
+    for sort in prepared_sort {
+        if !query.sort.iter().any(|given| given.field == sort.field) {
+            query.sort.push(sort);
+        }
     }
     for (name, value) in arguments {
         if resource.attribute(name).is_some() {

@@ -849,6 +849,16 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// Where `sort` puts nulls: where it says, or as Ash does by default, which the
+    /// dialect may need to spell out.
+    fn null_order(&self, sort: &Sort) -> &'static str {
+        match sort.nulls_first {
+            Some(true) => " NULLS FIRST",
+            Some(false) => " NULLS LAST",
+            None => self.dialect.null_order(sort.descending),
+        }
+    }
+
     /// What `sort` orders by: its field, or null where its guard doesn't hold.
     fn sort_operand(&mut self, resource: &ResourceDef, sort: &Sort) -> Result<String> {
         let col = self.compile_operand(resource, &sort.field)?;
@@ -869,7 +879,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         for sort in sorts {
             let col = self.sort_operand(resource, sort)?;
             let dir = if sort.descending { "DESC" } else { "ASC" };
-            clauses.push(format!("{col} {dir}{}", self.dialect.null_order(sort.descending)));
+            clauses.push(format!("{col} {dir}{}", self.null_order(sort)));
         }
         Ok(format!(" ORDER BY {}", clauses.join(", ")))
     }
@@ -1064,7 +1074,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 all_sorts.push(Sort {
                     field: pk.to_string(),
                     descending: false,
-                    guard: None,
+                    ..Default::default()
                 });
             }
         }
@@ -1134,7 +1144,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if cursor.is_some() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             if !sorts.iter().any(|s| s.field == pk) {
-                sorts.push(Sort { field: pk.to_string(), descending: false, guard: None });
+                sorts.push(Sort { field: pk.to_string(), descending: false, ..Default::default() });
             }
         }
         let mut order = Vec::new();
@@ -1142,7 +1152,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let alias = ident(self.dialect, &format!("__ash_sort_{i}"))?;
             items.push(format!("{} AS {alias}", self.sort_operand(resource, sort)?));
             let dir = if sort.descending { "DESC" } else { "ASC" };
-            order.push((alias, format!("{dir}{}", self.dialect.null_order(sort.descending))));
+            order.push((alias, format!("{dir}{}", self.null_order(sort))));
         }
 
         let mut inner = format!("SELECT {} FROM {}", items.join(", "), self.table(resource)?);

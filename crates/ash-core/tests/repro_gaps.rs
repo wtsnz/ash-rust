@@ -106,6 +106,7 @@ mod vault {
                 return Err(Error::Validation {
                     field: "locked".into(),
                     message: "cannot destroy a locked record".into(),
+                    vars: Vec::new(),
                 });
             }
             Ok(())
