@@ -1,8 +1,9 @@
+use ash_macro_support::{Action, ResourceTokens};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{Error, Ident, ItemMacro, LitStr, Result, Token, bracketed};
+use syn::{Error, Ident, LitStr, Result, Token, bracketed};
 
 struct StateMachineBlock {
     state_attribute: String,
@@ -14,23 +15,6 @@ struct TransitionBlock {
     action: String,
     from: Vec<String>,
     to: String,
-}
-
-struct ActionBlock {
-    kind: Ident,
-    name: Ident,
-    body: TokenStream2,
-}
-
-impl Parse for ActionBlock {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let kind: Ident = input.parse()?;
-        let name: Ident = input.parse()?;
-        let content;
-        syn::braced!(content in input);
-        let body: TokenStream2 = content.parse()?;
-        Ok(Self { kind, name, body })
-    }
 }
 
 impl Parse for StateMachineBlock {
@@ -136,165 +120,18 @@ impl Parse for StateMachineBlock {
     }
 }
 
-/// Generic section of resource DSL
-struct RawSection {
-    name: Ident,
-    tokens: TokenStream2,
-    has_brace: bool,
-}
-
-struct ResourceDslInput {
-    outer_attrs: Vec<syn::Attribute>,
-    resource_ident: Ident,
-    sections: Vec<RawSection>,
-    state_machine: Option<StateMachineBlock>,
-}
-
-const DSL_SECTIONS: &[&str] = &[
-    "table",
-    "attributes",
-    "relationships",
-    "calculations",
-    "aggregates",
-    "actions",
-    "policies",
-    "field_policies",
-    "extensions",
-    "notifiers",
-    "extend",
-    "optimistic_lock",
-    "identities",
-    "embedded",
-    "data_layer",
-    "store",
-    "timestamps",
-    "multitenancy",
-    "actor",
-];
-
-impl Parse for ResourceDslInput {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let outer_attrs = input.call(syn::Attribute::parse_outer)?;
-        if input.peek(Ident) {
-            let fork = input.fork();
-            if let Ok(id) = fork.parse::<Ident>()
-                && id == "embedded"
-            {
-                let _: Ident = input.parse()?;
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
-            }
-        }
-
-        let mut resource_ident = None;
-        let mut sections = Vec::new();
-        let mut state_machine = None;
-        parse_sm_dsl_body(
-            input,
-            &mut resource_ident,
-            &mut sections,
-            &mut state_machine,
-        )?;
-
-        let resource_ident = resource_ident.ok_or_else(|| {
-            Error::new(
-                proc_macro2::Span::call_site(),
-                "expected `Name { ... }` resource header",
-            )
-        })?;
-
-        Ok(Self {
-            outer_attrs,
-            resource_ident,
-            sections,
-            state_machine,
-        })
-    }
-}
-
-fn parse_sm_dsl_body(
-    input: ParseStream,
-    resource_ident: &mut Option<Ident>,
-    sections: &mut Vec<RawSection>,
-    state_machine: &mut Option<StateMachineBlock>,
-) -> Result<()> {
-    while !input.is_empty() {
-        let ident: Ident = input.parse()?;
-        if ident == "resource" || ident == "name" {
-            let r: Ident = input.parse()?;
-            *resource_ident = Some(r);
-            if input.peek(Token![;]) {
-                let _: Token![;] = input.parse()?;
-            }
-        } else if ident == "state_machine" {
-            let content;
-            syn::braced!(content in input);
-            let sm: StateMachineBlock = content.parse()?;
-            *state_machine = Some(sm);
-            if input.peek(Token![;]) {
-                let _: Token![;] = input.parse()?;
-            }
-        } else if input.peek(syn::token::Brace) {
-            let content;
-            syn::braced!(content in input);
-            if resource_ident.is_none() && !DSL_SECTIONS.iter().any(|s| ident == *s) {
-                *resource_ident = Some(ident);
-                parse_sm_dsl_body(&content, resource_ident, sections, state_machine)?;
-            } else {
-                let inner: TokenStream2 = content.parse()?;
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
-                sections.push(RawSection {
-                    name: ident,
-                    tokens: inner,
-                    has_brace: true,
-                });
-            }
-        } else {
-            let mut tok_vec = Vec::new();
-            while !input.is_empty() && !input.peek(Token![;]) {
-                tok_vec.push(input.parse::<proc_macro2::TokenTree>()?);
-            }
-            if input.peek(Token![;]) {
-                let _: Token![;] = input.parse()?;
-            }
-            let tokens = tok_vec.into_iter().collect();
-            sections.push(RawSection {
-                name: ident,
-                tokens,
-                has_brace: false,
-            });
-        }
-    }
-    Ok(())
-}
-
 /// Pattern 2: Transformative Macro Decorator (`#[state_machine] resource! { ... }`)
 #[proc_macro_attribute]
 pub fn state_machine(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_2: TokenStream2 = item.clone().into();
-
-    // Check if item is wrapped in `resource! { ... }` or raw DSL
-    let parsed_result: Result<ResourceDslInput> = syn::parse2::<ItemMacro>(item_2.clone())
-        .and_then(|item_macro| syn::parse2::<ResourceDslInput>(item_macro.mac.tokens))
-        .or_else(|_| syn::parse2::<ResourceDslInput>(item_2));
-
-    let dsl = match parsed_result {
-        Ok(d) => d,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    match expand_state_machine_transformer(dsl) {
+    match ResourceTokens::from_item(item.into()).and_then(expand_state_machine_transformer) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenStream2> {
-    let sm = match dsl.state_machine {
-        Some(sm) => sm,
+fn expand_state_machine_transformer(mut resource: ResourceTokens) -> Result<TokenStream2> {
+    let sm = match resource.take_section("state_machine") {
+        Some(section) => syn::parse2::<StateMachineBlock>(section.tokens)?,
         None => {
             return Err(Error::new(
                 proc_macro2::Span::call_site(),
@@ -303,51 +140,23 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
         }
     };
 
-    let resource_ident = &dsl.resource_ident;
+    let resource_ident = resource.name.clone();
     let state_attr_str = &sm.state_attribute;
     let state_attr_ident = format_ident!("{}", sm.state_attribute);
     let initial_str = &sm.initial;
 
     // 1. Transform `attributes`: ensure state_attribute exists
-    let attr_section_opt = dsl.sections.iter_mut().find(|s| s.name == "attributes");
-    if let Some(attr_sec) = attr_section_opt {
-        let attr_tokens_str = attr_sec.tokens.to_string();
-        if !attr_tokens_str.contains(state_attr_str.as_str()) {
-            let existing_tokens = &attr_sec.tokens;
-            attr_sec.tokens = quote! {
-                #existing_tokens
-                #state_attr_ident: String;
-            };
-        }
-    } else {
-        dsl.sections.push(RawSection {
-            name: format_ident!("attributes"),
-            tokens: quote! {
-                id: ::uuid::Uuid [pk];
-                #state_attr_ident: String;
-            },
-            has_brace: true,
-        });
+    if resource.section("attributes").is_none() {
+        resource.append_to_section("attributes", quote! { id: ::uuid::Uuid [pk]; });
+    }
+    if !resource.declares_attribute(&state_attr_ident) {
+        resource.append_to_section("attributes", quote! { #state_attr_ident: String; });
     }
 
     // 2. Transform `actions`:
     //    - In primary create action: inject default state change
     //    - For each transition: inject transition validation + change
-    let actions_section_opt = dsl.sections.iter().find(|s| s.name == "actions");
-    let mut actions: Vec<ActionBlock> = match actions_section_opt {
-        Some(act_sec) => syn::parse::Parser::parse2(
-            |input: syn::parse::ParseStream| {
-                let mut list = Vec::new();
-                while !input.is_empty() {
-                    list.push(input.parse::<ActionBlock>()?);
-                }
-                Ok(list)
-            },
-            act_sec.tokens.clone(),
-        )
-        .unwrap_or_default(),
-        None => Vec::new(),
-    };
+    let mut actions = resource.actions()?;
 
     let default_state_change = quote! {
         change custom(&::ash_state_machine::DefaultStateChange::new(
@@ -358,24 +167,20 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
 
     let mut had_create = false;
     for act in &mut actions {
-        if act.kind == "create" {
+        if act.is("create") {
             had_create = true;
-            let existing_body = &act.body;
-            act.body = quote! {
-                #existing_body
-                #default_state_change
-            };
+            act.append(default_state_change.clone());
         }
     }
     if !had_create {
-        actions.push(ActionBlock {
-            kind: format_ident!("create"),
-            name: format_ident!("create"),
-            body: quote! {
+        actions.push(Action::new(
+            "create",
+            format_ident!("create"),
+            quote! {
                 primary;
                 #default_state_change
             },
-        });
+        ));
     }
 
     for t in &sm.transitions {
@@ -383,136 +188,56 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
         let t_to = &t.to;
         let t_action_str = &t.action;
 
-        let val_tokens = quote! {
+        let transition_tokens = quote! {
             validate custom(&::ash_state_machine::TransitionValidation::new(
                 #state_attr_str,
                 &[#(#t_from),*],
                 #t_to,
                 #t_action_str,
             ));
-        };
-        let change_tokens = quote! {
             change custom(&::ash_state_machine::TransitionChange::new(
                 #state_attr_str,
                 #t_to,
             ));
         };
 
-        if let Some(existing_act) = actions
+        match actions
             .iter_mut()
-            .find(|a| a.kind == "update" && a.name == t.action)
+            .find(|a| a.is("update") && a.name == t.action)
         {
-            let existing_body = &existing_act.body;
-            existing_act.body = quote! {
-                #existing_body
-                #val_tokens
-                #change_tokens
-            };
-        } else {
-            actions.push(ActionBlock {
-                kind: format_ident!("update"),
-                name: format_ident!("{}", t.action),
-                body: quote! {
-                    #val_tokens
-                    #change_tokens
-                },
-            });
+            Some(existing) => existing.append(transition_tokens),
+            None => actions.push(Action::new(
+                "update",
+                format_ident!("{}", t.action),
+                transition_tokens,
+            )),
         }
     }
-
-    let reconstructed_actions = actions.into_iter().map(|a| {
-        let k = a.kind;
-        let n = a.name;
-        let b = a.body;
-        quote! {
-            #k #n {
-                #b
-            }
-        }
-    });
-
-    if let Some(act_sec) = dsl.sections.iter_mut().find(|s| s.name == "actions") {
-        act_sec.tokens = quote! {
-            #(#reconstructed_actions)*
-        };
-    } else {
-        dsl.sections.push(RawSection {
-            name: format_ident!("actions"),
-            tokens: quote! {
-                #(#reconstructed_actions)*
-            },
-            has_brace: true,
-        });
-    }
+    resource.set_actions(&actions);
 
     // 3. Transform `extensions`: inject StateMachineDef constant into resource definition extensions
-    let sm_def_tokens = {
-        let transitions_tokens = sm.transitions.iter().map(|t| {
+    let transitions_tokens: Vec<TokenStream2> = sm
+        .transitions
+        .iter()
+        .map(|t| {
             let a_str = &t.action;
             let from_lits = &t.from;
             let to_str = &t.to;
             quote! {
                 ::ash_state_machine::TransitionDef::new(#a_str, &[#(#from_lits),*], #to_str)
             }
-        });
+        })
+        .collect();
+    resource.add_extension(quote! {
+        &::ash_state_machine::StateMachineDef::new(
+            #state_attr_str,
+            &[#initial_str],
+            Some(#initial_str),
+            &[#(#transitions_tokens),*],
+        )
+    })?;
 
-        quote! {
-            &::ash_state_machine::StateMachineDef::new(
-                #state_attr_str,
-                &[#initial_str],
-                Some(#initial_str),
-                &[#(#transitions_tokens),*],
-            )
-        }
-    };
-
-    let ext_section_opt = dsl.sections.iter_mut().find(|s| s.name == "extensions");
-    if let Some(ext_sec) = ext_section_opt {
-        let existing_ext = &ext_sec.tokens;
-        ext_sec.tokens = quote! {
-            #existing_ext
-            #sm_def_tokens
-        };
-    } else {
-        dsl.sections.push(RawSection {
-            name: format_ident!("extensions"),
-            tokens: quote! {
-                #sm_def_tokens
-            },
-            has_brace: true,
-        });
-    }
-
-    // 4. Reconstruct resource! { ... } tokens
-    let mut reconstructed_sections = Vec::new();
-    for sec in &dsl.sections {
-        let sec_name = &sec.name;
-        let sec_tokens = &sec.tokens;
-        if sec.has_brace {
-            reconstructed_sections.push(quote! {
-                #sec_name {
-                    #sec_tokens
-                }
-            });
-        } else {
-            reconstructed_sections.push(quote! {
-                #sec_name #sec_tokens;
-            });
-        }
-    }
-
-    let outer_attrs = &dsl.outer_attrs;
-
-    // 5. Generate HasStateMachine implementation and can_<action> helper methods
-    let transitions_tokens = sm.transitions.iter().map(|t| {
-        let a_str = &t.action;
-        let from_lits = &t.from;
-        let to_str = &t.to;
-        quote! {
-            ::ash_state_machine::TransitionDef::new(#a_str, &[#(#from_lits),*], #to_str)
-        }
-    });
-
+    // 4. Generate HasStateMachine implementation and can_<action> helper methods
     let can_helper_methods = sm.transitions.iter().map(|t| {
         let can_method = format_ident!("can_{}", t.action);
         let a_str = &t.action;
@@ -523,13 +248,9 @@ fn expand_state_machine_transformer(mut dsl: ResourceDslInput) -> Result<TokenSt
         }
     });
 
+    let resource_macro = resource.to_resource_macro();
     Ok(quote! {
-        #(#outer_attrs)*
-        ::ash_core::resource! {
-            #resource_ident {
-                #(#reconstructed_sections)*
-            }
-        }
+        #resource_macro
 
         impl ::ash_state_machine::HasStateMachine for #resource_ident {
             const STATE_MACHINE: ::ash_state_machine::StateMachineDef = ::ash_state_machine::StateMachineDef::new(

@@ -1,0 +1,22 @@
+[package]
+name = "ash-archival"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Soft delete (archival) extension for ash-rust"
+
+[dependencies]
+ash-core = { path = "../ash-core" }
+ash-archival-macros = { path = "../ash-archival-macros" }
+uuid.workspace = true
+
+[dev-dependencies]
+ash-authentication = { path = "../ash-authentication" }
+ash-graphql = { path = "../ash-graphql" }
+ash-state-machine = { path = "../ash-state-machine" }
+ash-memory = { path = "../ash-memory" }
+async-graphql = { version = "7", features = ["dynamic-schema"] }
+serde_json = "1"
+ash-sqlite = { path = "../ash-sqlite" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

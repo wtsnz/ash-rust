@@ -17,7 +17,7 @@ pub fn action_named<'a>(def: &'a ResourceDef, name: &str) -> Result<&'a ActionDe
 pub fn read_action<'a>(def: &'a ResourceDef, name: Option<&str>) -> Result<&'a ActionDef> {
     let action = match name {
         Some(name) => action_named(def, name)?,
-        None => def.primary_read().ok_or(Error::NoPrimaryRead(def.name))?,
+        None => def.default_read(),
     };
     expect_kind(action, ActionKind::Read)?;
     Ok(action)
@@ -362,29 +362,30 @@ pub fn apply_tenant_scope(
     filter: Option<Filter>,
     tenant: Option<String>,
 ) -> Result<(Option<Filter>, Option<String>)> {
-    let mut filter = filter;
-    if let Some(mt) = resource.multitenancy {
-        match mt.strategy {
-            crate::resource::MultitenancyStrategy::Attribute(attr_name) => {
-                if let Some(ref tenant) = tenant {
-                    let tenant_filter = Filter::eq(attr_name, Value::String(tenant.clone()));
-                    filter = and_filters(filter, Some(tenant_filter));
-                } else if !mt.global {
-                    return Err(Error::TenantRequired {
-                        resource: resource.name,
-                    });
-                }
-            }
-            crate::resource::MultitenancyStrategy::Context => {
-                if tenant.is_none() && !mt.global {
-                    return Err(Error::TenantRequired {
-                        resource: resource.name,
-                    });
-                }
-            }
-        }
+    if let Some(mt) = resource.multitenancy
+        && tenant.is_none()
+        && !mt.global
+    {
+        return Err(Error::TenantRequired {
+            resource: resource.name,
+        });
     }
+    let filter = and_filters(filter, resource.tenant_filter(tenant.as_deref()));
     Ok((filter, tenant))
+}
+
+/// [`apply_tenant_scope`] plus the primary read's filters, so a lookup by id for a write
+/// sees the same records a read does. An archived record stays out of reach.
+pub fn visible_scope(
+    resource: &ResourceDef,
+    filter: Option<Filter>,
+    tenant: Option<String>,
+) -> Result<(Option<Filter>, Option<String>)> {
+    let (filter, tenant) = apply_tenant_scope(resource, filter, tenant)?;
+    Ok((
+        and_filters(filter, resource.primary_read_filter()),
+        tenant,
+    ))
 }
 
 /// Stamp or require a tenant on write fields. Attribute strategy writes `tenant` onto `fields`.
@@ -422,36 +423,25 @@ pub fn apply_tenant_to_fields(
 /// Split accepted attributes from action arguments. Extra keys (pk, version) are ignored
 /// so GraphQL can pass `id` on the same map. An empty accept list keeps non-argument keys
 /// as fields, matching the GraphQL input builder.
-pub fn take_accepted_and_args(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
-    let mut fields = FieldMap::new();
-    let mut arguments = FieldMap::new();
-    for (field, value) in input {
-        if action.has_argument(&field) {
-            arguments.insert(field, value);
-        } else if action.accept.is_empty() || action.accept.contains(&field.as_str()) {
-            fields.insert(field, value);
-        }
-    }
-    for arg in action.arguments {
-        if !arg.allow_nil && !arguments.contains_key(arg.name) {
-            return Err(Error::Missing {
-                field: arg.name.to_string(),
-            });
-        }
-    }
-    Ok((fields, arguments))
-}
-
-pub fn validate(def: &ResourceDef, fields: &FieldMap) -> Result<()> {
+/// Checks each attribute's value against its type, then rewrites values with several
+/// spellings (IP addresses, vectors, floats) to their canonical text.
+pub fn validate(def: &ResourceDef, fields: &mut FieldMap) -> Result<()> {
     for attribute in def.attributes {
-        match fields.get(attribute.name) {
+        match fields.get_mut(attribute.name) {
             None | Some(Value::Null) if attribute.allow_nil => {}
             None | Some(Value::Null) => {
                 return Err(Error::Missing {
                     field: attribute.name.to_string(),
                 });
             }
-            Some(value) => check_type(attribute, value)?,
+            Some(value) => {
+                check_type(attribute, value)?;
+                if let Value::String(raw) = value
+                    && let Some(canonical) = crate::types::canonical_text(attribute.ty, raw)
+                {
+                    *raw = canonical;
+                }
+            }
         }
     }
     Ok(())
@@ -465,7 +455,7 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
         | (AttrType::Boolean, Value::Bool(_))
         | (AttrType::Map, Value::Map(_))
         | (AttrType::Array, Value::Array(_)) => true,
-        (AttrType::UtcDatetime, Value::String(got)) => match crate::UtcDateTime::parse(got) {
+        (AttrType::UtcDatetime { precision }, Value::String(got)) => match precision.normalize(got) {
             Ok(_) => true,
             Err(_) => {
                 return Err(Error::Constraint {
@@ -480,6 +470,62 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
                 return Err(Error::Constraint {
                     field: attribute.name.to_string(),
                     message: format!("must be a decimal number, got {got}"),
+                });
+            }
+        },
+        (AttrType::Binary, Value::String(got)) => match crate::Binary::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be base64, got {got}"),
+                });
+            }
+        },
+        (AttrType::Date, Value::String(got)) => match crate::Date::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a calendar date, got {got}"),
+                });
+            }
+        },
+        (AttrType::Inet, Value::String(got)) => match crate::Inet::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be an IP address, got {got}"),
+                });
+            }
+        },
+        (AttrType::Vector { dimensions }, Value::String(got)) => {
+            match crate::parse_vector(got).and_then(|v| crate::check_vector(&v, dimensions)) {
+                Ok(()) => true,
+                Err(err) => {
+                    return Err(Error::Constraint {
+                        field: attribute.name.to_string(),
+                        message: err.to_string(),
+                    });
+                }
+            }
+        }
+        (AttrType::CiString, Value::String(got)) => match crate::CiString::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a string, got {got}"),
+                });
+            }
+        },
+        (AttrType::Float, Value::String(got)) => match crate::Float::parse(got) {
+            Ok(_) => true,
+            Err(_) => {
+                return Err(Error::Constraint {
+                    field: attribute.name.to_string(),
+                    message: format!("must be a finite float, got {got}"),
                 });
             }
         },
@@ -504,5 +550,51 @@ fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
             expected: attribute.ty.name().into(),
             got: value.type_name().into(),
         })
+    }
+}
+
+/// Values a new record gets before its action's changes run: a generated primary key,
+/// the first lock version, attribute defaults, and timestamps.
+pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
+    let missing =
+        |fields: &FieldMap, name: &str| matches!(fields.get(name), None | Some(Value::Null));
+    generate_pk(def, fields);
+    if let Some(version) = def.optimistic_lock_attribute()
+        && missing(fields, version)
+    {
+        fields.insert(version.to_string(), Value::Int(1));
+    }
+    for attr in def.attributes {
+        if let Some(default) = attr.default_fn
+            && missing(fields, attr.name)
+        {
+            fields.insert(attr.name.to_string(), default());
+        }
+    }
+    if let Some((created_at, updated_at)) = def.timestamps {
+        let now = crate::types::UtcDateTimeUsec::now().as_str().to_string();
+        for name in [created_at, updated_at] {
+            if missing(fields, name) {
+                fields.insert(name.to_string(), Value::String(now.clone()));
+            }
+        }
+    }
+}
+
+/// Values an update sets before its action's changes run: the next lock version and a
+/// new `updated_at`.
+pub(crate) fn prepare_update_fields(def: &ResourceDef, existing: &FieldMap, fields: &mut FieldMap) {
+    if let Some(version) = def.optimistic_lock_attribute() {
+        let current = match existing.get(version) {
+            Some(Value::Int(n)) => *n,
+            _ => 1,
+        };
+        fields.insert(version.to_string(), Value::Int(current + 1));
+    }
+    if let Some((_created_at, updated_at)) = def.timestamps {
+        fields.insert(
+            updated_at.to_string(),
+            Value::String(crate::types::UtcDateTimeUsec::now().as_str().to_string()),
+        );
     }
 }

@@ -126,12 +126,6 @@ pub fn expand_ash_enum(input: DeriveInput) -> Result<TokenStream> {
             }
         }
 
-        impl ::ash_core::IntoOption<#name> for #name {
-            fn into_option(self) -> ::std::option::Option<#name> {
-                ::std::option::Option::Some(self)
-            }
-        }
-
         impl<'a> ::ash_core::IntoOption<#name> for &'a str {
             fn into_option(self) -> ::std::option::Option<#name> {
                 <#name as ::ash_core::AshEnum>::parse(self).ok()

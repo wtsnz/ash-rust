@@ -19,6 +19,83 @@ fn try_from_i64(ty: &Type, n: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     }
 }
 
+fn composite_keys(
+    rel: &crate::define::ast::RelationshipSpec,
+    name: &str,
+    resource: &str,
+) -> Result<TokenStream> {
+    if rel.fk_columns.len() <= 1 && rel.reference_columns.is_empty() {
+        return Ok(quote! {});
+    }
+    if matches!(rel.kind, RelType::ManyToMany) {
+        return Err(Error::new_spanned(
+            &rel.ident,
+            "many_to_many does not take a composite foreign key",
+        ));
+    }
+    let source_default = match rel.kind {
+        RelType::BelongsTo => rel
+            .fk
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{name}_id")),
+        _ => "id".to_string(),
+    };
+    let dest_default = match rel.kind {
+        RelType::BelongsTo => "id".to_string(),
+        _ => rel
+            .fk
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("{}_id", snake_case(resource))),
+    };
+    let (source, destination) = match rel.kind {
+        RelType::BelongsTo => {
+            let source = if rel.fk_columns.is_empty() {
+                vec![source_default]
+            } else {
+                rel.fk_columns.iter().map(|id| id.to_string()).collect()
+            };
+            let destination = if rel.reference_columns.is_empty() {
+                vec![dest_default]
+            } else {
+                rel.reference_columns
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+            (source, destination)
+        }
+        _ => {
+            let destination = if rel.fk_columns.is_empty() {
+                vec![dest_default]
+            } else {
+                rel.fk_columns.iter().map(|id| id.to_string()).collect()
+            };
+            let source = if rel.reference_columns.is_empty() {
+                vec![source_default]
+            } else {
+                rel.reference_columns
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect()
+            };
+            (source, destination)
+        }
+    };
+    if source.len() != destination.len() {
+        return Err(Error::new_spanned(
+            &rel.ident,
+            format!(
+                "relationship `{name}` has {} key columns and {} referenced columns",
+                source.len(),
+                destination.len()
+            ),
+        ));
+    }
+    Ok(quote! { .with_keys(&[#(#source),*], &[#(#destination),*]) })
+}
+
 pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     if def.attributes.is_empty() {
         return Ok(quote! {});
@@ -207,6 +284,13 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnDelete::Nilify },
             crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnDelete::Restrict },
         };
+        let on_update_tok = match r.on_update {
+            crate::define::ast::OnDeleteSpec::Nothing => quote! { ::ash_core::OnUpdate::Nothing },
+            crate::define::ast::OnDeleteSpec::Cascade => quote! { ::ash_core::OnUpdate::Cascade },
+            crate::define::ast::OnDeleteSpec::Nilify => quote! { ::ash_core::OnUpdate::Nilify },
+            crate::define::ast::OnDeleteSpec::Restrict => quote! { ::ash_core::OnUpdate::Restrict },
+        };
+        let keys = composite_keys(r, &name_str, &resource_str)?;
         match r.kind {
             RelType::BelongsTo => {
                 let fk_str =
@@ -218,7 +302,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::HasMany => {
@@ -231,7 +315,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::HasOne => {
@@ -244,7 +328,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         #name_str,
                         || &<#dest as ::ash_core::Resource>::DEF,
                         #fk_str,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)#keys
                 });
             }
             RelType::ManyToMany => {
@@ -269,7 +353,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         || &<#through_ident as ::ash_core::Resource>::DEF,
                         #source_on_join,
                         #dest_on_join,
-                    ).with_on_delete(#on_delete_tok)
+                    ).with_on_delete(#on_delete_tok).with_on_update(#on_update_tok)
                 });
             }
         }
@@ -496,6 +580,23 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = id.to_string();
         let ty = &a.ty;
 
+        // A timestamp not yet stored reads as now, in the field's own type.
+        if let Some(ts) = &def.timestamps
+            && (id == &ts.created_at || id == &ts.updated_at)
+        {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(val) if !val.is_null() => {
+                        <#ty as ::ash_core::AshType>::from_value(val)?
+                    }
+                    _ => <#ty as ::ash_core::AshType>::from_value(
+                        &::ash_core::AshType::to_value(&::ash_core::UtcDateTimeUsec::now()),
+                    )?,
+                }
+            });
+            continue;
+        }
+
         if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if option_inner(ty).is_some() {
@@ -537,18 +638,6 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     }
                 });
             }
-            continue;
-        }
-
-        if let Some(ts) = &def.timestamps
-            && (id == &ts.created_at || id == &ts.updated_at)
-        {
-            from_inits.push(quote! {
-                #id: match fields.get(#name_str) {
-                    ::std::option::Option::Some(::ash_core::Value::String(s)) => s.clone(),
-                    _ => ::ash_core::utc_now_iso8601(),
-                }
-            });
             continue;
         }
 
@@ -741,7 +830,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             RelType::BelongsTo | RelType::HasOne => {
                 attach_arms.push(quote! {
                     #name_str => {
-                        self.#id = ::ash_core::Rel::Loaded(match related.first() {
+                        self.#id = ::ash_core::Rel::of(match related.first() {
                             ::std::option::Option::Some(row) => ::std::option::Option::Some(<#dest as ::ash_core::Resource>::from_fields(row)?),
                             ::std::option::Option::None => ::std::option::Option::None,
                         });
@@ -752,7 +841,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             RelType::HasMany | RelType::ManyToMany => {
                 attach_arms.push(quote! {
                     #name_str => {
-                        self.#id = ::ash_core::Rel::Loaded(
+                        self.#id = ::ash_core::Rel::of(
                             related
                                 .iter()
                                 .map(<#dest as ::ash_core::Resource>::from_fields)
@@ -909,11 +998,18 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 Some(msg) => quote! { ::std::option::Option::Some(#msg) },
                 None => quote! { ::std::option::Option::None },
             };
+            let predicate_tokens = match &ident.predicate {
+                Some(sql) => quote! { ::std::option::Option::Some(#sql) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let nils_distinct = ident.nils_distinct;
             quote! {
                 ::ash_core::IdentityDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
                     message: #msg_tokens,
+                    predicate: #predicate_tokens,
+                    nils_distinct: #nils_distinct,
                 }
             }
         })
@@ -925,10 +1021,41 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         .map(|index| {
             let name_str = index.name.to_string();
             let key_strs: Vec<String> = index.keys.iter().map(|k| k.to_string()).collect();
+            let predicate_tokens = match &index.predicate {
+                Some(sql) => quote! { ::std::option::Option::Some(#sql) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let method_tokens = match &index.method {
+                Some(method) => quote! { ::std::option::Option::Some(#method) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let include_strs: Vec<String> = index.include.iter().map(|k| k.to_string()).collect();
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
                     keys: &[#(#key_strs),*],
+                    predicate: #predicate_tokens,
+                    method: #method_tokens,
+                    include: &[#(#include_strs),*],
+                }
+            }
+        })
+        .collect();
+
+    let statement_defs: Vec<_> = def
+        .statements
+        .iter()
+        .map(|statement| {
+            let name_str = statement.name.to_string();
+            let dialects = &statement.dialects;
+            let up = &statement.up;
+            let down = &statement.down;
+            quote! {
+                ::ash_core::StatementDef {
+                    name: #name_str,
+                    dialects: &[#(#dialects),*],
+                    up: #up,
+                    down: #down,
                 }
             }
         })
@@ -977,6 +1104,15 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     let mut identity_methods = Vec::new();
     for ident in &def.identities {
         let name = &ident.name;
+        if ident.predicate.is_some() {
+            // A `where:` predicate is raw SQL that a generated lookup cannot apply, so it
+            // could return a row the identity does not cover. Query explicitly instead.
+            let name_str = name.to_string();
+            identity_methods.push(quote! {
+                pub const #name: &'static str = #name_str;
+            });
+            continue;
+        }
         let fn_get = format_ident!("get_by_{}", name);
         let fn_find = format_ident!("find_by_{}", name);
 
@@ -995,7 +1131,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         format!("unknown attribute `{key}` in identity `{name}`"),
                     )
                 })?;
-            let ty = &attr.ty;
+            let ty = option_inner(&attr.ty).unwrap_or(&attr.ty);
             arg_names.push(key);
             arg_tys.push(ty);
             filter_exprs.push(quote! {
@@ -1121,6 +1257,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     identities: &[#(#ident_defs),*],
                     indexes: &[#(#index_defs),*],
                     checks: &[#(#check_defs),*],
+                    statements: &[#(#statement_defs),*],
                     embedded: #embedded_lit,
                     data_layer: #data_layer_tokens,
                     timestamps: #timestamps_tokens,
@@ -1181,12 +1318,6 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         impl #resource {
             #(#associated_field_consts)*
             #(#identity_methods)*
-        }
-
-        impl ::ash_core::IntoOption<#resource> for #resource {
-            fn into_option(self) -> ::std::option::Option<#resource> {
-                ::std::option::Option::Some(self)
-            }
         }
 
         impl ::std::convert::From<#resource> for ::ash_core::Value {

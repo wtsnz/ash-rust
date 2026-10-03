@@ -39,23 +39,28 @@ pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, Resource, define, domain, resource};
 pub use bulk::{BulkCreateOptions, BulkDestroyOptions, BulkResult, bulk_create, bulk_destroy};
 pub use changeset::{
-    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, IntoFieldMap,
-    ManagedRelationshipSpec,
+    AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, DynamicChangeset,
+    DynamicChangesetHook, IntoFieldMap, ManagedRelationshipSpec,
 };
 pub use context::Context;
-pub use data_layer::{CompiledQuery, DataLayer, SchemaSupport, Sort, TransactionSupport};
+pub use data_layer::{
+    CompiledQuery, DataLayer, NoDataLayer, SchemaSupport, Sort, TransactionSupport,
+};
 pub use engine::{
     KeysetCursor, Page, Query, create, create_dynamic, destroy, destroy_dynamic, destroy_existing,
-    get, handle_managed_relationships, insert, manual_create, query, run, update, update_dynamic,
-    update_existing,
+    get, handle_managed_relationships, insert, load_related, manual_create, query, record_visible,
+    run, scope_read, update, update_dynamic, update_existing,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
-pub use filter::Filter;
-pub use keys::{Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation};
+pub use filter::{Filter, all_of, any_of, in_list, text_matches};
+pub use keys::{
+    Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation, TextValue,
+};
 pub use multi::{BoundMulti, IntoChangeset, Multi, MultiResult};
 pub use notifier::{Notification, Notifier, SyncFnNotifier};
+pub use pipeline::visible_scope;
 pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_field_writes,
     authorize_write, check_to_filter, compile_read_filter, redact_fields,
@@ -64,14 +69,19 @@ pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport,
 pub use rel::Rel;
 pub use resource::{
     AttrType, AttributeDef, CheckDef, DataLayerKind, Domain, DomainDef, IdentityDef, IndexDef,
-    MultitenancyDef, MultitenancyStrategy, OnDelete, RelKind, RelationshipDef, Resource,
+    StatementDef,
+    MultitenancyDef, MultitenancyStrategy, OnDelete, OnUpdate, RelKind, RelationshipDef, Resource,
     ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
 };
 pub use store::{
     DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore, StoreTag,
     default_store_type_id,
 };
-pub use types::{AshEnum, AshType, Decimal, UtcDateTime};
+pub use types::{
+    AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, TimePrecision, UtcDateTime, UtcDateTimeUsec, Vector,
+    canonical_text, check_vector, compare_decimal, compare_typed, format_inet, format_vector,
+    parse_vector,
+};
 pub use value::{
     ConstValue, FieldMap, IntoOption, Value, optional_int, optional_uuid, required_string,
     required_uuid,

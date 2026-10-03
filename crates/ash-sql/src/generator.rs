@@ -64,7 +64,7 @@ pub fn generate_migration_with_version<D: SqlDialect>(
     let up_filename = format!("{version}_{name}.{dialect_name}.up.sql");
     let down_filename = format!("{version}_{name}.{dialect_name}.down.sql");
 
-    let mut up_stmts = Vec::new();
+    let mut up_stmts = extension_sql(dialect, operations);
     let mut down_stmts = Vec::new();
 
     for op in operations {
@@ -97,6 +97,17 @@ pub fn generate_migration_with_version<D: SqlDialect>(
         down_filename,
         up_sql,
         down_sql,
+    }
+}
+
+fn sql_command(sql: &str) -> String {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.ends_with(';') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed};")
     }
 }
 
@@ -135,6 +146,42 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
             let up = format!("ALTER TABLE {t} DROP COLUMN {col_name};");
             let down = format!("-- Rollback for dropped column {col_name} on {t}");
             (up, down)
+        }
+        SchemaOperation::RenameTable { old_name, new_name } => {
+            let old_table = dialect.quote_identifier(old_name);
+            let new_table = dialect.quote_identifier(new_name);
+            let up = format!("ALTER TABLE {old_table} RENAME TO {new_table};");
+            let down = format!("ALTER TABLE {new_table} RENAME TO {old_table};");
+            (up, down)
+        }
+        // SQLite cannot rename an index; emit_sql recreates it from the target snapshot.
+        SchemaOperation::RenameIndex {
+            old_name, new_name, ..
+        } if dialect.name() == "postgres" => {
+            let old_index = dialect.quote_identifier(old_name);
+            let new_index = dialect.quote_identifier(new_name);
+            (
+                format!("ALTER INDEX {old_index} RENAME TO {new_index};"),
+                format!("ALTER INDEX {new_index} RENAME TO {old_index};"),
+            )
+        }
+        // SQLite keeps constraint names inside the table definition and rebuilds the table
+        // from the snapshot whenever a constraint changes, so only Postgres renames them.
+        SchemaOperation::RenameConstraint {
+            table,
+            old_name,
+            new_name,
+        } if dialect.name() == "postgres" => {
+            let t = dialect.quote_identifier(table);
+            let old_constraint = dialect.quote_identifier(old_name);
+            let new_constraint = dialect.quote_identifier(new_name);
+            (
+                format!("ALTER TABLE {t} RENAME CONSTRAINT {old_constraint} TO {new_constraint};"),
+                format!("ALTER TABLE {t} RENAME CONSTRAINT {new_constraint} TO {old_constraint};"),
+            )
+        }
+        SchemaOperation::RenameIndex { .. } | SchemaOperation::RenameConstraint { .. } => {
+            (String::new(), String::new())
         }
         SchemaOperation::RenameColumn {
             table,
@@ -222,7 +269,21 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                 .map(|k| dialect.quote_identifier(k))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let up = format!("CREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {t} ({key_cols});");
+            let up = format!(
+                "{};",
+                format_create_index(
+                    true,
+                    true,
+                    &id_name,
+                    &t,
+                    &key_cols,
+                    identity.predicate.as_deref(),
+                    dialect.name(),
+                    identity.nils_distinct,
+                    None,
+                    "",
+                )
+            );
             let down = format!("DROP INDEX IF EXISTS {id_name};");
             (up, down)
         }
@@ -241,7 +302,21 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
                 .map(|k| dialect.quote_identifier(k))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let up = format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {t} ({key_cols});");
+            let up = format!(
+                "{};",
+                format_create_index(
+                    false,
+                    true,
+                    &idx_name,
+                    &t,
+                    &key_cols,
+                    index.predicate.as_deref(),
+                    dialect.name(),
+                    true,
+                    index.method.as_deref(),
+                    &quote_columns(dialect, &index.include),
+                )
+            );
             let down = format!("DROP INDEX IF EXISTS {idx_name};");
             (up, down)
         }
@@ -271,17 +346,21 @@ fn generate_operation_sql<D: SqlDialect>(dialect: &D, op: &SchemaOperation) -> (
         SchemaOperation::AddReference { table, reference } => {
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(&reference.name);
-            let col = dialect.quote_identifier(&reference.column);
+            let (col, target_col) = reference.key_sql(dialect);
             let target_t = dialect.quote_identifier(&reference.target_table);
-            let target_col = dialect.quote_identifier(&reference.target_column);
             let on_del = &reference.on_delete;
 
             let up = format!(
-                "ALTER TABLE {t} ADD CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {on_del};"
+                "ALTER TABLE {t} ADD CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {on_del}{};",
+                reference.on_update_sql()
             );
             let down = format!("ALTER TABLE {t} DROP CONSTRAINT IF EXISTS {ref_name};");
             (up, down)
         }
+        SchemaOperation::RunStatement { statement, .. } => {
+            (sql_command(&statement.up), sql_command(&statement.down))
+        }
+        SchemaOperation::DropStatement { down, up, .. } => (sql_command(down), sql_command(up)),
         SchemaOperation::DropReference { table, name } => {
             let t = dialect.quote_identifier(table);
             let ref_name = dialect.quote_identifier(name);
@@ -318,12 +397,12 @@ pub fn emit_create_table<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -
 
     for reference in &snapshot.references {
         let ref_name = dialect.quote_identifier(&reference.name);
-        let col = dialect.quote_identifier(&reference.column);
+        let (col, target_col) = reference.key_sql(dialect);
         let target_t = dialect.quote_identifier(&reference.target_table);
-        let target_col = dialect.quote_identifier(&reference.target_column);
         cols.push(format!(
-            "CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}",
-            reference.on_delete
+            "CONSTRAINT {ref_name} FOREIGN KEY ({col}) REFERENCES {target_t} ({target_col}) ON DELETE {}{}",
+            reference.on_delete,
+            reference.on_update_sql(),
         ));
     }
 
@@ -349,9 +428,20 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             .map(|k| dialect.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        sql.push_str(&format!(
-            "\n\nCREATE UNIQUE INDEX IF NOT EXISTS {id_name} ON {table} ({key_cols});"
+        sql.push_str("\n\n");
+        sql.push_str(&format_create_index(
+            true,
+            true,
+            &id_name,
+            &table,
+            &key_cols,
+            identity.predicate.as_deref(),
+            dialect.name(),
+            identity.nils_distinct,
+            None,
+            "",
         ));
+        sql.push(';');
     }
     for index in &snapshot.indexes {
         let idx_name = dialect.quote_identifier(&index.name);
@@ -361,17 +451,79 @@ fn emit_indexes<D: SqlDialect>(dialect: &D, snapshot: &TableSnapshot) -> String 
             .map(|k| dialect.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        sql.push_str(&format!(
-            "\n\nCREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({key_cols});"
+        sql.push_str("\n\n");
+        sql.push_str(&format_create_index(
+            false,
+            true,
+            &idx_name,
+            &table,
+            &key_cols,
+            index.predicate.as_deref(),
+            dialect.name(),
+            true,
+            index.method.as_deref(),
+            &quote_columns(dialect, &index.include),
         ));
+        sql.push(';');
     }
     sql
+}
+
+fn quote_columns<D: SqlDialect>(dialect: &D, columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn format_create_index(
+    unique: bool,
+    if_not_exists: bool,
+    name: &str,
+    table: &str,
+    columns: &str,
+    predicate: Option<&str>,
+    dialect: &str,
+    nils_distinct: bool,
+    method: Option<&str>,
+    include: &str,
+) -> String {
+    let unique_sql = if unique { "UNIQUE " } else { "" };
+    let exists_sql = if if_not_exists { "IF NOT EXISTS " } else { "" };
+    let using_sql = match method {
+        Some(method) if dialect == "postgres" && !method.eq_ignore_ascii_case("btree") => {
+            format!(" USING {method}")
+        }
+        _ => String::new(),
+    };
+    let include_sql = if dialect == "postgres" && !include.is_empty() {
+        format!(" INCLUDE ({include})")
+    } else {
+        String::new()
+    };
+    let nulls_sql = if unique && !nils_distinct && dialect == "postgres" {
+        " NULLS NOT DISTINCT"
+    } else {
+        ""
+    };
+    let where_sql = predicate
+        .filter(|predicate| !predicate.is_empty())
+        .map(|predicate| format!(" WHERE {predicate}"))
+        .unwrap_or_default();
+    format!(
+        "CREATE {unique_sql}INDEX {exists_sql}{name} ON {table}{using_sql} ({columns}){include_sql}{nulls_sql}{where_sql}"
+    )
 }
 
 fn table_of(op: &SchemaOperation) -> Option<&str> {
     match op {
         SchemaOperation::CreateTable(snapshot) => Some(snapshot.table.as_str()),
         SchemaOperation::DropTable(name) => Some(name.as_str()),
+        SchemaOperation::RenameTable { new_name, .. } => Some(new_name.as_str()),
+        SchemaOperation::RenameIndex { table, .. }
+        | SchemaOperation::RenameConstraint { table, .. } => Some(table.as_str()),
         SchemaOperation::AddColumn { table, .. }
         | SchemaOperation::DropColumn { table, .. }
         | SchemaOperation::RenameColumn { table, .. }
@@ -384,6 +536,8 @@ fn table_of(op: &SchemaOperation) -> Option<&str> {
         | SchemaOperation::DropIndex { table, .. }
         | SchemaOperation::AddCheck { table, .. }
         | SchemaOperation::DropCheck { table, .. }
+        | SchemaOperation::RunStatement { table, .. }
+        | SchemaOperation::DropStatement { table, .. }
         | SchemaOperation::AddReference { table, .. }
         | SchemaOperation::DropReference { table, .. } => Some(table.as_str()),
     }
@@ -400,6 +554,70 @@ fn needs_sqlite_rebuild(op: &SchemaOperation) -> bool {
             | SchemaOperation::AddReference { .. }
             | SchemaOperation::DropReference { .. }
     )
+}
+
+/// `CREATE EXTENSION` for each extension that columns created in `operations` need.
+/// Extensions are database-wide, so they go in `public` and are never dropped.
+fn extension_sql<D: SqlDialect>(dialect: &D, operations: &[SchemaOperation]) -> Vec<String> {
+    let mut names: Vec<&'static str> = Vec::new();
+    for op in operations {
+        let types: Vec<&str> = match op {
+            SchemaOperation::CreateTable(snapshot) => {
+                snapshot.columns.iter().map(|c| c.sql_type.as_str()).collect()
+            }
+            SchemaOperation::AddColumn { column, .. } => vec![column.sql_type.as_str()],
+            SchemaOperation::AlterColumnType { new_type, .. } => vec![new_type.as_str()],
+            _ => Vec::new(),
+        };
+        for sql_type in types {
+            if let Some(name) = dialect.extension_for_type(sql_type)
+                && !names.contains(&name)
+            {
+                names.push(name);
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| format!("CREATE EXTENSION IF NOT EXISTS {name} WITH SCHEMA public;"))
+        .collect()
+}
+
+/// Extensions `resource`'s columns need, for installing without migrations.
+pub fn required_extensions<D: SqlDialect>(
+    dialect: &D,
+    resource: &ash_core::ResourceDef,
+) -> Vec<String> {
+    let snapshot = TableSnapshot::from_resource(resource, dialect);
+    extension_sql(dialect, &[SchemaOperation::CreateTable(snapshot)])
+}
+
+/// The snapshot of `table` in `snapshots`. A table renamed in `operations` may be filed under
+/// its other name there, in either direction, so it is returned under `table`.
+fn snapshot_for(
+    snapshots: &[TableSnapshot],
+    operations: &[SchemaOperation],
+    table: &str,
+) -> Option<TableSnapshot> {
+    if let Some(snapshot) = snapshots.iter().find(|s| s.table == table) {
+        return Some(snapshot.clone());
+    }
+    operations.iter().find_map(|op| match op {
+        SchemaOperation::RenameTable { old_name, new_name } => {
+            let other = if new_name == table {
+                old_name
+            } else if old_name == table {
+                new_name
+            } else {
+                return None;
+            };
+            snapshots
+                .iter()
+                .find(|s| &s.table == other)
+                .map(|s| s.renamed(table))
+        }
+        _ => None,
+    })
 }
 
 pub fn emit_sql<D: SqlDialect>(
@@ -419,15 +637,74 @@ pub fn emit_sql<D: SqlDialect>(
         HashSet::new()
     };
 
-    let mut stmts = Vec::new();
+    let mut stmts = extension_sql(dialect, operations);
     let mut rebuilt = HashSet::new();
 
     for op in operations {
         let table = table_of(op).unwrap_or_default();
+        // A table not yet rebuilt gets fresh indexes and constraints under the target names
+        // when it is, so renaming them first is unnecessary and would rebuild too early.
+        // After the rebuild, renames apply as usual.
+        if rebuild.contains(table)
+            && !rebuilt.contains(table)
+            && matches!(
+                op,
+                SchemaOperation::RenameIndex { .. } | SchemaOperation::RenameConstraint { .. }
+            )
+        {
+            continue;
+        }
+        if let SchemaOperation::RenameIndex {
+            table,
+            old_name,
+            new_name,
+        } = op
+            && dialect.name() == "sqlite"
+        {
+            stmts.push(format!(
+                "DROP INDEX IF EXISTS {};",
+                dialect.quote_identifier(old_name)
+            ));
+            // Generated index names include the table, so the name finds the definition
+            // whichever name the table has in these snapshots.
+            let recreate = targets.iter().find_map(|target| {
+                if let Some(identity) = target.identities.iter().find(|i| &i.name == new_name) {
+                    Some(SchemaOperation::CreateIdentity {
+                        table: table.clone(),
+                        identity: identity.clone(),
+                    })
+                } else {
+                    target.indexes.iter().find(|i| &i.name == new_name).map(|index| {
+                        SchemaOperation::CreateIndex {
+                            table: table.clone(),
+                            index: index.clone(),
+                        }
+                    })
+                }
+            });
+            let recreate = recreate.unwrap_or_else(|| {
+                panic!("index `{new_name}` is missing from the target snapshot for `{table}`")
+            });
+            stmts.push(generate_operation_sql(dialect, &recreate).0);
+            continue;
+        }
+        if matches!(
+            op,
+            SchemaOperation::RenameTable { .. } | SchemaOperation::RenameConstraint { .. }
+        ) {
+            let (up, _) = generate_operation_sql(dialect, op);
+            if !up.is_empty() {
+                stmts.push(up);
+            }
+            continue;
+        }
         if rebuild.contains(table)
             && !matches!(
                 op,
-                SchemaOperation::CreateTable(_) | SchemaOperation::DropTable(_)
+                SchemaOperation::CreateTable(_)
+                    | SchemaOperation::DropTable(_)
+                    | SchemaOperation::RunStatement { .. }
+                    | SchemaOperation::DropStatement { .. }
             )
         {
             if matches!(op, SchemaOperation::RenameColumn { .. }) {
@@ -436,13 +713,14 @@ pub fn emit_sql<D: SqlDialect>(
                     stmts.push(up);
                 }
             }
-            if rebuilt.insert(table.to_string())
-                && let (Some(old), Some(new)) = (
-                    previous.iter().find(|s| s.table == table),
-                    targets.iter().find(|s| s.table == table),
-                )
-            {
-                stmts.push(emit_sqlite_rebuild(dialect, old, new, previous, operations));
+            if rebuilt.insert(table.to_string()) {
+                let (Some(old), Some(new)) = (
+                    snapshot_for(previous, operations, table),
+                    snapshot_for(targets, operations, table),
+                ) else {
+                    panic!("cannot rebuild `{table}`: its previous or target snapshot is missing");
+                };
+                stmts.push(emit_sqlite_rebuild(dialect, &old, &new, previous, operations));
             }
             continue;
         }
@@ -519,6 +797,20 @@ fn emit_sqlite_rebuild<D: SqlDialect>(
     let mut indexed = new.clone();
     indexed.table = new.table.clone();
     sql.push_str(&emit_indexes(dialect, &indexed));
+    // Dropping the old table also dropped any indexes or triggers its statements made,
+    // so unchanged statements run again. Changed and new ones run as their own steps.
+    for statement in &new.statements {
+        if old
+            .statements
+            .iter()
+            .any(|kept| kept.name == statement.name && kept.up == statement.up)
+        {
+            let up = sql_command(&statement.up);
+            if !up.is_empty() {
+                sql.push_str(&format!("\n\n{up}"));
+            }
+        }
+    }
     for child in &children {
         let hold = dialect.quote_identifier(&format!("{}__ash_hold", child.table));
         let src = dialect.quote_identifier(&child.table);

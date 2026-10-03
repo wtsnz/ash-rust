@@ -15,7 +15,8 @@ use ash_core::{
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
-use ash_pubsub::PubSub;
+use ash_pubsub::{ContextPubSubExt, PubSub};
+use std::sync::Arc;
 use axum::response::Html;
 use axum::routing::get;
 use uuid::Uuid;
@@ -58,6 +59,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -94,6 +96,7 @@ static REP_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -245,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f1.insert("title".into(), Value::String("Network printer unreachable on 3rd floor".into()));
     f1.insert("status".into(), Value::String("OPEN".into()));
     f1.insert("priority".into(), Value::Int(2));
-    mem.create(&TICKET_DEF, id1, f1).await?;
+    mem.create(&TICKET_DEF, None, id1, f1).await?;
 
     let id2 = Uuid::new_v4();
     let mut f2 = FieldMap::new();
@@ -253,16 +256,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f2.insert("title".into(), Value::String("Postgres replication lag investigation".into()));
     f2.insert("status".into(), Value::String("IN_PROGRESS".into()));
     f2.insert("priority".into(), Value::Int(1));
-    mem.create(&TICKET_DEF, id2, f2).await?;
+    mem.create(&TICKET_DEF, None, id2, f2).await?;
 
     let rep_id = Uuid::new_v4();
     let mut f_rep = HashMap::new();
     f_rep.insert("id".into(), Value::Uuid(rep_id));
     f_rep.insert("name".into(), Value::String("Alex Mercer".into()));
     f_rep.insert("email".into(), Value::String("alex@example.com".into()));
-    mem.create(&REP_DEF, rep_id, f_rep).await?;
+    mem.create(&REP_DEF, None, rep_id, f_rep).await?;
 
-    let ctx = Context::new(mem);
+    // Writes publish their changes to subscriptions through the context's notifier.
+    let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF, &REP_DEF])
         .with_pubsub(pubsub)

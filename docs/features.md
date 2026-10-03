@@ -343,6 +343,15 @@ let active = Article::query(&ctx)
     .await?;
 ```
 
+String and `CiString` attributes also get `contains`, `starts_with`, and `ends_with`. Wildcards in the text match literally, and only `CiString` fields ignore case:
+
+```rust
+let rust_posts = Article::query(&ctx)
+    .filter(Article::title.contains("Rust"))
+    .all()
+    .await?;
+```
+
 ### 3. Typed PubSub Ergonomics
 Fluently attach `PubSub` to contexts and subscribe to typed event streams without string topic typos:
 
@@ -1117,7 +1126,7 @@ Multi-tenant systems and distributed tracing require carrying contextual request
 - **Notification & Generic Action Propagation**:
   - Committed `Notification` payloads include `.tenant: Option<String>` and merge request metadata.
   - Generic action input structs expose `input.tenant()` and `input.metadata()`.
-- **Resource-level `multitenancy`**: `multitenancy { strategy: attribute; attribute: tenant_id; }` stamps the tenant attribute on create and scopes reads. `strategy: context` requires `ctx.tenant()` without writing a column. Create without a tenant is `Error::TenantRequired` unless `global: true`.
+- **Resource-level `multitenancy`**: `multitenancy { strategy: attribute; attribute: tenant_id; }` stamps the tenant attribute on create and scopes reads. `strategy: context` keeps each tenant's rows apart in the data layer (a Postgres schema per tenant, a memory table per tenant; SQLite refuses) without writing a column. Create without a tenant is `Error::TenantRequired` unless `global: true`.
 
 ### Example Usage
 ```rust

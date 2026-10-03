@@ -34,7 +34,7 @@ E-commerce catalogs, issue trackers, and customer portals allow users to filter 
     AND category_id = ANY($3)
   ```
 * **Ash-Rust Solution**:
-  * `Filter::and`, `Filter::or`, `Filter::not`, `Filter::eq`, `Filter::ne`, `Filter::gt`, `Filter::gte`, `Filter::lt`, `Filter::lte`, `Filter::in_list`, `Filter::is_nil`.
+  * `Filter::and`, `Filter::or`, `Filter::not`, `Filter::eq`, `Filter::ne`, `Filter::gt`, `Filter::gte`, `Filter::lt`, `Filter::lte`, `Filter::in_list`, `Filter::is_nil`, `Filter::contains`, `Filter::starts_with`, `Filter::ends_with`.
   * Expression operator overloading (`&`, `|`, `!`) allows composing arbitrary filter trees at runtime.
   * Trivial filters (`Filter::True` and `Filter::False`) are simplified (`1=1`, `0=1`).
 
@@ -77,7 +77,7 @@ Dashboards frequently require summaries alongside rows (e.g. a list of categorie
 SaaS applications require strict tenant isolation so data from tenant A never leaks to tenant B.
 
 * **Pattern**:
-  * **Schema-based Multi-Tenancy (PostgreSQL)**: Setting the schema search path: `SET LOCAL search_path TO "tenant_1", "public"` or qualifying tables (`"tenant_1"."tickets"`).
+  * **Schema-based Multi-Tenancy (PostgreSQL)**: A context-tenant resource's tables are qualified by the tenant's schema in every statement (`"tenant_1"."tickets"`), subqueries included, as AshPostgres prefixes them. The session's `search_path` is never changed.
   * **Row-based Multi-Tenancy**: Appending `WHERE tenant_id = $tenant` to all queries.
 * **Ash-Rust Solution**:
   * Every `Context` and `CompiledQuery` carries `tenant: Option<String>`.
@@ -109,7 +109,7 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 * **Ash-Rust Handling**:
   * `Filter::eq(col, Value::Null)` automatically renders `col IS NULL`.
   * `Filter::ne(col, Value::Null)` automatically renders `col IS NOT NULL`.
-  * In-memory filtering mirrors SQL null semantics exactly (`null_inequality_identical_in_memory_and_sqlite` test).
+  * In-memory filtering and `Filter::matches` mirror SQL null semantics, including `NOT`: `!Filter::contains("email", "x")` leaves out rows whose `email` is null, because `NOT UNKNOWN` is still `UNKNOWN` (`null_inequality_identical_in_memory_and_sqlite` and `text_filters_match_in_memory_and_sqlite` tests).
 
 ### 3. Keyset Pagination Sort Drift & Timestamp Collisions
 * **The Pitfall**: Paginating on non-unique columns like `created_at DESC`. When multiple records share the identical timestamp (e.g. in bulk operations), cursor `created_at < cursor` drops all other records sharing that exact timestamp.
@@ -142,6 +142,13 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
   * If a resource defines an optimistic lock attribute (`version`), `UPDATE` appends `WHERE id = $id AND version = $expected_version`.
   * If rows affected == 0, the driver verifies if the row was deleted (`Error::NotFound`) or modified by another worker (`Error::StaleRecord`).
 
+### 8. Wildcards in Text Search Input
+* **The Pitfall**: Building `WHERE title LIKE '%' || $1 || '%'` from a search box. A user typing `50%` or `a_b` gets wildcard matches instead of the literal text, and SQLite's `LIKE` ignores ASCII case while Postgres's does not.
+* **Ash-Rust Handling**:
+  * `Filter::contains`, `Filter::starts_with`, and `Filter::ends_with` escape the needle, so every character matches literally.
+  * Following Ash, `String` fields match case-sensitively and `CiString` fields ignore case. SQLite compiles `String` matches to `GLOB` (case-sensitive) and `CiString` matches to `LIKE ... ESCAPE '\'`, which ignores case for ASCII letters only, so `É` and `é` differ there but not on Postgres or in memory. Postgres compiles both to `LIKE`, and `citext` makes it case-insensitive.
+  * Text filters on non-text fields are rejected with an error instead of failing in the database.
+
 ---
 
 ## Part 3: SQLite vs PostgreSQL Dialect Matrix
@@ -153,8 +160,11 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 | **Boolean Literals** | `1` and `0` (integers) | `TRUE` and `FALSE` |
 | **Insert / Update Return** | Two-step (execute + SELECT by PK) | `RETURNING *` (single roundtrip) |
 | **UUID Storage** | `TEXT` (36 chars) | Native `UUID` type |
-| **JSON Storage** | `TEXT` stringified JSON | Native `JSONB` |
+| **JSON Storage** | `TEXT` holding plain JSON | Native `JSONB` holding plain JSON |
+| **IP Addresses (`Inet`)** | `TEXT`, canonical form (`10.0.0.1/32` is stored and matched as `10.0.0.1`) | Native `INET` |
+| **Embeddings (`Vector<N>`)** | `TEXT` like `[1,2.5,3]` | pgvector `VECTOR(N)` (migrations create the `vector` extension; the server must have pgvector installed) |
 | **Lateral Subqueries** | Window functions / Subqueries | Native `LEFT JOIN LATERAL (...) ON true` |
+| **Text Filters** | `GLOB` (`String`), `LIKE ... ESCAPE '\'` (`CiString`) | `LIKE` (`citext` ignores case) |
 | **Upsert Syntax** | `ON CONFLICT (...) DO UPDATE SET ...` | `ON CONFLICT (...) DO UPDATE SET ... RETURNING *` |
 | **Schema Migrations** | `_ash_schema_migrations` (TEXT) | `_ash_schema_migrations` (VARCHAR) |
 
@@ -182,3 +192,7 @@ Every pattern and edge case is tested continuously in CI:
    - `crates/ash-core/tests/null_inequality.rs` (`test_null_inequality_identical_in_memory_and_sqlite`).
 7. **Complex Expressions (CASE WHEN, Arithmetic, String Length)**:
    - `crates/ash-sql/tests/compiler_tests.rs` (`test_complex_expressions_compilation`).
+8. **Text Search Filters (Wildcards & Case)**:
+   - `crates/ash-sql/tests/compiler_tests.rs` (`test_text_filters_escape_wildcards_per_dialect`).
+   - `crates/ash-core/tests/text_filters.rs` (`text_filters_match_in_memory_and_sqlite`).
+   - `crates/cargo-ash/tests/migrations/queries.rs` (`text_filters_match_literally_and_respect_case`, SQLite and Postgres).

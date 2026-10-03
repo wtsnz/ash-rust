@@ -16,6 +16,7 @@ static USER_DEST: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -56,6 +57,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -70,7 +72,7 @@ fn test_resource_interface_generation() {
     assert!(ts.contains("export interface Ticket {"));
     assert!(ts.contains("  id: string;"));
     assert!(ts.contains("  title: string;"));
-    assert!(ts.contains("  status: \"open\" | \"in_progress\" | \"closed\";"));
+    assert!(ts.contains("  status: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";"));
     assert!(ts.contains("  priority: number;"));
     assert!(ts.contains("  author_id?: string | null;"));
     assert!(ts.contains("  author?: User | null;"));
@@ -82,7 +84,7 @@ fn test_action_input_interface() {
     assert!(ts.contains("export interface OpenTicketInput {"));
     assert!(ts.contains("export type TicketOpenInput = OpenTicketInput;"));
     assert!(ts.contains("  title: string;"));
-    assert!(ts.contains("  status: \"open\" | \"in_progress\" | \"closed\";"));
+    assert!(ts.contains("  status: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";"));
     assert!(ts.contains("  priority: number;"));
     assert!(ts.contains("  author_id?: string | null;"));
 }
@@ -92,7 +94,11 @@ fn test_filter_and_sort_generation() {
     let filter = generate_resource_filter_input(&TICKET_DEF);
     assert!(filter.contains("export interface TicketFilterInput {"));
     assert!(filter.contains("  id?: UuidFilter;"));
-    assert!(filter.contains("  title?: StringFilter;"));
+    assert!(filter.contains("  title?: TextFilter;"));
+    assert!(filter.contains(
+        "export interface TicketStatusFilter {\n  eq?: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";\n  ne?: \"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\";\n  in?: (\"OPEN\" | \"IN_PROGRESS\" | \"CLOSED\")[];\n  isNil?: boolean;\n}"
+    ));
+    assert!(filter.contains("  status?: TicketStatusFilter;"));
     assert!(filter.contains("  priority?: IntFilter;"));
     assert!(filter.contains("  author?: UserFilterInput;"));
     assert!(filter.contains("  and?: TicketFilterInput[];"));
@@ -123,6 +129,7 @@ fn test_has_one_typescript_interface() {
         identities: &[],
         indexes: &[],
         checks: &[],
+        statements: &[],
         embedded: false,
         data_layer: ash_core::DataLayerKind::Memory,
         timestamps: None,
@@ -150,6 +157,7 @@ fn test_has_one_typescript_interface() {
         identities: &[],
         indexes: &[],
         checks: &[],
+        statements: &[],
         embedded: false,
         data_layer: ash_core::DataLayerKind::Memory,
         timestamps: None,
@@ -163,4 +171,52 @@ fn test_has_one_typescript_interface() {
 
     let filter = generate_resource_filter_input(&USER_DEF_HAS_ONE);
     assert!(filter.contains("  profile?: ProfileFilterInput;"));
+}
+
+#[test]
+fn test_common_filters_use_graphql_field_names() {
+    let ts = generate_common_types();
+    assert!(ts.contains("export interface BooleanFilter {\n  eq?: boolean;\n  ne?: boolean;\n  isNil?: boolean;\n}"));
+    assert!(ts.contains("  ne?: string;"));
+    assert!(ts.contains("  isNil?: boolean;"));
+    assert!(!ts.contains("neq"));
+    assert!(!ts.contains("is_nil"));
+    assert!(!ts.contains("JsonFilter"));
+}
+
+#[test]
+fn test_filter_input_skips_json_attributes() {
+    static EVENT_ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::optional("metadata", AttrType::Map),
+        AttributeDef::optional("tags", AttrType::Array),
+    ];
+    static EVENT_DEF: ResourceDef = ResourceDef {
+        name: "Event",
+        table: "events",
+        attributes: EVENT_ATTRS,
+        relationships: &[],
+        actions: &[],
+        policies: &[],
+        field_policies: &[],
+        calculations: &[],
+        aggregates: &[],
+        extensions: &[],
+        notifiers: &[],
+        identities: &[],
+        indexes: &[],
+        checks: &[],
+        statements: &[],
+        embedded: false,
+        data_layer: ash_core::DataLayerKind::Memory,
+        timestamps: None,
+        store_type_id: || std::any::TypeId::of::<()>(),
+        store_name: "memory",
+        multitenancy: None,
+    };
+
+    let filter = generate_resource_filter_input(&EVENT_DEF);
+    assert!(filter.contains("  id?: UuidFilter;"));
+    assert!(!filter.contains("metadata"));
+    assert!(!filter.contains("tags"));
 }

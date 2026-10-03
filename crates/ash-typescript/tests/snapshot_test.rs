@@ -27,6 +27,7 @@ fn test_generate_from_snapshots() {
         identities: vec![],
         indexes: vec![],
         checks: vec![],
+        statements: vec![],
         references: vec![],
     };
 
@@ -61,12 +62,16 @@ fn test_generate_from_snapshots() {
         identities: vec![],
         indexes: vec![],
         checks: vec![],
+        statements: vec![],
         references: vec![ReferenceSnapshot {
             name: "fk_tickets_author".to_string(),
             column: "author_id".to_string(),
+            columns: vec!["author_id".to_string()],
             target_table: "users".to_string(),
             target_column: "id".to_string(),
+            target_columns: vec!["id".to_string()],
             on_delete: "SET NULL".to_string(),
+            on_update: "NO ACTION".to_string(),
         }],
     };
 
@@ -85,4 +90,34 @@ fn test_generate_from_snapshots() {
     assert!(ts.contains("export class AshClient {"));
     assert!(ts.contains("public readonly ticket: TicketClient;"));
     assert!(ts.contains("public readonly user: UserClient;"));
+}
+
+#[test]
+fn test_json_columns_have_no_filter_type() {
+    use ash_typescript::snapshot::sql_type_to_ts_and_zod;
+
+    assert_eq!(sql_type_to_ts_and_zod("UUID", false).1, Some("UuidFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("JSONB", true).1, None);
+    let decimal = sql_type_to_ts_and_zod("NUMERIC", false);
+    assert_eq!((decimal.0, decimal.1), ("string", Some("StringFilter")));
+}
+
+#[test]
+fn test_only_ci_string_columns_get_text_filters() {
+    use ash_typescript::snapshot::sql_type_to_ts_and_zod;
+
+    assert_eq!(sql_type_to_ts_and_zod("CITEXT", false).1, Some("TextFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("TEXT COLLATE NOCASE", false).1, Some("TextFilter"));
+    // SQLite keeps dates, decimals and enums in TEXT, and Postgres enums in VARCHAR.
+    assert_eq!(sql_type_to_ts_and_zod("TEXT", false).1, Some("StringFilter"));
+    assert_eq!(sql_type_to_ts_and_zod("VARCHAR(255)", false).1, Some("StringFilter"));
+}
+
+#[test]
+fn test_vector_columns_are_number_lists_without_filters() {
+    use ash_typescript::snapshot::sql_type_to_ts_and_zod;
+
+    let vector = sql_type_to_ts_and_zod("VECTOR(3)", false);
+    assert_eq!((vector.0, vector.1), ("number[]", None));
+    assert_eq!(vector.2, "z.array(z.number())");
 }

@@ -73,6 +73,47 @@ impl Value {
         serde_json::from_str(s).map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Plain JSON for a JSON column: maps become objects and strings stay strings, unlike
+    /// [`Value::to_json`], which tags each value with its variant.
+    pub fn to_plain_json(&self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Bool(b) => serde_json::Value::Bool(*b),
+            Self::Int(i) => serde_json::Value::from(*i),
+            Self::Uuid(u) => serde_json::Value::String(u.to_string()),
+            Self::String(s) => serde_json::Value::String(s.clone()),
+            Self::Map(m) => serde_json::Value::Object(
+                m.iter().map(|(k, v)| (k.clone(), v.to_plain_json())).collect(),
+            ),
+            Self::Array(a) => serde_json::Value::Array(a.iter().map(Self::to_plain_json).collect()),
+        }
+    }
+
+    /// Reads plain JSON from a JSON column. Integers become [`Value::Int`], other numbers
+    /// their text, and strings that parse as UUIDs [`Value::Uuid`].
+    pub fn from_plain_json(json: serde_json::Value) -> Self {
+        match json {
+            serde_json::Value::Null => Self::Null,
+            serde_json::Value::Bool(b) => Self::Bool(b),
+            serde_json::Value::Number(n) => match n.as_i64() {
+                Some(i) => Self::Int(i),
+                None => Self::String(n.to_string()),
+            },
+            serde_json::Value::String(s) => match Uuid::parse_str(&s) {
+                Ok(u) => Self::Uuid(u),
+                Err(_) => Self::String(s),
+            },
+            serde_json::Value::Array(a) => {
+                Self::Array(a.into_iter().map(Self::from_plain_json).collect())
+            }
+            serde_json::Value::Object(o) => Self::Map(
+                o.into_iter()
+                    .map(|(k, v)| (k, Self::from_plain_json(v)))
+                    .collect(),
+            ),
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "null",
@@ -135,6 +176,26 @@ impl Ord for Value {
                 a_entries.cmp(&b_entries)
             }
             (a, b) => rank(a).cmp(&rank(b)),
+        }
+    }
+}
+
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Null => {}
+            Self::Bool(b) => b.hash(state),
+            Self::Int(n) => n.hash(state),
+            Self::Uuid(u) => u.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Array(items) => items.hash(state),
+            // Maps compare equal whatever their iteration order, so hash them sorted.
+            Self::Map(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by_key(|(k, _)| *k);
+                entries.hash(state);
+            }
         }
     }
 }
@@ -271,8 +332,10 @@ impl<T> IntoOption<T> for Option<T> {
     }
 }
 
-impl IntoOption<String> for String {
-    fn into_option(self) -> Option<String> {
+/// Any value is a present value of its own type, so a setter for an optional field of
+/// a new type works without an impl of its own.
+impl<T> IntoOption<T> for T {
+    fn into_option(self) -> Option<T> {
         Some(self)
     }
 }
@@ -280,38 +343,6 @@ impl IntoOption<String> for String {
 impl IntoOption<String> for &str {
     fn into_option(self) -> Option<String> {
         Some(self.to_string())
-    }
-}
-
-impl IntoOption<i64> for i64 {
-    fn into_option(self) -> Option<i64> {
-        Some(self)
-    }
-}
-
-macro_rules! impl_into_option_int {
-    ($($t:ty),*) => {
-        $(
-            impl IntoOption<$t> for $t {
-                fn into_option(self) -> Option<$t> {
-                    Some(self)
-                }
-            }
-        )*
-    };
-}
-
-impl_into_option_int!(i8, i16, i32, isize, u8, u16, u32, u64, usize, i128, u128);
-
-impl IntoOption<bool> for bool {
-    fn into_option(self) -> Option<bool> {
-        Some(self)
-    }
-}
-
-impl IntoOption<Uuid> for Uuid {
-    fn into_option(self) -> Option<Uuid> {
-        Some(self)
     }
 }
 
@@ -385,5 +416,31 @@ pub fn optional_uuid(fields: &FieldMap, key: &str) -> Result<Option<Uuid>> {
             expected: "uuid".into(),
             got: value.type_name().into(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::{BuildHasher, RandomState};
+
+    #[test]
+    fn equal_maps_hash_alike_whatever_their_order() {
+        let mut forward = FieldMap::new();
+        let mut backward = FieldMap::new();
+        for n in 0..32 {
+            forward.insert(format!("k{n}"), Value::Int(n));
+        }
+        for n in (0..32).rev() {
+            backward.insert(format!("k{n}"), Value::Int(n));
+        }
+        let (forward, backward) = (Value::Map(forward), Value::Map(backward));
+        assert_eq!(forward, backward);
+        let hasher = RandomState::new();
+        assert_eq!(hasher.hash_one(&forward), hasher.hash_one(&backward));
+        assert_ne!(
+            hasher.hash_one(Value::Int(1)),
+            hasher.hash_one(Value::Bool(true))
+        );
     }
 }

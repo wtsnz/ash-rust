@@ -1,5 +1,5 @@
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, RelKind,
+    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
     RelationshipDef, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -22,10 +22,13 @@ static USER_RELS: &[RelationshipDef] = &[RelationshipDef {
     destination: || &TICKET_DEF,
     source_attribute: "id",
     destination_attribute: "author_id",
+    source_attributes: &[],
+    destination_attributes: &[],
     through: None,
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Cascade,
+    on_update: OnUpdate::Nothing,
 }];
 
 static USER_ACTIONS: &[ActionDef] = &[
@@ -50,6 +53,7 @@ static USER_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -77,10 +81,13 @@ static TICKET_RELS: &[RelationshipDef] = &[RelationshipDef {
     destination: || &USER_DEF,
     source_attribute: "author_id",
     destination_attribute: "id",
+    source_attributes: &[],
+    destination_attributes: &[],
     through: None,
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Nothing,
+    on_update: OnUpdate::Nothing,
 }];
 
 static TICKET_ACTIONS: &[ActionDef] = &[
@@ -105,6 +112,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -128,6 +136,7 @@ static SQLITE_USER_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Sqlite,
     timestamps: None,
@@ -151,6 +160,7 @@ static SQLITE_TICKET_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Sqlite,
     timestamps: None,
@@ -172,7 +182,7 @@ async fn setup_memory_benchmark_data(
         u.insert("id".into(), Value::Uuid(author_id));
         u.insert("name".into(), Value::String(format!("Engineer #{i}")));
         u.insert("email".into(), Value::String(format!("engineer{i}@example.com")));
-        mem.create(&USER_DEF, author_id, u).await.unwrap();
+        mem.create(&USER_DEF, None, author_id, u).await.unwrap();
         author_ids.push(author_id);
     }
 
@@ -195,7 +205,7 @@ async fn setup_memory_benchmark_data(
         t.insert("priority".into(), Value::Int(priority));
         t.insert("author_id".into(), Value::Uuid(author_id));
 
-        mem.create(&TICKET_DEF, t_id, t).await.unwrap();
+        mem.create(&TICKET_DEF, None, t_id, t).await.unwrap();
     }
 
     let schema = AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF])
@@ -410,7 +420,7 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
         u.insert("id".into(), Value::Uuid(author_id));
         u.insert("name".into(), Value::String("SQLite Engineer".into()));
         u.insert("email".into(), Value::String("sqlite@example.com".into()));
-        db.create(&SQLITE_USER_DEF, author_id, u).await.unwrap();
+        db.create(&SQLITE_USER_DEF, None, author_id, u).await.unwrap();
 
         for i in 1..=100 {
             let t_id = Uuid::new_v4();
@@ -420,7 +430,7 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
             t.insert("status".into(), Value::String("OPEN".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("author_id".into(), Value::Uuid(author_id));
-            db.create(&SQLITE_TICKET_DEF, t_id, t).await.unwrap();
+            db.create(&SQLITE_TICKET_DEF, None, t_id, t).await.unwrap();
         }
 
         let ctx = Context::new(db);

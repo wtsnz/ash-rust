@@ -1,8 +1,9 @@
+use ash_macro_support::ResourceTokens;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Error, Ident, ItemMacro, LitInt, LitStr, Result, Token};
+use syn::{Error, Ident, LitInt, LitStr, Result, Token};
 
 struct PasswordStrategyConfig {
     identity_field: String,
@@ -240,213 +241,42 @@ impl Parse for AuthenticationBlock {
     }
 }
 
-struct RawSection {
-    name: Ident,
-    tokens: TokenStream2,
-    has_brace: bool,
-}
-
-struct ResourceDslInput {
-    outer_attrs: Vec<Attribute>,
-    resource_ident: Ident,
-    sections: Vec<RawSection>,
-    auth_block: Option<AuthenticationBlock>,
-}
-
-const DSL_SECTIONS: &[&str] = &[
-    "table",
-    "attributes",
-    "relationships",
-    "calculations",
-    "aggregates",
-    "actions",
-    "policies",
-    "field_policies",
-    "extensions",
-    "notifiers",
-    "extend",
-    "optimistic_lock",
-    "identities",
-    "embedded",
-    "data_layer",
-    "store",
-    "timestamps",
-    "multitenancy",
-    "actor",
-];
-
-impl Parse for ResourceDslInput {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let outer_attrs = input.call(Attribute::parse_outer)?;
-        let mut embedded = false;
-        if input.peek(Ident) {
-            let fork = input.fork();
-            if let Ok(id) = fork.parse::<Ident>()
-                && id == "embedded"
-            {
-                let _: Ident = input.parse()?;
-                if input.peek(Token![;]) {
-                    let _: Token![;] = input.parse()?;
-                }
-                embedded = true;
-            }
-        }
-
-        let mut resource_ident = None;
-        let mut sections = Vec::new();
-        let mut auth_block = None;
-
-        parse_auth_dsl_body(input, &mut resource_ident, &mut sections, &mut auth_block)?;
-
-        let resource_ident = resource_ident.ok_or_else(|| {
-            Error::new(
-                proc_macro2::Span::call_site(),
-                "expected `Name { ... }` resource header",
-            )
-        })?;
-
-        let _ = embedded;
-        Ok(Self {
-            outer_attrs,
-            resource_ident,
-            sections,
-            auth_block,
-        })
-    }
-}
-
-fn parse_auth_dsl_body(
-    input: ParseStream,
-    resource_ident: &mut Option<Ident>,
-    sections: &mut Vec<RawSection>,
-    auth_block: &mut Option<AuthenticationBlock>,
-) -> Result<()> {
-    while !input.is_empty() {
-        let ident: Ident = input.parse()?;
-
-        if ident == "resource" || ident == "name" {
-            let name: Ident = input.parse()?;
-            if input.peek(Token![;]) {
-                let _: Token![;] = input.parse()?;
-            }
-            *resource_ident = Some(name);
-            continue;
-        }
-
-        if ident == "authentication" {
-            let inner;
-            syn::braced!(inner in input);
-            let parsed_auth: AuthenticationBlock = inner.parse()?;
-            *auth_block = Some(parsed_auth);
-            continue;
-        }
-
-        if input.peek(syn::token::Brace) {
-            let inner;
-            syn::braced!(inner in input);
-            if resource_ident.is_none() && !DSL_SECTIONS.iter().any(|s| ident == *s) {
-                *resource_ident = Some(ident);
-                parse_auth_dsl_body(&inner, resource_ident, sections, auth_block)?;
-            } else {
-                let inner_tokens: TokenStream2 = inner.parse()?;
-                sections.push(RawSection {
-                    name: ident,
-                    tokens: inner_tokens,
-                    has_brace: true,
-                });
-            }
-        } else {
-            let mut tok_vec = Vec::new();
-            while !input.is_empty() && !input.peek(Token![;]) {
-                tok_vec.push(input.parse::<proc_macro2::TokenTree>()?);
-            }
-            if input.peek(Token![;]) {
-                let _: Token![;] = input.parse()?;
-            }
-            let tokens = tok_vec.into_iter().collect();
-            sections.push(RawSection {
-                name: ident,
-                tokens,
-                has_brace: false,
-            });
-        }
-    }
-    Ok(())
-}
-
 /// Pattern 2: Transformative Macro Decorator (`#[authentication] resource! { ... }`)
 #[proc_macro_attribute]
 pub fn authentication(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_2: TokenStream2 = item.clone().into();
-
-    let (dsl_tokens, outer_attrs) = match syn::parse2::<ItemMacro>(item_2.clone()) {
-        Ok(item_macro) => (item_macro.mac.tokens, item_macro.attrs),
-        Err(_) => (item_2, Vec::new()),
-    };
-
-    let mut dsl = match syn::parse2::<ResourceDslInput>(dsl_tokens) {
-        Ok(d) => d,
-        Err(e) => return e.to_compile_error().into(),
-    };
-    if !outer_attrs.is_empty() {
-        dsl.outer_attrs.extend(outer_attrs);
-    }
-
-    match expand_authentication_transformer(dsl) {
+    match ResourceTokens::from_item(item.into()).and_then(expand_authentication_transformer) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenStream2> {
-    let auth = dsl.auth_block.unwrap_or_else(|| AuthenticationBlock {
-        password: Some(PasswordStrategyConfig::default()),
-        tokens: Some(TokenStrategyConfig::default()),
-        api_key: None,
-        confirmation: None,
-    });
+fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<TokenStream2> {
+    let auth = match resource.take_section("authentication") {
+        Some(section) => syn::parse2::<AuthenticationBlock>(section.tokens)?,
+        None => AuthenticationBlock {
+            password: Some(PasswordStrategyConfig::default()),
+            tokens: Some(TokenStrategyConfig::default()),
+            api_key: None,
+            confirmation: None,
+        },
+    };
 
-    let resource_ident = &dsl.resource_ident;
+    let resource_ident = resource.name.clone();
 
-    // 1. Injected fields into `attributes`
-    let mut injected_attrs = quote! {};
-    if let Some(pass) = &auth.password {
-        let field_ident = format_ident!("{}", pass.hashed_password_field);
-        injected_attrs = quote! {
-            #injected_attrs
-            #field_ident: Option<String>;
-        };
+    // 1. Inject fields into `attributes`, unless the resource declares them
+    if resource.section("attributes").is_none() {
+        resource.append_to_section("attributes", quote! { id: ::uuid::Uuid [pk]; });
     }
-    if let Some(api) = &auth.api_key {
-        let field_ident = format_ident!("{}", api.api_key_field);
-        injected_attrs = quote! {
-            #injected_attrs
-            #field_ident: Option<String>;
-        };
-    }
-    if let Some(conf) = &auth.confirmation {
-        let field_ident = format_ident!("{}", conf.confirmed_field);
-        injected_attrs = quote! {
-            #injected_attrs
-            #field_ident: Option<String>;
-        };
-    }
-
-    if let Some(attr_sec) = dsl.sections.iter_mut().find(|s| s.name == "attributes") {
-        let existing = &attr_sec.tokens;
-        attr_sec.tokens = quote! {
-            #existing
-            #injected_attrs
-        };
-    } else {
-        dsl.sections.push(RawSection {
-            name: format_ident!("attributes"),
-            tokens: quote! {
-                id: ::uuid::Uuid [pk];
-                #injected_attrs
-            },
-            has_brace: true,
-        });
+    let injected_fields = [
+        auth.password.as_ref().map(|p| &p.hashed_password_field),
+        auth.api_key.as_ref().map(|a| &a.api_key_field),
+        auth.confirmation.as_ref().map(|c| &c.confirmed_field),
+    ];
+    for field in injected_fields.into_iter().flatten() {
+        let field_ident = format_ident!("{}", field);
+        if !resource.declares_attribute(&field_ident) {
+            resource.append_to_section("attributes", quote! { #field_ident: Option<String>; });
+        }
     }
 
     // 2. Injected actions into `actions`
@@ -471,37 +301,55 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
             quote! { None }
         };
 
-        injected_actions = quote! {
-            #injected_actions
-            create #reg_ident {
-                accept [#id_ident];
-                argument password: String;
-                #conf_arg
-                change custom(&::ash_authentication::HashPasswordChange::new(
-                    "password",
-                    #conf_str_opt,
-                    #hashed_field_str,
-                ).with_min_length(#min_len));
-            }
+        let hash = quote! {
+            change custom(&::ash_authentication::HashPasswordChange::new(
+                "password",
+                #conf_str_opt,
+                #hashed_field_str,
+            ).with_min_length(#min_len));
         };
+        let mut actions = resource.actions()?;
+        match actions.iter_mut().find(|action| action.name == reg_ident) {
+            // A register action the resource defines keeps its own body and gains the
+            // password arguments it lacks and the hashing, so passwords are never stored
+            // in the clear.
+            Some(action) if action.is("create") => {
+                let mut additions = quote! {};
+                if !declares_argument(&action.body, "password") {
+                    additions = quote! { argument password: String; };
+                }
+                if pass.require_confirmation
+                    && !declares_argument(&action.body, "password_confirmation")
+                {
+                    additions = quote! { #additions #conf_arg };
+                }
+                action.append(quote! { #additions #hash });
+                resource.set_actions(&actions);
+            }
+            Some(action) => {
+                return Err(Error::new_spanned(
+                    &action.name,
+                    "the password register action must be a create action",
+                ));
+            }
+            None => {
+                injected_actions = quote! {
+                    #injected_actions
+                    create #reg_ident {
+                        accept [#id_ident];
+                        argument password: String;
+                        #conf_arg
+                        #hash
+                    }
+                };
+            }
+        }
     }
 
-    if let Some(act_sec) = dsl.sections.iter_mut().find(|s| s.name == "actions") {
-        let existing = &act_sec.tokens;
-        act_sec.tokens = quote! {
-            #existing
-            #injected_actions
-        };
-    } else {
-        dsl.sections.push(RawSection {
-            name: format_ident!("actions"),
-            tokens: quote! {
-                read read { primary; }
-                #injected_actions
-            },
-            has_brace: true,
-        });
+    if resource.section("actions").is_none() {
+        resource.append_to_section("actions", quote! { read read { primary; } });
     }
+    resource.append_to_section("actions", injected_actions);
 
     // 3. Inject AuthenticationDef into `extensions`
     let pass_tokens = if let Some(p) = &auth.password {
@@ -571,51 +419,11 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
         }
     };
 
-    if let Some(ext_sec) = dsl.sections.iter_mut().find(|s| s.name == "extensions") {
-        let existing = &ext_sec.tokens;
-        ext_sec.tokens = quote! {
-            #existing, #auth_ext_expr
-        };
-    } else {
-        dsl.sections.push(RawSection {
-            name: format_ident!("extensions"),
-            tokens: quote! {
-                [#auth_ext_expr]
-            },
-            has_brace: false,
-        });
-    }
+    resource.add_extension(auth_ext_expr)?;
 
-    // Reassemble sections into inner DSL
-    let mut dsl_body = quote! {};
-
-    for sec in dsl.sections {
-        let sec_name = &sec.name;
-        let sec_tokens = &sec.tokens;
-        if sec.has_brace {
-            dsl_body = quote! {
-                #dsl_body
-                #sec_name {
-                    #sec_tokens
-                }
-            };
-        } else {
-            dsl_body = quote! {
-                #dsl_body
-                #sec_name #sec_tokens;
-            };
-        }
-    }
-
-    let outer_attrs = &dsl.outer_attrs;
-
+    let resource_macro = resource.to_resource_macro();
     let expanded = quote! {
-        #(#outer_attrs)*
-        ::ash_core::resource! {
-            #resource_ident {
-                #dsl_body
-            }
-        }
+        #resource_macro
 
         impl #resource_ident {
             /// Initialize an `AuthStrategy` configured for this resource.
@@ -626,4 +434,15 @@ fn expand_authentication_transformer(mut dsl: ResourceDslInput) -> Result<TokenS
     };
 
     Ok(expanded)
+}
+
+/// Whether an action body declares `argument name: ...`.
+fn declares_argument(body: &TokenStream2, name: &str) -> bool {
+    let trees: Vec<proc_macro2::TokenTree> = body.clone().into_iter().collect();
+    trees.windows(2).any(|pair| match pair {
+        [proc_macro2::TokenTree::Ident(keyword), proc_macro2::TokenTree::Ident(ident)] => {
+            keyword == "argument" && ident == name
+        }
+        _ => false,
+    })
 }

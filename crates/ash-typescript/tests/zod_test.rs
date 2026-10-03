@@ -37,6 +37,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -60,4 +61,33 @@ fn test_zod_schema_generation() {
     assert!(zod.contains("status: z.enum([\"open\", \"in_progress\", \"closed\"])"));
     assert!(zod.contains("priority: z.number().int().min(1).max(5)"));
     assert!(zod.contains("author_id: z.string().uuid().nullable().optional()"));
+}
+
+static ISSUE_ATTRS: &[AttributeDef] = &[
+    AttributeDef::uuid_pk("id"),
+    AttributeDef::required(
+        "kind",
+        AttrType::Atom {
+            one_of: &["bug", "feature", "chore"],
+        },
+    ),
+];
+
+static ISSUE_ACTIONS: &[ActionDef] = &[ActionDef::create("file")
+    .accept(&["kind"])
+    .validations(&[Validation::one_of("kind", &["bug", "feature"])])];
+
+static ISSUE_DEF: ResourceDef = ResourceDef {
+    name: "Issue",
+    table: "issues",
+    attributes: ISSUE_ATTRS,
+    actions: ISSUE_ACTIONS,
+    ..TICKET_DEF
+};
+
+#[test]
+fn test_atom_one_of_inputs_use_graphql_enum_values() {
+    let zod = generate_resource_zod(&ISSUE_DEF);
+    assert!(zod.contains("kind: z.enum([\"BUG\", \"FEATURE\", \"CHORE\"])"), "{zod}");
+    assert!(zod.contains("kind: z.enum([\"BUG\", \"FEATURE\"])"), "{zod}");
 }

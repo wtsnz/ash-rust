@@ -1,10 +1,10 @@
 use ash_core::{
-    AggregateDef, AggregateFilter, AggregateKind, AttrType, CompiledQuery, Error, Expr, FieldMap,
-    Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
+    AggregateDef, AggregateFilter, AggregateKind, AttrType, CalculationDef, CompiledQuery, Error,
+    Expr, FieldMap, Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
 use uuid::Uuid;
 
-use crate::dialect::SqlDialect;
+use crate::dialect::{SqlDialect, TextMatch};
 use crate::param::SqlParam;
 
 /// A parameterized SQL statement and its bound parameter values.
@@ -33,6 +33,34 @@ pub fn ident<D: SqlDialect>(dialect: &D, name: &str) -> Result<String> {
     Ok(dialect.quote_identifier(name))
 }
 
+/// `dest_alias.dest_col = outer_alias.source_col`, AND-ed when the relationship is composite.
+fn relationship_equalities<D: SqlDialect>(
+    dialect: &D,
+    dest_alias: &str,
+    dest: &ResourceDef,
+    outer_alias: &str,
+    outer: &ResourceDef,
+    rel: &ash_core::RelationshipDef,
+) -> Result<String> {
+    let source_cols = rel.source_columns();
+    let dest_cols = rel.destination_columns();
+    if source_cols.len() != dest_cols.len() {
+        return Err(Error::Invalid(format!(
+            "relationship `{}` has {} source columns and {} destination columns",
+            rel.name,
+            source_cols.len(),
+            dest_cols.len()
+        )));
+    }
+    let mut parts = Vec::new();
+    for (source_col, dest_col) in source_cols.iter().zip(dest_cols.iter()) {
+        let dest_sql = column(dialect, dest, dest_col)?;
+        let outer_sql = column(dialect, outer, source_col)?;
+        parts.push(format!("{dest_alias}.{dest_sql} = {outer_alias}.{outer_sql}"));
+    }
+    Ok(parts.join(" AND "))
+}
+
 /// Validates that a column exists on the resource and returns its quoted identifier.
 pub fn column<D: SqlDialect>(dialect: &D, resource: &ResourceDef, field: &str) -> Result<String> {
     if resource.attribute(field).is_none()
@@ -51,8 +79,22 @@ pub fn column<D: SqlDialect>(dialect: &D, resource: &ResourceDef, field: &str) -
 pub struct QueryCompiler<'a, D: SqlDialect> {
     pub dialect: &'a D,
     param_counter: usize,
+    /// Numbers subquery aliases. Kept apart from `param_counter` so Postgres
+    /// placeholders stay consecutive.
+    alias_counter: usize,
     pub params: Vec<SqlParam>,
+    /// A bound value that cannot be sent, reported when the filter finishes compiling.
+    invalid_param: Option<Error>,
     pub current_calc_args: Option<FieldMap>,
+    /// Declared arguments of the calculation being compiled, which type its parameters.
+    current_calc_arguments: &'static [ash_core::ArgumentDef],
+    /// Argument values for each calculation the query names, for wherever it appears.
+    calc_args: std::collections::HashMap<String, FieldMap>,
+    /// Resources whose primary-read filters are being compiled. A read filter that leads
+    /// back to its own resource is not applied again inside itself, which would recurse.
+    applying_read_filters: Vec<&'static str>,
+    /// The query's tenant, which also limits the rows read through relationships.
+    tenant: Option<String>,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -60,9 +102,86 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Self {
             dialect,
             param_counter: 0,
+            alias_counter: 0,
             params: Vec::new(),
+            invalid_param: None,
             current_calc_args: None,
+            current_calc_arguments: &[],
+            calc_args: std::collections::HashMap::new(),
+            applying_read_filters: Vec::new(),
+            tenant: None,
         }
+    }
+
+    /// Compiles `calc` with the query's arguments for it, in a SELECT list or a filter.
+    fn compile_calculation(
+        &mut self,
+        resource: &ResourceDef,
+        calc: &CalculationDef,
+    ) -> Result<String> {
+        let args = self.calc_args.get(calc.name).cloned();
+        let outer_args = std::mem::replace(&mut self.current_calc_args, args);
+        let outer_arguments = std::mem::replace(&mut self.current_calc_arguments, calc.arguments);
+        let compiled = self.compile_expr(resource, &calc.expr);
+        self.current_calc_args = outer_args;
+        self.current_calc_arguments = outer_arguments;
+        compiled
+    }
+
+    /// The compiler with `tenant` set, for a write. Reads take the query's tenant.
+    pub fn with_tenant(mut self, tenant: Option<&str>) -> Self {
+        self.tenant = tenant.map(str::to_string);
+        self
+    }
+
+    /// `resource`'s table as this statement reaches it: in the tenant's schema for a
+    /// context-tenant resource, as AshPostgres prefixes it, or unqualified. Every table a
+    /// statement touches goes through here, subqueries included, so none reads the wrong
+    /// tenant's rows.
+    fn table(&self, resource: &ResourceDef) -> Result<String> {
+        let table = ident(self.dialect, resource.table_name())?;
+        let schema_tenant = match (resource.multitenancy, self.tenant.as_deref()) {
+            (Some(mt), Some(tenant)) if mt.strategy == ash_core::MultitenancyStrategy::Context => {
+                tenant
+            }
+            _ => return Ok(table),
+        };
+        let schema = ident(self.dialect, schema_tenant)?;
+        self.dialect.qualify_table(&schema, &table).ok_or_else(|| {
+            Error::Invalid(format!(
+                "{} has no schemas to keep the tenants of `{}` apart; use attribute \
+                 multitenancy",
+                self.dialect.name(),
+                resource.name
+            ))
+        })
+    }
+
+    /// What a read of `resource` through a relationship sees, compiled against `alias`:
+    /// the query's tenant, and the primary-read filter unless it is already being
+    /// compiled further out.
+    fn compile_read_filter(
+        &mut self,
+        resource: &'static ResourceDef,
+        alias: &str,
+    ) -> Result<Option<String>> {
+        let mut parts = Vec::new();
+        if let Some(tenant_filter) = resource.tenant_filter(self.tenant.as_deref()) {
+            parts.push(self.compile_filter_scoped(resource, &tenant_filter, Some(alias))?);
+        }
+        if !self.applying_read_filters.contains(&resource.name)
+            && let Some(read_filter) = resource.primary_read_filter()
+        {
+            self.applying_read_filters.push(resource.name);
+            let compiled = self.compile_filter_scoped(resource, &read_filter, Some(alias));
+            self.applying_read_filters.pop();
+            parts.push(compiled?);
+        }
+        Ok(match parts.len() {
+            0 => None,
+            1 => parts.pop(),
+            _ => Some(format!("({})", parts.join(" AND "))),
+        })
     }
 
     /// Pushes a bound parameter and returns the dialect placeholder (e.g. `?` or `$1`).
@@ -73,7 +192,23 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     }
 
     fn bind_typed(&mut self, ty: AttrType, val: Value) -> String {
-        let placeholder = self.push_param(val);
+        self.param_counter += 1;
+        let placeholder = self.dialect.placeholder(self.param_counter);
+        // Stored values are canonical, so compare against the canonical spelling too.
+        let val = match &val {
+            Value::String(raw) => ash_core::canonical_text(ty, raw).map_or(val, Value::String),
+            _ => val,
+        };
+        if ty == AttrType::Binary {
+            if let Value::String(encoded) = &val
+                && let Err(err) = ash_core::Binary::parse(encoded)
+            {
+                self.invalid_param.get_or_insert(err);
+            }
+            self.params.push(SqlParam::binary(val));
+        } else {
+            self.params.push(SqlParam::typed(val, ty));
+        }
         self.dialect.cast_param(ty, &placeholder)
     }
 
@@ -102,7 +237,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         scope_alias: Option<&str>,
     ) -> Result<String> {
         if let Some(calc) = resource.calculation(field) {
-            self.compile_expr(resource, &calc.expr)
+            self.compile_calculation(resource, calc)
         } else {
             let col = column(self.dialect, resource, field)?;
             if let Some(alias) = scope_alias {
@@ -123,8 +258,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     .and_then(|args| args.get(*name))
                     .cloned()
                     .unwrap_or(Value::Null);
-                let p = self.push_param(val);
-                Ok(p)
+                // Bind with the declared type, so a missing argument is a typed NULL that
+                // Postgres can use in `COALESCE` or arithmetic.
+                match self.current_calc_arguments.iter().find(|arg| arg.name == *name) {
+                    Some(arg) => Ok(self.bind_typed(arg.ty, val)),
+                    None => Ok(self.push_param(val)),
+                }
             }
             Expr::LitInt(n) => Ok(n.to_string()),
             Expr::LitString(s) => {
@@ -229,11 +368,52 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    fn compile_text_match(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        kind: TextMatch,
+        needle: &str,
+        scope_alias: Option<&str>,
+    ) -> Result<String> {
+        let ty = resource
+            .attribute(field)
+            .map(|attr| attr.ty)
+            .or_else(|| resource.calculation(field).map(|calc| calc.ty));
+        let case_insensitive = match ty {
+            Some(AttrType::CiString) => true,
+            Some(AttrType::String | AttrType::Atom { .. }) | None => false,
+            Some(other) => {
+                return Err(Error::Invalid(format!(
+                    "text filters need a string field, but `{field}` on {} is {other:?}",
+                    resource.name
+                )));
+            }
+        };
+        let op = self.compile_operand_scoped(resource, field, scope_alias)?;
+        let pattern = self.dialect.text_pattern(kind, needle, case_insensitive);
+        let p = self.bind_field(resource, field, Value::String(pattern));
+        Ok(self.dialect.render_text_match(&op, &p, case_insensitive))
+    }
+
     pub fn compile_filter(&mut self, resource: &ResourceDef, filter: &Filter) -> Result<String> {
         self.compile_filter_scoped(resource, filter, None)
     }
 
     pub fn compile_filter_scoped(
+        &mut self,
+        resource: &ResourceDef,
+        filter: &Filter,
+        scope_alias: Option<&str>,
+    ) -> Result<String> {
+        let sql = self.compile_filter_node(resource, filter, scope_alias)?;
+        match self.invalid_param.take() {
+            Some(err) => Err(err),
+            None => Ok(sql),
+        }
+    }
+
+    fn compile_filter_node(
         &mut self,
         resource: &ResourceDef,
         filter: &Filter,
@@ -284,10 +464,38 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NULL"))
             }
+            Filter::Contains(field, needle) => {
+                self.compile_text_match(resource, field, TextMatch::Contains, needle, scope_alias)
+            }
+            Filter::StartsWith(field, needle) => {
+                self.compile_text_match(resource, field, TextMatch::StartsWith, needle, scope_alias)
+            }
+            Filter::EndsWith(field, needle) => {
+                self.compile_text_match(resource, field, TextMatch::EndsWith, needle, scope_alias)
+            }
             Filter::In(_field, vals) if vals.is_empty() => Ok("0=1".to_string()),
             Filter::In(field, vals) => {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
+                let ty = resource
+                    .attribute(field)
+                    .map(|attr| attr.ty)
+                    .or_else(|| resource.calculation(field).map(|calc| calc.ty));
+                if ty == Some(AttrType::Binary) {
+                    // Each value needs decoding, so compare one bound value at a time.
+                    let parts: Vec<String> = vals
+                        .iter()
+                        .map(|val| {
+                            let p = self.bind_field(resource, field, val.clone());
+                            format!("{op} = {p}")
+                        })
+                        .collect();
+                    return Ok(format!("({})", parts.join(" OR ")));
+                }
                 let param = self.push_list_param(vals.clone());
+                let param = match ty {
+                    Some(ty) => self.dialect.cast_list_param(ty, &param),
+                    None => param,
+                };
                 Ok(self.dialect.render_in_list(&op, &param))
             }
             Filter::And(parts) => {
@@ -319,15 +527,24 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     ))
                 })?;
                 let dest_res = (rel.destination)();
-                self.param_counter += 1;
-                let dest_alias = format!("rel_{}_{}", dest_res.table_name(), self.param_counter);
-                let dest_table = ident(self.dialect, dest_res.table_name())?;
+                self.alias_counter += 1;
+                let dest_alias = format!("rel_{}_{}", dest_res.table_name(), self.alias_counter);
+                let dest_table = self.table(dest_res)?;
                 let outer_scope = scope_alias
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| ident(self.dialect, resource.table_name()).unwrap());
-                let outer_col = column(self.dialect, resource, rel.source_attribute)?;
-                let dest_col = column(self.dialect, dest_res, rel.destination_attribute)?;
-                let inner_sql = self.compile_filter_scoped(dest_res, filter, Some(&dest_alias))?;
+                let join_sql = relationship_equalities(
+                    self.dialect,
+                    &dest_alias,
+                    dest_res,
+                    &outer_scope,
+                    resource,
+                    rel,
+                )?;
+                let mut inner_sql = self.compile_filter_scoped(dest_res, filter, Some(&dest_alias))?;
+                if let Some(read_sql) = self.compile_read_filter(dest_res, &dest_alias)? {
+                    inner_sql = format!("({inner_sql} AND {read_sql})");
+                }
 
                 match rel.kind {
                     RelKind::ManyToMany => {
@@ -338,13 +555,15 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                             ))
                         })?;
                         let through_res = through_fn();
-                        self.param_counter += 1;
+                        self.alias_counter += 1;
                         let join_alias = format!(
                             "rel_join_{}_{}",
                             through_res.table_name(),
-                            self.param_counter
+                            self.alias_counter
                         );
-                        let through_table = ident(self.dialect, through_res.table_name())?;
+                        let through_table = self.table(through_res)?;
+                        let outer_col = column(self.dialect, resource, rel.source_attribute)?;
+                        let dest_col = column(self.dialect, dest_res, rel.destination_attribute)?;
                         let source_on_join = column(
                             self.dialect,
                             through_res,
@@ -357,12 +576,16 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                             rel.destination_attribute_on_join_resource
                                 .unwrap_or(rel.destination_attribute),
                         )?;
+                        // An archived join row unlinks the records, as it does for loads.
+                        if let Some(join_sql) = self.compile_read_filter(through_res, &join_alias)? {
+                            inner_sql = format!("{inner_sql} AND {join_sql}");
+                        }
                         Ok(format!(
                             "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} INNER JOIN {through_table} AS {join_alias} ON {dest_alias}.{dest_col} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {outer_scope}.{outer_col} AND {inner_sql})"
                         ))
                     }
                     RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => Ok(format!(
-                        "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_col} = {outer_scope}.{outer_col} AND {inner_sql})"
+                        "EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {join_sql} AND {inner_sql})"
                     )),
                 }
             }
@@ -389,6 +612,27 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// The aggregate's own filter plus the primary-read filters of the destination and,
+    /// for many_to_many, the join resource, each prefixed with ` AND `.
+    fn aggregate_conditions(
+        &mut self,
+        dest: &'static ResourceDef,
+        dest_alias: &str,
+        agg: &AggregateDef,
+        join: Option<(&'static ResourceDef, &str)>,
+    ) -> Result<String> {
+        let mut sql = self.compile_aggregate_filter(dest_alias, &agg.filter)?;
+        if let Some(compiled) = self.compile_read_filter(dest, dest_alias)? {
+            sql.push_str(&format!(" AND {compiled}"));
+        }
+        if let Some((through, join_alias)) = join
+            && let Some(compiled) = self.compile_read_filter(through, join_alias)?
+        {
+            sql.push_str(&format!(" AND {compiled}"));
+        }
+        Ok(sql)
+    }
+
     pub fn compile_aggregate(
         &mut self,
         resource: &ResourceDef,
@@ -398,9 +642,17 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
         })?;
         let dest = (rel.destination)();
-        let dest_table = ident(self.dialect, dest.table_name())?;
+        let dest_table = self.table(dest)?;
         let dest_alias = ident(self.dialect, &format!("_ash_sub_{}", agg.name))?;
         let source_table = ident(self.dialect, resource.table_name())?;
+        let join_sql = relationship_equalities(
+            self.dialect,
+            &dest_alias,
+            dest,
+            &source_table,
+            resource,
+            rel,
+        )?;
         let source_attr = ident(self.dialect, rel.source_attribute)?;
         let dest_attr = ident(self.dialect, rel.destination_attribute)?;
 
@@ -408,37 +660,39 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             RelKind::HasMany | RelKind::BelongsTo | RelKind::HasOne => match &agg.kind {
                 AggregateKind::Count => {
                     let mut s = format!(
-                        "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
                     s.push(')');
                     Ok(s)
                 }
                 AggregateKind::Exists => {
                     let mut s = format!(
-                        "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
                     s.push_str("))");
                     Ok(s)
                 }
                 AggregateKind::First { field } => {
                     let f = ident(self.dialect, field)?;
                     let mut s = format!(
-                        "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
                     s.push_str(" LIMIT 1)");
                     Ok(s)
                 }
                 AggregateKind::Sum { field } => {
                     let f = ident(self.dialect, field)?;
                     let mut s = format!(
-                        "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {dest_alias}.{dest_attr} = {source_table}.{source_attr}"
+                        "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
-                    s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                    s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
                     s.push(')');
-                    Ok(s)
+                    // SUM's result type can differ from the column's, so it is cast to the
+                    // aggregate's declared type.
+                    Ok(self.dialect.cast_expression(agg.ty, &s))
                 }
             },
             RelKind::ManyToMany => {
@@ -449,8 +703,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     ))
                 })?;
                 let through_def = through_fn();
-                let join_table = ident(self.dialect, through_def.table_name())?;
+                let join_table = self.table(through_def)?;
                 let join_alias = ident(self.dialect, &format!("_ash_join_{}", agg.name))?;
+                let join = Some((through_def, join_alias.as_str()));
                 let source_on_join = ident(
                     self.dialect,
                     rel.source_attribute_on_join_resource
@@ -467,7 +722,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(SELECT COUNT(*) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
                         s.push(')');
                         Ok(s)
                     }
@@ -475,7 +730,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(EXISTS (SELECT 1 FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
                         s.push_str("))");
                         Ok(s)
                     }
@@ -484,7 +739,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
                         s.push_str(" LIMIT 1)");
                         Ok(s)
                     }
@@ -493,9 +748,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         let mut s = format!(
                             "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
-                        s.push_str(&self.compile_aggregate_filter(&dest_alias, &agg.filter)?);
+                        s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
                         s.push(')');
-                        Ok(s)
+                        // SUM's result type can differ from the column's, so it is cast to the
+                        // aggregate's declared type.
+                        Ok(self.dialect.cast_expression(agg.ty, &s))
                     }
                 }
             }
@@ -604,6 +861,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         query: &CompiledQuery,
         cursor: Option<&KeysetCursor>,
     ) -> Result<CompiledSql> {
+        self.calc_args = query.calculation_args.clone();
+        self.tenant = query.tenant.clone();
         let mut sql = String::from("SELECT ");
         let mut select_items = Vec::new();
 
@@ -618,9 +877,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     resource.name
                 ))
             })?;
-            self.current_calc_args = query.calculation_args.get(calc_name).cloned();
-            let expr_sql = self.compile_expr(resource, &calc.expr)?;
-            self.current_calc_args = None;
+            let expr_sql = self.compile_calculation(resource, calc)?;
             let alias = ident(self.dialect, calc.name)?;
             select_items.push(format!("{expr_sql} AS {alias}"));
         }
@@ -639,7 +896,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         sql.push_str(&select_items.join(", "));
         sql.push_str(" FROM ");
-        sql.push_str(&ident(self.dialect, resource.table_name())?);
+        sql.push_str(&self.table(resource)?);
 
         let mut where_clauses = Vec::new();
 
@@ -688,7 +945,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         fields: &FieldMap,
     ) -> Result<CompiledSql> {
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
         let mut col_names = Vec::new();
         let mut placeholders = Vec::new();
 
@@ -720,7 +977,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if rows.is_empty() {
             return Ok(CompiledSql::new(String::new(), Vec::new()));
         }
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
 
         let mut col_names = Vec::new();
         let mut attrs = Vec::new();
@@ -765,7 +1022,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
 
         let mut set_clauses = Vec::new();
         for attr in resource.attributes {
@@ -812,7 +1069,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
         let p = self.push_param(Value::Uuid(id));
 
@@ -828,7 +1085,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
-        let table = ident(self.dialect, resource.table_name())?;
+        let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
 
         if ids.is_empty() {
@@ -898,9 +1155,17 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for key in identity.keys {
                 key_cols.push(ident(self.dialect, key)?);
             }
-            stmts.push(format!(
-                "CREATE UNIQUE INDEX {if_not_exists}{idx_name} ON {table} ({})",
-                key_cols.join(", ")
+            stmts.push(crate::generator::format_create_index(
+                true,
+                !if_not_exists.is_empty(),
+                &idx_name,
+                &table,
+                &key_cols.join(", "),
+                identity.predicate,
+                self.dialect.name(),
+                identity.nils_distinct,
+                None,
+                "",
             ));
         }
 
@@ -913,9 +1178,21 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             for key in index.keys {
                 key_cols.push(ident(self.dialect, key)?);
             }
-            stmts.push(format!(
-                "CREATE INDEX {if_not_exists}{idx_name} ON {table} ({})",
-                key_cols.join(", ")
+            let mut include_cols = Vec::new();
+            for column in index.include {
+                include_cols.push(ident(self.dialect, column)?);
+            }
+            stmts.push(crate::generator::format_create_index(
+                false,
+                !if_not_exists.is_empty(),
+                &idx_name,
+                &table,
+                &key_cols.join(", "),
+                index.predicate,
+                self.dialect.name(),
+                true,
+                index.method,
+                &include_cols.join(", "),
             ));
         }
 

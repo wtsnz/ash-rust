@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use ash_core::{
-    CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
+    AttrType, CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
     TransactionSupport, Value,
 };
 use ash_sql::{CompiledSql, MigrationExecutor, Migrator, PostgresDialect, QueryCompiler, SqlParam};
@@ -202,15 +202,99 @@ impl Postgres {
     }
 
     /// Installs table and index DDL for the given Ash resources.
+    ///
+    /// Runs in one transaction under the migration lock, so several processes installing
+    /// at once (for example app instances starting together) neither collide on
+    /// `CREATE TABLE IF NOT EXISTS` nor see a table before its indexes exist.
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
+        self.transaction(|tx| {
+            let tx = tx.clone();
+            async move {
+                tx.execute_raw(&format!("SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"))
+                    .await?;
+                tx.install_unlocked(resources).await
+            }
+        })
+        .await
+    }
+
+    /// Creates `tenant`'s schema if needed and installs its tables, as [`install`](Self::install)
+    /// does for the default schema. As with AshPostgres's tenant migrations, only resources
+    /// with context multitenancy get a table per tenant; the others stay shared. Schema
+    /// names must match `[A-Za-z_][A-Za-z0-9_]*`. With migrations, use
+    /// [`migrate_schemas`](Self::migrate_schemas) instead.
+    pub async fn install_tenant(&self, tenant: &str, resources: &[&ResourceDef]) -> Result<()> {
+        validate_schema_name(tenant)?;
+        let schema = quote_schema_name(tenant);
+        let tenant_resources: Vec<&ResourceDef> = resources
+            .iter()
+            .copied()
+            .filter(|res| {
+                res.multitenancy
+                    .is_some_and(|mt| mt.strategy == ash_core::MultitenancyStrategy::Context)
+            })
+            .collect();
+        self.transaction(|tx| {
+            let tx = tx.clone();
+            async move {
+                tx.execute_raw(&format!("SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"))
+                    .await?;
+                tx.execute_raw(&format!("CREATE SCHEMA IF NOT EXISTS {schema}")).await?;
+                // New tables land in the first schema on the path, for this transaction
+                // only; `public` keeps extension types such as `citext` visible.
+                tx.execute_raw(&format!("SET LOCAL search_path TO {schema}, public"))
+                    .await?;
+                tx.install_unlocked(&tenant_resources).await
+            }
+        })
+        .await
+    }
+
+    async fn install_unlocked(&self, resources: &[&ResourceDef]) -> Result<()> {
         let resources = ash_sql::persistable_resources(resources);
         let dialect = PostgresDialect;
         let compiler = QueryCompiler::new(&dialect);
-        for res in resources {
+        for res in &resources {
+            for extension in ash_sql::required_extensions(&dialect, res) {
+                self.execute_raw(&extension).await?;
+            }
             let ddl = compiler.compile_create_table(res)?;
             self.execute_raw(&ddl).await?;
             for idx_ddl in compiler.compile_create_indexes(res)? {
                 self.execute_raw(&idx_ddl).await?;
+            }
+        }
+        let has_statements = resources.iter().any(|res| {
+            res.statements
+                .iter()
+                .any(|s| s.dialects.is_empty() || s.dialects.contains(&"postgres"))
+        });
+        if has_statements {
+            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE).await?;
+        }
+        for res in &resources {
+            for statement in res.statements {
+                if !statement.dialects.is_empty() && !statement.dialects.contains(&"postgres") {
+                    continue;
+                }
+                let table = res.table_name();
+                let (name, up) = (statement.name, statement.up);
+                let changed = self
+                    .execute_raw(&ash_sql::install::record_new_statement(table, name, up))
+                    .await?
+                    .rows_affected()
+                    + self
+                        .execute_raw(&ash_sql::install::record_changed_statement(table, name, up))
+                        .await?
+                        .rows_affected();
+                if changed > 0
+                    && let Err(err) = self.execute_raw(up).await
+                {
+                    let _ = self
+                        .execute_raw(&ash_sql::install::forget_statement(table, name))
+                        .await;
+                    return Err(err);
+                }
             }
         }
         Ok(())
@@ -246,9 +330,11 @@ impl Postgres {
                 .execute(pool)
                 .await
                 .map_err(map_sqlx)?;
+            // `public` keeps database-wide extension types such as `citext` visible.
+            let search_path = format!("{name},public");
             let opts = (*pool.connect_options())
                 .clone()
-                .options([("search_path", *name)]);
+                .options([("search_path", search_path.as_str())]);
             let tenant_pool = PgPoolOptions::new()
                 .max_connections(1)
                 .connect_with(opts)
@@ -308,6 +394,24 @@ impl MigrationExecutor for Postgres {
         let executor = PgMigrationExecutor::new(pool.clone(), "");
         executor.remove_migration(version).await
     }
+
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let migrator = Migrator::new(PostgresDialect, ".");
+        let executor = PgMigrationExecutor::new(pool.clone(), migrator.create_tracking_table_sql());
+        executor.init().await?;
+        executor.apply_migration(sql, version, name).await
+    }
+
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let executor = PgMigrationExecutor::new(pool.clone(), "");
+        executor.revert_migration(sql, version).await
+    }
 }
 
 impl SchemaSupport for Postgres {
@@ -320,11 +424,12 @@ impl DataLayer for Postgres {
     async fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_insert(resource, &fields)?;
 
         // Postgres supports RETURNING * for single-roundtrip writes!
@@ -332,9 +437,15 @@ impl DataLayer for Postgres {
         row_to_fields(&row, resource, &[], &[])
     }
 
-    async fn update(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_update(resource, id, &fields)?;
 
         // Postgres RETURNING * executes update and returns the new row
@@ -347,13 +458,14 @@ impl DataLayer for Postgres {
                     let pk = resource
                         .primary_key()
                         .ok_or(Error::NoPrimaryKey(resource.name))?;
-                    let check_sql = format!(
-                        "SELECT 1 FROM \"{}\" WHERE \"{}\" = $1",
-                        resource.table_name(),
-                        pk.name
-                    );
-                    let check_compiled =
-                        CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
+                    // Whether the row is there at all, read in the same tenant.
+                    let exists = CompiledQuery {
+                        filter: Some(ash_core::Filter::eq(pk.name, Value::Uuid(id))),
+                        tenant: tenant.map(str::to_string),
+                        limit: Some(1),
+                        ..CompiledQuery::default()
+                    };
+                    let check_compiled = QueryCompiler::new(&dialect).compile_select(resource, &exists)?;
                     let rows = self.fetch_all(&check_compiled).await?;
                     if rows.is_empty() {
                         Err(Error::NotFound)
@@ -370,9 +482,9 @@ impl DataLayer for Postgres {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_delete(resource, id)?;
         let result = self.execute_compiled(&compiled).await?;
         if result.rows_affected() == 0 {
@@ -386,15 +498,8 @@ impl DataLayer for Postgres {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
-        // Schema multitenancy: if tenant is specified, apply search_path
-        if let Some(tenant) = &query.tenant {
-            let set_search_path = format!(
-                "SET LOCAL search_path TO \"{}\", \"public\"",
-                tenant.replace('"', "\"\"")
-            );
-            let _ = self.execute_raw(&set_search_path).await;
-        }
-
+        // A context-tenant resource's tables are qualified by the tenant's schema, as
+        // AshPostgres prefixes them, so the session's `search_path` is never changed.
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_select(resource, query)?;
@@ -407,13 +512,14 @@ impl DataLayer for Postgres {
     async fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
     ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_upsert(resource, &fields, identity, update_fields)?;
 
         // Single-roundtrip write with RETURNING *
@@ -424,13 +530,14 @@ impl DataLayer for Postgres {
     async fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_bulk_insert(resource, &rows)?;
         let pg_rows = self.fetch_all_resource(&compiled, resource).await?;
         pg_rows
@@ -439,12 +546,12 @@ impl DataLayer for Postgres {
             .collect()
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect);
+        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_bulk_delete(resource, ids)?;
         self.execute_compiled_resource(&compiled, resource).await?;
         Ok(())
@@ -569,6 +676,21 @@ async fn set_search_path(pool: &PgPool, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// `pg_advisory_xact_lock` key each migration step takes inside its own transaction, so
+/// migrators on other hosts apply or roll back one version at a time. The lock ends with
+/// the transaction, so it cannot outlive or be lost during the work it protects.
+pub const MIGRATION_LOCK_KEY: i64 = 0x6173_685f_6d69_6772;
+
+async fn begin_locked(pool: &PgPool) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await.map_err(map_sqlx)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(MIGRATION_LOCK_KEY)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+    Ok(tx)
+}
+
 struct PgMigrationExecutor {
     pool: PgPool,
     create_table_sql: &'static str,
@@ -583,11 +705,13 @@ impl PgMigrationExecutor {
     }
 
     async fn init(&self) -> Result<()> {
+        // Concurrent `CREATE TABLE IF NOT EXISTS` calls can still collide, so take the lock.
+        let mut tx = begin_locked(&self.pool).await?;
         sqlx::query(self.create_table_sql)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(map_sqlx)?;
-        Ok(())
+        tx.commit().await.map_err(map_sqlx)
     }
 }
 
@@ -604,8 +728,17 @@ impl MigrationExecutor for PgMigrationExecutor {
         self.init().await
     }
 
-    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
+        let mut tx = begin_locked(&self.pool).await?;
+        let applied = sqlx::query("SELECT 1 FROM _ash_schema_migrations WHERE version = $1")
+            .bind(version)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_sqlx)?
+            .is_some();
+        if applied {
+            return Ok(false);
+        }
         sqlx::raw_sql(sql)
             .execute(&mut *tx)
             .await
@@ -620,7 +753,32 @@ impl MigrationExecutor for PgMigrationExecutor {
         .await
         .map_err(map_sqlx)?;
         tx.commit().await.map_err(map_sqlx)?;
-        Ok(())
+        Ok(true)
+    }
+
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        let mut tx = begin_locked(&self.pool).await?;
+        let latest =
+            sqlx::query("SELECT 1 WHERE (SELECT MAX(version) FROM _ash_schema_migrations) = $1")
+                .bind(version)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_sqlx)?
+            .is_some();
+        if !latest {
+            return Ok(false);
+        }
+        sqlx::raw_sql(sql)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        sqlx::query("DELETE FROM _ash_schema_migrations WHERE version = $1")
+            .bind(version)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        tx.commit().await.map_err(map_sqlx)?;
+        Ok(true)
     }
 
     async fn applied_versions(&self) -> Result<Vec<String>> {
@@ -715,8 +873,16 @@ fn bind_compiled<'q>(
             }
         }
         match &p.value {
+            // Bind NULL with the column's type: a cached statement keeps the parameter
+            // types of its first run, so a text NULL would break a later uuid value.
             Value::Null => {
-                query = query.bind(None::<String>);
+                query = match p.ty {
+                    Some(AttrType::Uuid) => query.bind(None::<Uuid>),
+                    Some(AttrType::Integer) => query.bind(None::<i64>),
+                    Some(AttrType::Boolean) => query.bind(None::<bool>),
+                    Some(AttrType::Map | AttrType::Array) => query.bind(None::<serde_json::Value>),
+                    _ => query.bind(None::<String>),
+                };
             }
             Value::Bool(b) => {
                 query = query.bind(*b);
@@ -730,15 +896,8 @@ fn bind_compiled<'q>(
             Value::String(s) => {
                 query = query.bind(s.clone());
             }
-            Value::Map(m) => {
-                let json = serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string());
-                let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-                query = query.bind(parsed);
-            }
-            Value::Array(a) => {
-                let json = serde_json::to_string(a).unwrap_or_else(|_| "[]".to_string());
-                let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-                query = query.bind(parsed);
+            Value::Map(_) | Value::Array(_) => {
+                query = query.bind(p.value.to_plain_json());
             }
         }
     }
@@ -775,8 +934,64 @@ fn row_to_fields(
     Ok(map)
 }
 
+/// Reads a column sqlx has no Rust type for, decoding Postgres's binary or text form.
+fn raw_column(
+    row: &PgRow,
+    col_name: &str,
+    binary: fn(&[u8]) -> Option<String>,
+    text: fn(&str) -> Option<String>,
+) -> Value {
+    use sqlx::ValueRef;
+    let Ok(raw) = row.try_get_raw(col_name) else {
+        return Value::Null;
+    };
+    if raw.is_null() {
+        return Value::Null;
+    }
+    let decoded = match raw.format() {
+        sqlx::postgres::PgValueFormat::Binary => raw.as_bytes().ok().and_then(binary),
+        sqlx::postgres::PgValueFormat::Text => raw.as_str().ok().and_then(text),
+    };
+    decoded.map(Value::String).unwrap_or(Value::Null)
+}
+
+/// Binary `inet`: family, prefix bits, cidr flag, address length, then the address bytes.
+fn decode_inet(bytes: &[u8]) -> Option<String> {
+    let [family, bits, _, len, addr @ ..] = bytes else {
+        return None;
+    };
+    let addr = match (family, *len as usize) {
+        (2, 4) => std::net::IpAddr::from(<[u8; 4]>::try_from(addr).ok()?),
+        (3, 16) => std::net::IpAddr::from(<[u8; 16]>::try_from(addr).ok()?),
+        _ => return None,
+    };
+    Some(ash_core::format_inet(addr, *bits))
+}
+
+/// Binary pgvector: dimensions (u16), an unused u16, then big-endian f32 values.
+fn decode_vector(bytes: &[u8]) -> Option<String> {
+    let dimensions = u16::from_be_bytes([*bytes.first()?, *bytes.get(1)?]) as usize;
+    let data = bytes.get(4..)?;
+    if data.len() != dimensions * 4 {
+        return None;
+    }
+    let values: Vec<f32> = data
+        .chunks_exact(4)
+        .map(|chunk| f32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+    Some(ash_core::format_vector(&values))
+}
+
 fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) -> Value {
     match ty {
+        ash_core::AttrType::Inet => raw_column(row, col_name, decode_inet, |text| {
+            ash_core::Inet::parse(text).ok().map(|inet| inet.as_str().to_string())
+        }),
+        ash_core::AttrType::Vector { .. } => raw_column(row, col_name, decode_vector, |text| {
+            ash_core::parse_vector(text)
+                .ok()
+                .map(|values| ash_core::format_vector(&values))
+        }),
         ash_core::AttrType::Uuid => {
             if let Ok(Some(u)) = row.try_get::<Option<Uuid>, _>(col_name) {
                 Value::Uuid(u)
@@ -786,25 +1001,52 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
-        ash_core::AttrType::String | ash_core::AttrType::Atom { .. } => {
+        ash_core::AttrType::String
+        | ash_core::AttrType::CiString
+        | ash_core::AttrType::Atom { .. } => {
             if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 Value::String(s)
             } else {
                 Value::Null
             }
         }
-        ash_core::AttrType::UtcDatetime => {
+        ash_core::AttrType::UtcDatetime { precision } => {
             if let Ok(Some(dt)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(col_name)
             {
-                Value::String(format_utc(dt))
+                Value::String(precision.format(dt))
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
-                Value::String(s)
+                Value::String(precision.normalize(&s).unwrap_or(s))
             } else {
                 Value::Null
             }
         }
         ash_core::AttrType::Decimal => {
             if let Ok(Some(n)) = row.try_get::<Option<rust_decimal::Decimal>, _>(col_name) {
+                Value::String(n.to_string())
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Binary => {
+            if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(col_name) {
+                Value::String(ash_core::Binary::from_bytes(bytes).encode())
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Date => {
+            if let Ok(Some(date)) = row.try_get::<Option<chrono::NaiveDate>, _>(col_name) {
+                Value::String(date.format("%Y-%m-%d").to_string())
+            } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
+                Value::String(s)
+            } else {
+                Value::Null
+            }
+        }
+        ash_core::AttrType::Float => {
+            if let Ok(Some(n)) = row.try_get::<Option<f64>, _>(col_name) {
                 Value::String(n.to_string())
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 Value::String(s)
@@ -830,10 +1072,10 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
         }
         ash_core::AttrType::Map => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
-                json_to_ash_value(json_val)
+                Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 serde_json::from_str::<serde_json::Value>(&s)
-                    .map(json_to_ash_value)
+                    .map(Value::from_plain_json)
                     .unwrap_or(Value::Null)
             } else {
                 Value::Null
@@ -841,55 +1083,14 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
         }
         ash_core::AttrType::Array => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
-                json_to_ash_value(json_val)
+                Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
                 serde_json::from_str::<serde_json::Value>(&s)
-                    .map(json_to_ash_value)
+                    .map(Value::from_plain_json)
                     .unwrap_or(Value::Null)
             } else {
                 Value::Null
             }
-        }
-    }
-}
-
-fn format_utc(dt: chrono::DateTime<chrono::Utc>) -> String {
-    let format = if dt.timestamp_subsec_nanos() == 0 {
-        chrono::SecondsFormat::Secs
-    } else {
-        chrono::SecondsFormat::AutoSi
-    };
-    dt.to_rfc3339_opts(format, true)
-}
-
-fn json_to_ash_value(val: serde_json::Value) -> Value {
-    match val {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
-        serde_json::Value::String(s) => {
-            if let Ok(u) = Uuid::parse_str(&s) {
-                Value::Uuid(u)
-            } else {
-                Value::String(s)
-            }
-        }
-        serde_json::Value::Array(a) => {
-            let arr = a.into_iter().map(json_to_ash_value).collect();
-            Value::Array(arr)
-        }
-        serde_json::Value::Object(o) => {
-            let mut map = FieldMap::new();
-            for (k, v) in o {
-                map.insert(k, json_to_ash_value(v));
-            }
-            Value::Map(map)
         }
     }
 }

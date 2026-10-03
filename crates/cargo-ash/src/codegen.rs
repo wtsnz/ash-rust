@@ -1,5 +1,5 @@
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -108,6 +108,18 @@ pub enum CodegenError {
     AmbiguousRenames(Vec<RenameQuestion>),
     DuplicateIndexName { table: String, name: String },
     DuplicateCheckName { table: String, name: String },
+    DuplicateStatementName { table: String, name: String },
+    ForeignKeyTargetNotUnique {
+        table: String,
+        relationship: String,
+        target: String,
+        columns: Vec<String>,
+    },
+    UnknownIndexColumn {
+        table: String,
+        index: String,
+        column: String,
+    },
     Usage(String),
     Io(std::io::Error),
     Snapshot(serde_json::Error),
@@ -162,6 +174,29 @@ impl fmt::Display for CodegenError {
                 f,
                 "check `{name}` on table `{table}` is defined more than once"
             ),
+            Self::DuplicateStatementName { table, name } => write!(
+                f,
+                "statement `{name}` on table `{table}` is defined more than once"
+            ),
+            Self::ForeignKeyTargetNotUnique {
+                table,
+                relationship,
+                target,
+                columns,
+            } => write!(
+                f,
+                "relationship `{relationship}` on `{table}` references ({}) on `{target}`, \
+                 which needs a unique identity without `where` on exactly those columns",
+                columns.join(", ")
+            ),
+            Self::UnknownIndexColumn {
+                table,
+                index,
+                column,
+            } => write!(
+                f,
+                "index `{index}` on `{table}` names `{column}`, which is not a column of `{table}`"
+            ),
             Self::Usage(message) => write!(f, "{message}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::Snapshot(error) => write!(f, "{error}"),
@@ -184,12 +219,25 @@ impl From<serde_json::Error> for CodegenError {
     }
 }
 
-/// Answers rename questions from `table.old=new` pairs and leaves every other question unresolved.
-pub struct ExplicitRenames(pub Vec<(String, String, String)>);
+/// Answers rename questions from `--rename table.old=new` and `--rename-table old=new`, and
+/// passes the rest to `fallback`.
+pub struct ExplicitRenames<F> {
+    pub columns: Vec<(String, String, String)>,
+    pub tables: Vec<(String, String)>,
+    pub fallback: F,
+}
 
-impl RenameResolver for ExplicitRenames {
+impl<F: RenameResolver> RenameResolver for ExplicitRenames<F> {
     fn resolve(&mut self, question: &RenameQuestion) -> Resolution {
-        for (table, old, new) in &self.0 {
+        if question.table_rename {
+            for (old, new) in &self.tables {
+                if new == &question.added && question.candidates.iter().any(|c| c == old) {
+                    return Resolution::RenamedFrom(old.clone());
+                }
+            }
+            return self.fallback.resolve(question);
+        }
+        for (table, old, new) in &self.columns {
             if table == &question.table
                 && new == &question.added
                 && question.candidates.iter().any(|c| c == old)
@@ -197,23 +245,43 @@ impl RenameResolver for ExplicitRenames {
                 return Resolution::RenamedFrom(old.clone());
             }
         }
-        Resolution::Unresolved
+        self.fallback.resolve(question)
     }
 }
 
-/// Asks on stdin for each ambiguous column.
+/// The answer when nobody can be asked: a table nobody said was renamed is a new table, as
+/// before table renames existed, while an ambiguous column still fails so it is not dropped.
+pub struct Unattended;
+
+impl RenameResolver for Unattended {
+    fn resolve(&mut self, question: &RenameQuestion) -> Resolution {
+        if question.table_rename {
+            Resolution::NotRenamed
+        } else {
+            Resolution::Unresolved
+        }
+    }
+}
+
+/// Asks on stdin for each ambiguous column or table.
 pub struct Prompt;
 
 impl RenameResolver for Prompt {
     fn resolve(&mut self, question: &RenameQuestion) -> Resolution {
+        let (what, kind) = if question.table_rename {
+            (format!("New table `{}`", question.added), "table")
+        } else {
+            (
+                format!("Table `{}`: added `{}`", question.table, question.added),
+                "column",
+            )
+        };
         let _ = writeln!(
             io::stderr(),
-            "Table `{}`: added `{}`. Removed: {}.",
-            question.table,
-            question.added,
+            "{what}. Removed: {}.",
             question.candidates.join(", ")
         );
-        let _ = write!(io::stderr(), "Rename from (blank to add a new column): ");
+        let _ = write!(io::stderr(), "Rename from (blank to add a new {kind}): ");
         let _ = io::stderr().flush();
         let mut line = String::new();
         if io::stdin().read_line(&mut line).is_err() {
@@ -282,11 +350,77 @@ fn run_with<D: SqlDialect>(
                 });
             }
         }
+        let mut statement_names = std::collections::HashSet::new();
+        for statement in resource.statements {
+            if !statement_names.insert(statement.name) {
+                return Err(CodegenError::DuplicateStatementName {
+                    table: resource.table_name().to_string(),
+                    name: statement.name.to_string(),
+                });
+            }
+        }
+        // A foreign key must point at the primary key or a full, non-partial unique key.
+        for rel in resource.relationships {
+            if rel.kind != ash_core::RelKind::BelongsTo {
+                continue;
+            }
+            let target = (rel.destination)();
+            let mut columns = rel.destination_columns();
+            columns.sort_unstable();
+            let is_pk = target.primary_key().is_some_and(|pk| columns == [pk.name]);
+            let is_identity = target.identities.iter().any(|identity| {
+                let mut keys = identity.keys.to_vec();
+                keys.sort_unstable();
+                identity.predicate.is_none() && keys == columns
+            });
+            if !is_pk && !is_identity {
+                return Err(CodegenError::ForeignKeyTargetNotUnique {
+                    table: resource.table_name().to_string(),
+                    relationship: rel.name.to_string(),
+                    target: target.table_name().to_string(),
+                    columns: rel.destination_columns().iter().map(|c| c.to_string()).collect(),
+                });
+            }
+        }
     }
     let new: Vec<TableSnapshot> = resources
         .iter()
         .map(|resource| TableSnapshot::from_resource(resource, dialect))
         .collect();
+    // Index columns are checked against the built table, which includes generated columns
+    // such as timestamps, rather than failing when the migration runs.
+    for (resource, table) in resources.iter().zip(&new) {
+        let identities = resource.identities.iter().map(|identity| (identity.name, identity.keys));
+        let indexes = resource
+            .indexes
+            .iter()
+            .map(|index| (index.name, index.keys))
+            .chain(resource.indexes.iter().map(|index| (index.name, index.include)));
+        for (name, columns) in identities.chain(indexes) {
+            if let Some(column) = columns
+                .iter()
+                .find(|column| table.columns.iter().all(|c| c.name != **column))
+            {
+                return Err(CodegenError::UnknownIndexColumn {
+                    table: table.table.clone(),
+                    index: name.to_string(),
+                    column: column.to_string(),
+                });
+            }
+        }
+    }
+    // Generated checks (such as `ck_<table>_<attr>_one_of`) share a namespace with user checks.
+    for table in &new {
+        let mut names = std::collections::HashSet::new();
+        for check in &table.checks {
+            if !names.insert(check.name.as_str()) {
+                return Err(CodegenError::DuplicateCheckName {
+                    table: table.table.clone(),
+                    name: check.name.clone(),
+                });
+            }
+        }
+    }
 
     let committed_dir = committed_snap_dir(options);
     let old = if options.squash_history {
@@ -326,7 +460,7 @@ fn run_with<D: SqlDialect>(
         return Ok(CodegenOutcome::NoChanges);
     }
 
-    let down_ops = reverse_plan(&old, &plan.targets, &plan.renames);
+    let down_ops = reverse_plan(&old, &plan.targets, &plan.renames, &plan.table_renames);
     let down_sql = emit_sql(dialect, &down_ops, &plan.targets, &old);
 
     match options.mode {
@@ -665,6 +799,9 @@ struct CodegenCli {
     snapshots_dir: PathBuf,
     #[arg(long = "rename")]
     renames: Vec<String>,
+    /// Confirms a table rename as `old=new`.
+    #[arg(long = "rename-table")]
+    table_renames: Vec<String>,
 }
 
 pub fn run_cli<I, S>(
@@ -716,10 +853,28 @@ where
             .ok_or_else(|| CodegenError::Usage(format!("expected table.column=new, got {spec}")))?;
         parsed.push((table.to_string(), old.to_string(), new.to_string()));
     }
-    if parsed.is_empty() {
-        run(&resources, &options, &mut NonInteractive)
+    let mut tables = Vec::new();
+    for spec in &cli.table_renames {
+        let (old, new) = spec
+            .split_once('=')
+            .ok_or_else(|| CodegenError::Usage(format!("expected old=new, got {spec}")))?;
+        tables.push((old.to_string(), new.to_string()));
+    }
+    // Ask about columns on a terminal; elsewhere an unanswered column question fails.
+    if io::stdin().is_terminal() {
+        let mut resolver = ExplicitRenames {
+            columns: parsed,
+            tables,
+            fallback: Prompt,
+        };
+        run(&resources, &options, &mut resolver)
     } else {
-        run(&resources, &options, &mut ExplicitRenames(parsed))
+        let mut resolver = ExplicitRenames {
+            columns: parsed,
+            tables,
+            fallback: Unattended,
+        };
+        run(&resources, &options, &mut resolver)
     }
 }
 

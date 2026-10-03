@@ -60,6 +60,29 @@ impl TestDb {
         let admin = ash_postgres::Postgres::connect(&base)
             .await
             .expect("DATABASE_URL is set but Postgres is unreachable");
+        // Tests run in parallel, and concurrent `CREATE EXTENSION` calls race on a fresh
+        // database. Install extensions once under a lock so migrations find them already
+        // there. pgvector is optional locally; vector tests skip without it.
+        let mut tx = admin.pool().unwrap().begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(7303013)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "DO $$ BEGIN
+               IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+                 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+               END IF;
+             END $$",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         let schema = format!("codegen_{}", Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
             .execute(admin.pool().unwrap())
@@ -68,7 +91,7 @@ impl TestDb {
         let separator = if base.contains('?') { '&' } else { '?' };
         Some(
             Self::connect(format!(
-                "{base}{separator}options=-c%20search_path%3D{schema}"
+                "{base}{separator}options=-c%20search_path%3D{schema}%2Cpublic"
             ))
             .await,
         )
@@ -120,6 +143,43 @@ impl TestDb {
         match self.db {
             Db::Sqlite(_) => "TEXT",
             Db::Postgres(_) => "timestamp with time zone",
+        }
+    }
+
+    pub fn binary_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "BLOB",
+            Db::Postgres(_) => "bytea",
+        }
+    }
+
+    /// Whether pgvector is installed. CI always has it, so a missing extension fails there.
+    pub async fn has_vector(&self) -> bool {
+        let Db::Postgres(_) = &self.db else {
+            return true;
+        };
+        let installed = self
+            .int("SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector'")
+            .await
+            == 1;
+        assert!(
+            installed || std::env::var_os("CI").is_none(),
+            "CI must run Postgres with pgvector available"
+        );
+        installed
+    }
+
+    pub fn date_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "TEXT",
+            Db::Postgres(_) => "date",
+        }
+    }
+
+    pub fn float_type(&self) -> &'static str {
+        match self.db {
+            Db::Sqlite(_) => "REAL",
+            Db::Postgres(_) => "double precision",
         }
     }
 
@@ -239,6 +299,7 @@ pub struct ForeignKey {
     pub references_table: String,
     pub references_column: String,
     pub on_delete: String,
+    pub on_update: String,
 }
 
 impl DbSchema {
@@ -332,6 +393,7 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
                 references_table: row.get("table"),
                 references_column: row.get("to"),
                 on_delete: row.get("on_delete"),
+                on_update: row.get("on_update"),
             });
         }
         table.foreign_keys.sort();
@@ -353,12 +415,23 @@ async fn sqlite_schema(pool: &sqlx::SqlitePool) -> DbSchema {
     schema
 }
 
+fn referential_action_name(code: &str) -> &'static str {
+    match code {
+        "c" => "CASCADE",
+        "n" => "SET NULL",
+        "r" => "RESTRICT",
+        "d" => "SET DEFAULT",
+        _ => "NO ACTION",
+    }
+}
+
 async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
     let mut schema = DbSchema::default();
 
     let columns = sqlx::query(
         "SELECT c.table_name::text AS table_name, c.column_name::text AS column_name,
-                c.data_type::text AS data_type, c.is_nullable::text AS is_nullable,
+                CASE WHEN c.data_type = 'USER-DEFINED' THEN c.udt_name::text ELSE c.data_type::text END AS data_type,
+                c.is_nullable::text AS is_nullable,
                 c.column_default::text AS column_default,
                 EXISTS (
                     SELECT 1 FROM information_schema.table_constraints tc
@@ -402,7 +475,7 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
          JOIN pg_namespace n ON n.oid = t.relnamespace
          CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-         WHERE n.nspname = current_schema() AND ix.indisunique AND NOT ix.indisprimary
+         WHERE k.ord <= ix.indnkeyatts AND n.nspname = current_schema() AND ix.indisunique AND NOT ix.indisprimary
          GROUP BY t.relname, i.relname",
     )
     .fetch_all(pool)
@@ -425,7 +498,7 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
          JOIN pg_namespace n ON n.oid = t.relnamespace
          CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-         WHERE n.nspname = current_schema() AND NOT ix.indisunique AND NOT ix.indisprimary
+         WHERE k.ord <= ix.indnkeyatts AND n.nspname = current_schema() AND NOT ix.indisunique AND NOT ix.indisprimary
          GROUP BY t.relname, i.relname",
     )
     .fetch_all(pool)
@@ -441,7 +514,8 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
     let foreign_keys = sqlx::query(
         "SELECT cl.relname::text AS table_name, a.attname::text AS column_name,
                 rt.relname::text AS references_table, ra.attname::text AS references_column,
-                c.confdeltype::text AS on_delete
+                c.confdeltype::text AS on_delete,
+                c.confupdtype::text AS on_update
          FROM pg_constraint c
          JOIN pg_class cl ON cl.oid = c.conrelid
          JOIN pg_namespace n ON n.oid = cl.relnamespace
@@ -456,19 +530,16 @@ async fn postgres_schema(pool: &sqlx::PgPool) -> DbSchema {
     for row in foreign_keys {
         let table: String = row.get("table_name");
         let code: String = row.get("on_delete");
-        let on_delete = match code.as_str() {
-            "c" => "CASCADE",
-            "n" => "SET NULL",
-            "r" => "RESTRICT",
-            "d" => "SET DEFAULT",
-            _ => "NO ACTION",
-        };
+        let on_delete = referential_action_name(&code);
+        let update_code: String = row.get("on_update");
+        let on_update = referential_action_name(&update_code);
         if let Some(t) = schema.tables.get_mut(&table) {
             t.foreign_keys.push(ForeignKey {
                 column: row.get("column_name"),
                 references_table: row.get("references_table"),
                 references_column: row.get("references_column"),
                 on_delete: on_delete.to_string(),
+                on_update: on_update.to_string(),
             });
             t.foreign_keys.sort();
         }

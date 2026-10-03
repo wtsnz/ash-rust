@@ -2,10 +2,10 @@ use ash_core::{
     AggregateDef, AttrType, CompiledQuery, Error, FieldMap, IdentityDef, ResourceDef, Result, Value,
 };
 use ash_sql::{
-    column as sql_column, ident as sql_ident, CompiledSql, QueryCompiler, SqliteDialect,
+    CompiledSql, QueryCompiler, SqliteDialect, column as sql_column, ident as sql_ident,
 };
-use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 pub fn ident(name: &str) -> Result<String> {
@@ -105,13 +105,27 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
                 Uuid::parse_str(&text).map_err(|err| Error::DataLayer(err.to_string()))?,
             )),
         },
-        AttrType::String | AttrType::Atom { .. } | AttrType::UtcDatetime => {
+        AttrType::String
+        | AttrType::CiString
+        | AttrType::Atom { .. }
+        | AttrType::Date
+        | AttrType::Inet
+        | AttrType::Vector { .. }
+        | AttrType::UtcDatetime { .. } => {
             match optional_text(row, col)? {
                 None => Ok(Value::Null),
                 Some(text) => Ok(Value::String(text)),
             }
         }
         AttrType::Decimal => match optional_decimal(row, col)? {
+            None => Ok(Value::Null),
+            Some(text) => Ok(Value::String(text)),
+        },
+        AttrType::Binary => match optional_blob(row, col)? {
+            None => Ok(Value::Null),
+            Some(bytes) => Ok(Value::String(ash_core::Binary::from_bytes(bytes).encode())),
+        },
+        AttrType::Float => match optional_float(row, col)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
@@ -124,17 +138,10 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::Map => match optional_text(row, col)? {
+        AttrType::Map | AttrType::Array => match optional_text(row, col)? {
             None => Ok(Value::Null),
-            Some(text) => match serde_json::from_str::<FieldMap>(&text) {
-                Ok(m) => Ok(Value::Map(m)),
-                Err(_) => Ok(Value::Null),
-            },
-        },
-        AttrType::Array => match optional_text(row, col)? {
-            None => Ok(Value::Null),
-            Some(text) => match serde_json::from_str::<Vec<Value>>(&text) {
-                Ok(a) => Ok(Value::Array(a)),
+            Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(json) => Ok(Value::from_plain_json(json)),
                 Err(_) => Ok(Value::Null),
             },
         },
@@ -152,13 +159,27 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::String | AttrType::Atom { .. } | AttrType::UtcDatetime => {
+        AttrType::String
+        | AttrType::CiString
+        | AttrType::Atom { .. }
+        | AttrType::Date
+        | AttrType::Inet
+        | AttrType::Vector { .. }
+        | AttrType::UtcDatetime { .. } => {
             match optional_text(row, agg.name)? {
                 None => Ok(Value::Null),
                 Some(text) => Ok(Value::String(text)),
             }
         }
         AttrType::Decimal => match optional_decimal(row, agg.name)? {
+            None => Ok(Value::Null),
+            Some(text) => Ok(Value::String(text)),
+        },
+        AttrType::Binary => match optional_blob(row, agg.name)? {
+            None => Ok(Value::Null),
+            Some(bytes) => Ok(Value::String(ash_core::Binary::from_bytes(bytes).encode())),
+        },
+        AttrType::Float => match optional_float(row, agg.name)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
         },
@@ -190,6 +211,30 @@ fn optional_decimal(row: &SqliteRow, name: &str) -> Result<Option<String>> {
         Err(sqlx::Error::ColumnNotFound(_)) => Ok(None),
         Err(err) => Err(Error::DataLayer(err.to_string())),
     }
+}
+
+fn optional_blob(row: &SqliteRow, name: &str) -> Result<Option<Vec<u8>>> {
+    match row.try_get::<Option<Vec<u8>>, _>(name) {
+        Ok(value) => Ok(value),
+        Err(sqlx::Error::ColumnNotFound(_)) => Ok(None),
+        Err(err) => Err(Error::DataLayer(err.to_string())),
+    }
+}
+
+fn optional_float(row: &SqliteRow, name: &str) -> Result<Option<String>> {
+    match row.try_get::<Option<f64>, _>(name) {
+        Ok(Some(n)) => return Ok(Some(n.to_string())),
+        Ok(None) => return Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => return Ok(None),
+        Err(_) => {}
+    }
+    match row.try_get::<Option<i64>, _>(name) {
+        Ok(Some(n)) => return Ok(Some(n.to_string())),
+        Ok(None) => return Ok(None),
+        Err(sqlx::Error::ColumnNotFound(_)) => return Ok(None),
+        Err(_) => {}
+    }
+    optional_text(row, name)
 }
 
 fn format_real(n: f64) -> String {
@@ -256,6 +301,7 @@ mod tests {
         identities: &[],
         indexes: &[],
         checks: &[],
+        statements: &[],
         embedded: false,
         data_layer: ash_core::DataLayerKind::Sqlite,
         timestamps: None,

@@ -151,13 +151,13 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
             interface_probes.push(match ci.target {
                 CodeInterfaceTarget::Static => quote! {
                     if false {
-                        let _ = <#res_ident>::#method::<::ash_memory::Memory>;
+                        let _ = <#res_ident>::#method::<::ash_core::NoDataLayer>;
                     }
                 },
                 CodeInterfaceTarget::Record | CodeInterfaceTarget::Id => quote! {
                     if false {
                         fn __ash_probe_action(
-                            __ctx: &::ash_core::Context<::ash_memory::Memory>,
+                            __ctx: &::ash_core::Context<::ash_core::NoDataLayer>,
                             __id: ::uuid::Uuid,
                         ) {
                             let _ = <#res_ident>::#method(__ctx, __id);

@@ -103,7 +103,7 @@ mod http {
             Value::String("2026-01-01T00:00:00Z".into()),
         );
         ctx.data
-            .update(&User::DEF, user.id, fields)
+            .update(&User::DEF, None, user.id, fields)
             .await
             .expect("mark fixture user confirmed so HTTP tests can sign in");
 

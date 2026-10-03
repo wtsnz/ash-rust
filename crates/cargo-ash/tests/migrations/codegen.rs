@@ -73,6 +73,7 @@ async fn initial_codegen_creates_every_table(db: TestDb) {
             references_table: "orgs".into(),
             references_column: "id".into(),
             on_delete: "CASCADE".into(),
+            on_update: "NO ACTION".into(),
         }]
     );
 
@@ -347,7 +348,8 @@ async fn confirmed_rename_preserves_data(db: TestDb) {
         vec![RenameQuestion {
             table: "tickets".into(),
             added: "title".into(),
-            candidates: vec!["subject".into()]
+            candidates: vec!["subject".into()],
+            table_rename: false,
         }]
     );
     assert_eq!(
@@ -411,7 +413,8 @@ async fn unresolved_rename_fails_and_writes_nothing(db: TestDb) {
             vec![RenameQuestion {
                 table: "tickets".into(),
                 added: "title".into(),
-                candidates: vec!["subject".into()]
+                candidates: vec!["subject".into()],
+                table_rename: false,
             }]
         ),
         other => panic!("expected AmbiguousRenames, got {other:?}"),
@@ -419,6 +422,156 @@ async fn unresolved_rename_fails_and_writes_nothing(db: TestDb) {
     assert_eq!(project.migration_files(), files_before);
 }
 on_every_backend!(unresolved_rename_fails_and_writes_nothing);
+
+async fn confirmed_table_rename_keeps_rows(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut resolver = |question: &RenameQuestion| {
+        if question.table_rename {
+            Resolution::RenamedFrom("tickets".into())
+        } else {
+            Resolution::NotRenamed
+        }
+    };
+    let options = project.options(Mode::Write, Some("rename_tickets"));
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::renamed_table::Issue::DEF),
+            &mut resolver,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.contains_key("issues"));
+    assert!(!db.schema().await.tables.contains_key("tickets"));
+    // Generated names follow the table, so later migrations can find them.
+    assert!(
+        db.schema()
+            .await
+            .table("issues")
+            .unique_indexes
+            .contains_key("idx_issues_unique_subject")
+    );
+    if db.dialect().name() == "postgres" {
+        assert_eq!(
+            db.int(
+                "SELECT COUNT(*) FROM pg_constraint WHERE conname = 'fk_issues_org' \
+                 AND connamespace = current_schema()::regnamespace"
+            )
+            .await,
+            1
+        );
+    }
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM issues WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.contains_key("tickets"));
+    assert!(
+        db.schema()
+            .await
+            .table("tickets")
+            .unique_indexes
+            .contains_key("idx_tickets_unique_subject")
+    );
+    assert_eq!(
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
+        "Printer on fire"
+    );
+}
+on_every_backend!(confirmed_table_rename_keeps_rows);
+
+async fn renaming_a_table_and_its_columns_keeps_rows_and_constraints(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    db.migrate(&project.migrations()).await.unwrap();
+    seed_ticket(&db).await;
+
+    let mut resolver = |question: &RenameQuestion| {
+        if question.table_rename {
+            Resolution::RenamedFrom("tickets".into())
+        } else if question.added == "title" {
+            Resolution::RenamedFrom("subject".into())
+        } else {
+            Resolution::NotRenamed
+        }
+    };
+    let options = project.options(Mode::Write, Some("rename_and_change_tickets"));
+    project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::renamed_table_changed::Issue::DEF),
+            &mut resolver,
+        )
+        .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+
+    assert_eq!(
+        db.text(&format!("SELECT title FROM issues WHERE id = '{TICKET_ID}'"))
+            .await,
+        "Printer on fire",
+        "the renamed column keeps its data"
+    );
+    let schema = db.schema().await;
+    let issues = schema.table("issues");
+    assert_eq!(issues.columns["status"].default.as_deref(), Some("'closed'"));
+    assert_eq!(issues.foreign_keys.len(), 1, "{:?}", issues.foreign_keys);
+    assert_eq!(issues.foreign_keys[0].on_delete, "RESTRICT");
+    assert!(issues.unique_indexes.contains_key("idx_issues_unique_title"));
+    assert!(!issues.unique_indexes.contains_key("idx_issues_unique_subject"));
+    // The old identity is gone, so duplicate subjects are no longer rejected by a stale index.
+    assert!(
+        db.exec(&format!(
+            "INSERT INTO issues (id, title, status, org_id) VALUES \
+             ('00000000-0000-0000-0000-0000000000f9', 'Other', 'open', '{ORG_ID}')"
+        ))
+        .await
+        .is_ok()
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let tickets = schema.table("tickets");
+    assert_eq!(tickets.foreign_keys.len(), 1, "{:?}", tickets.foreign_keys);
+    assert_eq!(tickets.foreign_keys[0].on_delete, "CASCADE");
+    assert!(tickets.unique_indexes.contains_key("idx_tickets_unique_subject"));
+    assert_eq!(
+        db.text(&format!("SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"))
+            .await,
+        "Printer on fire"
+    );
+}
+on_every_backend!(renaming_a_table_and_its_columns_keeps_rows_and_constraints);
+
+async fn unattended_codegen_treats_unconfirmed_tables_as_new(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate("create_helpdesk", &fixtures::helpdesk());
+    let options = project.options(Mode::Write, Some("replace_tickets"));
+    let outcome = project
+        .run(
+            &options,
+            &fixtures::helpdesk_with(&fixtures::renamed_table::Issue::DEF),
+            &mut cargo_ash::codegen::Unattended,
+        )
+        .unwrap();
+    assert!(matches!(outcome, CodegenOutcome::Written(_)), "{outcome:?}");
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("issues"));
+    assert!(!schema.tables.contains_key("tickets"));
+}
+on_every_backend!(unattended_codegen_treats_unconfirmed_tables_as_new);
 
 async fn changing_nullability_and_default_keeps_data(db: TestDb) {
     let project = Project::for_db(&db);
@@ -1269,6 +1422,7 @@ async fn dev_squash_keeps_a_rename_a_type_change_and_a_new_child_table(db: TestD
             references_table: "tickets".into(),
             references_column: "id".into(),
             on_delete: "CASCADE".into(),
+            on_update: "NO ACTION".into(),
         }]
     );
     db.exec(&format!(
@@ -1569,12 +1723,12 @@ async fn codegen_creates_timestamptz_and_numeric_columns(db: TestDb) {
     match &db.db {
         crate::support::Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::invoice::Invoice::DEF, written_id, fields)
+                .create(&fixtures::invoice::Invoice::DEF, None, written_id, fields)
                 .await
                 .unwrap();
         }
         crate::support::Db::Postgres(pg) => {
-            pg.create(&fixtures::invoice::Invoice::DEF, written_id, fields)
+            pg.create(&fixtures::invoice::Invoice::DEF, None, written_id, fields)
                 .await
                 .unwrap();
         }
@@ -2204,3 +2358,1164 @@ async fn squash_history_refuses_until_rollback_then_writes_one_migration(db: Tes
     );
 }
 on_every_backend!(squash_history_refuses_until_rollback_then_writes_one_migration);
+
+async fn codegen_creates_a_float_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_gauges", &[&fixtures::gauge::Gauge::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_gauges.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"weight\""));
+    if dialect == "postgres" {
+        assert!(up.contains("DOUBLE PRECISION"));
+    } else {
+        assert!(up.contains("\"weight\" REAL"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert_eq!(schema.column("gauges", "weight").ty, db.float_type());
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000f1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("weight".into(), Value::String("2.5".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::gauge::Gauge::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::gauge::Gauge::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::gauge::Gauge::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::gauge::Gauge::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    let weight = rows[0].get("weight").unwrap();
+    assert_eq!(
+        weight,
+        &Value::String(ash_core::Float::parse("2.5").unwrap().as_str().into())
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_float_column);
+
+async fn codegen_creates_a_date_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_deadlines", &[&fixtures::deadline::Deadline::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_deadlines.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(up.contains("\"due_on\""));
+    if dialect == "postgres" {
+        assert!(up.contains("DATE"));
+    } else {
+        assert!(up.contains("\"due_on\" TEXT"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("deadlines", "due_on").ty,
+        db.date_type()
+    );
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000d1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("due_on".into(), Value::String("2024-03-01".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::deadline::Deadline::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::deadline::Deadline::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::deadline::Deadline::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::deadline::Deadline::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("due_on"),
+        Some(&Value::String("2024-03-01".into()))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_date_column);
+
+async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
+    if !db.has_vector().await {
+        eprintln!("skipping: pgvector is not available");
+        return;
+    }
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_devices", &[&fixtures::device::Device::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_devices.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains("\"address\" INET"), "{up}");
+        assert!(up.contains("\"embedding\" VECTOR(3)"), "{up}");
+        assert!(up.contains("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;"), "{up}");
+    } else {
+        assert!(up.contains("\"address\" TEXT"), "{up}");
+        assert!(up.contains("\"embedding\" TEXT"), "{up}");
+        assert!(!up.contains("EXTENSION"), "{up}");
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let (inet_type, vector_type) = match dialect {
+        "postgres" => ("inet", "vector"),
+        _ => ("TEXT", "TEXT"),
+    };
+    assert_eq!(schema.column("devices", "address").ty, inet_type);
+    assert_eq!(schema.column("devices", "embedding").ty, vector_type);
+
+    let rows_in = [
+        ("00000000-0000-0000-0000-0000000000e1", "10.0.0.1", Some("[1,2.5,-3]")),
+        ("00000000-0000-0000-0000-0000000000e2", "2001:DB8::1/64", None),
+    ];
+    for (id, address, embedding) in rows_in {
+        let id = uuid::Uuid::parse_str(id).unwrap();
+        let mut fields = FieldMap::new();
+        fields.insert("id".into(), Value::Uuid(id));
+        fields.insert(
+            "address".into(),
+            ash_core::Inet::parse(address).unwrap().into(),
+        );
+        fields.insert(
+            "embedding".into(),
+            embedding.map_or(Value::Null, |e| Value::String(e.into())),
+        );
+        match &db.db {
+            Db::Sqlite(sqlite) => {
+                sqlite.create(&fixtures::device::Device::DEF, None, id, fields).await.unwrap();
+            }
+            Db::Postgres(pg) => {
+                pg.create(&fixtures::device::Device::DEF, None, id, fields).await.unwrap();
+            }
+        }
+    }
+
+    let read = |filter: Option<ash_core::Filter>| {
+        let db = &db;
+        async move {
+            let query = ash_core::CompiledQuery {
+                filter,
+                sort: vec![ash_core::Sort {
+                    field: "id".into(),
+                    descending: false,
+                }],
+                ..Default::default()
+            };
+            match &db.db {
+                Db::Sqlite(sqlite) => sqlite
+                    .run_query(&fixtures::device::Device::DEF, &query)
+                    .await
+                    .unwrap(),
+                Db::Postgres(pg) => pg
+                    .run_query(&fixtures::device::Device::DEF, &query)
+                    .await
+                    .unwrap(),
+            }
+        }
+    };
+    let rows = read(None).await;
+    assert_eq!(rows[0].get("address"), Some(&Value::String("10.0.0.1".into())));
+    assert_eq!(
+        rows[0].get("embedding"),
+        Some(&Value::String("[1,2.5,-3]".into()))
+    );
+    assert_eq!(
+        rows[1].get("address"),
+        Some(&Value::String("2001:db8::1/64".into()))
+    );
+    assert_eq!(rows[1].get("embedding"), Some(&Value::Null));
+
+    // Other spellings of the stored values match too.
+    for (field, value) in [
+        ("address", "10.0.0.1"),
+        ("address", "10.0.0.1/32"),
+        ("embedding", "[1.0, 2.50, -3]"),
+    ] {
+        let matched = read(Some(ash_core::Filter::eq(field, value))).await;
+        assert_eq!(matched.len(), 1, "{field} = {value}");
+    }
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_inet_and_vector_columns);
+
+async fn codegen_creates_a_binary_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_file_blobs", &[&fixtures::file_blob::FileBlob::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_file_blobs.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains("BYTEA"));
+        assert!(up.contains("decode('aGVsbG8=', 'base64')"));
+    } else {
+        assert!(up.contains("\"payload\" BLOB"));
+        assert!(up.contains("X'68656C6C6F'"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema().await.column("file_blobs", "payload").ty,
+        db.binary_type()
+    );
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000b1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert(
+        "payload".into(),
+        Value::String(ash_core::Binary::from_bytes(b"world".to_vec()).encode()),
+    );
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::file_blob::FileBlob::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::file_blob::FileBlob::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::file_blob::FileBlob::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::file_blob::FileBlob::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("payload"),
+        Some(&Value::String(
+            ash_core::Binary::from_bytes(b"world".to_vec()).encode()
+        ))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_binary_column);
+
+async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_markers", &[&fixtures::marker::Marker::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_markers.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    let down = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_markers.{dialect}.down.sql",
+        migration.version
+    )))
+    .unwrap();
+    let table = up.find("CREATE TABLE IF NOT EXISTS \"markers\"").unwrap();
+    let sidecar = up.find("CREATE TABLE marker_sidecar").unwrap();
+    let by_id = up.find("CREATE INDEX IF NOT EXISTS markers_by_id").unwrap();
+    assert!(table < sidecar && sidecar < by_id, "statements run after the table:\n{up}");
+    let drop_index = down.find("DROP INDEX IF EXISTS markers_by_id;").unwrap();
+    let drop_side = down.find("DROP TABLE IF EXISTS marker_sidecar;").unwrap();
+    let drop_table = down.find("DROP TABLE IF EXISTS \"markers\"").unwrap();
+    assert!(
+        drop_index < drop_side && drop_side < drop_table,
+        "statements are undone in reverse, before the table:\n{down}"
+    );
+    if dialect == "postgres" {
+        assert!(up.contains("COMMENT ON TABLE markers IS 'markers';"));
+    } else {
+        assert!(!up.contains("COMMENT ON"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("marker_sidecar"));
+    assert!(
+        schema.table("markers").indexes.contains_key("markers_by_id"),
+        "the statement's index must exist"
+    );
+    if dialect == "postgres" {
+        assert_eq!(
+            db.text("SELECT obj_description('markers'::regclass)").await,
+            "markers"
+        );
+    }
+
+    db.rollback(&project.migrations()).await.unwrap();
+    let after = db.schema().await;
+    assert!(after.tables.is_empty());
+}
+on_every_backend!(codegen_runs_custom_statements_around_the_table);
+
+async fn index_names(db: &TestDb) -> Vec<String> {
+    let mut names: Vec<String> = db
+        .schema()
+        .await
+        .table("indexed_notes")
+        .indexes
+        .keys()
+        .cloned()
+        .collect();
+    names.sort();
+    names
+}
+
+async fn changed_statements_undo_the_old_version_and_survive_rebuilds(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate(
+        "create_indexed_notes",
+        &[&fixtures::indexed_notes_v1::IndexedNote::DEF],
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec("INSERT INTO indexed_notes (id, title) VALUES ('00000000-0000-0000-0000-0000000000d1', 'kept')")
+        .await
+        .unwrap();
+    assert_eq!(
+        index_names(&db).await,
+        ["indexed_notes_by_id", "indexed_notes_by_title"]
+    );
+
+    project.generate(
+        "change_indexed_notes",
+        &[&fixtures::indexed_notes_v2::IndexedNote::DEF],
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        index_names(&db).await,
+        ["indexed_notes_by_id", "indexed_notes_by_title_id"],
+        "the old index is dropped, and SQLite's rebuild must not lose by_id"
+    );
+    assert_eq!(db.int("SELECT COUNT(*) FROM indexed_notes").await, 1);
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert_eq!(
+        index_names(&db).await,
+        ["indexed_notes_by_id", "indexed_notes_by_title"]
+    );
+}
+on_every_backend!(changed_statements_undo_the_old_version_and_survive_rebuilds);
+
+async fn install_runs_each_statement_once(db: TestDb) {
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    // marker_sidecar is created with a plain CREATE TABLE, so a second run would fail.
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("marker_sidecar"));
+    assert!(schema.table("markers").indexes.contains_key("markers_by_id"));
+}
+on_every_backend!(install_runs_each_statement_once);
+
+async fn install_runs_custom_statements(db: TestDb) {
+    db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
+    let schema = db.schema().await;
+    assert!(schema.tables.contains_key("markers"));
+    assert!(schema.tables.contains_key("marker_sidecar"));
+}
+on_every_backend!(install_runs_custom_statements);
+
+async fn codegen_rejects_duplicate_statement_name_without_writing(db: TestDb) {
+    let project = Project::for_db(&db);
+    let before = project.migration_files();
+    let options = project.options(Mode::Write, Some("dup_statement"));
+    let result = project.run(
+        &options,
+        &[&fixtures::duplicate_statement_notes::DuplicateStatementNote::DEF],
+        &mut NonInteractive,
+    );
+    match result {
+        Err(CodegenError::DuplicateStatementName { table, name }) => {
+            assert_eq!(table, "duplicate_statement_notes");
+            assert_eq!(name, "prepare");
+        }
+        other => panic!("expected DuplicateStatementName, got {other:?}"),
+    }
+    assert_eq!(
+        project.migration_files(),
+        before,
+        "DuplicateStatementName must not write SQL files"
+    );
+    assert!(
+        project.snapshot_files().is_empty(),
+        "DuplicateStatementName must not write snapshot files"
+    );
+}
+on_every_backend!(codegen_rejects_duplicate_statement_name_without_writing);
+
+async fn codegen_creates_a_citext_column(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate("create_contacts", &[&fixtures::contact::Contact::DEF]);
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_contacts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        let extension = up
+            .find("CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;")
+            .unwrap();
+        let column = up.find("\"email\" CITEXT").unwrap();
+        assert!(extension < column);
+        assert!(up.contains("'Ada@Example.com'"));
+    } else {
+        assert!(up.contains("\"email\" TEXT"));
+        assert!(!up.contains("citext"));
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    let expected = if dialect == "postgres" { "citext" } else { "TEXT" };
+    assert_eq!(db.schema().await.column("contacts", "email").ty, expected);
+
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000c1").unwrap();
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(id));
+    fields.insert("email".into(), Value::String("Ada@Example.com".into()));
+    match &db.db {
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&fixtures::contact::Contact::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+        Db::Postgres(pg) => {
+            pg.create(&fixtures::contact::Contact::DEF, None, id, fields)
+                .await
+                .unwrap();
+        }
+    }
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite
+            .run_query(
+                &fixtures::contact::Contact::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .run_query(
+                &fixtures::contact::Contact::DEF,
+                &ash_core::CompiledQuery::default(),
+            )
+            .await
+            .unwrap(),
+    };
+    assert_eq!(
+        rows[0].get("email"),
+        Some(&Value::String("Ada@Example.com".into()))
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_creates_a_citext_column);
+
+async fn citext_columns_work_in_every_schema(db: TestDb) {
+    let Db::Postgres(pg) = &db.db else {
+        eprintln!("SQLite has no citext or schemas");
+        return;
+    };
+    let project = Project::for_db(&db);
+    project.generate("create_contacts", &[&fixtures::contact::Contact::DEF]);
+    let schema_a = format!("tenant_a_{}", uuid::Uuid::new_v4().simple());
+    let schema_b = format!("tenant_b_{}", uuid::Uuid::new_v4().simple());
+
+    db.migrate(&project.migrations()).await.unwrap();
+    pg.migrate_schemas(&[&schema_a, &schema_b], project.migrations())
+        .await
+        .unwrap();
+
+    for schema in [&schema_a, &schema_b] {
+        assert_eq!(
+            db.int(&format!(
+                "SELECT COUNT(*) FROM pg_attribute a \
+                 JOIN pg_class c ON c.oid = a.attrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = '{schema}' AND c.relname = 'contacts' \
+                   AND a.attname = 'email' AND a.atttypid = 'public.citext'::regtype"
+            ))
+            .await,
+            1,
+            "{schema}.contacts.email must be citext"
+        );
+    }
+    db.exec(&format!(
+        "INSERT INTO \"{schema_a}\".contacts (id, email) \
+         VALUES ('00000000-0000-0000-0000-0000000000c2', 'Ada@Example.com')"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        db.int(&format!(
+            "SELECT COUNT(*) FROM \"{schema_a}\".contacts WHERE email = 'ada@example.com'"
+        ))
+        .await,
+        1,
+        "citext must compare case-insensitively"
+    );
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.int("SELECT COUNT(*) FROM pg_extension WHERE extname = 'citext'")
+            .await,
+        1,
+        "rolling back one schema must keep the extension for the others"
+    );
+}
+on_every_backend!(citext_columns_work_in_every_schema);
+
+async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
+    use ash_core::{CompiledQuery, Error, Filter, Sort};
+    use fixtures::typed_values::TypedValue;
+
+    db.install(&[&TypedValue::DEF]).await.unwrap();
+    let rows = [
+        ("00000000-0000-0000-0000-0000000000a1", "9.5", "2024-01-02", "aGVsbG8=", "Ada@Example.com", "10.50"),
+        ("00000000-0000-0000-0000-0000000000a2", "10", "2024-03-04", "d29ybGQ=", "grace@example.com", "9.99"),
+        ("00000000-0000-0000-0000-0000000000a3", "100.25", "2025-12-31", "AAEC", "linus@example.org", "-3"),
+    ];
+    let insert = |id: &str, weight: &str, due_on: &str, payload: &str, email: &str, amount: &str| {
+        let mut fields = FieldMap::new();
+        fields.insert("id".into(), Value::Uuid(uuid::Uuid::parse_str(id).unwrap()));
+        for (name, value) in [
+            ("weight", weight),
+            ("due_on", due_on),
+            ("payload", payload),
+            ("email", email),
+            ("amount", amount),
+        ] {
+            fields.insert(name.into(), Value::String(value.into()));
+        }
+        fields
+    };
+    for (id, weight, due_on, payload, email, amount) in rows {
+        let fields = insert(id, weight, due_on, payload, email, amount);
+        let id = uuid::Uuid::parse_str(id).unwrap();
+        match &db.db {
+            Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, None, id, fields).await.unwrap(),
+            Db::Postgres(pg) => pg.create(&TypedValue::DEF, None, id, fields).await.unwrap(),
+        };
+    }
+
+    async fn ids(db: &TestDb, filter: Option<Filter>, sort: Vec<Sort>) -> Vec<String> {
+        let query = CompiledQuery {
+            filter,
+            sort,
+            ..Default::default()
+        };
+        let rows = match &db.db {
+            Db::Sqlite(sqlite) => sqlite.run_query(&TypedValue::DEF, &query).await.unwrap(),
+            Db::Postgres(pg) => pg.run_query(&TypedValue::DEF, &query).await.unwrap(),
+        };
+        rows.iter()
+            .map(|row| match row.get("id") {
+                Some(Value::Uuid(id)) => id.to_string()[34..].to_string(),
+                other => panic!("unexpected id {other:?}"),
+            })
+            .collect()
+    }
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let strings = |values: &[&str]| -> Vec<Value> {
+        values.iter().map(|v| Value::String(v.to_string())).collect()
+    };
+
+    assert_eq!(
+        sorted(ids(&db, Some(Filter::in_list("weight", strings(&["9.5", "100.25"]))), vec![]).await),
+        ["a1", "a3"]
+    );
+    assert_eq!(
+        ids(&db, Some(Filter::in_list("due_on", strings(&["2024-03-04"]))), vec![]).await,
+        ["a2"]
+    );
+    assert_eq!(
+        sorted(ids(&db, Some(Filter::in_list("payload", strings(&["aGVsbG8=", "AAEC"]))), vec![]).await),
+        ["a1", "a3"]
+    );
+    assert_eq!(
+        ids(&db, Some(Filter::in_list("email", strings(&["ada@example.com"]))), vec![]).await,
+        ["a1"],
+        "CiString `in` ignores case"
+    );
+    assert_eq!(
+        ids(&db, Some(Filter::eq("email", "ADA@EXAMPLE.COM")), vec![]).await,
+        ["a1"],
+        "CiString `eq` ignores case"
+    );
+    assert_eq!(
+        sorted(ids(&db, Some(Filter::gt("weight", "9.6")), vec![]).await),
+        ["a2", "a3"],
+        "Float compares numerically"
+    );
+    let by_weight = Sort {
+        field: "weight".into(),
+        descending: false,
+    };
+    assert_eq!(ids(&db, None, vec![by_weight]).await, ["a1", "a2", "a3"]);
+    assert_eq!(
+        ids(&db, Some(Filter::gt("amount", "9.995")), vec![]).await,
+        ["a1"],
+        "Decimal compares numerically"
+    );
+
+    let query = CompiledQuery {
+        filter: Some(Filter::eq("payload", "not base64!")),
+        ..Default::default()
+    };
+    let bad = match &db.db {
+        Db::Sqlite(sqlite) => sqlite.run_query(&TypedValue::DEF, &query).await,
+        Db::Postgres(pg) => pg.run_query(&TypedValue::DEF, &query).await,
+    };
+    assert!(bad.is_err(), "invalid base64 must be an error, got {bad:?}");
+
+    let duplicate = insert(
+        "00000000-0000-0000-0000-0000000000a4",
+        "1",
+        "2024-01-01",
+        "AAEC",
+        "ADA@example.COM",
+        "0",
+    );
+    let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000a4").unwrap();
+    let result = match &db.db {
+        Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, None, id, duplicate).await,
+        Db::Postgres(pg) => pg.create(&TypedValue::DEF, None, id, duplicate).await,
+    };
+    assert!(
+        matches!(result, Err(Error::IdentityConflict { .. })),
+        "CiString identities ignore case: {result:?}"
+    );
+}
+on_every_backend!(typed_columns_filter_sort_and_stay_unique);
+
+async fn codegen_creates_partial_indexes(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_live_accounts",
+        &[&fixtures::live_accounts::LiveAccount::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_live_accounts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_live_accounts_live_email\" ON \"live_accounts\" (\"email\") WHERE deleted_at IS NULL;"
+        ),
+        "partial unique index missing:\n{up}"
+    );
+    assert!(
+        up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_live_accounts_active_email\" ON \"live_accounts\" (\"email\") WHERE deleted_at IS NULL;"
+        ),
+        "partial index missing:\n{up}"
+    );
+
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a1', 'ada@example.com', NULL)",
+    )
+    .await
+    .unwrap();
+    let duplicate_live = db
+        .exec(
+            "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a2', 'ada@example.com', NULL)",
+        )
+        .await;
+    assert!(duplicate_live.is_err(), "live emails must stay unique");
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a3', 'ada@example.com', '2024-01-01')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "INSERT INTO live_accounts (id, email, deleted_at) VALUES ('00000000-0000-0000-0000-0000000000a4', 'ada@example.com', '2024-02-01')",
+    )
+    .await
+    .unwrap();
+
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(!db.schema().await.tables.contains_key("live_accounts"));
+}
+on_every_backend!(codegen_creates_partial_indexes);
+
+async fn codegen_unique_nulls_follow_the_dialect(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_optional_emails",
+        &[&fixtures::optional_emails::OptionalEmail::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_optional_emails.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO optional_emails (id, email) VALUES ('00000000-0000-0000-0000-0000000000b1', NULL)",
+    )
+    .await
+    .unwrap();
+    let second = db
+        .exec(
+            "INSERT INTO optional_emails (id, email) VALUES ('00000000-0000-0000-0000-0000000000b2', NULL)",
+        )
+        .await;
+    if dialect == "postgres" {
+        assert!(up.contains("NULLS NOT DISTINCT"));
+        assert!(second.is_err(), "postgres must reject a second null email");
+    } else {
+        assert!(!up.contains("NULLS NOT DISTINCT"));
+        assert!(second.is_ok(), "sqlite keeps nulls distinct");
+    }
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_unique_nulls_follow_the_dialect);
+
+async fn codegen_emits_postgres_index_methods(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_tagged_notes",
+        &[&fixtures::tagged_notes::TaggedNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_tagged_notes.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    if dialect == "postgres" {
+        assert!(up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_tagged_notes_by_body\" ON \"tagged_notes\" USING hash (\"body\");"
+        ));
+    } else {
+        assert!(up.contains(
+            "CREATE INDEX IF NOT EXISTS \"idx_tagged_notes_by_body\" ON \"tagged_notes\" (\"body\");"
+        ));
+        assert!(!up.contains("USING"));
+    }
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema()
+            .await
+            .table("tagged_notes")
+            .indexes
+            .get("idx_tagged_notes_by_body"),
+        Some(&vec!["body".to_string()])
+    );
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_emits_postgres_index_methods);
+
+async fn codegen_emits_postgres_index_include_columns(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_covered_notes",
+        &[&fixtures::covered_notes::CoveredNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_covered_notes.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    let plain = "CREATE INDEX IF NOT EXISTS \"idx_covered_notes_by_title\" ON \"covered_notes\" (\"title\")";
+    if dialect == "postgres" {
+        assert!(up.contains(&format!("{plain} INCLUDE (\"body\");")), "{up}");
+    } else {
+        assert!(up.contains(&format!("{plain};")), "{up}");
+        assert!(!up.contains("INCLUDE"), "{up}");
+    }
+
+    db.migrate(&project.migrations()).await.unwrap();
+    assert_eq!(
+        db.schema()
+            .await
+            .table("covered_notes")
+            .indexes
+            .get("idx_covered_notes_by_title"),
+        Some(&vec!["title".to_string()])
+    );
+    if dialect == "postgres" {
+        assert_eq!(
+            db.int(
+                "SELECT COUNT(*) FROM pg_indexes \
+                 WHERE indexname = 'idx_covered_notes_by_title' \
+                   AND schemaname = current_schema() \
+                   AND indexdef LIKE '%INCLUDE (body)%'"
+            )
+            .await,
+            1
+        );
+    }
+    db.rollback(&project.migrations()).await.unwrap();
+    assert!(db.schema().await.tables.is_empty());
+}
+on_every_backend!(codegen_emits_postgres_index_include_columns);
+
+async fn index_method_and_include_changes_only_matter_on_postgres(db: TestDb) {
+    let project = Project::for_db(&db);
+    project.generate(
+        "create_covered_notes",
+        &[&fixtures::covered_notes::CoveredNote::DEF],
+    );
+    let options = project.options(Mode::Check, None);
+    let outcome = project
+        .run(
+            &options,
+            &[&fixtures::covered_notes_v2::CoveredNote::DEF],
+            &mut NonInteractive,
+        )
+        .unwrap();
+    match db.db {
+        // SQLite builds the same B-tree either way, so nothing changes.
+        Db::Sqlite(_) => assert_eq!(outcome, CodegenOutcome::NoChanges),
+        Db::Postgres(_) => match outcome {
+            CodegenOutcome::OutOfDate { up_sql } => {
+                assert!(up_sql.contains("USING hash"), "{up_sql}");
+            }
+            other => panic!("expected a rebuilt index, got {other:?}"),
+        },
+    }
+
+    match project.run(
+        &project.options(Mode::Write, Some("misindexed")),
+        &[&fixtures::misindexed_notes::MisindexedNote::DEF],
+        &mut NonInteractive,
+    ) {
+        Err(CodegenError::UnknownIndexColumn { index, column, .. }) => {
+            assert_eq!((index.as_str(), column.as_str()), ("by_title", "summary"));
+        }
+        other => panic!("expected UnknownIndexColumn, got {other:?}"),
+    }
+}
+on_every_backend!(index_method_and_include_changes_only_matter_on_postgres);
+
+async fn codegen_cascades_foreign_key_updates(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_moved_files",
+        &[
+            &fixtures::moved_files::folder::Folder::DEF,
+            &fixtures::moved_files::file::File::DEF,
+        ],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_moved_files.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains("ON DELETE RESTRICT ON UPDATE CASCADE"),
+        "on update missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    let schema = db.schema().await;
+    let fk = &schema.table("files").foreign_keys[0];
+    assert_eq!(fk.on_delete, "RESTRICT");
+    assert_eq!(fk.on_update, "CASCADE");
+    db.exec("INSERT INTO folders (id, name) VALUES ('00000000-0000-0000-0000-0000000000c1', 'inbox')")
+        .await
+        .unwrap();
+    db.exec(
+        "INSERT INTO files (id, name, folder_id) VALUES ('00000000-0000-0000-0000-0000000000c2', 'note', '00000000-0000-0000-0000-0000000000c1')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "UPDATE folders SET id = '00000000-0000-0000-0000-0000000000c3' WHERE id = '00000000-0000-0000-0000-0000000000c1'",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.text("SELECT CAST(folder_id AS TEXT) FROM files").await,
+        "00000000-0000-0000-0000-0000000000c3"
+    );
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_cascades_foreign_key_updates);
+
+async fn codegen_enforces_composite_foreign_keys(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_tenant_accounts",
+        &[
+            &fixtures::tenant_accounts::account::Account::DEF,
+            &fixtures::tenant_accounts::membership::Membership::DEF,
+        ],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_tenant_accounts.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "FOREIGN KEY (\"tenant_id\", \"code\") REFERENCES \"accounts\" (\"tenant_id\", \"code\")"
+        ),
+        "composite foreign key missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO accounts (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000d0', 'acme')",
+    )
+    .await
+    .unwrap();
+    db.exec(
+        "INSERT INTO memberships (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d0', 'acme')",
+    )
+    .await
+    .unwrap();
+    let missing = db
+        .exec(
+            "INSERT INTO memberships (id, tenant_id, code) VALUES ('00000000-0000-0000-0000-0000000000d3', '00000000-0000-0000-0000-0000000000d0', 'other')",
+        )
+        .await;
+    assert!(missing.is_err(), "a missing parent key must fail");
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_enforces_composite_foreign_keys);
+
+async fn codegen_checks_enum_variants(db: TestDb) {
+    let project = Project::for_db(&db);
+    let migration = project.generate(
+        "create_enum_labels",
+        &[&fixtures::enum_labels::LabeledNote::DEF],
+    );
+    let dialect = db.dialect().name();
+    let up = std::fs::read_to_string(project.migrations().join(format!(
+        "{}_create_enum_labels.{dialect}.up.sql",
+        migration.version
+    )))
+    .unwrap();
+    assert!(
+        up.contains(
+            "CONSTRAINT \"ck_enum_labels_label_one_of\" CHECK (\"label\" IN ('closed', 'open'))"
+        ) || up.contains(
+            "CONSTRAINT \"ck_enum_labels_label_one_of\" CHECK (\"label\" IN ('open', 'closed'))"
+        ),
+        "enum check missing:\n{up}"
+    );
+    db.migrate(&project.migrations()).await.unwrap();
+    db.exec(
+        "INSERT INTO enum_labels (id, label) VALUES ('00000000-0000-0000-0000-0000000000e1', 'open')",
+    )
+    .await
+    .unwrap();
+    let bad = db
+        .exec(
+            "INSERT INTO enum_labels (id, label) VALUES ('00000000-0000-0000-0000-0000000000e2', 'archived')",
+        )
+        .await;
+    assert!(bad.is_err(), "a value outside the enum must fail");
+    db.rollback(&project.migrations()).await.unwrap();
+}
+on_every_backend!(codegen_checks_enum_variants);
+
+async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
+    use fixtures::live_accounts::LiveAccount;
+
+    db.install(&[&LiveAccount::DEF]).await.unwrap();
+    let identity = LiveAccount::DEF.identity("live_email").unwrap();
+    let row = |n: u128, deleted_at: Option<&str>| {
+        let mut fields = FieldMap::new();
+        fields.insert("id".into(), Value::Uuid(uuid::Uuid::from_u128(n)));
+        fields.insert("email".into(), Value::String("ada@example.com".into()));
+        fields.insert(
+            "deleted_at".into(),
+            deleted_at.map_or(Value::Null, |d| Value::String(d.into())),
+        );
+        fields
+    };
+    for (n, deleted_at, stored) in [
+        (1, Some("2024-01-01"), 1),
+        (2, None, 2),
+        (3, None, 2),
+        (4, Some("2024-02-01"), 4),
+    ] {
+        let fields = row(n, deleted_at);
+        let id = uuid::Uuid::from_u128(n);
+        let result = match &db.db {
+            Db::Sqlite(sqlite) => sqlite.upsert(&LiveAccount::DEF, None, id, fields, identity, &[]).await,
+            Db::Postgres(pg) => pg.upsert(&LiveAccount::DEF, None, id, fields, identity, &[]).await,
+        };
+        let record = result.unwrap_or_else(|err| panic!("upsert {n} failed: {err}"));
+        assert_eq!(
+            record.get("id"),
+            Some(&Value::Uuid(uuid::Uuid::from_u128(stored))),
+            "upsert {n} returned the wrong row"
+        );
+    }
+    // Two archived rows and one live row; the second live row hit the partial index.
+    assert_eq!(db.int("SELECT COUNT(*) FROM live_accounts").await, 3);
+}
+on_every_backend!(partial_identities_upsert_against_their_predicate);
+
+async fn codegen_rejects_unkeyed_foreign_keys_and_colliding_checks(db: TestDb) {
+    let project = Project::for_db(&db);
+    let options = project.options(Mode::Write, Some("unkeyed"));
+    match project.run(
+        &options,
+        &[
+            &fixtures::unkeyed_reference::parent::Parent::DEF,
+            &fixtures::unkeyed_reference::child::Child::DEF,
+        ],
+        &mut NonInteractive,
+    ) {
+        Err(CodegenError::ForeignKeyTargetNotUnique {
+            relationship,
+            target,
+            ..
+        }) => {
+            assert_eq!(relationship, "parent");
+            assert_eq!(target, "unkeyed_parents");
+        }
+        other => panic!("expected ForeignKeyTargetNotUnique, got {other:?}"),
+    }
+
+    let options = project.options(Mode::Write, Some("colliding"));
+    match project.run(
+        &options,
+        &[&fixtures::colliding_checks::CollidingNote::DEF],
+        &mut NonInteractive,
+    ) {
+        Err(CodegenError::DuplicateCheckName { name, .. }) => {
+            assert_eq!(name, "ck_colliding_notes_label_one_of");
+        }
+        other => panic!("expected DuplicateCheckName, got {other:?}"),
+    }
+    assert!(project.migration_files().is_empty());
+}
+on_every_backend!(codegen_rejects_unkeyed_foreign_keys_and_colliding_checks);
+
+async fn json_columns_hold_plain_json(db: TestDb) {
+    use ash_core::CompiledQuery;
+    use fixtures::json_profiles::profile::Profile;
+
+    db.install(&[&Profile::DEF]).await.unwrap();
+    let address = |street: &str, city: &str| {
+        let mut fields = FieldMap::new();
+        fields.insert("street".into(), Value::String(street.into()));
+        fields.insert("city".into(), Value::String(city.into()));
+        Value::Map(fields)
+    };
+    let written = uuid::Uuid::from_u128(1);
+    let mut fields = FieldMap::new();
+    fields.insert("id".into(), Value::Uuid(written));
+    fields.insert("address".into(), address("221B Baker Street", "London"));
+    match &db.db {
+        Db::Sqlite(sqlite) => sqlite.create(&Profile::DEF, None, written, fields).await.unwrap(),
+        Db::Postgres(pg) => pg.create(&Profile::DEF, None, written, fields).await.unwrap(),
+    };
+
+    // The database's own JSON functions see the fields, not a tagged encoding.
+    let city = match db.db {
+        Db::Sqlite(_) => "json_extract(address, '$.city')",
+        Db::Postgres(_) => "address->>'city'",
+    };
+    assert_eq!(
+        db.text(&format!("SELECT {city} FROM json_profiles WHERE id = '{written}'"))
+            .await,
+        "London"
+    );
+
+    // A row written outside Ash reads back as the same map.
+    let external = uuid::Uuid::from_u128(2);
+    db.exec(&format!(
+        r#"INSERT INTO json_profiles (id, address) VALUES ('{external}', '{{"street":"1 Rue de Rivoli","city":"Paris"}}')"#
+    ))
+    .await
+    .unwrap();
+
+    let rows = match &db.db {
+        Db::Sqlite(sqlite) => sqlite.run_query(&Profile::DEF, &CompiledQuery::default()).await,
+        Db::Postgres(pg) => pg.run_query(&Profile::DEF, &CompiledQuery::default()).await,
+    }
+    .unwrap();
+    let address_of = |id: uuid::Uuid| {
+        rows.iter()
+            .find(|row| row.get("id") == Some(&Value::Uuid(id)))
+            .and_then(|row| row.get("address"))
+            .cloned()
+    };
+    assert_eq!(address_of(written), Some(address("221B Baker Street", "London")));
+    assert_eq!(address_of(external), Some(address("1 Rue de Rivoli", "Paris")));
+}
+on_every_backend!(json_columns_hold_plain_json);

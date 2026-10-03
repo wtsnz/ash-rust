@@ -19,6 +19,7 @@ pub struct ResourceDefinition {
     pub identities: Vec<IdentitySpec>,
     pub indexes: Vec<IndexSpec>,
     pub checks: Vec<CheckSpec>,
+    pub statements: Vec<StatementSpec>,
     pub embedded: bool,
     pub data_layer: Option<Ident>,
     pub store: Option<Type>,
@@ -48,6 +49,7 @@ impl ResourceDefinition {
             identities: Vec::new(),
             indexes: Vec::new(),
             checks: Vec::new(),
+            statements: Vec::new(),
             embedded: false,
             data_layer: None,
             store: None,
@@ -76,16 +78,28 @@ pub struct IdentitySpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
     pub message: Option<String>,
+    pub predicate: Option<String>,
+    pub nils_distinct: bool,
 }
 
 pub struct IndexSpec {
     pub name: Ident,
     pub keys: Vec<Ident>,
+    pub predicate: Option<String>,
+    pub method: Option<String>,
+    pub include: Vec<Ident>,
 }
 
 pub struct CheckSpec {
     pub name: Ident,
     pub expression: String,
+}
+
+pub struct StatementSpec {
+    pub name: Ident,
+    pub dialects: Vec<String>,
+    pub up: String,
+    pub down: String,
 }
 
 pub struct ActorFieldSpec {
@@ -147,10 +161,13 @@ pub struct RelationshipSpec {
     pub dest: Ident,
     pub struct_field_ty: Type,
     pub fk: Option<Ident>,
+    pub fk_columns: Vec<Ident>,
+    pub reference_columns: Vec<Ident>,
     pub through: Option<Ident>,
     pub source_attribute_on_join_resource: Option<String>,
     pub destination_attribute_on_join_resource: Option<String>,
     pub on_delete: OnDeleteSpec,
+    pub on_update: OnDeleteSpec,
 }
 
 pub struct CalculationSpec {
@@ -245,6 +262,8 @@ pub struct ActionSpec {
     pub returns_kw: Option<Ident>,
     pub run_kw: Option<Ident>,
     pub accept_span: Option<proc_macro2::Span>,
+    pub soft: bool,
+    pub cascade_destroy: Vec<Ident>,
 }
 
 pub struct ArgumentSpec {

@@ -63,14 +63,25 @@ pub struct IdentityDef {
     pub name: &'static str,
     pub keys: &'static [&'static str],
     pub message: Option<&'static str>,
+    /// SQL predicate for a partial unique index (`CREATE UNIQUE INDEX ... WHERE ...`).
+    pub predicate: Option<&'static str>,
+    /// When false, Postgres emits `UNIQUE NULLS NOT DISTINCT`. SQLite has no equivalent and keeps the default unique index.
+    pub nils_distinct: bool,
 }
 
 impl IdentityDef {
+    pub const fn with_nils_distinct(mut self, nils_distinct: bool) -> Self {
+        self.nils_distinct = nils_distinct;
+        self
+    }
+
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
         Self {
             name,
             keys,
             message: None,
+            predicate: None,
+            nils_distinct: true,
         }
     }
 
@@ -83,7 +94,14 @@ impl IdentityDef {
             name,
             keys,
             message: Some(message),
+            predicate: None,
+            nils_distinct: true,
         }
+    }
+
+    pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
+        self.predicate = Some(predicate);
+        self
     }
 }
 
@@ -91,11 +109,38 @@ impl IdentityDef {
 pub struct IndexDef {
     pub name: &'static str,
     pub keys: &'static [&'static str],
+    /// SQL predicate for a partial index (`CREATE INDEX ... WHERE ...`).
+    pub predicate: Option<&'static str>,
+    /// Index access method. `None` and `btree` stay the default and are omitted from SQL. Other methods are emitted as `USING` on Postgres only.
+    pub method: Option<&'static str>,
+    /// Extra columns stored in the index for index-only scans (`INCLUDE (...)`), Postgres only.
+    pub include: &'static [&'static str],
 }
 
 impl IndexDef {
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
-        Self { name, keys }
+        Self {
+            name,
+            keys,
+            predicate: None,
+            method: None,
+            include: &[],
+        }
+    }
+
+    pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
+        self.predicate = Some(predicate);
+        self
+    }
+
+    pub const fn with_method(mut self, method: &'static str) -> Self {
+        self.method = Some(method);
+        self
+    }
+
+    pub const fn with_include(mut self, include: &'static [&'static str]) -> Self {
+        self.include = include;
+        self
     }
 }
 
@@ -103,6 +148,19 @@ impl IndexDef {
 pub struct CheckDef {
     pub name: &'static str,
     pub expression: &'static str,
+}
+
+/// Raw SQL run beside the generated table migration.
+///
+/// An empty `dialects` list means every dialect. Otherwise the statement is
+/// emitted only when `SqlDialect::name` is in the list, so Postgres-only SQL
+/// such as `CREATE EXTENSION` is not sent to SQLite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatementDef {
+    pub name: &'static str,
+    pub dialects: &'static [&'static str],
+    pub up: &'static str,
+    pub down: &'static str,
 }
 
 impl CheckDef {
@@ -160,6 +218,7 @@ pub struct ResourceDef {
     pub identities: &'static [IdentityDef],
     pub indexes: &'static [IndexDef],
     pub checks: &'static [CheckDef],
+    pub statements: &'static [StatementDef],
     pub embedded: bool,
     pub data_layer: DataLayerKind,
     pub timestamps: Option<(&'static str, &'static str)>,
@@ -248,6 +307,47 @@ impl ResourceDef {
         self.attributes
             .iter()
             .find(|attribute| attribute.primary_key)
+    }
+
+    /// Filters from the primary read's `prepare filter(...)` steps. Following Ash, every
+    /// read of the resource sees them: relationship loads, aggregates, and filters that
+    /// reach it through a relationship.
+    pub fn primary_read_filter(&self) -> Option<crate::filter::Filter> {
+        let read = self.primary_read()?;
+        let filters: Vec<crate::filter::Filter> = read
+            .preparations
+            .iter()
+            .filter_map(|prep| match prep {
+                crate::action::PreparationDef::Filter(build) => Some(build()),
+                _ => None,
+            })
+            .collect();
+        if filters.is_empty() {
+            None
+        } else {
+            Some(crate::filter::Filter::and(filters))
+        }
+    }
+
+    /// Limits a read in `tenant` to that tenant's rows of an attribute-tenant resource,
+    /// whether it reads the resource directly or through a relationship. Context-tenant
+    /// resources are kept apart by the data layer instead.
+    pub fn tenant_filter(&self, tenant: Option<&str>) -> Option<crate::filter::Filter> {
+        match (self.multitenancy?.strategy, tenant) {
+            (MultitenancyStrategy::Attribute(attribute), Some(tenant)) => Some(
+                crate::filter::Filter::eq(attribute, crate::value::Value::String(tenant.to_string())),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The read this resource is read through when no action is named: typed queries,
+    /// relationship loads and GraphQL all use it. That's its primary read, or for a
+    /// resource that declares no read action, an implicit `read` without preparations,
+    /// through which its read policies still apply.
+    pub fn default_read(&self) -> &ActionDef {
+        static IMPLICIT_READ: ActionDef = ActionDef::read("read");
+        self.primary_read().unwrap_or(&IMPLICIT_READ)
     }
 
     pub fn primary_read(&self) -> Option<&ActionDef> {
@@ -360,11 +460,26 @@ pub enum AttrType {
     Atom { one_of: &'static [&'static str] },
     Map,
     Array,
-    UtcDatetime,
+    UtcDatetime { precision: crate::types::TimePrecision },
     Decimal,
+    Float,
+    Date,
+    Binary,
+    CiString,
+    Inet,
+    Vector { dimensions: u32 },
 }
 
 impl AttrType {
+    /// A UTC datetime to the second, as Ash's `:utc_datetime`.
+    pub const UTC_DATETIME: Self = Self::UtcDatetime {
+        precision: crate::types::TimePrecision::Second,
+    };
+    /// A UTC datetime to the microsecond, as Ash's `:utc_datetime_usec`.
+    pub const UTC_DATETIME_USEC: Self = Self::UtcDatetime {
+        precision: crate::types::TimePrecision::Microsecond,
+    };
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::Uuid => "uuid",
@@ -374,14 +489,35 @@ impl AttrType {
             Self::Atom { .. } => "atom",
             Self::Map => "map",
             Self::Array => "array",
-            Self::UtcDatetime => "utc_datetime",
+            Self::UtcDatetime {
+                precision: crate::types::TimePrecision::Second,
+            } => "utc_datetime",
+            Self::UtcDatetime {
+                precision: crate::types::TimePrecision::Microsecond,
+            } => "utc_datetime_usec",
             Self::Decimal => "decimal",
+            Self::Float => "float",
+            Self::Date => "date",
+            Self::Binary => "binary",
+            Self::CiString => "ci_string",
+            Self::Inet => "inet",
+            Self::Vector { .. } => "vector",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OnDelete {
+    #[default]
+    Nothing,
+    Cascade,
+    Nilify,
+    Restrict,
+}
+
+/// Referential action for `ON UPDATE`. `Nothing` is `NO ACTION` and is omitted from generated SQL.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OnUpdate {
     #[default]
     Nothing,
     Cascade,
@@ -396,10 +532,25 @@ pub struct RelationshipDef {
     pub destination: fn() -> &'static ResourceDef,
     pub source_attribute: &'static str,
     pub destination_attribute: &'static str,
+    /// Extra key columns on this resource. Empty means [`Self::source_attribute`] alone.
+    pub source_attributes: &'static [&'static str],
+    /// Matching columns on the destination. Empty means [`Self::destination_attribute`] alone.
+    pub destination_attributes: &'static [&'static str],
     pub through: Option<fn() -> &'static ResourceDef>,
     pub source_attribute_on_join_resource: Option<&'static str>,
     pub destination_attribute_on_join_resource: Option<&'static str>,
     pub on_delete: OnDelete,
+    pub on_update: OnUpdate,
+}
+
+fn key_values(fields: &FieldMap, columns: &[&str]) -> Option<Vec<crate::value::Value>> {
+    columns
+        .iter()
+        .map(|column| match fields.get(*column) {
+            Some(value) if !value.is_null() => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -416,6 +567,74 @@ impl RelationshipDef {
         self
     }
 
+    pub const fn with_on_update(mut self, on_update: OnUpdate) -> Self {
+        self.on_update = on_update;
+        self
+    }
+
+    /// Sets a composite key. The first column of each side is also stored in the single-column fields.
+    pub const fn with_keys(
+        mut self,
+        source: &'static [&'static str],
+        destination: &'static [&'static str],
+    ) -> Self {
+        if let Some(first) = source.first() {
+            self.source_attribute = first;
+        }
+        if let Some(first) = destination.first() {
+            self.destination_attribute = first;
+        }
+        self.source_attributes = source;
+        self.destination_attributes = destination;
+        self
+    }
+
+    pub fn source_columns(&self) -> Vec<&'static str> {
+        if self.source_attributes.is_empty() {
+            vec![self.source_attribute]
+        } else {
+            self.source_attributes.to_vec()
+        }
+    }
+
+    pub fn destination_columns(&self) -> Vec<&'static str> {
+        if self.destination_attributes.is_empty() {
+            vec![self.destination_attribute]
+        } else {
+            self.destination_attributes.to_vec()
+        }
+    }
+
+    /// `(column on this resource, column on the destination)` for each key column.
+    pub fn key_pairs(&self) -> Vec<(&'static str, &'static str)> {
+        self.source_columns()
+            .into_iter()
+            .zip(self.destination_columns())
+            .collect()
+    }
+
+    /// This side's key values in `source`, or `None` when any of them is null or missing.
+    pub fn source_key(&self, source: &FieldMap) -> Option<Vec<crate::value::Value>> {
+        key_values(source, &self.source_columns())
+    }
+
+    /// The destination's key values in `destination`, or `None` when any is null or missing.
+    pub fn destination_key(&self, destination: &FieldMap) -> Option<Vec<crate::value::Value>> {
+        key_values(destination, &self.destination_columns())
+    }
+
+    /// Selects the destination rows linked to `source`, or `None` when its key is null,
+    /// since a null key links to nothing.
+    pub fn destination_filter(&self, source: &FieldMap) -> Option<crate::filter::Filter> {
+        let key = self.source_key(source)?;
+        Some(crate::filter::Filter::and(
+            self.destination_columns()
+                .into_iter()
+                .zip(key)
+                .map(|(column, value)| crate::filter::Filter::eq(column, value)),
+        ))
+    }
+
     pub const fn belongs_to(
         name: &'static str,
         destination: fn() -> &'static ResourceDef,
@@ -427,10 +646,13 @@ impl RelationshipDef {
             destination,
             source_attribute,
             destination_attribute: "id",
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -445,10 +667,13 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute,
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -463,10 +688,13 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute,
+            source_attributes: &[],
+            destination_attributes: &[],
             through: None,
             source_attribute_on_join_resource: None,
             destination_attribute_on_join_resource: None,
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 
@@ -483,10 +711,13 @@ impl RelationshipDef {
             destination,
             source_attribute: "id",
             destination_attribute: "id",
+            source_attributes: &[],
+            destination_attributes: &[],
             through: Some(through),
             source_attribute_on_join_resource: Some(source_attribute_on_join_resource),
             destination_attribute_on_join_resource: Some(destination_attribute_on_join_resource),
             on_delete: OnDelete::Nothing,
+            on_update: OnUpdate::Nothing,
         }
     }
 }

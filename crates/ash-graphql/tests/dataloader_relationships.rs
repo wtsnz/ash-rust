@@ -1,5 +1,5 @@
 use ash_core::{
-    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, RelKind, RelationshipDef,
+    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind, RelationshipDef,
     ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -18,10 +18,13 @@ static AUTHOR_RELS: &[RelationshipDef] = &[RelationshipDef {
     destination: || &POST_DEF,
     source_attribute: "id",
     destination_attribute: "author_id",
+    source_attributes: &[],
+    destination_attributes: &[],
     through: None,
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Cascade,
+    on_update: OnUpdate::Nothing,
 }];
 
 static AUTHOR_DEF: ResourceDef = ResourceDef {
@@ -39,6 +42,7 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -59,10 +63,13 @@ static POST_RELS: &[RelationshipDef] = &[RelationshipDef {
     destination: || &AUTHOR_DEF,
     source_attribute: "author_id",
     destination_attribute: "id",
+    source_attributes: &[],
+    destination_attributes: &[],
     through: None,
     source_attribute_on_join_resource: None,
     destination_attribute_on_join_resource: None,
     on_delete: OnDelete::Nothing,
+    on_update: OnUpdate::Nothing,
 }];
 
 static POST_DEF: ResourceDef = ResourceDef {
@@ -80,6 +87,7 @@ static POST_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -93,13 +101,13 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
     let mut a1 = FieldMap::new();
     a1.insert("id".into(), Value::Uuid(author1_id));
     a1.insert("name".into(), Value::String("Alice".into()));
-    data.create(&AUTHOR_DEF, author1_id, a1).await.unwrap();
+    data.create(&AUTHOR_DEF, None, author1_id, a1).await.unwrap();
 
     let author2_id = Uuid::new_v4();
     let mut a2 = FieldMap::new();
     a2.insert("id".into(), Value::Uuid(author2_id));
     a2.insert("name".into(), Value::String("Bob".into()));
-    data.create(&AUTHOR_DEF, author2_id, a2).await.unwrap();
+    data.create(&AUTHOR_DEF, None, author2_id, a2).await.unwrap();
 
     // Alice's posts
     for i in 1..=2 {
@@ -108,7 +116,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Alice Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author1_id));
-        data.create(&POST_DEF, p_id, p).await.unwrap();
+        data.create(&POST_DEF, None, p_id, p).await.unwrap();
     }
 
     // Bob's posts
@@ -118,7 +126,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Bob Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author2_id));
-        data.create(&POST_DEF, p_id, p).await.unwrap();
+        data.create(&POST_DEF, None, p_id, p).await.unwrap();
     }
 
     (author1_id, author2_id)
@@ -146,7 +154,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         }
     "#;
 
-    let dataloader1 = AshGraphQL::create_dataloader(ctx.clone(), resources);
+    let dataloader1 = AshGraphQL::create_dataloader(ctx.clone());
     let req = Request::new(query_authors).data(ctx.clone()).data(dataloader1);
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors in listAuthors: {:?}", res.errors);
@@ -176,7 +184,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         }
     "#;
 
-    let dataloader2 = AshGraphQL::create_dataloader(ctx.clone(), resources);
+    let dataloader2 = AshGraphQL::create_dataloader(ctx.clone());
     let req = Request::new(query_posts).data(ctx).data(dataloader2);
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors in listPosts: {:?}", res.errors);

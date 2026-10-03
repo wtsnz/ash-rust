@@ -29,19 +29,37 @@ pub fn to_camel_case(s: &str) -> String {
     }
 }
 
+/// Atom variants as GraphQL enum values, which are upper-cased.
+pub fn enum_values(one_of: &[&str]) -> Vec<String> {
+    one_of.iter().map(|value| value.to_uppercase()).collect()
+}
+
+/// Name of the per-attribute filter for an atom, e.g. `TicketStatusFilter`.
+pub fn enum_filter_name(resource_name: &str, attr_name: &str) -> String {
+    format!("{resource_name}{}Filter", to_pascal_case(attr_name))
+}
+
 /// Map an Ash `AttrType` to its corresponding TypeScript type string.
 pub fn attr_type_to_ts(ty: &AttrType) -> String {
     match ty {
-        AttrType::Uuid | AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => {
+        AttrType::Uuid
+        | AttrType::String
+        | AttrType::CiString
+        | AttrType::Date
+        | AttrType::Binary
+        | AttrType::UtcDatetime { .. }
+        | AttrType::Inet
+        | AttrType::Decimal => {
             "string".to_string()
         }
-        AttrType::Integer => "number".to_string(),
+        AttrType::Float | AttrType::Integer => "number".to_string(),
+        AttrType::Vector { .. } => "number[]".to_string(),
         AttrType::Boolean => "boolean".to_string(),
         AttrType::Atom { one_of } => {
             if one_of.is_empty() {
                 "string".to_string()
             } else {
-                one_of
+                enum_values(one_of)
                     .iter()
                     .map(|s| format!("\"{s}\""))
                     .collect::<Vec<_>>()
@@ -54,14 +72,22 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
 }
 
 /// Map an Ash `AttrType` to its corresponding Filter type name.
-pub fn attr_type_to_filter_type(ty: &AttrType) -> &'static str {
+///
+/// Returns `None` for types the GraphQL filter input leaves out.
+pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<&'static str> {
     match ty {
-        AttrType::Uuid => "UuidFilter",
-        AttrType::String | AttrType::UtcDatetime | AttrType::Decimal => "StringFilter",
-        AttrType::Integer => "IntFilter",
-        AttrType::Boolean => "BooleanFilter",
-        AttrType::Atom { .. } => "StringFilter",
-        AttrType::Map | AttrType::Array => "JsonFilter",
+        AttrType::Uuid => Some("UuidFilter"),
+        AttrType::String | AttrType::CiString => Some("TextFilter"),
+        AttrType::Date
+        | AttrType::Binary
+        | AttrType::UtcDatetime { .. }
+        | AttrType::Decimal
+        | AttrType::Inet => Some("StringFilter"),
+        AttrType::Float => Some("FloatFilter"),
+        AttrType::Integer => Some("IntFilter"),
+        AttrType::Boolean => Some("BooleanFilter"),
+        AttrType::Atom { .. } => Some("StringFilter"),
+        AttrType::Map | AttrType::Array | AttrType::Vector { .. } => None,
     }
 }
 
@@ -85,40 +111,53 @@ export interface PaginatedResult<T> {
 
 export interface UuidFilter {
   eq?: string;
-  neq?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface StringFilter {
   eq?: string;
-  neq?: string;
-  contains?: string;
-  starts_with?: string;
-  ends_with?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
+}
+
+export interface TextFilter {
+  eq?: string;
+  ne?: string;
+  in?: string[];
+  isNil?: boolean;
+  contains?: string;
+  startsWith?: string;
+  endsWith?: string;
+}
+
+export interface FloatFilter {
+  eq?: number;
+  ne?: number;
+  gt?: number;
+  gte?: number;
+  lt?: number;
+  lte?: number;
+  isNil?: boolean;
 }
 
 export interface IntFilter {
   eq?: number;
-  neq?: number;
+  ne?: number;
   gt?: number;
   gte?: number;
   lt?: number;
   lte?: number;
   in?: number[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface BooleanFilter {
   eq?: boolean;
-  neq?: boolean;
-  is_nil?: boolean;
-}
-
-export interface JsonFilter {
-  is_nil?: boolean;
+  ne?: boolean;
+  isNil?: boolean;
 }
 "#
     .to_string()
@@ -225,10 +264,29 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     let mut out = String::new();
     let name = res.name;
 
+    for attr in res.attributes {
+        if let AttrType::Atom { one_of } = attr.ty
+            && !one_of.is_empty()
+        {
+            let values = attr_type_to_ts(&attr.ty);
+            let filter = enum_filter_name(name, attr.name);
+            out.push_str(&format!(
+                "export interface {filter} {{\n  eq?: {values};\n  ne?: {values};\n  in?: ({values})[];\n  isNil?: boolean;\n}}\n\n"
+            ));
+        }
+    }
+
     out.push_str(&format!("export interface {name}FilterInput {{\n"));
     for attr in res.attributes {
-        let filter_type = attr_type_to_filter_type(&attr.ty);
-        out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
+        let filter_type = match attr.ty {
+            AttrType::Atom { one_of } if !one_of.is_empty() => {
+                Some(enum_filter_name(name, attr.name))
+            }
+            _ => attr_type_to_filter_type(&attr.ty).map(str::to_string),
+        };
+        if let Some(filter_type) = filter_type {
+            out.push_str(&format!("  {}?: {};\n", attr.name, filter_type));
+        }
     }
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;

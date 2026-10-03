@@ -28,10 +28,31 @@ pub trait MigrationExecutor: Send + Sync {
     /// Removes a rolled-back migration version from `_ash_schema_migrations`.
     async fn remove_migration(&self, version: &str) -> Result<()>;
 
-    /// Runs one migration script and records it in a single transaction when the store allows it.
-    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
+    /// Runs one migration script and records `version`, unless it is already recorded.
+    /// Returns whether it ran.
+    ///
+    /// Stores that can should check, run, and record in one transaction that also keeps
+    /// other migrators out, so migrators racing on one database apply each version once.
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
+        if self.applied_versions().await?.iter().any(|v| v == version) {
+            return Ok(false);
+        }
         self.execute_script(sql).await?;
-        self.record_migration(version, name).await
+        self.record_migration(version, name).await?;
+        Ok(true)
+    }
+
+    /// Runs a down script and forgets `version`, unless it is no longer the latest
+    /// recorded version. Returns whether it ran. Like [`Self::apply_migration`], stores
+    /// that can should do this in one locked transaction.
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        let applied = self.applied_versions().await?;
+        if applied.iter().max().map(String::as_str) != Some(version) {
+            return Ok(false);
+        }
+        self.execute_script(sql).await?;
+        self.remove_migration(version).await?;
+        Ok(true)
     }
 
     /// Creates `_ash_schema_migrations` if the executor needs it before reading versions.
@@ -163,9 +184,21 @@ impl<D: SqlDialect> Migrator<D> {
         Ok(pending)
     }
 
-    /// Runs all pending migrations against the given executor, returning the list of applied versions.
-    pub async fn run<E: MigrationExecutor>(&self, executor: &E) -> Result<Vec<String>> {
+    /// Runs `work` while holding the process and directory migration locks. Migrators on
+    /// other hosts are kept apart per migration by the executor; see
+    /// [`MigrationExecutor::apply_migration`].
+    async fn locked<T>(&self, work: impl std::future::Future<Output = Result<T>>) -> Result<T> {
         let _lock = lock_migrations(&self.migrations_dir).await?;
+        work.await
+    }
+
+    /// Runs all pending migrations against the given executor, returning the versions this
+    /// call applied. Versions another migrator applies first are skipped.
+    pub async fn run<E: MigrationExecutor>(&self, executor: &E) -> Result<Vec<String>> {
+        self.locked(self.run_unlocked(executor)).await
+    }
+
+    async fn run_unlocked<E: MigrationExecutor>(&self, executor: &E) -> Result<Vec<String>> {
         executor.ensure_tracking_table().await?;
         let pending = self.pending_migrations(executor).await?;
         let mut applied_versions = Vec::new();
@@ -178,10 +211,12 @@ impl<D: SqlDialect> Migrator<D> {
                 ))
             })?;
 
-            executor
+            if executor
                 .apply_migration(&sql, &migration.version, &migration.name)
-                .await?;
-            applied_versions.push(migration.version);
+                .await?
+            {
+                applied_versions.push(migration.version);
+            }
         }
 
         Ok(applied_versions)
@@ -189,44 +224,63 @@ impl<D: SqlDialect> Migrator<D> {
 
     /// Rolls back the latest applied migration, returning the rolled-back version if any.
     pub async fn rollback<E: MigrationExecutor>(&self, executor: &E) -> Result<Option<String>> {
-        let mut applied = executor.applied_versions().await?;
-        applied.sort();
+        self.locked(self.rollback_unlocked(executor)).await
+    }
 
-        let Some(latest_version) = applied.last() else {
-            return Ok(None);
-        };
+    async fn rollback_unlocked<E: MigrationExecutor>(
+        &self,
+        executor: &E,
+    ) -> Result<Option<String>> {
+        // Another migrator may roll back or apply a version between reading the history
+        // and taking the lock; the executor then declines and we look again.
+        loop {
+            let mut applied = executor.applied_versions().await?;
+            applied.sort();
 
-        let all = self.discover_migrations()?;
-        let migration = all
-            .into_iter()
-            .find(|m| m.version == *latest_version)
-            .ok_or_else(|| {
+            let Some(latest_version) = applied.pop() else {
+                return Ok(None);
+            };
+
+            let all = self.discover_migrations()?;
+            let migration = all
+                .into_iter()
+                .find(|m| m.version == latest_version)
+                .ok_or_else(|| {
+                    Error::DataLayer(format!(
+                        "Migration script for version {latest_version} not found on disk"
+                    ))
+                })?;
+
+            let down_path = migration.down_path.ok_or_else(|| {
                 Error::DataLayer(format!(
-                    "Migration script for version {latest_version} not found on disk"
+                    "No rollback script found for migration version {latest_version}"
                 ))
             })?;
 
-        let down_path = migration.down_path.ok_or_else(|| {
-            Error::DataLayer(format!(
-                "No rollback script found for migration version {latest_version}"
-            ))
-        })?;
+            let sql = fs::read_to_string(&down_path).map_err(|e| {
+                Error::DataLayer(format!(
+                    "Failed to read down migration {}: {e}",
+                    down_path.display()
+                ))
+            })?;
 
-        let sql = fs::read_to_string(&down_path).map_err(|e| {
-            Error::DataLayer(format!(
-                "Failed to read down migration {}: {e}",
-                down_path.display()
-            ))
-        })?;
-
-        executor.execute_script(&sql).await?;
-        executor.remove_migration(&migration.version).await?;
-
-        Ok(Some(migration.version))
+            if executor.revert_migration(&sql, &latest_version).await? {
+                return Ok(Some(latest_version));
+            }
+        }
     }
 
     /// Rolls back applied migrations down to (and not including) the target version.
     pub async fn rollback_to<E: MigrationExecutor>(
+        &self,
+        executor: &E,
+        target_version: &str,
+    ) -> Result<Vec<String>> {
+        self.locked(self.rollback_to_unlocked(executor, target_version))
+            .await
+    }
+
+    async fn rollback_to_unlocked<E: MigrationExecutor>(
         &self,
         executor: &E,
         target_version: &str,
@@ -237,7 +291,7 @@ impl<D: SqlDialect> Migrator<D> {
             applied.sort();
             match applied.last() {
                 Some(latest) if latest.as_str() > target_version => {
-                    if let Some(v) = self.rollback(executor).await? {
+                    if let Some(v) = self.rollback_unlocked(executor).await? {
                         rolled_back.push(v);
                     } else {
                         break;

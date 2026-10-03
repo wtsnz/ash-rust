@@ -294,3 +294,68 @@ async fn test_identities_and_upsert_in_sqlite() {
     assert_eq!(re_read.display_name, "Dave Upserted");
     assert_eq!(re_read.points, 777);
 }
+
+mod nullable {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Handle {
+            table "handles";
+            attributes {
+                id: Uuid [pk];
+                nickname: Option<String>;
+                email: String;
+                archived_at: Option<String>;
+            }
+            identities {
+                identity one_nickname: [nickname], nils_distinct: false;
+                identity live_email: [email], where: "archived_at IS NULL";
+            }
+            actions {
+                create create {
+                    primary;
+                    accept [nickname, email, archived_at];
+                }
+                read read { primary; }
+            }
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+#[test]
+async fn memory_identities_follow_nulls_and_skip_partial_predicates() {
+    use nullable::Handle;
+
+    let ctx = Context::new(Memory::new());
+
+    // NULLS NOT DISTINCT: a second null nickname collides with the first.
+    Handle::create(&ctx).email("a@example.com").await.expect("first null nickname");
+    let err = Handle::create(&ctx)
+        .email("b@example.com")
+        .await
+        .expect_err("second null nickname should collide");
+    assert!(
+        matches!(err, Error::IdentityConflict { identity: "one_nickname", .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // The memory store cannot run a `where:` predicate, so it leaves the partial
+    // identity to the database instead of rejecting rows the index would allow.
+    Handle::create(&ctx)
+        .nickname("archived")
+        .email("a@example.com")
+        .archived_at("2024-01-01")
+        .await
+        .expect("partial identity is not enforced in memory");
+
+    // Upserting on it would have to guess which rows the predicate covers.
+    let err = Handle::create(&ctx)
+        .nickname("upserted")
+        .email("a@example.com")
+        .upsert_on(Handle::live_email, &["nickname"])
+        .await
+        .expect_err("upsert on a partial identity should be rejected");
+    assert!(matches!(err, Error::Invalid(_)), "unexpected error: {err:?}");
+}

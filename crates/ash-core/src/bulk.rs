@@ -6,11 +6,10 @@ use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
-use crate::pipeline::{
-    action_named, apply_changes_with_context, apply_tenant_scope, expect_kind, expect_persist,
-    generate_pk, pk_name, run_validations_with_context, split_input, validate,
-};
-use crate::policy::{authorize_field_writes, authorize_write, redact_fields};
+use crate::action::DynamicAfterTransactionHook;
+use crate::changeset::DynamicChangeset;
+use crate::changeset::dynamic_upsert_identity as upsert_identity;
+use crate::pipeline::{action_named, expect_kind, expect_persist, pk_name, visible_scope};
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value, required_uuid};
 
@@ -157,7 +156,38 @@ impl<R> BulkResult<R> {
     }
 }
 
+/// One row of a bulk action, prepared as a single write prepares, with the hooks to run
+/// once its outcome is known.
+struct PreparedRow {
+    id: Uuid,
+    changeset: DynamicChangeset,
+    after_transactions: Vec<DynamicAfterTransactionHook>,
+}
+
+/// Runs `hooks` with a row's outcome.
+fn conclude(hooks: Vec<DynamicAfterTransactionHook>, outcome: std::result::Result<&FieldMap, &Error>) {
+    for hook in hooks {
+        hook(outcome);
+    }
+}
+
+impl<R> BulkResult<R> {
+    /// Counts a failed row, or returns its error when the action stops on the first one.
+    fn fail(&mut self, err: Error, stop_on_error: bool) -> Result<()> {
+        if stop_on_error {
+            return Err(err);
+        }
+        self.errors.push(err.to_string());
+        self.error_count += 1;
+        Ok(())
+    }
+}
+
 /// Create multiple records in a single batch or in chunked batches.
+///
+/// Each row runs through the same changeset as a single create: accept, changes,
+/// tenant, validations, policies and before-action hooks, then after-action hooks and a
+/// notification once its batch is written.
 pub async fn bulk_create<R: Resource, D: DataLayer, I, F>(
     ctx: &Context<D>,
     action: &str,
@@ -171,193 +201,92 @@ where
     let action_def = action_named(&R::DEF, action)?;
     expect_kind(action_def, ActionKind::Create)?;
     expect_persist(action_def, PersistKind::DataLayer)?;
+    if let Some((identity, _)) = &opts.upsert {
+        upsert_identity(&R::DEF, identity)?;
+    }
 
-    let pk = pk_name(&R::DEF)?;
-
+    let mut result = BulkResult::default();
     let mut prepared = Vec::new();
-    let mut errors = Vec::new();
-    let mut error_count = 0;
-
     for input in inputs {
-        let raw_fields = input.into_field_map();
-        let prep_res = (|| -> Result<(Uuid, FieldMap, FieldMap)> {
-            let (mut fields, arguments) = split_input(action_def, raw_fields)?;
-            generate_pk(&R::DEF, &mut fields);
-
-            if let Some(v_attr) = R::DEF.optimistic_lock_attribute()
-                && (!fields.contains_key(v_attr) || fields.get(v_attr) == Some(&Value::Null))
-            {
-                fields.insert(v_attr.to_string(), Value::Int(1));
-            }
-
-            for attr in R::DEF.attributes {
-                if let Some(def_fn) = attr.default_fn
-                    && (!fields.contains_key(attr.name)
-                        || fields.get(attr.name) == Some(&Value::Null))
-                {
-                    fields.insert(attr.name.to_string(), def_fn());
+        let mut changeset =
+            match DynamicChangeset::for_create(ctx, &R::DEF, action_def, input.into_field_map()) {
+                Ok(changeset) => changeset,
+                Err(err) => {
+                    result.fail(err, opts.stop_on_error)?;
+                    continue;
                 }
-            }
-
-            if let Some((created_at, updated_at)) = R::DEF.timestamps {
-                let now = crate::resource::utc_now_iso8601();
-                if !fields.contains_key(created_at) || fields.get(created_at) == Some(&Value::Null)
-                {
-                    fields.insert(created_at.to_string(), Value::String(now.clone()));
-                }
-                if !fields.contains_key(updated_at) || fields.get(updated_at) == Some(&Value::Null)
-                {
-                    fields.insert(updated_at.to_string(), Value::String(now));
-                }
-            }
-
-            apply_changes_with_context(
-                &mut fields,
-                action_def,
-                ctx.actor.as_ref(),
-                ctx.tenant(),
-                ctx.metadata(),
-                &arguments,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-            )?;
-            validate(&R::DEF, &fields)?;
-            run_validations_with_context(
-                &R::DEF,
-                action_def,
-                None,
-                &fields,
-                ctx.actor.as_ref(),
-                ctx.tenant(),
-                ctx.metadata(),
-                &arguments,
-            )?;
-            authorize_field_writes(&R::DEF, ctx.actor.as_ref(), None, &fields)?;
-            authorize_write(&R::DEF, action_def, ctx.actor.as_ref(), Some(&fields))?;
-
-            let id = required_uuid(&fields, pk)?;
-            Ok((id, fields, arguments))
-        })();
-
-        match prep_res {
-            Ok(tuple) => prepared.push(tuple),
+            };
+        if let Some((identity, update_fields)) = &opts.upsert {
+            let update_fields: Vec<&str> = update_fields.iter().map(String::as_str).collect();
+            changeset = changeset.with_upsert(identity, &update_fields);
+        }
+        let after_transactions = changeset.take_after_transactions();
+        match changeset.prepare(ctx).await {
+            Ok(id) => prepared.push(PreparedRow {
+                id,
+                changeset,
+                after_transactions,
+            }),
             Err(err) => {
-                if opts.stop_on_error {
-                    return Err(err);
-                } else {
-                    errors.push(err.to_string());
-                    error_count += 1;
-                }
+                conclude(after_transactions, Err(&err));
+                result.fail(err, opts.stop_on_error)?;
             }
         }
     }
 
-    let mut records = Vec::new();
-    let mut count = 0;
-
-    let chunk_size = opts.batch_size.unwrap_or(if prepared.is_empty() {
-        1
-    } else {
-        prepared.len()
-    });
-    for chunk in prepared.chunks(chunk_size) {
-        if let Some((ident_name, ref u_fields)) = opts.upsert {
-            let identity = R::DEF.identity(ident_name).ok_or_else(|| {
-                Error::Invalid(format!(
-                    "unknown identity `{ident_name}` for upsert on {}",
-                    R::DEF.name
-                ))
-            })?;
-
-            for (id, fields, arguments) in chunk {
-                match ctx
-                    .data
-                    .upsert(&R::DEF, *id, fields.clone(), identity, u_fields)
-                    .await
-                {
-                    Ok(mut stored) => {
-                        if opts.notify {
-                            let mut notif_metadata = ctx.metadata.clone();
-                            notif_metadata.extend(arguments.clone());
-                            let notification = crate::notifier::Notification::new(
-                                R::DEF.name,
-                                action_def.name,
-                                action_def.kind,
-                                *id,
-                                stored.clone(),
-                                None,
-                                ctx.actor.clone(),
-                                notif_metadata,
-                            )
-                            .with_tenant(ctx.tenant.clone());
-                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification)
-                                .await?;
-                        }
-                        if opts.return_records {
-                            redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
-                            records.push(R::from_fields(&stored)?);
-                        }
-                        count += 1;
-                    }
-                    Err(err) => {
-                        if opts.stop_on_error {
-                            return Err(err);
-                        } else {
-                            errors.push(err.to_string());
-                            error_count += 1;
-                        }
-                    }
-                }
+    let cascade = crate::engine::Cascade::new(opts.notify);
+    let chunk_size = opts.batch_size.unwrap_or(prepared.len()).max(1);
+    let mut rows = prepared.into_iter().peekable();
+    while rows.peek().is_some() {
+        let mut chunk: Vec<PreparedRow> = rows.by_ref().take(chunk_size).collect();
+        // Upserts go one row at a time, so one conflict fails only its own row.
+        let stored: Vec<Result<FieldMap>> = if opts.upsert.is_some() {
+            let mut stored = Vec::with_capacity(chunk.len());
+            for row in &mut chunk {
+                stored.push(row.changeset.persist(ctx, row.id, &cascade).await);
             }
+            stored
         } else {
-            let chunk_tuples: Vec<(Uuid, FieldMap)> =
-                chunk.iter().map(|(id, f, _)| (*id, f.clone())).collect();
-            match ctx.data.bulk_create(&R::DEF, chunk_tuples).await {
-                Ok(stored_rows) => {
-                    for (mut stored, (id, _, arguments)) in stored_rows.into_iter().zip(chunk) {
-                        if opts.notify {
-                            let mut notif_metadata = ctx.metadata.clone();
-                            notif_metadata.extend(arguments.clone());
-                            let notification = crate::notifier::Notification::new(
-                                R::DEF.name,
-                                action_def.name,
-                                action_def.kind,
-                                *id,
-                                stored.clone(),
-                                None,
-                                ctx.actor.clone(),
-                                notif_metadata,
-                            )
-                            .with_tenant(ctx.tenant.clone());
-                            crate::notifier::dispatch_notification(ctx, &R::DEF, notification)
-                                .await?;
-                        }
-                        if opts.return_records {
-                            redact_fields(&R::DEF, ctx.actor.as_ref(), &mut stored)?;
-                            records.push(R::from_fields(&stored)?);
-                        }
-                        count += 1;
-                    }
-                }
+            let tuples = chunk
+                .iter_mut()
+                .map(|row| (row.id, row.changeset.take_fields()))
+                .collect();
+            match ctx.data.bulk_create(&R::DEF, ctx.tenant.as_deref(), tuples).await {
+                Ok(stored) => stored.into_iter().map(Ok).collect(),
                 Err(err) => {
+                    let failed = chunk.len();
+                    for row in chunk {
+                        conclude(row.after_transactions, Err(&err));
+                    }
                     if opts.stop_on_error {
                         return Err(err);
-                    } else {
-                        errors.push(err.to_string());
-                        error_count += chunk.len();
                     }
+                    result.errors.push(err.to_string());
+                    result.error_count += failed;
+                    continue;
                 }
+            }
+        };
+
+        for (mut row, stored) in chunk.into_iter().zip(stored) {
+            let outcome = match stored {
+                Ok(stored) => row.changeset.finish(ctx, row.id, stored, opts.notify).await,
+                Err(err) => Err(err),
+            };
+            conclude(row.after_transactions, outcome.as_ref());
+            match outcome {
+                Ok(stored) => {
+                    if opts.return_records {
+                        result.records.push(R::from_fields(&stored)?);
+                    }
+                    result.count += 1;
+                }
+                Err(err) => result.fail(err, opts.stop_on_error)?,
             }
         }
     }
 
-    Ok(BulkResult {
-        records,
-        errors,
-        error_count,
-        count,
-    })
+    Ok(result)
 }
 
 /// Destroy multiple records by ID in a single batch or in chunked batches.
@@ -383,7 +312,7 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
         pk.to_string(),
         ids.iter().map(|id| Value::Uuid(*id)).collect(),
     );
-    let (filter, tenant) = apply_tenant_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
+    let (filter, tenant) = visible_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
     let rows = ctx
         .data
         .run_query(
@@ -396,92 +325,100 @@ pub async fn bulk_destroy<R: Resource, D: DataLayer>(
         )
         .await?;
 
-    let mut valid_to_destroy = Vec::new();
-    let mut errors = Vec::new();
-    let mut error_count = 0;
-
-    for row in rows {
-        let id = required_uuid(&row, pk)?;
-
-        let check_res = (|| -> Result<()> {
-            authorize_write(&R::DEF, action_def, ctx.actor.as_ref(), Some(&row))?;
-            Ok(())
-        })();
-
-        match check_res {
-            Ok(()) => {
-                // Check cascading deletes
-                match crate::engine::handle_cascading_deletes(ctx, &R::DEF, id, &row).await {
-                    Ok(()) => valid_to_destroy.push((id, row)),
-                    Err(err) => {
-                        if opts.stop_on_error {
-                            return Err(err);
-                        } else {
-                            errors.push(err.to_string());
-                            error_count += 1;
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                if opts.stop_on_error {
-                    return Err(err);
-                } else {
-                    errors.push(err.to_string());
-                    error_count += 1;
-                }
-            }
-        }
-    }
-
-    let mut records = Vec::new();
-    let mut count = 0;
-
-    let chunk_size = opts.batch_size.unwrap_or(if valid_to_destroy.is_empty() {
-        1
-    } else {
-        valid_to_destroy.len()
-    });
-    for chunk in valid_to_destroy.chunks(chunk_size) {
-        let chunk_ids: Vec<Uuid> = chunk.iter().map(|(id, _)| *id).collect();
-        match ctx.data.bulk_destroy(&R::DEF, &chunk_ids).await {
-            Ok(()) => {
-                for (id, row) in chunk {
-                    if opts.notify {
-                        let notification = crate::notifier::Notification::new(
-                            R::DEF.name,
-                            action_def.name,
-                            action_def.kind,
-                            *id,
-                            row.clone(),
-                            Some(row.clone()),
-                            ctx.actor.clone(),
-                            ctx.metadata.clone(),
-                        )
-                        .with_tenant(ctx.tenant.clone());
-                        crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
-                    }
+    // Soft and cascading destroys run each record's changes and cascades, so they go
+    // one record at a time instead of through a single bulk delete.
+    if action_def.soft || !action_def.cascade_destroy.is_empty() {
+        let mut result = BulkResult::default();
+        let cascade = crate::engine::Cascade::new(opts.notify);
+        for row in rows {
+            let id = required_uuid(&row, pk)?;
+            let destroyed =
+                crate::engine::destroy_dynamic_with(ctx, &R::DEF, action_def, id, &row, &cascade)
+                    .await;
+            match destroyed {
+                Ok(stored) => {
                     if opts.return_records {
-                        records.push(R::from_fields(row)?);
+                        result.records.push(R::from_fields(&stored)?);
                     }
-                    count += 1;
+                    result.count += 1;
+                }
+                Err(err) if opts.stop_on_error => return Err(err),
+                Err(err) => {
+                    result.errors.push(err.to_string());
+                    result.error_count += 1;
                 }
             }
+        }
+        return Ok(result);
+    }
+
+    // Each row runs through the same changeset as a single destroy, then the rows are
+    // deleted together.
+    let mut result = BulkResult::default();
+    let mut prepared = Vec::new();
+    for row in rows {
+        let mut changeset = match DynamicChangeset::for_destroy(ctx, &R::DEF, action_def, row) {
+            Ok(changeset) => changeset,
             Err(err) => {
-                if opts.stop_on_error {
-                    return Err(err);
-                } else {
-                    errors.push(err.to_string());
-                    error_count += chunk.len();
-                }
+                result.fail(err, opts.stop_on_error)?;
+                continue;
+            }
+        };
+        let after_transactions = changeset.take_after_transactions();
+        let ready = async {
+            let id = changeset.prepare(ctx).await?;
+            let existing = changeset.existing().cloned().unwrap_or_default();
+            crate::engine::handle_cascading_deletes(ctx, &R::DEF, id, &existing).await?;
+            Ok::<_, Error>((id, existing))
+        }
+        .await;
+        match ready {
+            Ok((id, existing)) => prepared.push((
+                PreparedRow {
+                    id,
+                    changeset,
+                    after_transactions,
+                },
+                existing,
+            )),
+            Err(err) => {
+                conclude(after_transactions, Err(&err));
+                result.fail(err, opts.stop_on_error)?;
             }
         }
     }
 
-    Ok(BulkResult {
-        records,
-        errors,
-        error_count,
-        count,
-    })
+    let chunk_size = opts.batch_size.unwrap_or(prepared.len()).max(1);
+    let mut rows = prepared.into_iter().peekable();
+    while rows.peek().is_some() {
+        let chunk: Vec<(PreparedRow, FieldMap)> = rows.by_ref().take(chunk_size).collect();
+        let ids: Vec<Uuid> = chunk.iter().map(|(row, _)| row.id).collect();
+        if let Err(err) = ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await {
+            let failed = chunk.len();
+            for (row, _) in chunk {
+                conclude(row.after_transactions, Err(&err));
+            }
+            if opts.stop_on_error {
+                return Err(err);
+            }
+            result.errors.push(err.to_string());
+            result.error_count += failed;
+            continue;
+        }
+        for (mut row, existing) in chunk {
+            let outcome = row.changeset.finish(ctx, row.id, existing, opts.notify).await;
+            conclude(row.after_transactions, outcome.as_ref());
+            match outcome {
+                Ok(stored) => {
+                    if opts.return_records {
+                        result.records.push(R::from_fields(&stored)?);
+                    }
+                    result.count += 1;
+                }
+                Err(err) => result.fail(err, opts.stop_on_error)?,
+            }
+        }
+    }
+
+    Ok(result)
 }

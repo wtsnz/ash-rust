@@ -92,6 +92,7 @@ async fn dump_sqlite(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::error
             identities: Vec::new(),
             indexes: Vec::new(),
             checks: Vec::new(),
+            statements: Vec::new(),
             references: Vec::new(),
         });
     }
@@ -114,7 +115,7 @@ async fn dump_postgres(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::err
     let mut snapshots = Vec::new();
     for table in tables {
         let rows = sqlx::query(
-            "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position ASC"
+            "SELECT column_name, CASE WHEN data_type = 'USER-DEFINED' THEN udt_name::text ELSE data_type::text END AS data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position ASC"
         )
         .bind(&table)
         .fetch_all(pool)
@@ -148,6 +149,7 @@ async fn dump_postgres(url: &str) -> Result<Vec<TableSnapshot>, Box<dyn std::err
             identities: Vec::new(),
             indexes: Vec::new(),
             checks: Vec::new(),
+            statements: Vec::new(),
             references: Vec::new(),
         });
     }

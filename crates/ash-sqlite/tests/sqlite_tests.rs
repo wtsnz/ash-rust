@@ -31,6 +31,7 @@ const TICKET: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Sqlite,
     timestamps: None,
@@ -51,7 +52,7 @@ async fn test_sqlite_crud_and_install() -> Result<()> {
     fields.insert("status".to_string(), Value::String("open".into()));
     fields.insert("priority".to_string(), Value::Int(1));
 
-    let created = db.create(&TICKET, id, fields).await?;
+    let created = db.create(&TICKET, None, id, fields).await?;
     assert_eq!(created.get("subject"), Some(&Value::String("Printer broken".into())));
 
     let query = ash_core::CompiledQuery::default();
@@ -61,10 +62,10 @@ async fn test_sqlite_crud_and_install() -> Result<()> {
 
     let mut update_fields = FieldMap::new();
     update_fields.insert("status".to_string(), Value::String("closed".into()));
-    let updated = db.update(&TICKET, id, update_fields).await?;
+    let updated = db.update(&TICKET, None, id, update_fields).await?;
     assert_eq!(updated.get("status"), Some(&Value::String("closed".into())));
 
-    db.destroy(&TICKET, id).await?;
+    db.destroy(&TICKET, None, id).await?;
     let rows_after = db.run_query(&TICKET, &query).await?;
     assert_eq!(rows_after.len(), 0);
 
@@ -117,7 +118,7 @@ async fn test_sqlite_in_query_large_batch_exceeds_1000_limit() -> Result<()> {
         fields.insert("subject".to_string(), Value::String(format!("Ticket {i}")));
         fields.insert("status".to_string(), Value::String("open".into()));
         fields.insert("priority".to_string(), Value::Int(i));
-        db.create(&TICKET, id, fields).await?;
+        db.create(&TICKET, None, id, fields).await?;
     }
 
     // Now construct a filter list with 1,500 UUIDs (exceeds SQLite's 999 variable limit)
@@ -140,7 +141,7 @@ async fn test_sqlite_in_query_large_batch_exceeds_1000_limit() -> Result<()> {
 
     // Also test bulk_destroy with 1,200 IDs
     let destroy_targets: Vec<Uuid> = (0..1200).map(|_| Uuid::new_v4()).collect();
-    db.bulk_destroy(&TICKET, &destroy_targets).await?;
+    db.bulk_destroy(&TICKET, None, &destroy_targets).await?;
 
     Ok(())
 }
@@ -174,6 +175,7 @@ static CATEGORY_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Sqlite,
     timestamps: None,
@@ -193,7 +195,7 @@ async fn test_sqlite_self_referential_aggregate() -> Result<()> {
     root_fields.insert("id".to_string(), Value::Uuid(root_id));
     root_fields.insert("name".to_string(), Value::String("Electronics".into()));
     root_fields.insert("parent_id".to_string(), Value::Null);
-    db.create(&CATEGORY_DEF, root_id, root_fields).await?;
+    db.create(&CATEGORY_DEF, None, root_id, root_fields).await?;
 
     // Create 2 Child categories under root
     for i in 1..=2 {
@@ -202,7 +204,7 @@ async fn test_sqlite_self_referential_aggregate() -> Result<()> {
         child_fields.insert("id".to_string(), Value::Uuid(child_id));
         child_fields.insert("name".to_string(), Value::String(format!("Subcategory {i}")));
         child_fields.insert("parent_id".to_string(), Value::Uuid(root_id));
-        db.create(&CATEGORY_DEF, child_id, child_fields).await?;
+        db.create(&CATEGORY_DEF, None, child_id, child_fields).await?;
     }
 
     // Query categories with subcategories_count aggregate
@@ -246,11 +248,11 @@ async fn test_sqlite_empty_in_and_empty_bulk_operations() -> Result<()> {
     let _ = db.run_query(&TICKET, &query_not_empty).await?;
 
     // 3. bulk_create with empty items -> returns Ok(vec![])
-    let created = db.bulk_create(&TICKET, Vec::new()).await?;
+    let created = db.bulk_create(&TICKET, None, Vec::new()).await?;
     assert!(created.is_empty());
 
     // 4. bulk_destroy with empty IDs -> returns Ok(())
-    db.bulk_destroy(&TICKET, &[]).await?;
+    db.bulk_destroy(&TICKET, None, &[]).await?;
 
     Ok(())
 }

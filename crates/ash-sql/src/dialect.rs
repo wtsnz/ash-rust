@@ -1,5 +1,49 @@
 use ash_core::{AttrType, AttributeDef, IdentityDef};
 
+/// Where a text filter looks for its needle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextMatch {
+    Contains,
+    StartsWith,
+    EndsWith,
+}
+
+/// `LIKE` pattern with `\`, `%`, and `_` in `needle` escaped by a backslash.
+pub fn like_pattern(kind: TextMatch, needle: &str) -> String {
+    let mut escaped = String::with_capacity(needle.len());
+    for ch in needle.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    wrap_pattern(kind, &escaped, "%")
+}
+
+/// SQLite `GLOB` pattern with `*`, `?`, and `[` in `needle` matched literally.
+pub fn glob_pattern(kind: TextMatch, needle: &str) -> String {
+    let mut escaped = String::with_capacity(needle.len());
+    for ch in needle.chars() {
+        match ch {
+            '*' | '?' | '[' => {
+                escaped.push('[');
+                escaped.push(ch);
+                escaped.push(']');
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    wrap_pattern(kind, &escaped, "*")
+}
+
+fn wrap_pattern(kind: TextMatch, escaped: &str, any: &str) -> String {
+    match kind {
+        TextMatch::Contains => format!("{any}{escaped}{any}"),
+        TextMatch::StartsWith => format!("{escaped}{any}"),
+        TextMatch::EndsWith => format!("{any}{escaped}"),
+    }
+}
+
 /// Defines database dialect-specific SQL syntax rules, quoting, placeholders, and types.
 pub trait SqlDialect: Send + Sync + 'static {
     /// Database identifier name (e.g. "postgres", "sqlite").
@@ -10,12 +54,37 @@ pub trait SqlDialect: Send + Sync + 'static {
         format!("\"{}\"", ident.replace('"', "\"\""))
     }
 
+    /// `table` in the quoted `schema`, where a context-tenant resource keeps a tenant's
+    /// rows, or `None` for a database without schemas, which can't keep tenants apart.
+    fn qualify_table(&self, _schema: &str, _table: &str) -> Option<String> {
+        None
+    }
+
     /// SQL parameter placeholder (e.g. `$1` for Postgres, `?` for SQLite).
     fn placeholder(&self, index: usize) -> String;
 
     /// Cast a bound placeholder when the column rejects an untyped string parameter.
     fn cast_param(&self, _ty: AttrType, placeholder: &str) -> String {
         placeholder.to_string()
+    }
+
+    /// Cast a computed expression to the column type of `ty`, for SQL whose result type
+    /// differs from what was declared (Postgres sums `bigint` as `numeric`).
+    fn cast_expression(&self, _ty: AttrType, expression: &str) -> String {
+        expression.to_string()
+    }
+
+    /// SQL literal for a standard-base64 binary value.
+    fn binary_literal(&self, encoded: &str) -> String {
+        let Ok(binary) = ash_core::Binary::parse(encoded) else {
+            return "NULL".to_string();
+        };
+        let hex: String = binary
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
+        format!("X'{hex}'")
     }
 
     /// Map Ash [`AttributeDef`] to a native SQL column type string.
@@ -49,6 +118,24 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Given an operand expression `op` (e.g. `"tickets"."id"`) and a bound parameter placeholder `param`,
     /// renders the dialect-specific SQL test.
     fn render_in_list(&self, op: &str, param: &str) -> String;
+
+    /// Cast a bound list parameter so its elements compare as the column type.
+    fn cast_list_param(&self, _ty: AttrType, placeholder: &str) -> String {
+        placeholder.to_string()
+    }
+
+    /// The database extension a column type needs, if any.
+    fn extension_for_type(&self, _sql_type: &str) -> Option<&'static str> {
+        None
+    }
+
+    /// Pattern to bind for a text filter, with wildcards in `needle` escaped.
+    fn text_pattern(&self, kind: TextMatch, needle: &str, _case_insensitive: bool) -> String {
+        like_pattern(kind, needle)
+    }
+
+    /// Render a text filter on `op`. `pattern` is the placeholder bound to [`Self::text_pattern`].
+    fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
 }
 
 /// Dialect implementation for SQLite.
@@ -68,9 +155,16 @@ impl SqlDialect for SqliteDialect {
         match attr.ty {
             AttrType::Integer | AttrType::Boolean => "INTEGER".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
+            AttrType::Float => "REAL".to_string(),
+            AttrType::Binary => "BLOB".to_string(),
+            // NOCASE makes =, IN, ORDER BY, and unique indexes ignore ASCII case.
+            AttrType::CiString => "TEXT COLLATE NOCASE".to_string(),
             AttrType::Uuid
             | AttrType::String
-            | AttrType::UtcDatetime
+            | AttrType::Date
+            | AttrType::UtcDatetime { .. }
+            | AttrType::Inet
+            | AttrType::Vector { .. }
             | AttrType::Atom { .. }
             | AttrType::Map
             | AttrType::Array => "TEXT".to_string(),
@@ -84,15 +178,20 @@ impl SqlDialect for SqliteDialect {
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
+        // A partial unique index only matches a conflict target that repeats its predicate.
+        let target = match identity.predicate {
+            Some(predicate) => format!("({key_cols}) WHERE {predicate}"),
+            None => format!("({key_cols})"),
+        };
         if update_fields.is_empty() {
-            format!("ON CONFLICT ({key_cols}) DO NOTHING")
+            format!("ON CONFLICT {target} DO NOTHING")
         } else {
             let set_clauses = update_fields
                 .iter()
                 .map(|f| format!("{} = excluded.{}", self.quote_identifier(f), self.quote_identifier(f)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("ON CONFLICT ({key_cols}) DO UPDATE SET {set_clauses}")
+            format!("ON CONFLICT {target} DO UPDATE SET {set_clauses}")
         }
     }
 
@@ -115,6 +214,23 @@ impl SqlDialect for SqliteDialect {
     fn render_in_list(&self, op: &str, param: &str) -> String {
         format!("{op} IN (SELECT value FROM json_each({param}))")
     }
+
+    /// `GLOB` is case-sensitive. `LIKE` ignores case, but only for ASCII letters.
+    fn text_pattern(&self, kind: TextMatch, needle: &str, case_insensitive: bool) -> String {
+        if case_insensitive {
+            like_pattern(kind, needle)
+        } else {
+            glob_pattern(kind, needle)
+        }
+    }
+
+    fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String {
+        if case_insensitive {
+            format!("{op} LIKE {pattern} ESCAPE '\\'")
+        } else {
+            format!("{op} GLOB {pattern}")
+        }
+    }
 }
 
 /// Dialect implementation for PostgreSQL.
@@ -122,6 +238,10 @@ impl SqlDialect for SqliteDialect {
 pub struct PostgresDialect;
 
 impl SqlDialect for PostgresDialect {
+    fn qualify_table(&self, schema: &str, table: &str) -> Option<String> {
+        Some(format!("{schema}.{table}"))
+    }
+
     fn name(&self) -> &'static str {
         "postgres"
     }
@@ -130,10 +250,21 @@ impl SqlDialect for PostgresDialect {
         format!("${index}")
     }
 
+    fn cast_expression(&self, ty: AttrType, expression: &str) -> String {
+        let column = self.column_type(&AttributeDef::required("", ty));
+        format!("CAST({expression} AS {column})")
+    }
+
     fn cast_param(&self, ty: AttrType, placeholder: &str) -> String {
         match ty {
-            AttrType::UtcDatetime => format!("{placeholder}::timestamptz"),
+            AttrType::UtcDatetime { .. } => format!("{placeholder}::timestamptz"),
             AttrType::Decimal => format!("{placeholder}::numeric"),
+            AttrType::Float => format!("{placeholder}::float8"),
+            AttrType::Date => format!("{placeholder}::date"),
+            AttrType::CiString => format!("{placeholder}::citext"),
+            AttrType::Inet => format!("{placeholder}::inet"),
+            AttrType::Vector { .. } => format!("{placeholder}::vector"),
+            AttrType::Binary => format!("decode({placeholder}, 'base64')"),
             _ => placeholder.to_string(),
         }
     }
@@ -145,8 +276,14 @@ impl SqlDialect for PostgresDialect {
             AttrType::Atom { .. } => "VARCHAR(255)".to_string(),
             AttrType::Integer => "BIGINT".to_string(),
             AttrType::Boolean => "BOOLEAN".to_string(),
-            AttrType::UtcDatetime => "TIMESTAMPTZ".to_string(),
+            AttrType::UtcDatetime { .. } => "TIMESTAMPTZ".to_string(),
             AttrType::Decimal => "NUMERIC".to_string(),
+            AttrType::Float => "DOUBLE PRECISION".to_string(),
+            AttrType::Date => "DATE".to_string(),
+            AttrType::CiString => "CITEXT".to_string(),
+            AttrType::Binary => "BYTEA".to_string(),
+            AttrType::Inet => "INET".to_string(),
+            AttrType::Vector { dimensions } => format!("VECTOR({dimensions})"),
             AttrType::Map | AttrType::Array => "JSONB".to_string(),
         }
     }
@@ -158,15 +295,27 @@ impl SqlDialect for PostgresDialect {
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        if update_fields.is_empty() {
-            format!("ON CONFLICT ({key_cols}) DO NOTHING")
+        // A partial unique index only matches a conflict target that repeats its predicate.
+        let target = match identity.predicate {
+            Some(predicate) => format!("({key_cols}) WHERE {predicate}"),
+            None => format!("({key_cols})"),
+        };
+        // `DO NOTHING` returns no row for an existing record, so with nothing to update
+        // we rewrite a key column to itself and `RETURNING *` still yields the record.
+        let fields: Vec<&str> = if update_fields.is_empty() {
+            identity.keys.iter().take(1).copied().collect()
         } else {
-            let set_clauses = update_fields
+            update_fields.iter().map(String::as_str).collect()
+        };
+        if fields.is_empty() {
+            format!("ON CONFLICT {target} DO NOTHING")
+        } else {
+            let set_clauses = fields
                 .iter()
                 .map(|f| format!("{} = EXCLUDED.{}", self.quote_identifier(f), self.quote_identifier(f)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("ON CONFLICT ({key_cols}) DO UPDATE SET {set_clauses}")
+            format!("ON CONFLICT {target} DO UPDATE SET {set_clauses}")
         }
     }
 
@@ -188,5 +337,37 @@ impl SqlDialect for PostgresDialect {
 
     fn render_in_list(&self, op: &str, param: &str) -> String {
         format!("{op} = ANY({param})")
+    }
+
+    fn extension_for_type(&self, sql_type: &str) -> Option<&'static str> {
+        let upper = sql_type.to_ascii_uppercase();
+        if upper.starts_with("CITEXT") {
+            Some("citext")
+        } else if upper.starts_with("VECTOR") {
+            Some("vector")
+        } else {
+            None
+        }
+    }
+
+    fn cast_list_param(&self, ty: AttrType, placeholder: &str) -> String {
+        match ty {
+            AttrType::Boolean => format!("{placeholder}::boolean[]"),
+            AttrType::UtcDatetime { .. } => format!("{placeholder}::timestamptz[]"),
+            AttrType::Decimal => format!("{placeholder}::numeric[]"),
+            AttrType::Float => format!("{placeholder}::float8[]"),
+            AttrType::Date => format!("{placeholder}::date[]"),
+            AttrType::CiString => format!("{placeholder}::citext[]"),
+            _ => placeholder.to_string(),
+        }
+    }
+
+    /// `LIKE` on a `citext` column already ignores case, so one form covers both.
+    fn render_text_match(&self, op: &str, pattern: &str, _case_insensitive: bool) -> String {
+        format!("{op} LIKE {pattern}")
+    }
+
+    fn binary_literal(&self, encoded: &str) -> String {
+        format!("decode('{}', 'base64')", encoded.replace('\'', "''"))
     }
 }

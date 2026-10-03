@@ -19,16 +19,18 @@ Automatic GraphQL server engine for `ash-rust` powered by `async-graphql`.
 
 ```rust,ignore
 use ash_graphql::AshGraphQL;
-use ash_pubsub::PubSub;
+use ash_pubsub::{ContextPubSubExt, PubSub};
 use ash_memory::Memory;
 
 let pubsub = PubSub::new();
+// Writes publish their changes through the context's notifier.
+let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
 
 // Build schema from an Ash Domain definition
 let schema = AshGraphQL::builder(&Helpdesk::DEF)
     .with_pubsub(pubsub.clone())
     .with_dataloader()
-    .finish::<Memory>()
+    .finish_with_context(ctx)
     .expect("Failed to build GraphQL schema");
 
 // Mount directly onto an Axum router
@@ -123,18 +125,38 @@ mutation {
 
 ### 5. Batched Relationship Loading (DataLoader)
 
-N+1 relationship loading problems are solved using `AshBatchLoader`:
+N+1 relationship loading problems are solved using `AshBatchLoader`, which loads every
+key of a relationship in one read. `with_dataloader()` gives each request its own loader,
+bound to the `Context<D>` that request runs as:
 ```rust,ignore
-let dataloader = AshGraphQL::create_dataloader(ctx.clone(), &[&AUTHOR_DEF, &POST_DEF]);
+let schema = AshGraphQL::from_resources(&[&AUTHOR_DEF, &POST_DEF])
+    .with_dataloader()
+    .finish::<Memory>()?;
 
-let req = Request::new(query)
-    .data(ctx)
-    .data(dataloader);
-
+// Relationships load as this actor in this tenant, batched.
+let req = Request::new(query).data(ctx.with_actor(actor));
 let res = schema.execute(req).await;
 ```
 
+A loader can also be supplied by hand with `AshGraphQL::create_dataloader(ctx)`.
+Relationship resolvers only use a loader serving the request's actor and tenant;
+otherwise they load directly.
+
+### Reads, Tenancy and Policies
+
+Every read (`get`, `list`, custom read actions, connections, relationships and
+subscriptions) runs as the request's `Context<D>`, through the same scoping as the typed
+API (`ash_core::scope_read`): the read action's preparations and argument filters, the
+actor's read policies, and the context's tenant. A record a typed read wouldn't return
+isn't reachable over GraphQL either. An `Actor` given in the request data acts for a
+context that carries none.
+
 ### 6. Realtime Subscriptions
+
+Subscriptions listen on the `PubSub` given to `with_pubsub`. Changes are published to it
+only by notifiers: a `PubSubNotifier` on the context a write runs in publishes it once,
+after its transaction commits, whether the write came through GraphQL or not. Each
+subscriber hears only the records its own read would return, in its tenant.
 
 Subscribe to resource changes with optional in-memory filter matching:
 ```graphql

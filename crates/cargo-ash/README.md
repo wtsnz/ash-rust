@@ -29,7 +29,10 @@ fn main() -> std::process::ExitCode {
 cargo run --bin ash-codegen -- create_helpdesk --dialect postgres
 cargo run --bin ash-codegen -- --check
 cargo run --bin ash-codegen -- rename_subject --rename tickets.subject=title
+cargo run --bin ash-codegen -- rename_tickets --rename-table tickets=issues --rename issues.subject=title
 ```
+
+When a table disappears and another appears, codegen asks whether it was renamed; in a terminal it prompts, otherwise `--rename-table old=new` answers. Otherwise the new table is created empty and the old one is dropped with its rows. A rename keeps the rows and renames the table's indexes, foreign keys and checks to match. Column renames on a renamed table use the new table name. Without a terminal, an ambiguous column rename is an error until `--rename` answers it.
 
 That writes dialect-suffixed SQL under `migrations/` and snapshots under `resource_snapshots/<dialect>/`. Removed columns stay in the database unless you pass `--drop-columns`. `--check` exits 1 when the resources do not match the snapshots.
 
@@ -40,6 +43,8 @@ That writes dialect-suffixed SQL under `migrations/` and snapshots under `resour
 ```bash
 cargo run --bin ash-codegen -- create_schema --squash --dialect postgres
 ```
+
+Several hosts can migrate one database at once. Each migration runs in its own transaction, which on Postgres first takes `pg_advisory_xact_lock` and on SQLite starts with `BEGIN IMMEDIATE`, then skips the migration if another host already applied it. Rollbacks work the same way and only undo the latest version. The lock ends with the transaction, so it works behind transaction-pooling proxies such as PgBouncer. `Postgres::install` takes the same lock and installs everything in one transaction, so app instances that install on startup do not collide either.
 
 ## CLI Usage
 

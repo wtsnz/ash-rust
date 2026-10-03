@@ -51,6 +51,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
     identities: &[],
     indexes: &[],
     checks: &[],
+    statements: &[],
     embedded: false,
     data_layer: ash_core::DataLayerKind::Memory,
     timestamps: None,
@@ -67,7 +68,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f1.insert("priority".into(), Value::Int(1));
     f1.insert("status".into(), Value::String("open".into()));
     f1.insert("is_published".into(), Value::Bool(true));
-    data.create(&TICKET_DEF, id1, f1).await.unwrap();
+    data.create(&TICKET_DEF, None, id1, f1).await.unwrap();
 
     let id2 = Uuid::new_v4();
     let mut f2 = FieldMap::new();
@@ -76,7 +77,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f2.insert("priority".into(), Value::Int(5));
     f2.insert("status".into(), Value::String("in_progress".into()));
     f2.insert("is_published".into(), Value::Bool(false));
-    data.create(&TICKET_DEF, id2, f2).await.unwrap();
+    data.create(&TICKET_DEF, None, id2, f2).await.unwrap();
 
     let id3 = Uuid::new_v4();
     let mut f3 = FieldMap::new();
@@ -85,7 +86,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f3.insert("priority".into(), Value::Int(10));
     f3.insert("status".into(), Value::String("closed".into()));
     f3.insert("is_published".into(), Value::Bool(true));
-    data.create(&TICKET_DEF, id3, f3).await.unwrap();
+    data.create(&TICKET_DEF, None, id3, f3).await.unwrap();
 
     (id1, id2, id3)
 }
@@ -186,6 +187,40 @@ async fn test_phase2_list_query_with_filters() {
     let tickets = val["listTickets"].as_array().unwrap();
     assert_eq!(tickets.len(), 1);
     assert_eq!(tickets[0]["title"], "Improve docs");
+}
+
+#[tokio::test]
+async fn test_list_query_with_text_filters() {
+    let memory = Memory::new();
+    seed_data(&memory).await;
+    let ctx = Context::new(memory);
+    let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
+        .finish::<Memory>()
+        .expect("Failed to build schema");
+
+    for (filter, expected) in [
+        (r#"{ title: { contains: "dark" } }"#, vec!["Add dark mode"]),
+        (r#"{ title: { contains: "DARK" } }"#, vec![]),
+        (r#"{ title: { startsWith: "Fix" } }"#, vec!["Fix memory leak"]),
+        (r#"{ title: { endsWith: "docs" } }"#, vec!["Improve docs"]),
+        (
+            r#"{ not: { title: { contains: "dark" } } }"#,
+            vec!["Fix memory leak", "Improve docs"],
+        ),
+    ] {
+        let query = format!("query {{ listTickets(filter: {filter}) {{ title }} }}");
+        let res = schema.execute(Request::new(query).data(ctx.clone())).await;
+        assert!(res.errors.is_empty(), "{filter}: {:?}", res.errors);
+        let val = res.data.into_json().unwrap();
+        let mut titles: Vec<&str> = val["listTickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|ticket| ticket["title"].as_str().unwrap())
+            .collect();
+        titles.sort();
+        assert_eq!(titles, expected, "{filter}");
+    }
 }
 
 #[tokio::test]

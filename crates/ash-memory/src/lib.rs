@@ -6,8 +6,9 @@ use std::future::ready;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash_core::{
-    apply_named_with_args, AggregateFilter, AggregateKind, CompiledQuery, DataLayer, Error,
-    FieldMap, Filter, ResourceDef, Result, SchemaSupport, TransactionSupport, Value,
+    all_of, any_of, apply_named_with_args, compare_typed, in_list, text_matches, AggregateFilter,
+    AggregateKind, AttrType, CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef,
+    Result, SchemaSupport, TransactionSupport, Value,
 };
 use uuid::Uuid;
 
@@ -43,15 +44,22 @@ fn check_identities(
     fields: &FieldMap,
 ) -> Result<()> {
     for ident in resource.identities {
+        // A `where:` predicate is SQL the in-memory store cannot evaluate, so it leaves
+        // partial identities to the database rather than reject rows they do not cover.
+        if ident.predicate.is_some() {
+            continue;
+        }
         for (existing_id, row) in table.iter() {
             if *existing_id == id {
                 continue;
             }
             let matches_all = ident.keys.iter().all(|k| {
-                let new_val = fields.get(*k);
-                let existing_val = row.get(*k);
+                let new_val = fields.get(*k).filter(|v| !v.is_null());
+                let existing_val = row.get(*k).filter(|v| !v.is_null());
                 match (new_val, existing_val) {
-                    (Some(a), Some(b)) if !a.is_null() && !b.is_null() => a == b,
+                    (Some(a), Some(b)) => same_value(field_type(resource, k), a, b),
+                    // NULLS NOT DISTINCT: two nulls collide.
+                    (None, None) => !ident.nils_distinct,
                     _ => false,
                 }
             });
@@ -70,16 +78,29 @@ fn check_identities(
     Ok(())
 }
 
+/// The table holding `resource`'s rows for `tenant`. A context-tenant resource keeps a
+/// table per tenant, as Ash's ETS data layer does, and its rows with no tenant (a global
+/// resource's) in the shared table; every other resource has one table.
+fn table_key(resource: &ResourceDef, tenant: Option<&str>) -> String {
+    match (resource.multitenancy, tenant) {
+        (Some(mt), Some(tenant)) if mt.strategy == ash_core::MultitenancyStrategy::Context => {
+            format!("{}@{tenant}", resource.name)
+        }
+        _ => resource.name.to_string(),
+    }
+}
+
 impl DataLayer for Memory {
     fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.entry(resource.name.to_string()).or_default();
+            let table = tables.entry(table_key(resource, tenant)).or_default();
             if table.contains_key(&id) {
                 return Err(Error::DataLayer(format!(
                     "duplicate id {id} in {}",
@@ -95,12 +116,13 @@ impl DataLayer for Memory {
     fn update(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             let mut current_row = table.get(&id).ok_or(Error::NotFound)?.clone();
 
             if let Some(v_attr) = resource.optimistic_lock_attribute()
@@ -132,22 +154,32 @@ impl DataLayer for Memory {
     fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         id: Uuid,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
+            // Which rows a partial identity covers is decided by its SQL predicate, so
+            // upserting on one here could overwrite a row the database would leave alone.
+            if identity.predicate.is_some() {
+                return Err(Error::Invalid(format!(
+                    "the memory data layer cannot upsert on partial identity `{}` of {}",
+                    identity.name, resource.name
+                )));
+            }
             let mut tables = self.lock()?;
-            let table = tables.entry(resource.name.to_string()).or_default();
+            let table = tables.entry(table_key(resource, tenant)).or_default();
             let existing_entry = table
                 .iter()
                 .find(|(_, row)| {
                     identity.keys.iter().all(|k| {
-                        let new_val = fields.get(*k);
-                        let existing_val = row.get(*k);
+                        let new_val = fields.get(*k).filter(|v| !v.is_null());
+                        let existing_val = row.get(*k).filter(|v| !v.is_null());
                         match (new_val, existing_val) {
-                            (Some(a), Some(b)) if !a.is_null() && !b.is_null() => a == b,
+                            (Some(a), Some(b)) => same_value(field_type(resource, k), a, b),
+                            (None, None) => !identity.nils_distinct,
                             _ => false,
                         }
                     })
@@ -179,10 +211,15 @@ impl DataLayer for Memory {
         })())
     }
 
-    fn destroy(&self, resource: &ResourceDef, id: Uuid) -> impl Future<Output = Result<()>> + Send {
+    fn destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+    ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             table.remove(&id).ok_or(Error::NotFound)?;
             Ok(())
         })())
@@ -191,11 +228,12 @@ impl DataLayer for Memory {
     fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.entry(resource.name.to_string()).or_default();
+            let table = tables.entry(table_key(resource, tenant)).or_default();
             let mut results = Vec::with_capacity(rows.len());
             for (id, fields) in rows {
                 if table.contains_key(&id) {
@@ -215,11 +253,12 @@ impl DataLayer for Memory {
     fn bulk_destroy(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         ids: &[Uuid],
     ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
             let mut tables = self.lock()?;
-            let table = tables.get_mut(resource.name).ok_or(Error::NotFound)?;
+            let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             for id in ids {
                 table.remove(id);
             }
@@ -234,8 +273,9 @@ impl DataLayer for Memory {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let tables = self.lock()?;
+            let tenant = query.tenant.as_deref();
             let mut rows: Vec<FieldMap> = tables
-                .get(resource.name)
+                .get(&table_key(resource, tenant))
                 .map(|table| table.values().cloned().collect())
                 .unwrap_or_default();
 
@@ -249,10 +289,10 @@ impl DataLayer for Memory {
             }
 
             let needed_aggs = needed_aggregates(resource, query);
-            apply_aggregates(&tables, resource, &mut rows, &needed_aggs)?;
+            apply_aggregates(&tables, tenant, resource, &mut rows, &needed_aggs)?;
 
             if let Some(filter) = &query.filter {
-                rows.retain(|row| row_matches_filter(&tables, resource, filter, row));
+                rows.retain(|row| row_matches_filter(&tables, tenant, resource, filter, row));
             }
 
             if !query.sort.is_empty() {
@@ -261,7 +301,11 @@ impl DataLayer for Memory {
                     for sort in &query.sort {
                         let left_value = left.get(&sort.field).cloned().unwrap_or(Value::Null);
                         let right_value = right.get(&sort.field).cloned().unwrap_or(Value::Null);
-                        order = left_value.cmp(&right_value);
+                        order = compare_typed(
+                            field_type(resource, &sort.field),
+                            &left_value,
+                            &right_value,
+                        );
                         if sort.descending {
                             order = order.reverse();
                         }
@@ -294,68 +338,178 @@ impl DataLayer for Memory {
     }
 }
 
+fn is_ci_string(resource: &ResourceDef, field: &str) -> bool {
+    field_type(resource, field) == Some(AttrType::CiString)
+}
+
+type Tables = HashMap<String, HashMap<Uuid, FieldMap>>;
+
+/// `tenant` is the query's: rows reached through a relationship are limited to it, as
+/// the rows of the query itself are.
 fn row_matches_filter(
-    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+    tables: &Tables,
+    tenant: Option<&str>,
     resource: &ResourceDef,
     filter: &Filter,
     row: &FieldMap,
 ) -> bool {
+    eval_filter(tables, tenant, resource, filter, row, None) == Some(true)
+}
+
+/// Resources whose primary-read filters are being applied, innermost first. As in the
+/// SQL compiler, a read filter that leads back to its own resource is not applied again
+/// inside itself, which would recurse.
+struct Applying<'a> {
+    name: &'static str,
+    outer: Option<&'a Applying<'a>>,
+}
+
+fn is_applying(scope: Option<&Applying>, name: &str) -> bool {
+    let mut scope = scope;
+    while let Some(applying) = scope {
+        if applying.name == name {
+            return true;
+        }
+        scope = applying.outer;
+    }
+    false
+}
+
+/// Whether `row` is in the query's tenant and passes `resource`'s primary-read filter,
+/// as every read through a relationship must. The read filter is skipped when it is
+/// already being applied further out.
+fn passes_read_filter(
+    tables: &Tables,
+    tenant: Option<&str>,
+    resource: &'static ResourceDef,
+    row: &FieldMap,
+    scope: Option<&Applying>,
+) -> bool {
+    if let Some(tenant_filter) = resource.tenant_filter(tenant)
+        && eval_filter(tables, tenant, resource, &tenant_filter, row, scope) != Some(true)
+    {
+        return false;
+    }
+    if is_applying(scope, resource.name) {
+        return true;
+    }
+    let Some(read_filter) = resource.primary_read_filter() else {
+        return true;
+    };
+    let inner = Applying {
+        name: resource.name,
+        outer: scope,
+    };
+    let row = with_calculations(resource, &read_filter, row);
+    eval_filter(tables, tenant, resource, &read_filter, &row, Some(&inner)) == Some(true)
+}
+
+/// `row` with the calculations `filter` reads. Stored rows hold none, and the SQL
+/// data layers compute them inline wherever a filter uses them.
+fn with_calculations<'r>(
+    resource: &ResourceDef,
+    filter: &Filter,
+    row: &'r FieldMap,
+) -> std::borrow::Cow<'r, FieldMap> {
+    let mut names = Vec::new();
+    filter.collect_fields(&mut names);
+    names.retain(|name| resource.calculation(name).is_some() && !row.contains_key(*name));
+    if names.is_empty() {
+        return std::borrow::Cow::Borrowed(row);
+    }
+    let mut row = row.clone();
+    let no_args = FieldMap::new();
+    for name in names {
+        // A calculation that cannot run leaves its field missing, so it compares as null.
+        let _ = apply_named_with_args(resource, &mut row, name, &no_args);
+    }
+    std::borrow::Cow::Owned(row)
+}
+
+/// Evaluates `filter` with SQL's three-valued logic: a comparison with a null field
+/// is unknown (`None`), and `NOT` of unknown stays unknown, so the row is left out.
+fn eval_filter(
+    tables: &Tables,
+    tenant: Option<&str>,
+    resource: &ResourceDef,
+    filter: &Filter,
+    row: &FieldMap,
+    scope: Option<&Applying>,
+) -> Option<bool> {
+    let present = |field: &str| row.get(field).filter(|got| !got.is_null());
+    let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
+        present(field).map(|got| text_matches(Some(got), needle, is_ci_string(resource, field), test))
+    };
     match filter {
-        Filter::True => true,
-        Filter::False => false,
+        Filter::True => Some(true),
+        Filter::False => Some(false),
+        Filter::Eq(field, value) if value.is_null() => Some(present(field).is_none()),
+        Filter::Ne(field, value) if value.is_null() => Some(present(field).is_some()),
         Filter::Eq(field, value) => {
-            if value.is_null() {
-                matches!(row.get(field), None | Some(Value::Null))
-            } else {
-                row.get(field).is_some_and(|got| !got.is_null() && got == value)
-            }
+            let ty = field_type(resource, field);
+            present(field).map(|got| same_value(ty, got, value))
         }
         Filter::Ne(field, value) => {
-            if value.is_null() {
-                row.get(field).is_some_and(|got| !got.is_null())
-            } else {
-                row.get(field).is_some_and(|got| !got.is_null() && got != value)
-            }
+            let ty = field_type(resource, field);
+            present(field).map(|got| !same_value(ty, got, value))
         }
-        Filter::Gt(field, value) => compare(row.get(field), value, Ordering::Greater, false),
-        Filter::Gte(field, value) => compare(row.get(field), value, Ordering::Greater, true),
-        Filter::Lt(field, value) => compare(row.get(field), value, Ordering::Less, false),
-        Filter::Lte(field, value) => compare(row.get(field), value, Ordering::Less, true),
-        Filter::In(field, values) => row.get(field).is_some_and(|got| values.contains(got)),
-        Filter::IsNil(field) => matches!(row.get(field), None | Some(Value::Null)),
-        Filter::And(parts) => parts.iter().all(|part| row_matches_filter(tables, resource, part, row)),
-        Filter::Or(parts) => parts.iter().any(|part| row_matches_filter(tables, resource, part, row)),
-        Filter::Not(inner) => !row_matches_filter(tables, resource, inner, row),
-        Filter::Related { relationship, filter: rel_filter } => {
+        Filter::Gt(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Greater, false)
+        }
+        Filter::Gte(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Greater, true)
+        }
+        Filter::Lt(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Less, false)
+        }
+        Filter::Lte(field, value) => {
+            compare(field_type(resource, field), row.get(field), value, Ordering::Less, true)
+        }
+        Filter::In(_, values) if values.is_empty() => Some(false),
+        Filter::In(field, values) => {
+            let ty = field_type(resource, field);
+            in_list(present(field), values, |got, value| same_value(ty, got, value))
+        }
+        Filter::IsNil(field) => Some(present(field).is_none()),
+        Filter::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
+        Filter::StartsWith(field, needle) => {
+            text(field, needle, |text, needle| text.starts_with(needle))
+        }
+        Filter::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+        Filter::And(parts) => {
+            all_of(parts.iter().map(|part| eval_filter(tables, tenant, resource, part, row, scope)))
+        }
+        Filter::Or(parts) => {
+            any_of(parts.iter().map(|part| eval_filter(tables, tenant, resource, part, row, scope)))
+        }
+        Filter::Not(inner) => {
+            eval_filter(tables, tenant, resource, inner, row, scope).map(|matched| !matched)
+        }
+        // `EXISTS (...)` in SQL: true or false, never unknown.
+        Filter::Related { relationship, filter: rel_filter } => Some((|| {
             let Some(rel) = resource.relationship(relationship) else {
                 return false;
             };
             let dest_res = (rel.destination)();
-            let dest_table = tables.get(dest_res.name);
+            let dest_table = tables.get(&table_key(dest_res, tenant));
             let Some(dest_table) = dest_table else {
                 return false;
             };
+            let matches = |dest_row: &FieldMap| {
+                let dest_row = with_calculations(dest_res, rel_filter, dest_row);
+                eval_filter(tables, tenant, dest_res, rel_filter, &dest_row, scope) == Some(true)
+                    && passes_read_filter(tables, tenant, dest_res, &dest_row, scope)
+            };
 
             match rel.kind {
-                ash_core::RelKind::BelongsTo => {
-                    let Some(fk_val) = row.get(rel.source_attribute) else {
-                        return false;
-                    };
-                    let Value::Uuid(fk_id) = fk_val else {
-                        return false;
-                    };
-                    let Some(dest_row) = dest_table.get(fk_id) else {
-                        return false;
-                    };
-                    row_matches_filter(tables, dest_res, rel_filter, dest_row)
-                }
-                ash_core::RelKind::HasMany | ash_core::RelKind::HasOne => {
-                    let Some(source_val) = row.get(rel.source_attribute) else {
+                ash_core::RelKind::BelongsTo
+                | ash_core::RelKind::HasMany
+                | ash_core::RelKind::HasOne => {
+                    let Some(key) = rel.source_key(row) else {
                         return false;
                     };
                     dest_table.values().any(|dest_row| {
-                        dest_row.get(rel.destination_attribute) == Some(source_val)
-                            && row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                        rel.destination_key(dest_row).as_ref() == Some(&key) && matches(dest_row)
                     })
                 }
                 ash_core::RelKind::ManyToMany => {
@@ -363,7 +517,7 @@ fn row_matches_filter(
                         return false;
                     };
                     let through_res = through_fn();
-                    let through_table = tables.get(through_res.name);
+                    let through_table = tables.get(&table_key(through_res, tenant));
                     let Some(through_table) = through_table else {
                         return false;
                     };
@@ -373,34 +527,51 @@ fn row_matches_filter(
                     let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
                     let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
 
+                    // An archived join row unlinks the records, as it does for loads.
                     let matching_dest_ids: Vec<&Value> = through_table
                         .values()
                         .filter(|jr| jr.get(source_on_join) == Some(source_val))
+                        .filter(|jr| passes_read_filter(tables, tenant, through_res, jr, scope))
                         .filter_map(|jr| jr.get(dest_on_join))
                         .collect();
 
                     dest_table.values().any(|dest_row| {
                         let dest_id = dest_row.get(rel.destination_attribute).unwrap_or(&Value::Null);
-                        matching_dest_ids.contains(&dest_id)
-                            && row_matches_filter(tables, dest_res, rel_filter, dest_row)
+                        matching_dest_ids.contains(&dest_id) && matches(dest_row)
                     })
                 }
             }
-        }
+        })()),
     }
 }
 
-fn compare(got: Option<&Value>, rhs: &Value, direction: Ordering, equal_ok: bool) -> bool {
-    let Some(got) = got else {
-        return false;
-    };
-    if got.is_null() || rhs.is_null() {
-        return false;
+/// The attribute or calculation type of `field`, which decides how values compare.
+fn field_type(resource: &ResourceDef, field: &str) -> Option<AttrType> {
+    resource
+        .attribute(field)
+        .map(|attr| attr.ty)
+        .or_else(|| resource.calculation(field).map(|calc| calc.ty))
+}
+
+fn same_value(ty: Option<AttrType>, a: &Value, b: &Value) -> bool {
+    compare_typed(ty, a, b) == Ordering::Equal
+}
+
+fn compare(
+    ty: Option<AttrType>,
+    got: Option<&Value>,
+    rhs: &Value,
+    direction: Ordering,
+    equal_ok: bool,
+) -> Option<bool> {
+    let got = got.filter(|got| !got.is_null())?;
+    if rhs.is_null() {
+        return None;
     }
-    match got.cmp(rhs) {
+    Some(match compare_typed(ty, got, rhs) {
         Ordering::Equal => equal_ok,
         order => order == direction,
-    }
+    })
 }
 
 fn needed_calculations<'a>(resource: &'a ResourceDef, query: &'a CompiledQuery) -> Vec<&'a str> {
@@ -462,7 +633,8 @@ fn strip_unrequested_aggregates(
 }
 
 fn apply_aggregates(
-    tables: &HashMap<String, HashMap<Uuid, FieldMap>>,
+    tables: &Tables,
+    tenant: Option<&str>,
     resource: &ResourceDef,
     rows: &mut [FieldMap],
     needed: &[&str],
@@ -479,8 +651,12 @@ fn apply_aggregates(
         })?;
         let dest = (rel.destination)();
         let dest_rows: Vec<&FieldMap> = tables
-            .get(dest.name)
-            .map(|t| t.values().collect())
+            .get(&table_key(dest, tenant))
+            .map(|t| {
+                t.values()
+                    .filter(|dest_row| passes_read_filter(tables, tenant, dest, dest_row, None))
+                    .collect()
+            })
             .unwrap_or_default();
 
         for row in rows.iter_mut() {
@@ -508,8 +684,12 @@ fn apply_aggregates(
                     .destination_attribute_on_join_resource
                     .unwrap_or(rel.destination_attribute);
                 let join_rows: Vec<&FieldMap> = tables
-                    .get(through_def.name)
-                    .map(|t| t.values().collect())
+                    .get(&table_key(through_def, tenant))
+                    .map(|t| {
+                        t.values()
+                            .filter(|jr| passes_read_filter(tables, tenant, through_def, jr, None))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let matching_dest_ids: Vec<&Value> = join_rows
                     .iter()
@@ -526,15 +706,10 @@ fn apply_aggregates(
                     })
                     .collect()
             } else {
+                let key = rel.source_key(row);
                 dest_rows
                     .iter()
-                    .filter(|dest_row| {
-                        let dest_val = dest_row
-                            .get(rel.destination_attribute)
-                            .cloned()
-                            .unwrap_or(Value::Null);
-                        dest_val == source_val
-                    })
+                    .filter(|dest_row| key.is_some() && rel.destination_key(dest_row) == key)
                     .collect()
             };
 

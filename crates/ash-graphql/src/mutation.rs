@@ -2,7 +2,7 @@ use ash_core::create_dynamic;
 use ash_core::destroy_dynamic;
 use ash_core::redact_fields;
 use ash_core::update_dynamic;
-use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, Context, DataLayer, Error as AshError, FieldMap, Filter, Notification, ResourceDef, Value};
+use ash_core::{ActionDef, ActionKind, AttrType, CompiledQuery, DataLayer, Error as AshError, FieldMap, Filter, ResourceDef, Value};
 use async_graphql::dynamic::*;
 use async_graphql::Value as GqlValue;
 use uuid::Uuid;
@@ -132,13 +132,7 @@ pub fn register_action_input(
     // 2. Attributes accepted by the action
     if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
         for attr in resource.attributes {
-            let is_accepted = if !action.accept.is_empty() {
-                action.accept.contains(&attr.name)
-            } else {
-                !attr.primary_key && !attr.generated && !attr.version
-            };
-
-            if is_accepted {
+            if action.accept.contains(&attr.name) {
                 let type_ref = attr_type_to_type_ref(resource.name, attr.name, attr.ty, true);
                 input_obj = input_obj.field(InputValue::new(attr.name, type_ref));
             }
@@ -165,7 +159,8 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
 
     Field::new(m_name, TypeRef::named_nn(payload_name), move |ctx| {
         FieldFuture::new(async move {
-            let ctx_ash = ctx.data::<Context<D>>()?;
+            let ash = crate::request::request_context::<D>(&ctx)?;
+            let ctx_ash = &*ash;
 
             let input_arg = ctx
                 .args
@@ -176,7 +171,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
             let mut input_map = FieldMap::new();
 
             // Extract accepted attributes
-            for attr in resource.attributes {
+            for attr in resource.attributes.iter().filter(|attr| action.accept.contains(&attr.name)) {
                 if let Some(val) = input_obj.get(attr.name) {
                     let ash_val = parse_input_val(&val, attr.ty)?;
                     if !ash_val.is_null() {
@@ -199,23 +194,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 ActionKind::Create => {
                     match create_dynamic(ctx_ash, resource, action, input_map).await {
                         Ok(mut stored) => {
-                            if let Some(pubsub) = ctx.data_opt::<ash_pubsub::PubSub>() {
-                                let rec_id = stored.get("id").and_then(|v| v.as_uuid()).unwrap_or_else(Uuid::new_v4);
-                                let notif = Notification::new(
-                                    resource.name,
-                                    action.name,
-                                    ActionKind::Create,
-                                    rec_id,
-                                    stored.clone(),
-                                    None,
-                                    ctx_ash.actor.clone(),
-                                    FieldMap::new(),
-                                );
-                                let topic = format!("{}:{}", resource.name.to_lowercase(), action.name);
-                                pubsub.publish(&topic, notif.clone());
-                                pubsub.publish(&format!("{}:*", resource.name.to_lowercase()), notif);
-                            }
-
                             let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut stored);
                             Ok(Some(FieldValue::owned_any(MutationPayload {
                                 result: Some(stored),
@@ -250,9 +228,14 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                             .map(|a| a.name)
                             .unwrap_or("id");
 
+                        let (filter, tenant) = ash_core::visible_scope(
+                            resource,
+                            Some(Filter::eq(pk, Value::Uuid(id))),
+                            ctx_ash.tenant.clone(),
+                        )?;
                         let query = CompiledQuery {
-                            filter: Some(Filter::eq(pk, Value::Uuid(id))),
-                            tenant: ctx_ash.tenant.clone(),
+                            filter,
+                            tenant,
                             ..CompiledQuery::default()
                         };
 
@@ -278,22 +261,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
 
                     match update_dynamic(ctx_ash, resource, action, id, input_map).await {
                         Ok(mut updated) => {
-                            if let Some(pubsub) = ctx.data_opt::<ash_pubsub::PubSub>() {
-                                let notif = Notification::new(
-                                    resource.name,
-                                    action.name,
-                                    ActionKind::Update,
-                                    id,
-                                    updated.clone(),
-                                    None,
-                                    ctx_ash.actor.clone(),
-                                    FieldMap::new(),
-                                );
-                                let topic = format!("{}:{}", resource.name.to_lowercase(), action.name);
-                                pubsub.publish(&topic, notif.clone());
-                                pubsub.publish(&format!("{}:*", resource.name.to_lowercase()), notif);
-                            }
-
                             let _ = redact_fields(resource, ctx_ash.actor.as_ref(), &mut updated);
                             Ok(Some(FieldValue::owned_any(MutationPayload {
                                 result: Some(updated),
@@ -323,13 +290,23 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                         .map(|a| a.name)
                         .unwrap_or("id");
 
-                    let query = CompiledQuery {
-                        filter: Some(Filter::eq(pk, Value::Uuid(id))),
-                        tenant: ctx_ash.tenant.clone(),
-                        ..CompiledQuery::default()
+                    // Look the record up as a read would, so archived or other tenants'
+                    // records are not found.
+                    let existing_records = match ash_core::visible_scope(
+                        resource,
+                        Some(Filter::eq(pk, Value::Uuid(id))),
+                        ctx_ash.tenant.clone(),
+                    ) {
+                        Ok((filter, tenant)) => {
+                            let query = CompiledQuery {
+                                filter,
+                                tenant,
+                                ..CompiledQuery::default()
+                            };
+                            ctx_ash.data.run_query(resource, &query).await
+                        }
+                        Err(err) => Err(err),
                     };
-
-                    let existing_records = ctx_ash.data.run_query(resource, &query).await;
                     let existing_field_map = match existing_records {
                         Ok(records) if !records.is_empty() => records.into_iter().next().unwrap(),
                         _ => {
@@ -364,22 +341,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
 
                     match destroy_dynamic(ctx_ash, resource, action, id, &existing_field_map).await {
                         Ok(_) => {
-                            if let Some(pubsub) = ctx.data_opt::<ash_pubsub::PubSub>() {
-                                let notif = Notification::new(
-                                    resource.name,
-                                    action.name,
-                                    ActionKind::Destroy,
-                                    id,
-                                    existing_field_map.clone(),
-                                    Some(existing_field_map),
-                                    ctx_ash.actor.clone(),
-                                    FieldMap::new(),
-                                );
-                                let topic = format!("{}:{}", resource.name.to_lowercase(), action.name);
-                                pubsub.publish(&topic, notif.clone());
-                                pubsub.publish(&format!("{}:*", resource.name.to_lowercase()), notif);
-                            }
-
                             Ok(Some(FieldValue::owned_any(MutationPayload {
                                 result: None,
                                 errors: Vec::new(),
@@ -423,17 +384,41 @@ fn parse_input_val(
             let s = acc.string()?;
             Ok(Value::String(s.to_string()))
         }
-        AttrType::UtcDatetime => {
+        AttrType::UtcDatetime { precision } => {
             let s = acc.string()?;
-            ash_core::UtcDateTime::parse(s)
+            let normalized = precision
+                .normalize(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(normalized))
+        }
+        AttrType::Binary => {
+            let s = acc.string()?;
+            let binary =
+                ash_core::Binary::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(binary.encode()))
+        }
+        AttrType::Date => {
+            let s = acc.string()?;
+            ash_core::Date::parse(s).map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
+        }
+        AttrType::CiString => {
+            let s = acc.string()?;
+            let value = ash_core::CiString::parse(s)
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(value.as_str().to_string()))
         }
         AttrType::Decimal => {
             let s = acc.string()?;
             ash_core::Decimal::parse(s)
                 .map_err(|err| async_graphql::Error::new(err.to_string()))?;
             Ok(Value::String(s.to_string()))
+        }
+        AttrType::Float => {
+            let n = acc.f64()?;
+            let float = ash_core::Float::parse(&n.to_string())
+                .map_err(|err| async_graphql::Error::new(err.to_string()))?;
+            Ok(Value::String(float.as_str().to_string()))
         }
         AttrType::Integer => {
             let n = acc.i64()?;
@@ -443,6 +428,10 @@ fn parse_input_val(
             let b = acc.boolean()?;
             Ok(Value::Bool(b))
         }
+        AttrType::Inet => Ok(Value::String(crate::types::parse_inet_input(acc)?)),
+        AttrType::Vector { dimensions } => Ok(Value::String(
+            crate::types::parse_vector_input(acc, dimensions)?,
+        )),
         AttrType::Atom { one_of } => {
             let name = acc.enum_name()?;
             if let Some(matched) = one_of.iter().find(|&&s| s.eq_ignore_ascii_case(name)) {

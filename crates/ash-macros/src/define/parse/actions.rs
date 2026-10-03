@@ -85,6 +85,8 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut validations = Vec::new();
     let mut preparations = Vec::new();
     let mut persist_manual = false;
+    let mut soft = false;
+    let mut cascade_destroy = Vec::new();
     let mut run_expr = None;
     let mut accept_kw = None;
     let mut change_kw = None;
@@ -351,6 +353,33 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         let _: Token![;] = body.parse()?;
                     }
                 }
+                "soft" => {
+                    if kind != ActionKind::Destroy {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "`soft` only applies to destroy actions",
+                        ));
+                    }
+                    soft = true;
+                    require_semi(&body, errors, "`soft`");
+                }
+                "cascade_destroy" => {
+                    if kind != ActionKind::Destroy {
+                        errors.push(Error::new_spanned(
+                            &item_ident,
+                            "`cascade_destroy` only applies to destroy actions",
+                        ));
+                    }
+                    if body.peek(Token![:]) {
+                        let _: Token![:] = body.parse()?;
+                    }
+                    let items;
+                    let _ = syn::bracketed!(items in body);
+                    cascade_destroy.extend(
+                        syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated(&items)?,
+                    );
+                    require_semi(&body, errors, "cascade_destroy");
+                }
                 "persist" => {
                     if persist_kw.is_none() {
                         persist_kw = Some(item_ident.clone());
@@ -405,6 +434,8 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         "persist",
                         "returns",
                         "run",
+                        "soft",
+                        "cascade_destroy",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &item_ident,
@@ -439,6 +470,8 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         returns_kw,
         run_kw,
         accept_span,
+        soft,
+        cascade_destroy,
     })
 }
 

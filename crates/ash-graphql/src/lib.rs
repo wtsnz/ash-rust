@@ -6,7 +6,7 @@ pub mod mutation;
 pub mod object;
 pub mod pagination;
 pub mod query;
-pub mod read_scope;
+pub(crate) mod request;
 pub mod sort;
 pub mod subscription;
 pub mod types;
@@ -15,7 +15,7 @@ pub mod types;
 pub mod axum;
 
 pub use builder::AshGraphQLBuilder;
-pub use dataloader::{AshBatchLoader, BelongsToKey, HasManyKey, ManyToManyKey};
+pub use dataloader::{AshBatchLoader, RelatedKey};
 pub use error::{UserError, register_user_error};
 pub use filter::{
     parse_resource_filter, register_primitive_filter_inputs, register_resource_filter_inputs,
@@ -59,12 +59,13 @@ impl AshGraphQL {
         AshGraphQLBuilder::from_resources(resources)
     }
 
-    /// Creates an `async-graphql` [`DataLoader`](async_graphql::dataloader::DataLoader) backed by [`AshBatchLoader`].
+    /// Creates an `async-graphql` [`DataLoader`](async_graphql::dataloader::DataLoader) backed
+    /// by [`AshBatchLoader`], loading relationships as `ctx` reads them. Relationship
+    /// resolvers only use it for a request running as the same actor and tenant.
     pub fn create_dataloader<D: ash_core::DataLayer + Clone + 'static>(
         ctx: ash_core::Context<D>,
-        resources: &[&'static ash_core::ResourceDef],
     ) -> async_graphql::dataloader::DataLoader<AshBatchLoader<D>> {
-        let loader = AshBatchLoader::new(ctx, resources);
+        let loader = AshBatchLoader::new(ctx);
         async_graphql::dataloader::DataLoader::new(loader, tokio::spawn)
     }
 }

@@ -1,5 +1,5 @@
 use crate::action::{ActionDef, Change, ManagedRelType};
-use crate::resource::Resource;
+use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value};
 
 /// Specifications for mutating or synchronizing a child relationship within a changeset.
@@ -10,7 +10,8 @@ pub struct ManagedRelationshipSpec {
     pub inputs: Vec<FieldMap>,
 }
 
-pub(crate) fn extract_managed_relationships<R: Resource>(
+pub(crate) fn extract_managed_relationships(
+    resource: &ResourceDef,
     action: &ActionDef,
     arguments: &FieldMap,
 ) -> Vec<ManagedRelationshipSpec> {
@@ -40,7 +41,7 @@ pub(crate) fn extract_managed_relationships<R: Resource>(
             });
         }
     }
-    for rel in R::DEF.relationships {
+    for rel in resource.relationships {
         if !managed_relationships.iter().any(|m| m.relationship == rel.name)
             && let Some(val) = arguments.get(rel.name)
         {

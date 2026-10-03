@@ -147,11 +147,44 @@ impl Sqlite {
 
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
         let resources = persistable_resources(resources);
-        for resource in resources {
+        for resource in &resources {
             let ddl = sql::create_table_sql(resource)?;
             self.execute_raw(&ddl).await?;
             for index_ddl in sql::create_indexes_sql(resource)? {
                 self.execute_raw(&index_ddl).await?;
+            }
+        }
+        let has_statements = resources.iter().any(|res| {
+            res.statements
+                .iter()
+                .any(|s| s.dialects.is_empty() || s.dialects.contains(&"sqlite"))
+        });
+        if has_statements {
+            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE).await?;
+        }
+        for resource in &resources {
+            for statement in resource.statements {
+                if !statement.dialects.is_empty() && !statement.dialects.contains(&"sqlite") {
+                    continue;
+                }
+                let table = resource.table_name();
+                let (name, up) = (statement.name, statement.up);
+                let changed = self
+                    .execute_raw(&ash_sql::install::record_new_statement(table, name, up))
+                    .await?
+                    .rows_affected()
+                    + self
+                        .execute_raw(&ash_sql::install::record_changed_statement(table, name, up))
+                        .await?
+                        .rows_affected();
+                if changed > 0
+                    && let Err(err) = self.execute_raw(up).await
+                {
+                    let _ = self
+                        .execute_raw(&ash_sql::install::forget_statement(table, name))
+                        .await;
+                    return Err(err);
+                }
             }
         }
         Ok(())
@@ -208,20 +241,76 @@ fn bind_compiled<'q>(
             Value::Uuid(u) => {
                 query = query.bind(u.to_string());
             }
+            Value::String(s) if p.binary => {
+                let bytes = ash_core::Binary::parse(s)
+                    .map(ash_core::Binary::into_bytes)
+                    .unwrap_or_default();
+                query = query.bind(bytes);
+            }
             Value::String(s) => {
                 query = query.bind(s.as_str());
             }
-            Value::Map(m) => {
-                let json = serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string());
-                query = query.bind(json);
-            }
-            Value::Array(a) => {
-                let json = serde_json::to_string(a).unwrap_or_else(|_| "[]".to_string());
-                query = query.bind(json);
+            Value::Map(_) | Value::Array(_) => {
+                query = query.bind(p.value.to_plain_json().to_string());
             }
         }
     }
     query
+}
+
+impl Sqlite {
+    /// Runs a migration script and its bookkeeping in one `BEGIN IMMEDIATE` transaction
+    /// with foreign keys off, if `guard` still returns a row once the write lock is ours.
+    /// `binds` go to `bookkeeping`, and the first also to `guard`.
+    async fn migration_step(
+        &self,
+        guard: &str,
+        sql: &str,
+        bookkeeping: &str,
+        binds: &[&str],
+    ) -> Result<bool> {
+        let pool = self
+            .pool()
+            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
+        let mut conn = pool.acquire().await.map_err(map_sqlx)?;
+        // Table rebuilds drop tables that others reference, so foreign keys stay off while
+        // the script runs. The pragma is ignored inside a transaction, so set it first.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx)?;
+        let outcome = async {
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+            let wanted = sqlx::query(guard)
+                .bind(binds[0])
+                .fetch_optional(&mut *conn)
+                .await?
+                .is_some();
+            if !wanted {
+                sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+                return Ok(false);
+            }
+            sqlx::raw_sql(sql).execute(&mut *conn).await?;
+            let mut query = sqlx::query(bookkeeping);
+            for bind in binds {
+                query = query.bind(*bind);
+            }
+            query.execute(&mut *conn).await?;
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok::<bool, sqlx::Error>(true)
+        }
+        .await;
+        if outcome.is_err() {
+            // The step's own error is the one to report, so a failed rollback is ignored.
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        }
+        let restored = sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await;
+        let wanted = outcome.map_err(map_sqlx)?;
+        restored.map_err(map_sqlx)?;
+        Ok(wanted)
+    }
 }
 
 impl MigrationExecutor for Sqlite {
@@ -233,54 +322,24 @@ impl MigrationExecutor for Sqlite {
         Ok(())
     }
 
-    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<()> {
-        let pool = self
-            .pool()
-            .ok_or_else(|| Error::DataLayer("Migration requires a connection pool".into()))?;
-        let mut conn = pool.acquire().await.map_err(map_sqlx)?;
-        sqlx::query("PRAGMA foreign_keys = OFF")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        let failed = sqlx::raw_sql(sql)
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx);
-        if let Err(error) = failed {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            let _ = sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await;
-            return Err(error);
-        }
-        let recorded = sqlx::query(
+    async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
+        self.migration_step(
+            "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM _ash_schema_migrations WHERE version = ?)",
+            sql,
             "INSERT INTO _ash_schema_migrations (version, name, applied_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            &[version, name],
         )
-        .bind(version)
-        .bind(name)
-        .execute(&mut *conn)
         .await
-        .map_err(map_sqlx);
-        if let Err(error) = recorded {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            let _ = sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await;
-            return Err(error);
-        }
-        sqlx::query("COMMIT")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&mut *conn)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(())
+    }
+
+    async fn revert_migration(&self, sql: &str, version: &str) -> Result<bool> {
+        self.migration_step(
+            "SELECT 1 WHERE (SELECT MAX(version) FROM _ash_schema_migrations) = ?",
+            sql,
+            "DELETE FROM _ash_schema_migrations WHERE version = ?",
+            &[version],
+        )
+        .await
     }
 
     async fn applied_versions(&self) -> Result<Vec<String>> {
@@ -336,19 +395,43 @@ impl SchemaSupport for Sqlite {
     }
 }
 
+/// SQLite has no schemas, so like AshSqlite it can't keep a context-tenant resource's
+/// tenants apart. It refuses such reads and writes rather than mix the tenants' rows.
+fn refuse_tenant_schema(resource: &ResourceDef, tenant: Option<&str>) -> Result<()> {
+    match (resource.multitenancy, tenant) {
+        (Some(mt), Some(_)) if mt.strategy == ash_core::MultitenancyStrategy::Context => {
+            Err(Error::Invalid(format!(
+                "sqlite has no schemas to keep the tenants of `{}` apart; use attribute \
+                 multitenancy",
+                resource.name
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 impl DataLayer for Sqlite {
     async fn create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
     ) -> Result<FieldMap> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::insert_query(resource, &fields)?;
         self.execute_query_resource(&qb, resource).await?;
         Ok(fields)
     }
 
-    async fn update(&self, resource: &ResourceDef, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Uuid,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::update_query(resource, id, &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
@@ -393,7 +476,8 @@ impl DataLayer for Sqlite {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::delete_query(resource, id)?;
         let result = self.execute_query(&qb).await?;
         if result.rows_affected() == 0 {
@@ -407,6 +491,7 @@ impl DataLayer for Sqlite {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
         let qb = sql::select_query(resource, query)?;
         let rows = self.fetch_all(&qb).await?;
         rows.iter()
@@ -417,11 +502,13 @@ impl DataLayer for Sqlite {
     async fn upsert(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         _id: Uuid,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
     ) -> Result<FieldMap> {
+        refuse_tenant_schema(resource, tenant)?;
         let qb = sql::upsert_query(resource, &fields, identity, update_fields)?;
         self.execute_query_resource(&qb, resource).await?;
 
@@ -435,8 +522,21 @@ impl DataLayer for Sqlite {
                 where_parts.push(format!("\"{}\" IS NULL", key));
             }
         }
+        // Rows outside a partial identity never conflict, so the result is either the
+        // row we just inserted or the one inside the predicate that absorbed the write.
+        let mut order = String::new();
+        if let Some(predicate) = identity.predicate {
+            let pk = resource
+                .primary_key()
+                .ok_or(Error::NoPrimaryKey(resource.name))?;
+            let pk_value = fields.get(pk.name).cloned().unwrap_or(Value::Null);
+            where_parts.push(format!("(\"{}\" = ? OR ({predicate}))", pk.name));
+            params.push(SqlParam::new(pk_value.clone()));
+            order = format!(" ORDER BY \"{}\" = ? DESC LIMIT 1", pk.name);
+            params.push(SqlParam::new(pk_value));
+        }
         let fetch_sql = format!(
-            "SELECT * FROM \"{}\" WHERE {}",
+            "SELECT * FROM \"{}\" WHERE {}{order}",
             resource.table_name(),
             where_parts.join(" AND ")
         );
@@ -449,6 +549,7 @@ impl DataLayer for Sqlite {
     async fn bulk_create(
         &self,
         resource: &ResourceDef,
+        tenant: Option<&str>,
         rows: Vec<(Uuid, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
@@ -459,7 +560,7 @@ impl DataLayer for Sqlite {
             async move {
                 let mut results = Vec::with_capacity(rows.len());
                 for (id, fields) in rows {
-                    results.push(tx.create(resource, id, fields).await?);
+                    results.push(tx.create(resource, tenant, id, fields).await?);
                 }
                 Ok(results)
             }
@@ -467,7 +568,8 @@ impl DataLayer for Sqlite {
         .await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
+        refuse_tenant_schema(resource, tenant)?;
         if ids.is_empty() {
             return Ok(());
         }

@@ -156,8 +156,8 @@ impl<D: DataLayer, R: Resource> Step<D> for DestroyStep<R> {
             let record = self.record.take().ok_or_else(|| {
                 Error::Invalid(format!("step `{}` has already been executed", self.name))
             })?;
-            crate::engine::destroy_existing(ctx, self.action, record.clone()).await?;
-            results.insert(self.name.clone(), record);
+            let stored = crate::engine::destroy_existing_returning(ctx, self.action, record).await?;
+            results.insert(self.name.clone(), stored);
             Ok(())
         })
     }
@@ -188,8 +188,8 @@ where
                 Error::Invalid(format!("step `{}` has already been executed", self.name))
             })?;
             let record = f(ctx, results)?;
-            crate::engine::destroy_existing(ctx, self.action, record.clone()).await?;
-            results.insert(self.name.clone(), record);
+            let stored = crate::engine::destroy_existing_returning(ctx, self.action, record).await?;
+            results.insert(self.name.clone(), stored);
             Ok(())
         })
     }

@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::value::{ConstValue, Value};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Actor {
     pub id: Uuid,
     attributes: HashMap<String, Value>,

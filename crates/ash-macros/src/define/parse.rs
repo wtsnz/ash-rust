@@ -3,6 +3,7 @@ mod aggregates;
 mod attributes;
 mod calculations;
 mod checks;
+mod statements;
 mod helpers;
 mod identities;
 mod indexes;
@@ -232,6 +233,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     let mut identities = Vec::new();
     let mut indexes = Vec::new();
     let mut checks = Vec::new();
+    let mut statements = Vec::new();
     let mut data_layer = None;
     let mut store = None;
     let mut timestamps = None;
@@ -412,6 +414,13 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                     indexes = parsed;
                 }
                 let _ = helpers::optional_semi(input);
+            } else if section_ident == "statements" {
+                if let Some(parsed) =
+                    parse_braced_with(input, errors, statements::parse_statements)
+                {
+                    statements = parsed;
+                }
+                let _ = helpers::optional_semi(input);
             } else if section_ident == "checks" {
                 if let Some(parsed) = parse_braced_with(input, errors, checks::parse_checks) {
                     checks = parsed;
@@ -549,9 +558,10 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     });
 
     if let Some(ref ts) = timestamps {
+        // As in Ash, timestamps are UTC datetimes to the microsecond.
         if !attributes.iter().any(|a| a.ident == ts.created_at) {
             let c_ident = ts.created_at.clone();
-            let str_ty: Type = syn::parse_str("String").unwrap();
+            let str_ty: Type = syn::parse_str("::ash_core::UtcDateTimeUsec").unwrap();
             attributes.push(AttributeSpec {
                 outer_attrs: Vec::new(),
                 ident: c_ident,
@@ -567,7 +577,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         }
         if !attributes.iter().any(|a| a.ident == ts.updated_at) {
             let u_ident = ts.updated_at.clone();
-            let str_ty: Type = syn::parse_str("String").unwrap();
+            let str_ty: Type = syn::parse_str("::ash_core::UtcDateTimeUsec").unwrap();
             attributes.push(AttributeSpec {
                 outer_attrs: Vec::new(),
                 ident: u_ident,
@@ -601,6 +611,7 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         identities,
         indexes,
         checks,
+        statements,
         embedded,
         data_layer,
         store,
@@ -1163,6 +1174,78 @@ mod tests {
             !def.calculations[0].arguments[0].outer_attrs.is_empty(),
             "missing calculation argument docs"
         );
+    }
+
+    #[test]
+    fn test_statement_dialect_must_be_known() {
+        let tokens = quote! {
+            TestResource {
+                attributes { id: Uuid [pk]; }
+                statements {
+                    statement extension only pg {
+                        up "CREATE EXTENSION IF NOT EXISTS citext";
+                    }
+                }
+            }
+        };
+        let err = parse_err(tokens);
+        assert!(
+            err.to_string()
+                .contains("unknown dialect `pg`, expected `postgres` or `sqlite`"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_index_include_needs_a_method_that_supports_it() {
+        let err = parse_err(quote! {
+            TestResource {
+                attributes { id: Uuid [pk]; tags: String; title: String; }
+                indexes { index by_tags: [tags], using: gin, include: [title]; }
+            }
+        });
+        assert!(
+            err.to_string()
+                .contains("`include` needs a btree, gist, or spgist index; Postgres has no INCLUDE for `gin`"),
+            "got: {err}"
+        );
+    }
+
+    fn relationship_err(relationship: proc_macro2::TokenStream) -> String {
+        parse_err(quote! {
+            TestResource {
+                attributes { id: Uuid [pk]; tenant_id: Uuid; code: String; }
+                relationships { #relationship }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn test_relationship_key_validation() {
+        let cases = [
+            (
+                quote! { belongs_to parent: Parent [fk: [tenant_id, code], references: [tenant_id]]; },
+                "`fk` names 2 column(s) but `references` names 1; they must match",
+            ),
+            (
+                quote! { many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id, references: [tenant_id, code]]; },
+                "composite keys are not supported on many_to_many relationships",
+            ),
+            (
+                quote! { has_many children: Child [fk: parent_id, on_update: cascade]; },
+                "`on_update` applies to the foreign key, so it belongs on the `belongs_to` side",
+            ),
+            (
+                quote! { belongs_to parent: Parent [fk: [tenant_id code], references: [tenant_id, code]]; },
+                "expected `,`",
+            ),
+        ];
+        for (relationship, expected) in cases {
+            let err = relationship_err(relationship.clone());
+            assert!(err.contains(expected), "{relationship}: got {err}");
+        }
     }
 
     #[test]

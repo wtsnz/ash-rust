@@ -213,6 +213,19 @@ let user = User::create(&ctx)
     .await?;
 ```
 
+### Partial identities and null keys
+
+`where:` makes the identity a partial unique index. Only rows matching the SQL predicate must be unique. `nils_distinct: false` makes two `NULL` keys collide (`NULLS NOT DISTINCT`; Postgres 15+).
+
+```rust
+identities {
+    identity live_email: [email], where: "deleted_at IS NULL";
+    identity one_nickname: [nickname], nils_distinct: false;
+}
+```
+
+A partial identity can still be an upsert target; the conflict clause repeats its predicate. It gets the `User::live_email` constant but no `get_by_` or `find_by_` lookup, because the key alone does not pick one row. The memory data layer cannot evaluate the predicate: it does not enforce partial identities and rejects upserts on them.
+
 ---
 
 ## 2b2. Non-unique indexes
@@ -241,6 +254,18 @@ resource! {
 }
 ```
 
+`where:` makes a partial index. `using:` picks the Postgres access method: `btree` (the default), `hash`, `gin`, `gist`, `brin`, or `spgist`. SQLite ignores it and builds a B-tree. GIN and GiST need an operator class for the column type: they work on `JSONB` and arrays, but a plain text column needs an extension such as `pg_trgm`, so declare that index in a `statements` block instead.
+
+`include: [title]` stores extra columns in the index for index-only scans. Postgres supports it on `btree`, `gist`, and `spgist` indexes only; SQLite keeps a plain index.
+
+```rust
+indexes {
+    index open_by_status: [status], where: "status <> 'closed'";
+    index by_title: [title], using: hash;
+    index by_owner: [owner_id], include: [title];
+}
+```
+
 ---
 
 ## 2b3. Check constraints
@@ -264,7 +289,7 @@ resource! {
 }
 ```
 
-Codegen names each check `ck_{table}_{name}` and emits it inside `CREATE TABLE`.
+Codegen names each check `ck_{table}_{name}` and emits it inside `CREATE TABLE`. Enum attributes get a generated `ck_{table}_{attr}_one_of` check, so a user check with that name is a codegen error.
 
 ---
 
@@ -288,6 +313,13 @@ resource! {
         }
     }
 }
+```
+
+Every create action gets `Resource::build_<action>()`, and every update action `record.build_<action>()`. `.build()` returns the record the action would store without saving it: like Ash's `apply_attributes`, it sets the primary key, lock version, defaults, and timestamps and runs the action's changes and validations, but checks no policies, sets no tenant, and manages no relationships. Embedded resources are built this way, and it works for resources with a table too.
+
+```rust
+let address = Address::build_create().street("221B Baker Street").city("London").postal_code("NW1").build()?;
+let draft = Ticket::build_open().title("Printer on fire").build()?; // has an id, not saved
 ```
 
 ---
@@ -322,7 +354,16 @@ has_many comments: Comment [fk: post_id];
 many_to_many tags: Tag [through: PostTag, source_fk: post_id, dest_fk: tag_id];
 ```
 
-`on_delete` is `cascade`, `nilify`, `restrict`, or `nothing` (identifiers, not `"cascade"` strings). `source_attribute_on_join_resource` / `destination_attribute_on_join_resource` are aliases of `source_fk` / `dest_fk`.
+### Composite keys
+
+`fk` and `references` take a list. They must name the same number of columns, in order. `references` defaults to the destination primary key; any other target must be a non-partial identity on exactly those columns, or codegen refuses to write the foreign key. `many_to_many` takes single columns only.
+
+```rust
+belongs_to project: Project [fk: [tenant_id, project_code], references: [tenant_id, code]];
+has_many tasks: Task [fk: [tenant_id, project_code], references: [tenant_id, code]];
+```
+
+`on_delete` is `cascade`, `nilify`, `restrict`, or `nothing` (identifiers, not `"cascade"` strings). `on_update` takes the same values and belongs on `belongs_to`, since it acts on the foreign key. `source_attribute_on_join_resource` / `destination_attribute_on_join_resource` are aliases of `source_fk` / `dest_fk`.
 
 ---
 
@@ -366,9 +407,9 @@ aggregates {
 ### Action Kinds
 
 - `create`: Inserts a new record. `persist manual` skips the data layer; the builder exposes `.persist(|ctx, record| async { ... })` instead of writing through the store.
-- `read`: Queries records. May use `prepare filter(...)` / `sort` / `limit` / `offset`.
+- `read`: Queries records. May use `prepare filter(...)` / `sort` / `limit` / `offset`. Following Ash, the primary read's filters also apply wherever another resource reaches this one: relationship loads, aggregates, and filters through a relationship, including the join resource of a `many_to_many`. Inside its own read filter, a resource's read filter is not applied again, so a filter that leads back to its resource does not recurse.
 - `update`: Mutates an existing record.
-- `destroy`: Deletes a record.
+- `destroy`: Deletes a record. `soft;` stores the action's changes as an update instead (raising the lock version and `updated_at`), and skips `on_delete` cascades because the row stays. `cascade_destroy [comments];` also destroys related records with their primary destroy action: after a soft destroy it destroys the ones the primary read shows, and before a hard delete it removes all of them with a destroy action that really deletes. Both follow Ash; `ash-archival` builds on them.
 - `generic`: Custom logic. Typed `accept { name: Type }` is allowed here only. Return type is `generic name, Type { ... }` or `returns Type;` inside the body. May omit `run` when the caller supplies `.run(...)`.
 
 ### Inputs
@@ -756,7 +797,7 @@ resource! {
 }
 ```
 
-`strategy: attribute` (the default if omitted) stamps and filters `attribute` from `ctx.tenant()`. `strategy: context` requires a tenant on the context without writing a column, which pairs with schema/`search_path` tenancy in `ash-postgres`. `global: true` skips the tenant requirement. `attribute` may be an identifier or a string.
+`strategy: attribute` (the default if omitted) stamps and filters `attribute` from `ctx.tenant()`. `strategy: context` leaves the tenant to the data layer, as Ash does: Postgres keeps each tenant's rows in its own schema, memory keeps a table per tenant, and SQLite, which has no schemas, refuses (use `strategy: attribute` there). `global: true` skips the tenant requirement. `attribute` may be an identifier or a string.
 
 ```rust
 let ctx = Context::new(data_layer)

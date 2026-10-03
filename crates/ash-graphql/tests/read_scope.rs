@@ -1,0 +1,220 @@
+//! Every GraphQL read runs as the request's context, through the same scoping as typed
+//! reads: connections see the read action's preparations, relationships load through
+//! the destination's policies, filters and tenant (batched per request), and field
+//! policies redact for the request's actor.
+
+use ash_core::{Actor, Context, Resource};
+use ash_graphql::AshGraphQL;
+use ash_memory::Memory;
+use async_graphql::Request;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use berth::Berth;
+use dock::Dock;
+
+mod dock {
+use super::berth::Berth;
+use ash_core::resource;
+use uuid::Uuid;
+
+resource! {
+    Dock {
+        table "docks";
+
+        multitenancy {
+            strategy: attribute;
+            attribute: org;
+        }
+
+        actor {
+            role: String;
+        }
+
+        attributes {
+            id: Uuid [pk];
+            org: String;
+            name: String;
+            notes: Option<String>;
+        }
+
+        relationships {
+            has_many berths: Berth [fk: dock_id];
+        }
+
+        field_policies {
+            field notes {
+                authorize_if actor_eq(role = "harbourmaster");
+            }
+        }
+
+        actions {
+            create create { primary; accept [name, notes]; }
+            read read { primary; }
+        }
+
+        policies {
+            policy action_type(create) {
+                authorize_if always;
+            }
+            policy action_type(read) {
+                authorize_if actor_present;
+            }
+        }
+    }
+}
+
+}
+
+mod berth {
+use super::dock::Dock;
+use ash_core::resource;
+use uuid::Uuid;
+
+resource! {
+    Berth {
+        table "berths";
+
+        multitenancy {
+            strategy: attribute;
+            attribute: org;
+        }
+
+        attributes {
+            id: Uuid [pk];
+            org: String;
+            dock_id: Uuid;
+            code: String;
+            closed: bool [default: false];
+        }
+
+        relationships {
+            belongs_to dock: Dock [fk: dock_id];
+        }
+
+        actions {
+            create create { primary; accept [dock_id, code, closed]; }
+            read read {
+                primary;
+                prepare filter(closed == false);
+            }
+        }
+    }
+}
+
+}
+
+struct Harbour {
+    schema: async_graphql::dynamic::Schema,
+    acme: Context<Memory>,
+    globex: Context<Memory>,
+}
+
+impl Harbour {
+    async fn new() -> Self {
+        let base = Context::new(Memory::new());
+        let acme = base.with_tenant("acme");
+        let globex = base.with_tenant("globex");
+        // Field policies guard writes too, so the harbourmaster writes the notes.
+        let north = Dock::create(&acme.with_actor(role("harbourmaster")))
+            .name("North").notes("keys under the mat").await.unwrap();
+        Berth::create(&acme).dock_id(north.id).code("A").await.unwrap();
+        Berth::create(&acme).dock_id(north.id).code("B").closed(true).await.unwrap();
+        // A berth in another tenant naming acme's dock doesn't reach it.
+        Berth::create(&globex).dock_id(north.id).code("C").await.unwrap();
+
+        let schema = AshGraphQL::from_resources(&[&Dock::DEF, &Berth::DEF])
+            .with_dataloader()
+            .finish::<Memory>()
+            .unwrap();
+        Self { schema, acme, globex }
+    }
+
+    async fn run(&self, request: Request) -> Value {
+        let response = self.schema.execute(request).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        response.data.into_json().unwrap()
+    }
+
+    async fn as_(&self, ctx: &Context<Memory>, query: &str) -> Value {
+        self.run(Request::new(query).data(ctx.clone())).await
+    }
+}
+
+fn role(role: &str) -> Actor {
+    Actor::new(Uuid::new_v4()).with_role(role)
+}
+
+const DOCKS: &str = "{ listDocks { name notes berths { code dock { name } } } }";
+
+#[tokio::test]
+async fn relationships_load_as_the_request_reads() {
+    let h = Harbour::new().await;
+
+    // The harbourmaster sees the notes, and only the open berth.
+    let harbourmaster = h.acme.with_actor(role("harbourmaster"));
+    assert_eq!(
+        h.as_(&harbourmaster, DOCKS).await["listDocks"],
+        json!([{
+            "name": "North",
+            "notes": "keys under the mat",
+            "berths": [{ "code": "A", "dock": { "name": "North" } }],
+        }])
+    );
+
+    // A clerk reads the same docks without the notes.
+    let clerk = h.acme.with_actor(role("clerk"));
+    assert_eq!(h.as_(&clerk, DOCKS).await["listDocks"][0]["notes"], Value::Null);
+
+    // Without an actor the dock's read policy hides it, through a berth too.
+    let berths = "{ listBerths { code dock { name } } }";
+    assert_eq!(
+        h.as_(&h.acme, berths).await["listBerths"],
+        json!([{ "code": "A", "dock": null }])
+    );
+
+    // Another tenant's berth can't reach acme's dock.
+    let globex = h.globex.with_actor(role("harbourmaster"));
+    assert_eq!(
+        h.as_(&globex, berths).await["listBerths"],
+        json!([{ "code": "C", "dock": null }])
+    );
+}
+
+#[tokio::test]
+async fn an_actor_given_alongside_the_context_acts_for_it() {
+    let h = Harbour::new().await;
+    let request = Request::new(DOCKS)
+        .data(h.acme.clone())
+        .data(role("harbourmaster"));
+    let docks = h.run(request).await;
+    assert_eq!(docks["listDocks"][0]["notes"], "keys under the mat");
+    assert_eq!(docks["listDocks"][0]["berths"][0]["dock"]["name"], "North");
+}
+
+#[tokio::test]
+async fn mutations_run_as_the_actor_given_alongside_the_context() {
+    let h = Harbour::new().await;
+    // Only the harbourmaster may write a dock's notes.
+    let mutation = r#"mutation { createDock(input: { name: "South", notes: "mind the gap" }) {
+        success errors { message } result { name }
+    } }"#;
+    let created = h
+        .run(Request::new(mutation).data(h.acme.clone()).data(role("harbourmaster")))
+        .await;
+    assert_eq!(created["createDock"]["success"], true, "{created}");
+    let refused = h.run(Request::new(mutation).data(h.acme.clone()).data(role("clerk"))).await;
+    assert_eq!(refused["createDock"]["success"], false, "{refused}");
+}
+
+#[tokio::test]
+async fn connections_read_through_the_read_action() {
+    let h = Harbour::new().await;
+    let page = h
+        .as_(&h.acme, "{ berthsConnection { totalCount edges { node { code } } } }")
+        .await;
+    assert_eq!(
+        page["berthsConnection"],
+        json!({ "totalCount": 1, "edges": [{ "node": { "code": "A" } }] })
+    );
+}

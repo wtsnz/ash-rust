@@ -44,16 +44,39 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
     let list = Punctuated::<Ident, Token![,]>::parse_terminated(&keys_content)?;
     let keys: Vec<Ident> = list.into_iter().collect();
     let mut message = None;
-    if input.peek(Token![,]) {
+    let mut predicate = None;
+    let mut nils_distinct = true;
+    while input.peek(Token![,]) {
         let _: Token![,] = input.parse()?;
-        if input.peek(Ident) {
-            let msg_kw: Ident = input.parse()?;
-            if msg_kw == "message" {
-                if input.peek(Token![:]) || input.peek(Token![=]) {
-                    let _ = input.parse::<proc_macro2::TokenTree>()?;
-                }
-                let msg_lit: syn::LitStr = input.parse()?;
-                message = Some(msg_lit.value());
+        if input.peek(Token![;]) || input.is_empty() {
+            break;
+        }
+        if input.peek(Token![where]) {
+            let _: Token![where] = input.parse()?;
+            expect_clause_sep(input)?;
+            let lit: syn::LitStr = input.parse()?;
+            predicate = Some(lit.value());
+            continue;
+        }
+        let key: Ident = input.parse()?;
+        match key.to_string().as_str() {
+            "message" => {
+                expect_clause_sep(input)?;
+                let lit: syn::LitStr = input.parse()?;
+                message = Some(lit.value());
+            }
+            "nils_distinct" => {
+                expect_clause_sep(input)?;
+                let lit: syn::LitBool = input.parse()?;
+                nils_distinct = lit.value;
+            }
+            other => {
+                return Err(Error::new_spanned(
+                    key,
+                    format!(
+                        "unknown identity clause `{other}`, expected `where`, `message`, or `nils_distinct`"
+                    ),
+                ));
             }
         }
     }
@@ -62,5 +85,14 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
         name,
         keys,
         message,
+        predicate,
+        nils_distinct,
     })
+}
+
+fn expect_clause_sep(input: ParseStream) -> Result<()> {
+    if input.peek(Token![:]) || input.peek(Token![=]) {
+        let _ = input.parse::<proc_macro2::TokenTree>()?;
+    }
+    Ok(())
 }

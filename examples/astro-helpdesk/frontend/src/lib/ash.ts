@@ -23,40 +23,53 @@ export interface PaginatedResult<T> {
 
 export interface UuidFilter {
   eq?: string;
-  neq?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface StringFilter {
   eq?: string;
-  neq?: string;
-  contains?: string;
-  starts_with?: string;
-  ends_with?: string;
+  ne?: string;
   in?: string[];
-  is_nil?: boolean;
+  isNil?: boolean;
+}
+
+export interface TextFilter {
+  eq?: string;
+  ne?: string;
+  in?: string[];
+  isNil?: boolean;
+  contains?: string;
+  startsWith?: string;
+  endsWith?: string;
+}
+
+export interface FloatFilter {
+  eq?: number;
+  ne?: number;
+  gt?: number;
+  gte?: number;
+  lt?: number;
+  lte?: number;
+  isNil?: boolean;
 }
 
 export interface IntFilter {
   eq?: number;
-  neq?: number;
+  ne?: number;
   gt?: number;
   gte?: number;
   lt?: number;
   lte?: number;
   in?: number[];
-  is_nil?: boolean;
+  isNil?: boolean;
 }
 
 export interface BooleanFilter {
   eq?: boolean;
-  neq?: boolean;
-  is_nil?: boolean;
-}
-
-export interface JsonFilter {
-  is_nil?: boolean;
+  ne?: boolean;
+  isNil?: boolean;
 }
 
 // --- Section 2: Resource Types & Action Inputs ---
@@ -66,6 +79,10 @@ export interface Ticket {
   description?: string | null;
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
   priority: number;
+  estimate?: number | null;
+  due_on?: string | null;
+  attachment?: string | null;
+  requester_email?: string | null;
   author_id?: string | null;
   author?: Representative | null;
 }
@@ -76,6 +93,10 @@ export interface OpenTicketInput {
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
   priority: number;
   author_id?: string | null;
+  estimate?: number | null;
+  due_on?: string | null;
+  attachment?: string | null;
+  requester_email?: string | null;
 }
 
 export type TicketOpenInput = OpenTicketInput;
@@ -102,12 +123,23 @@ export interface CloseTicketInput {
 
 export type TicketCloseInput = CloseTicketInput;
 
+export interface TicketStatusFilter {
+  eq?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+  ne?: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED";
+  in?: ("OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED")[];
+  isNil?: boolean;
+}
+
 export interface TicketFilterInput {
   id?: UuidFilter;
-  title?: StringFilter;
-  description?: StringFilter;
-  status?: StringFilter;
+  title?: TextFilter;
+  description?: TextFilter;
+  status?: TicketStatusFilter;
   priority?: IntFilter;
+  estimate?: FloatFilter;
+  due_on?: StringFilter;
+  attachment?: StringFilter;
+  requester_email?: TextFilter;
   author_id?: UuidFilter;
   author?: RepresentativeFilterInput;
   and?: TicketFilterInput[];
@@ -115,7 +147,7 @@ export interface TicketFilterInput {
   not?: TicketFilterInput;
 }
 
-export type TicketSortField = "id" | "title" | "description" | "status" | "priority" | "author_id";
+export type TicketSortField = "id" | "title" | "description" | "status" | "priority" | "estimate" | "due_on" | "attachment" | "requester_email" | "author_id";
 
 export interface TicketSortInput {
   field: TicketSortField;
@@ -144,9 +176,9 @@ export type RepresentativeCreateInput = CreateRepresentativeInput;
 
 export interface RepresentativeFilterInput {
   id?: UuidFilter;
-  name?: StringFilter;
-  email?: StringFilter;
-  role?: StringFilter;
+  name?: TextFilter;
+  email?: TextFilter;
+  role?: TextFilter;
   and?: RepresentativeFilterInput[];
   or?: RepresentativeFilterInput[];
   not?: RepresentativeFilterInput;
@@ -170,6 +202,10 @@ export const TicketSchema = z.object({
   description: z.string().nullable().optional(),
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]),
   priority: z.number().int(),
+  estimate: z.number().nullable().optional(),
+  due_on: z.string().nullable().optional(),
+  attachment: z.string().nullable().optional(),
+  requester_email: z.string().nullable().optional(),
   author_id: z.string().uuid().nullable().optional(),
 });
 
@@ -179,6 +215,10 @@ export const OpenTicketInputSchema = z.object({
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]),
   priority: z.number().int().min(1).max(5),
   author_id: z.string().uuid().nullable().optional(),
+  estimate: z.number().nullable().optional(),
+  due_on: z.string().nullable().optional(),
+  attachment: z.string().nullable().optional(),
+  requester_email: z.string().nullable().optional(),
 });
 
 export const TicketOpenInputSchema = OpenTicketInputSchema;
@@ -304,7 +344,7 @@ export class AshTransport {
 }
 
 export function buildTicketSelectionSet(include?: TicketInclude): string {
-  let fields = "id title description status priority author_id";
+  let fields = "id title description status priority estimate due_on attachment requester_email author_id";
   if (include?.author) {
     const subInclude = typeof include.author === "object" ? include.author : undefined;
     fields += ` author { ${buildRepresentativeSelectionSet(subInclude)} }`;

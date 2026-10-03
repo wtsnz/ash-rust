@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use ash_core::{OnDelete, RelKind, ResourceDef, Value};
+use ash_core::{AttrType, AttributeDef, OnDelete, OnUpdate, RelKind, ResourceDef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::dialect::SqlDialect;
@@ -19,10 +19,53 @@ pub struct TableSnapshot {
     pub indexes: Vec<IndexSnapshot>,
     #[serde(default)]
     pub checks: Vec<CheckSnapshot>,
+    #[serde(default)]
+    pub statements: Vec<StatementSnapshot>,
     pub references: Vec<ReferenceSnapshot>,
 }
 
 impl TableSnapshot {
+    /// This table under `new_name`, with generated index and constraint names following it.
+    pub fn renamed(&self, new_name: &str) -> TableSnapshot {
+        let mut copy = self.clone();
+        let old_name = copy.table.clone();
+        copy.table = new_name.to_string();
+        let rewrite = |name: &mut String, old_prefix: &str, new_prefix: &str| {
+            if let Some(rest) = name.strip_prefix(old_prefix) {
+                *name = format!("{new_prefix}{rest}");
+            }
+        };
+        for identity in &mut copy.identities {
+            rewrite(
+                &mut identity.name,
+                &format!("idx_{old_name}_"),
+                &format!("idx_{new_name}_"),
+            );
+        }
+        for index in &mut copy.indexes {
+            rewrite(
+                &mut index.name,
+                &format!("idx_{old_name}_"),
+                &format!("idx_{new_name}_"),
+            );
+        }
+        for check in &mut copy.checks {
+            rewrite(
+                &mut check.name,
+                &format!("ck_{old_name}_"),
+                &format!("ck_{new_name}_"),
+            );
+        }
+        for reference in &mut copy.references {
+            rewrite(
+                &mut reference.name,
+                &format!("fk_{old_name}_"),
+                &format!("fk_{new_name}_"),
+            );
+        }
+        copy
+    }
+
     /// Builds a [`TableSnapshot`] from an Ash [`ResourceDef`] and concrete [`SqlDialect`].
     pub fn from_resource<D: SqlDialect>(resource: &ResourceDef, dialect: &D) -> Self {
         let mut columns = Vec::new();
@@ -47,15 +90,38 @@ impl TableSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), id.name),
                 columns: id.keys.iter().map(|k| k.to_string()).collect(),
                 unique: true,
+                predicate: id.predicate.map(str::to_string),
+                nils_distinct: id.nils_distinct,
             });
         }
 
+        // SQLite has one index method and no INCLUDE, so its snapshots leave both out and
+        // changing them does not rebuild an identical index.
+        let postgres = dialect.name() == "postgres";
         let mut indexes = Vec::new();
         for index in resource.indexes {
             indexes.push(IndexSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), index.name),
                 columns: index.keys.iter().map(|k| k.to_string()).collect(),
+                predicate: index.predicate.map(str::to_string),
+                method: index.method.filter(|_| postgres).map(str::to_string),
+                include: if postgres {
+                    index.include.iter().map(|k| k.to_string()).collect()
+                } else {
+                    Vec::new()
+                },
             });
+        }
+
+        let mut statements = Vec::new();
+        for statement in resource.statements {
+            if statement.dialects.is_empty() || statement.dialects.contains(&dialect.name()) {
+                statements.push(StatementSnapshot {
+                    name: statement.name.to_string(),
+                    up: statement.up.to_string(),
+                    down: statement.down.to_string(),
+                });
+            }
         }
 
         let mut checks = Vec::new();
@@ -65,23 +131,42 @@ impl TableSnapshot {
                 expression: check.expression.to_string(),
             });
         }
+        for attr in resource.attributes {
+            if let Some(check) = enum_check(dialect, resource.table_name(), attr) {
+                checks.push(check);
+            }
+        }
 
         let mut references = Vec::new();
         for rel in resource.relationships {
             if rel.kind == RelKind::BelongsTo {
                 let dest = (rel.destination)();
-                let on_delete_str = match rel.on_delete {
-                    OnDelete::Cascade => "CASCADE",
-                    OnDelete::Nilify => "SET NULL",
-                    OnDelete::Restrict => "RESTRICT",
-                    OnDelete::Nothing => "NO ACTION",
+                let on_delete_str = referential_action(rel.on_delete);
+                let on_update_str = match rel.on_update {
+                    OnUpdate::Cascade => "CASCADE",
+                    OnUpdate::Nilify => "SET NULL",
+                    OnUpdate::Restrict => "RESTRICT",
+                    OnUpdate::Nothing => "NO ACTION",
                 };
+                let columns = rel
+                    .source_columns()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                let target_columns = rel
+                    .destination_columns()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
                 references.push(ReferenceSnapshot {
                     name: format!("fk_{}_{}", resource.table_name(), rel.name),
-                    column: rel.source_attribute.to_string(),
+                    column: columns.first().cloned().unwrap_or_default(),
+                    columns: columns.clone(),
                     target_table: dest.table_name().to_string(),
-                    target_column: rel.destination_attribute.to_string(),
+                    target_column: target_columns.first().cloned().unwrap_or_default(),
+                    target_columns,
                     on_delete: on_delete_str.to_string(),
+                    on_update: on_update_str.to_string(),
                 });
             }
         }
@@ -95,6 +180,7 @@ impl TableSnapshot {
             identities,
             indexes,
             checks,
+            statements,
             references,
         }
     }
@@ -141,6 +227,36 @@ pub struct IdentitySnapshot {
     pub name: String,
     pub columns: Vec<String>,
     pub unique: bool,
+    #[serde(default)]
+    pub predicate: Option<String>,
+    #[serde(default = "nils_are_distinct")]
+    pub nils_distinct: bool,
+}
+
+fn nils_are_distinct() -> bool {
+    true
+}
+
+fn enum_check<D: SqlDialect>(
+    dialect: &D,
+    table: &str,
+    attr: &AttributeDef,
+) -> Option<CheckSnapshot> {
+    let AttrType::Atom { one_of } = attr.ty else {
+        return None;
+    };
+    if one_of.is_empty() {
+        return None;
+    }
+    let values = one_of
+        .iter()
+        .map(|value| format!("'{}'", value.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(CheckSnapshot {
+        name: format!("ck_{table}_{}_one_of", attr.name),
+        expression: format!("{} IN ({values})", dialect.quote_identifier(attr.name)),
+    })
 }
 
 /// Represents a non-unique index in a schema snapshot.
@@ -148,6 +264,12 @@ pub struct IdentitySnapshot {
 pub struct IndexSnapshot {
     pub name: String,
     pub columns: Vec<String>,
+    #[serde(default)]
+    pub predicate: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
 }
 
 /// Represents a CHECK constraint in a schema snapshot.
@@ -157,14 +279,112 @@ pub struct CheckSnapshot {
     pub expression: String,
 }
 
-/// Represents a foreign key constraint in a schema snapshot.
+/// A hand-written SQL statement stored beside a table snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatementSnapshot {
+    pub name: String,
+    pub up: String,
+    pub down: String,
+}
+
+/// Represents a foreign key constraint in a schema snapshot.
+///
+/// `column` and `target_column` stay the first key so older snapshots still load.
+/// `columns` and `target_columns` hold the full key, including a one-column key.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "ReferenceSnapshotRaw")]
 pub struct ReferenceSnapshot {
     pub name: String,
     pub column: String,
+    pub columns: Vec<String>,
     pub target_table: String,
     pub target_column: String,
+    pub target_columns: Vec<String>,
     pub on_delete: String,
+    pub on_update: String,
+}
+
+#[derive(Deserialize)]
+struct ReferenceSnapshotRaw {
+    name: String,
+    column: String,
+    #[serde(default)]
+    columns: Vec<String>,
+    target_table: String,
+    target_column: String,
+    #[serde(default)]
+    target_columns: Vec<String>,
+    on_delete: String,
+    #[serde(default = "no_action")]
+    on_update: String,
+}
+
+impl From<ReferenceSnapshotRaw> for ReferenceSnapshot {
+    fn from(raw: ReferenceSnapshotRaw) -> Self {
+        let columns = if raw.columns.is_empty() {
+            vec![raw.column]
+        } else {
+            raw.columns
+        };
+        let target_columns = if raw.target_columns.is_empty() {
+            vec![raw.target_column]
+        } else {
+            raw.target_columns
+        };
+        Self {
+            name: raw.name,
+            column: columns.first().cloned().unwrap_or_default(),
+            columns,
+            target_table: raw.target_table,
+            target_column: target_columns.first().cloned().unwrap_or_default(),
+            target_columns,
+            on_delete: raw.on_delete,
+            on_update: raw.on_update,
+        }
+    }
+}
+
+fn referential_action(action: OnDelete) -> &'static str {
+    match action {
+        OnDelete::Cascade => "CASCADE",
+        OnDelete::Nilify => "SET NULL",
+        OnDelete::Restrict => "RESTRICT",
+        OnDelete::Nothing => "NO ACTION",
+    }
+}
+
+fn no_action() -> String {
+    "NO ACTION".to_string()
+}
+
+impl ReferenceSnapshot {
+    pub fn key_sql<D: SqlDialect>(&self, dialect: &D) -> (String, String) {
+        let quote = |cols: &[String]| {
+            cols.iter()
+                .map(|col| dialect.quote_identifier(col))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let source = if self.columns.is_empty() {
+            dialect.quote_identifier(&self.column)
+        } else {
+            quote(&self.columns)
+        };
+        let target = if self.target_columns.is_empty() {
+            dialect.quote_identifier(&self.target_column)
+        } else {
+            quote(&self.target_columns)
+        };
+        (source, target)
+    }
+
+    pub fn on_update_sql(&self) -> String {
+        if self.on_update.is_empty() || self.on_update == "NO ACTION" {
+            String::new()
+        } else {
+            format!(" ON UPDATE {}", self.on_update)
+        }
+    }
 }
 
 /// SQL default for a constant attribute default. A function that returns a new value each call is skipped.
@@ -178,6 +398,12 @@ pub fn attribute_sql_default<D: SqlDialect>(
     if first != second {
         return None;
     }
+    if attr.ty == ash_core::AttrType::Binary {
+        let Value::String(encoded) = &first else {
+            return None;
+        };
+        return Some(dialect.binary_literal(encoded));
+    }
     sql_literal(dialect, &first)
 }
 
@@ -188,8 +414,46 @@ pub fn sql_literal<D: SqlDialect>(dialect: &D, value: &Value) -> Option<String> 
         Value::Int(v) => Some(v.to_string()),
         Value::String(v) => Some(format!("'{}'", v.replace('\'', "''"))),
         Value::Uuid(v) => Some(format!("'{v}'")),
-        Value::Map(_) | Value::Array(_) => None,
+        Value::Map(_) | Value::Array(_) => {
+            let json = format!("'{}'", value_json(value).replace('\'', "''"));
+            if dialect.name() == "postgres" {
+                Some(format!("{json}::jsonb"))
+            } else {
+                Some(json)
+            }
+        }
     }
+}
+
+fn value_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(true) => "true".to_string(),
+        Value::Bool(false) => "false".to_string(),
+        Value::Int(v) => v.to_string(),
+        Value::Uuid(v) => format!("\"{v}\""),
+        Value::String(v) => format!("\"{}\"", json_escape(v)),
+        Value::Array(items) => {
+            let parts = items.iter().map(value_json).collect::<Vec<_>>().join(",");
+            format!("[{parts}]")
+        }
+        Value::Map(fields) => {
+            let mut keys = fields.keys().collect::<Vec<_>>();
+            keys.sort();
+            let parts = keys
+                .into_iter()
+                .map(|key| format!("\"{}\":{}", json_escape(key), value_json(&fields[key])))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{parts}}}")
+        }
+    }
+}
+
+/// JSON string contents for `value`, escaping quotes, backslashes, and control characters.
+fn json_escape(value: &str) -> String {
+    let quoted = serde_json::Value::String(value.to_string()).to_string();
+    quoted[1..quoted.len() - 1].to_string()
 }
 
 /// Resources that persist as tables, parents before children.
