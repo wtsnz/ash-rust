@@ -12,3 +12,4 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 5 | No DSL for an atomic expression update, Ash's `atomic_update(:view_count, expr(view_count + 1))`. | A `CustomChange` with an atomic plan (`changes.rs`). | open |
 | 6 | A generic action's `run`, written in the DSL, is generic over any data layer, so it can't open a transaction (`TransactionSupport`). Ash's generic actions take `transaction? true`. | The server supplies `.run(...)`, where the data layer is Postgres. | open |
 | 7 | No AshTypescript RPC: ash-typescript generates a GraphQL client, not AshTypescript's `rpc_action` methods over `/rpc/run`. | — | phase 2 of the benchmark plan |
+| 8 | A redacted field comes back null with no error. AshGraphql also reports it, as a `forbidden_field` error with the field's path, alongside the null. | `parity` counts AshGraphql's `forbidden_field` errors and leaves them out of the comparison. | open |

@@ -3220,10 +3220,16 @@ dependencies = [
  "ash-state-machine",
  "async-graphql",
  "axum",
+ "bytes",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 
