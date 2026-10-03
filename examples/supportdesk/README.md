@@ -85,9 +85,30 @@ An app started with `FIXTURE=fixture.json` and `DATABASE_URL` empties its tables
 the fixture through each resource's `seed` action, then serves. It reports how long that
 took on `GET /health/seeded`.
 
+## Running both
+
+```bash
+cargo run --release -p supportdesk --bin fixture -- --out /tmp/fixture.json
+
+# ash-rust, on :4701
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/supportdesk_rust \
+  FIXTURE=/tmp/fixture.json PORT=4701 cargo run --release -p supportdesk
+
+# Ash, on :4702
+cd examples/elixir/supportdesk && mix deps.get && MIX_ENV=prod mix release
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/supportdesk_elixir \
+  FIXTURE=/tmp/fixture.json PORT=4702 _build/prod/rel/supportdesk/bin/supportdesk start
+```
+
 ## Parity
 
-`cargo run --release -p supportdesk --bin parity -- --rust http://… --elixir http://…`
-sends both apps the benchmark's requests, each as admin, agent and viewer, and compares
-the answers: the same records, in the same order, with the same fields visible and the
-same errors.
+```bash
+cargo run --release -p supportdesk --bin parity -- \
+  --rust http://127.0.0.1:4701 --elixir http://127.0.0.1:4702 --fixture /tmp/fixture.json
+```
+
+sends both apps the same requests, each as an admin, an agent and a viewer, and compares
+the answers: reads (an inbox and its second page, a dashboard filtered and sorted by
+aggregates and calculations, nested relationships with limits), mutations and their
+failures, the JSON endpoints, and a subscription. Both must have just loaded the fixture.
+Where ash-rust still falls short of Ash, [GAPS.md](GAPS.md) says how.
