@@ -55,6 +55,8 @@ resource! {
 
         indexes {
             index by_requested: [requested_at];
+            // A cab's trips, newest first: a cab's latest trips page from here.
+            index by_cab_requested: [cab_id, requested_at];
             index active_by_cab: [cab_id], where: "status IN ('assigned', 'arrived', 'riding')";
         }
 

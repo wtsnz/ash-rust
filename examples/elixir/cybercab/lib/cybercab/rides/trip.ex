@@ -17,6 +17,9 @@ defmodule Cybercab.Rides.Trip do
     custom_indexes do
       index [:requested_at], name: "trips_by_requested"
 
+      # A cab's trips, newest first: a cab's latest trips page from here.
+      index [:cab_id, :requested_at], name: "trips_by_cab_requested"
+
       index [:cab_id],
         name: "trips_active_by_cab",
         where: "status IN ('assigned', 'arrived', 'riding')"
