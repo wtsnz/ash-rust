@@ -13,6 +13,7 @@ ash-graphql = { path = "../../crates/ash-graphql", features = ["axum"] }
 ash-postgres = { path = "../../crates/ash-postgres" }
 ash-pubsub = { path = "../../crates/ash-pubsub" }
 ash-state-machine = { path = "../../crates/ash-state-machine" }
+ash-typescript = { path = "../../crates/ash-typescript", default-features = false, features = ["axum"] }
 async-graphql = { version = "7", features = ["dynamic-schema"] }
 axum = "0.8"
 bytes = "1"

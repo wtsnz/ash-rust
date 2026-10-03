@@ -10,6 +10,9 @@
 //! comparisons that follow them still hold. AshGraphql reports each redacted field as a
 //! `forbidden_field` error as well as a null, which ash-graphql doesn't (see GAPS.md):
 //! those errors are counted, and left out of the comparison.
+//!
+//! The same goes for AshTypescript's RPC (`POST /rpc/run`): the data each action answers,
+//! and the types of the errors it fails with.
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -86,12 +89,23 @@ fn comparable(response: &Value, forbidden: &mut usize) -> Value {
     json!({ "data": strip_cursors(&response["data"]), "errors": errors })
 }
 
+/// What's compared of an RPC response: its data, but for keyset cursors, or the types of
+/// its errors.
+fn rpc_comparable(response: &Value) -> Value {
+    if response["success"] == true {
+        json!({ "data": strip_cursors(&response["data"]) })
+    } else {
+        let types: Vec<Value> = response["errors"].as_array().into_iter().flatten().map(|e| e["type"].clone()).collect();
+        json!({ "errors": types })
+    }
+}
+
 /// Keyset cursors encode the same position differently on each desk.
 fn strip_cursors(value: &Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.iter()
-                .filter(|(key, _)| !matches!(key.as_str(), "startKeyset" | "endKeyset"))
+                .filter(|(key, _)| !matches!(key.as_str(), "startKeyset" | "endKeyset" | "nextPage" | "previousPage"))
                 .map(|(key, value)| (key.clone(), strip_cursors(value)))
                 .collect(),
         ),
@@ -197,6 +211,20 @@ async fn main() -> ExitCode {
         .unwrap()
         .to_string();
 
+    let tickets: Vec<&Value> = fixture["tickets"].as_array().unwrap().iter().filter(|t| t["org"] == ORG).collect();
+    let ticket = |what: &str, pick: &dyn Fn(&Value) -> bool| {
+        tickets.iter().find(|t| t["id"] != assigned.as_str() && pick(t)).unwrap_or_else(|| panic!("{what}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let commented = |t: &Value| fixture["comments"].as_array().unwrap().iter().any(|c| c["ticket_id"] == t["id"]);
+    // An open ticket with comments, for RPC's reads and writes; a confidential new one,
+    // which a viewer can't read; and a new one anyone reads.
+    let open = ticket("an open ticket with comments", &|t| t["status"] == "open" && t["confidential"] == false && commented(t));
+    let secret = ticket("a confidential new ticket", &|t| t["status"] == "new" && t["confidential"] == true);
+    let plain = ticket("a new ticket", &|t| t["status"] == "new" && t["confidential"] == false);
+
     let desks = [Desk::new("rust", &rust_url), Desk::new("elixir", &elixir_url)];
     let mut report = Report { passed: 0, failed: Vec::new(), forbidden: 0 };
     let both = |query: &'static str, who: As, variables: Value| {
@@ -227,24 +255,67 @@ async fn main() -> ExitCode {
     println!("Writes:");
     let ticket_q = "query T($id: ID!) { getTicket(id: $id) { status viewCount version requesterEmail assignee { name } } }";
     let id = json!({ "id": assigned });
-    for (name, mutation, who) in [
-        ("view as agent", "mutation M($id: ID!) { viewTicket(id: $id) { result { viewCount version } errors { code } } }", &agent),
-        ("start as agent", "mutation M($id: ID!) { startTicket(id: $id) { result { status } errors { code } } }", &agent),
-        ("close an open ticket", "mutation M($id: ID!) { closeTicket(id: $id) { result { status } errors { code } } }", &agent),
-        ("resolve as viewer", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &viewer),
-        ("resolve as agent", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &agent),
+    let start = "mutation M($id: ID!) { startTicket(id: $id) { result { status } errors { code } } }";
+    // Whether to compare the errors' codes too: the desks code unexpected errors apart.
+    for (name, mutation, who, id, codes) in [
+        ("view as agent", "mutation M($id: ID!) { viewTicket(id: $id) { result { viewCount version } errors { code } } }", &agent, &id, false),
+        ("start as agent", start, &agent, &id, false),
+        ("close an open ticket", "mutation M($id: ID!) { closeTicket(id: $id) { result { status } errors { code } } }", &agent, &id, false),
+        ("resolve as viewer", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &viewer, &id, false),
+        ("resolve as agent", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &agent, &id, false),
+        // Found through the read, whose policies hide it from a viewer: not found, not forbidden.
+        ("start a ticket the viewer can't read", start, &viewer, &json!({ "id": secret }), true),
     ] {
         let (r, e) = both(mutation, who.clone(), id.clone()).await;
         let outcome = |v: &Value| {
             let result = v["data"].as_object().and_then(|d| d.values().next()).cloned().unwrap_or(Value::Null);
             let failed = !result["errors"].as_array().is_none_or(Vec::is_empty) || result["result"].is_null();
-            json!({ "result": if failed { Value::Null } else { result["result"].clone() }, "failed": failed })
+            let codes = if codes { result["errors"].clone() } else { Value::Null };
+            json!({ "result": if failed { Value::Null } else { result["result"].clone() }, "failed": failed, "codes": codes })
         };
         report.check(name, &outcome(&r), &outcome(&e));
     }
     let (r, e) = both(ticket_q, agent.clone(), id.clone()).await;
     let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
     report.check("the ticket after the writes, as its assignee", &r, &e);
+
+    println!("RPC:");
+    let nested_comments = json!({ "comments": { "fields": ["body", "internal"], "sort": "insertedAt,id", "filter": { "internal": { "eq": false } } } });
+    for (name, who, body) in [
+        ("list, filtered and sorted", &agent, json!({ "action": "list_tickets", "fields": ["id", "subject", "requesterEmail", "commentCount", "weight", { "assignee": ["name"] }], "sort": "-insertedAt,id", "filter": { "priority": { "greaterThanOrEqual": 4 } } })),
+        ("a keyset page, counted", &viewer, json!({ "action": "list_tickets", "fields": ["id", "subject"], "sort": "-insertedAt,id", "page": { "limit": 3, "count": true } })),
+        ("an offset page", &agent, json!({ "action": "list_tickets", "fields": ["id"], "sort": "-insertedAt,id", "page": { "limit": 2, "offset": 4 } })),
+        ("get, with relationships", &admin, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", "status", "requesterEmail", "weight", nested_comments, { "tags": { "fields": ["name"], "sort": "name" } }] })),
+        ("get, as a viewer", &viewer, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", { "comments": ["internal"] }] })),
+        ("get, missing", &agent, json!({ "action": "get_ticket", "getBy": { "id": "00000000-0000-0000-0000-000000000000" }, "fields": ["id"] })),
+        // As a viewer: AshTypescript loads relationships without the actor (see GAPS.md),
+        // so an agent's nested internal notes are hidden there.
+        ("nested limit and sort", &viewer, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "limit": 2, "sort": "-insertedAt,id" } }], "sort": "-insertedAt,id", "page": { "limit": 2 } })),
+        ("nested filter", &agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["internal"], "filter": { "internal": { "eq": false } } } }], "sort": "-insertedAt,id", "page": { "limit": 2, "offset": 0 } })),
+        ("agents", &agent, json!({ "action": "list_agents", "fields": ["name", "openAssigned"], "sort": "name", "filter": { "role": { "eq": "agent" } } })),
+        ("view", &agent, json!({ "action": "view_ticket", "identity": open, "fields": ["viewCount", "version"] })),
+        ("assign, selecting nothing", &agent, json!({ "action": "assign_ticket", "identity": open, "input": { "assigneeId": agent.id } })),
+        ("start, as a viewer who can't read it", &viewer, json!({ "action": "start_ticket", "identity": secret, "fields": ["status"] })),
+        ("start, as a viewer", &viewer, json!({ "action": "start_ticket", "identity": plain, "fields": ["status"] })),
+        ("start", &agent, json!({ "action": "start_ticket", "identity": secret, "fields": ["status"] })),
+        ("close an open ticket", &agent, json!({ "action": "close_ticket", "identity": open, "fields": ["status"] })),
+        ("open, invalid", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello there", "body": "b", "priority": 9, "requesterEmail": "a@b.c" }, "fields": ["id"] })),
+        ("open, with comments", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello there", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": [{ "body": "first" }] }, "fields": ["subject", "status", "requesterEmail", "commentCount", { "comments": ["body"] }, { "author": ["name"] }] })),
+        ("create a comment", &agent, json!({ "action": "create_comment", "input": { "ticketId": open, "body": "via rpc" }, "fields": ["body", "internal", "authorId"] })),
+        ("route", &agent, json!({ "action": "route_ticket", "input": { "subject": "Printer on fire", "body": "Smoke", "priority": 3, "requesterEmail": "pat@example.com" } })),
+        ("an unknown action", &agent, json!({ "action": "nope", "fields": ["id"] })),
+        ("an unknown field", &agent, json!({ "action": "list_tickets", "fields": ["id", "nope"] })),
+        ("a relationship without fields", &agent, json!({ "action": "list_tickets", "fields": ["id", "assignee"] })),
+    ] {
+        let r = desks[0].post("/rpc/run", who, body.clone()).await.1;
+        let e = desks[1].post("/rpc/run", who, body).await.1;
+        // A new record's id is each desk's own.
+        let comparable = |v: &Value| match &v["data"] {
+            Value::String(id) if uuid::Uuid::parse_str(id).is_ok() => json!({ "data": "an id" }),
+            _ => rpc_comparable(v),
+        };
+        report.check(name, &comparable(&r), &comparable(&e));
+    }
 
     println!("JSON endpoints:");
     let route = json!({

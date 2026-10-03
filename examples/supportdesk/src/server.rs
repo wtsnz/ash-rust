@@ -71,6 +71,8 @@ pub fn router<D: TransactionSupport + 'static>(
         Arc::new(SubscriptionHub::default()),
         Arc::new(Headers(base.clone())),
     );
+    let rpc_base = base.clone();
+    let rpc = ash_typescript::rpc::axum::rpc_router(rpc::<D>(), move |headers| request_context(&rpc_base, headers));
     let app = Arc::new(App { base, seeded_ms });
     let api = Router::new()
         .route("/api/route", post(route::<D>))
@@ -79,7 +81,7 @@ pub fn router<D: TransactionSupport + 'static>(
         .route("/health", get(|| async { "OK" }))
         .route("/health/seeded", get(seeded::<D>))
         .with_state(app);
-    Ok(graphql.merge(api))
+    Ok(graphql.merge(rpc).merge(api))
 }
 
 async fn seeded<D>(State(app): State<Arc<App<D>>>) -> Json<serde_json::Value> {
@@ -146,12 +148,35 @@ async fn route<D: TransactionSupport + 'static>(
     Json(input): Json<RouteInput>,
 ) -> Result<Json<serde_json::Value>, Failure> {
     let ctx = request_context(&app.base, &headers);
-    let id = Ticket::route(&ctx)
-        .subject(input.subject)
-        .body(input.body)
-        .priority(input.priority)
-        .requester_email(input.requester_email)
-        .comments(comment_fields(input.comments))
+    let id = route_ticket(
+        &ctx,
+        input.subject,
+        input.body,
+        input.priority,
+        input.requester_email,
+        comment_fields(input.comments),
+    )
+    .await?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// Runs the `route` generic action: in one transaction, opens a ticket with its comments,
+/// assigns it to the active agent or admin with the fewest open tickets, and records it.
+/// The JSON endpoint and the RPC action both run it.
+pub async fn route_ticket<D: TransactionSupport + 'static>(
+    ctx: &Context<D>,
+    subject: String,
+    body: String,
+    priority: i64,
+    requester_email: String,
+    comments: Vec<FieldMap>,
+) -> ash_core::Result<Uuid> {
+    Ticket::route(ctx)
+        .subject(subject)
+        .body(body)
+        .priority(priority)
+        .requester_email(requester_email)
+        .comments(comments)
         .run(|input| async move {
             let (subject, body, priority, email, comments) =
                 (input.subject, input.body, input.priority, input.requester_email, input.comments);
@@ -183,8 +208,53 @@ async fn route<D: TransactionSupport + 'static>(
                 })
                 .await
         })
-        .await?;
-    Ok(Json(json!({ "id": id })))
+        .await
+}
+
+/// The actions the desk serves over AshTypescript's RPC, as the Elixir desk's
+/// `typescript_rpc` block declares them.
+pub fn rpc<D: TransactionSupport + 'static>() -> ash_typescript::rpc::Rpc<D> {
+    use crate::{Comment, Tag};
+    ash_typescript::rpc::Rpc::new()
+        .action::<Ticket>("list_tickets", "read")
+        .get_by::<Ticket>("get_ticket", "read", &["id"])
+        .action::<Ticket>("open_ticket", "open")
+        .action::<Ticket>("assign_ticket", "assign")
+        .action::<Ticket>("start_ticket", "start")
+        .action::<Ticket>("hold_ticket", "hold")
+        .action::<Ticket>("resolve_ticket", "resolve")
+        .action::<Ticket>("reopen_ticket", "reopen")
+        .action::<Ticket>("close_ticket", "close")
+        .action::<Ticket>("view_ticket", "view")
+        .action::<Ticket>("edit_ticket", "edit")
+        .action::<Ticket>("destroy_ticket", "destroy")
+        .generic::<Ticket, _, _>("route_ticket", "route", |ctx, input| async move {
+            let text = |name: &str| match input.get(name) {
+                Some(Value::String(s)) => Ok(s.clone()),
+                _ => Err(Error::Missing { field: name.into() }),
+            };
+            let priority = match input.get("priority") {
+                Some(Value::Int(n)) => *n,
+                _ => return Err(Error::Missing { field: "priority".into() }),
+            };
+            let comments = match input.get("comments") {
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|item| match item {
+                        Value::Map(fields) => Some(fields.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let id = route_ticket(&ctx, text("subject")?, text("body")?, priority, text("requester_email")?, comments).await?;
+            Ok(Value::Uuid(id))
+        })
+        .action::<Comment>("list_comments", "read")
+        .action::<Comment>("create_comment", "create")
+        .action::<Agent>("list_agents", "read")
+        .action::<Tag>("list_tags", "read")
+        .action::<AuditEvent>("list_audit_events", "read")
 }
 
 #[derive(Deserialize)]

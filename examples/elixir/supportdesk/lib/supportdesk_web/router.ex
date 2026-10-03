@@ -90,6 +90,15 @@ defmodule SupportdeskWeb.Router do
     |> respond(conn, &%{version: &1.version})
   end
 
+  # AshTypescript's RPC: an action by name, as the request's actor and tenant.
+  post "/rpc/run" do
+    json(conn, 200, AshTypescript.Rpc.run_action(:supportdesk, conn, conn.body_params))
+  end
+
+  post "/rpc/validate" do
+    json(conn, 200, AshTypescript.Rpc.validate_action(:supportdesk, conn, conn.body_params))
+  end
+
   forward "/graphql",
     to: SupportdeskWeb.GraphqlPlug
 

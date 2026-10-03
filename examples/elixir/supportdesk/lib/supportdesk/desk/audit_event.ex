@@ -3,7 +3,7 @@ defmodule Supportdesk.Desk.AuditEvent do
   use Ash.Resource,
     domain: Supportdesk.Desk,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshGraphql.Resource]
+    extensions: [AshGraphql.Resource, AshTypescript.Resource]
 
   postgres do
     table "audit_events"
@@ -36,6 +36,10 @@ defmodule Supportdesk.Desk.AuditEvent do
       accept [:ticket_id, :kind]
       change set_attribute(:actor_id, actor(:id))
     end
+  end
+
+  typescript do
+    type_name "AuditEvent"
   end
 
   graphql do

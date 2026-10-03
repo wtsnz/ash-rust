@@ -3,7 +3,7 @@ defmodule Supportdesk.Desk.Ticket do
   use Ash.Resource,
     domain: Supportdesk.Desk,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshStateMachine, AshGraphql.Resource],
+    extensions: [AshStateMachine, AshGraphql.Resource, AshTypescript.Resource],
     authorizers: [Ash.Policy.Authorizer],
     notifiers: [Ash.Notifier.PubSub]
 
@@ -241,6 +241,10 @@ defmodule Supportdesk.Desk.Ticket do
 
   defp assign(ticket, agent, opts) do
     ticket |> Ash.Changeset.for_update(:assign, %{assignee_id: agent.id}, opts) |> Ash.update()
+  end
+
+  typescript do
+    type_name "Ticket"
   end
 
   graphql do
