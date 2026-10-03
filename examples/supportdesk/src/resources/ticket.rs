@@ -69,6 +69,7 @@ resource! {
         calculations {
             weight: i64 = priority * 10;
             subject_length: Option<i64> = string_length(subject);
+            scaled_priority(factor: i64): i64 = priority * arg(factor);
         }
 
         policies {
@@ -108,6 +109,7 @@ resource! {
         actions {
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
             }
 
             create open {

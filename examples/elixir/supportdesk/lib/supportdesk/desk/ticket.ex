@@ -92,6 +92,11 @@ defmodule Supportdesk.Desk.Ticket do
   calculations do
     calculate :weight, :integer, expr(priority * 10), public?: true
     calculate :subject_length, :integer, expr(string_length(subject)), public?: true
+
+    calculate :scaled_priority, :integer, expr(priority * ^arg(:factor)) do
+      public? true
+      argument :factor, :integer, allow_nil?: false
+    end
   end
 
   policies do
