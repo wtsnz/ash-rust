@@ -37,9 +37,9 @@
    - **Authorization & Policies**: Actor checks, field-level policies, and data redaction
 
 5. **[Performance Benchmarks](benchmarks.md)**
-   - Empirical results vs. canonical Ash Framework in Elixir
-   - Action, query, and aggregate performance breakdown
-   - Architectural root cause analysis (monomorphism, stack vs. heap allocation)
+   - End-to-end results vs. Ash in Elixir on the same app (supportdesk)
+   - In-memory framework-overhead micro-benchmarks (actions, queries, GraphQL)
+   - Why the gap is what it is, and where Ash is level
    - Continuous regression testing with Criterion (`cargo bench`)
 
 6. **[Relational Query Patterns & Edge Cases](query-patterns-and-edge-cases.md)**

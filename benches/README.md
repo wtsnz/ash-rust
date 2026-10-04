@@ -42,6 +42,8 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 
 ## Performance Comparison: Rust (`ash-rust`) vs. Elixir (`Ash 3.0`)
 
+These are micro-benchmarks of the framework's own overhead, mostly in memory. For what an application sees end to end (about 1.1–2.5x), see [docs/benchmarks.md](../docs/benchmarks.md).
+
 Measured 2026-09-18 on Apple M4 Max (16 cores, 128GB RAM). Elixir 1.20.1 / OTP 29.0.2 with the code server in `:embedded` mode after warmup. Rust 1.90.0 release. Ash 3.33.6 vs `ash-core` 0.1.0.
 
 ### Core Engine & Actions
