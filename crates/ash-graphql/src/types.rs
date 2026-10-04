@@ -70,6 +70,7 @@ pub fn ash_value_to_graphql_value(val: &AshValue) -> GqlValue {
         AshValue::Null => GqlValue::Null,
         AshValue::Bool(b) => GqlValue::Boolean(*b),
         AshValue::Int(n) => GqlValue::Number((*n).into()),
+        AshValue::Float(n) => async_graphql::Number::from_f64(*n).map_or(GqlValue::Null, GqlValue::Number),
         AshValue::String(s) => GqlValue::String(s.clone()),
         AshValue::Uuid(u) => GqlValue::String(u.to_string()),
         AshValue::Map(m) => {

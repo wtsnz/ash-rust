@@ -238,6 +238,9 @@ fn bind_compiled<'q>(
             Value::Int(i) => {
                 query = query.bind(*i);
             }
+            Value::Float(n) => {
+                query = query.bind(*n);
+            }
             Value::Uuid(u) => {
                 query = query.bind(u.to_string());
             }

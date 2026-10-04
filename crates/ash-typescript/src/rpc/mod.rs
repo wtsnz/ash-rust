@@ -1048,6 +1048,7 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
         (Some(AttrType::Float), Value::String(text)) => text.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or_else(|| Json::String(text.clone()), Json::Number),
         (_, Value::Bool(b)) => Json::Bool(*b),
         (_, Value::Int(i)) => Json::from(*i),
+        (_, Value::Float(n)) => serde_json::Number::from_f64(*n).map_or(Json::Null, Json::Number),
         (_, Value::String(s)) => Json::String(s.clone()),
         (_, Value::Uuid(u)) => Json::String(u.to_string()),
         (_, Value::Map(_) | Value::Array(_)) => value.to_plain_json(),

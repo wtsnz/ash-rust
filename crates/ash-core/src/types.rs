@@ -314,6 +314,7 @@ impl AshType for f64 {
         match value {
             Value::String(s) => Float::parse(s).map(|float| float.value()),
             Value::Int(n) => Ok(*n as f64),
+            Value::Float(n) => Ok(*n),
             _ => Err(Error::Invalid("expected float".into())),
         }
     }
@@ -691,6 +692,8 @@ impl AshType for Float {
     fn from_value(value: &Value) -> Result<Self> {
         match value {
             Value::String(s) => Self::parse(s),
+            Value::Float(n) => Self::parse(&n.to_string()),
+            Value::Int(n) => Self::parse(&n.to_string()),
             _ => Err(Error::Invalid("expected float".into())),
         }
     }

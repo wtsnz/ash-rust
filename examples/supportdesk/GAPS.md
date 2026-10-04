@@ -30,7 +30,7 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 23 | No action metadata (`metadata :name, :type`, `show_metadata`, `metadataFields`). | — | open |
 | 24 | No `field_names`/`argument_names` mappings, nor `typed_query`, AshTypescript's Phoenix channels or client hooks. | — | open (most belong with the client generator, 15) |
 | 25 | RPC can't select fields within an embedded resource, typed map or union: they come back whole. | — | open |
-| 26 | A float inside a map comes back as text: `Value` has no float. | — | open |
+| 26 | A float inside a map comes back as text: `Value` has no float. | — | fixed: `Value::Float` |
 | 27 | Primary keys are UUIDs only. | — | open |
 | 28 | ash-rust's SQLite runs no update as one statement: it reads the record first, so concurrent updates of it can lose one another's changes. AshSqlite runs atomic updates. | — | open |
 
