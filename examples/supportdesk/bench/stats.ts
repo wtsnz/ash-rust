@@ -4,7 +4,7 @@ export type Summary = {
   count: number;
   errors: number;
   seconds: number;
-  /** Completed requests a second. */
+  /** Operations that succeeded and finished within the window, a second. */
   rate: number;
   p50: number | null;
   p90: number | null;
@@ -21,7 +21,9 @@ const quantile = (sorted: Float64Array, q: number): number =>
 /** Milliseconds, rounded to what the clock can tell apart. */
 const ms = (value: number): number => Math.round(value * 100) / 100;
 
-export const summarize = (latencies: Float64Array, errors: number, seconds: number): Summary => {
+/** `latencies` of the operations started or due within the window; `completed`, those
+ *  that finished within it, which give its throughput. */
+export const summarize = (latencies: Float64Array, errors: number, seconds: number, completed: number): Summary => {
   const sorted = latencies.slice().sort();
   const n = sorted.length;
   const at = (q: number, min: number) => (n >= min ? ms(quantile(sorted, q)) : null);
@@ -29,7 +31,7 @@ export const summarize = (latencies: Float64Array, errors: number, seconds: numb
     count: n,
     errors,
     seconds,
-    rate: Math.round((n / seconds) * 10) / 10,
+    rate: Math.round((completed / seconds) * 10) / 10,
     p50: at(0.5, 1),
     p90: at(0.9, 100),
     p95: at(0.95, 1_000),

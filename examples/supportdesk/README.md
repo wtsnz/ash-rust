@@ -161,8 +161,11 @@ nothing else. It needs Node 22.18 or later and `psql`, and nothing to install.
   copy.
 - **Fair order.** Reps alternate which desk goes first. Reads run 3 reps per desk, writes
   2.
-- **What's reported:** throughput and latency (p95 from 1,000 samples, p99 from 10,000),
-  errors, the server's CPU time per 1,000 requests and its peak memory, and how busy the
+- **What's reported,** in operations (a read is one request; a write scenario's step may
+  be several): throughput, the operations that succeeded and finished within the window;
+  latency, every operation started or due within it, however late it finished (p95 from
+  1,000 samples, p99 from 10,000); failures, with their latency kept apart; the server's
+  CPU time over the window per 1,000 operations and its peak memory; and how busy the
   driver was. Each run writes `bench/runs/<time>/`: a manifest (revisions, binary
   hashes, machine, Postgres, options), every window in `results.jsonl`, the desks' logs,
   and `report.md`, which gives each scenario's medians and ratio and flags a difference

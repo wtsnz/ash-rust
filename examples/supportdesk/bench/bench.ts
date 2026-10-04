@@ -105,6 +105,8 @@ const runJob = (thread: Worker, job: Job) =>
 
 type Window = {
   summary: Summary;
+  /** The median time a failed operation took, where any failed. */
+  failureP50: number | null;
   succeeded: number;
   unfinished: number;
   late: number;
@@ -148,18 +150,22 @@ const measure = async (scenario: Scenario, transport: Transport, desk: Desk, see
   const driver = process.cpuUsage(driverBefore);
   await sampling;
   const latencies = Float64Array.from(results.flatMap((r) => Array.from(r.latencies)));
+  const failures = Float64Array.from(results.flatMap((r) => Array.from(r.failures)));
   const errors = results.reduce((t, r) => t + r.errors, 0);
-  const summary = summarize(latencies, errors, options.window / 1000);
+  const completed = results.reduce((t, r) => t + r.completed, 0);
+  const summary = summarize(latencies, errors, options.window / 1000, completed);
+  // CPU over the window, per operation finished in it.
   const cpuSeconds = before && after ? Math.round((after.cpu - before.cpu) * 100) / 100 : null;
   return {
     summary,
+    failureP50: summarize(failures, 0, 1, 0).p50,
     succeeded: results.reduce((t, r) => t + r.succeeded, 0),
     unfinished: results.reduce((t, r) => t + r.unfinished, 0),
     late: results.reduce((t, r) => t + r.late, 0),
     firstErrors: results.flatMap((r) => r.firstErrors).slice(0, 3),
     server: {
       cpuSeconds,
-      cpuPerKRequests: cpuSeconds !== null && summary.count ? Math.round((cpuSeconds / summary.count) * 1000 * 1000) / 1000 : null,
+      cpuPerKRequests: cpuSeconds !== null && completed ? Math.round((cpuSeconds / completed) * 1000 * 1000) / 1000 : null,
       maxRssMiB: maxRss ? Math.round(maxRss / 1024) : null,
     },
     driverCores: Math.round(((driver.user + driver.system) / 1e6 / ((until - start) / 1000)) * 100) / 100,
@@ -167,7 +173,9 @@ const measure = async (scenario: Scenario, transport: Transport, desk: Desk, see
 };
 const emptyResult = async (): Promise<JobResult> => ({
   latencies: new Float64Array(),
+  failures: new Float64Array(),
   errors: 0,
+  completed: 0,
   succeeded: 0,
   unfinished: 0,
   late: 0,
@@ -321,7 +329,8 @@ const subscriptions = async (desk: Desk) => {
   const org = w.orgs[0];
   const staff = [org.admin, ...org.agents];
   const sentAt = new Map<string, number>();
-  const heardAt = new Map<string, number[]>();
+  /** Each update's arrivals: at which subscriber, when. */
+  const heardAt = new Map<string, Array<[number, number]>>();
   let measuring = false;
   const sockets = await Promise.all(
     Array.from({ length: subscribers }, async (_, i) => {
@@ -340,7 +349,7 @@ const subscriptions = async (desk: Desk) => {
             const updated = message.payload?.data?.ticketUpdated?.updated;
             if (updated) {
               const key = `${updated.id}:${updated.viewCount}`;
-              heardAt.set(key, [...(heardAt.get(key) ?? []), performance.timeOrigin + performance.now()]);
+              heardAt.set(key, [...(heardAt.get(key) ?? []), [i, performance.timeOrigin + performance.now()]]);
             }
           }
         },
@@ -380,19 +389,30 @@ const subscriptions = async (desk: Desk) => {
   await sleep(2000);
   measuring = false;
   for (const socket of sockets) socket.close();
+  // Every acknowledged update at every subscriber, once.
   const latencies: number[] = [];
-  let heard = 0;
+  let missing = 0;
+  let duplicates = 0;
   for (const [key, sent] of sentAt) {
-    for (const at of heardAt.get(key) ?? []) {
-      latencies.push(at - sent);
-      heard += 1;
+    const arrivals = heardAt.get(key) ?? [];
+    for (let subscriber = 0; subscriber < subscribers; subscriber++) {
+      const at = arrivals.filter(([who]) => who === subscriber);
+      if (at.length === 0) missing += 1;
+      else latencies.push(at[0][1] - sent);
+      duplicates += Math.max(0, at.length - 1);
     }
   }
-  const expected = acknowledged * subscribers;
-  const summary = summarize(Float64Array.from(latencies), errors, options.window / 1000);
+  const unexpected = [...heardAt.keys()].filter((key) => !sentAt.has(key)).length;
+  const problems = [
+    missing ? `${missing} of ${acknowledged * subscribers} deliveries missing` : "",
+    duplicates ? `${duplicates} duplicated` : "",
+    unexpected ? `${unexpected} updates no view made` : "",
+  ].filter(Boolean);
+  const summary = summarize(Float64Array.from(latencies), errors, options.window / 1000, latencies.length);
   return {
     window: {
       summary,
+      failureP50: null,
       succeeded: acknowledged,
       unfinished: 0,
       late: 0,
@@ -400,7 +420,7 @@ const subscriptions = async (desk: Desk) => {
       server: { cpuSeconds: null, cpuPerKRequests: null, maxRssMiB: null },
       driverCores: 0,
     } as Window,
-    check: heard === expected ? "every update delivered to every subscriber" : `DELIVERED ${heard} of ${expected}`,
+    check: problems.length ? `DELIVERY: ${problems.join(", ")}` : "every update delivered once to every subscriber",
   };
 };
 
@@ -413,9 +433,9 @@ const report = () => {
     `ash-rust at \`${manifest.git.rev.slice(0, 10)}\`${manifest.git.dirty ? " (uncommitted changes)" : ""} against Ash (Elixir), on ${manifest.machine.cpu} (${manifest.machine.cores} cores), ${manifest.postgres.split(" on ")[0]}.`,
     `Reads: closed loop, ${options.clients} clients, ${options.readReps} reps of ${options.window / 1000} s per desk. Writes: open loop at fixed rates, ${options.writeReps} reps per desk, each on a fresh copy of the seeded data.`,
     "",
-    "Each figure is the median over reps. **Ratio** is how many times better ash-rust does (throughput for reads, p50 latency for writes): above 1, ash-rust is ahead. *Within noise* means within 5% or the spread between reps.",
+    "Each figure is the median over reps, counted in operations: one request for a read, a scenario's whole step for a write (a `workflow` is three requests, a `bulk` 300 records). Throughput counts the operations that succeeded and finished within the window; latency, every operation started (reads) or due (writes) within it, however late it finished; failures are counted, and their latency kept apart. Server CPU is over the window, per operation finished in it. **Ratio** is how many times better ash-rust does (throughput for reads, p50 latency for writes): above 1, ash-rust is ahead. *Within noise* means within 5% or the spread between reps.",
     "",
-    "| Scenario | Over | Rust | Elixir | Ratio | Rust p50 / p99 ms | Elixir p50 / p99 ms | Server CPU s per 1k requests (Rust / Elixir) | Checks |",
+    "| Scenario | Over | Rust | Elixir | Ratio | Rust p50 / p99 ms | Elixir p50 / p99 ms | Server CPU s per 1k operations (Rust / Elixir) | Checks |",
     "|---|---|---:|---:|---:|---|---|---|---|",
   ];
   const keys = [...new Set(results.map((r) => `${r.tier}|${r.scenario}|${r.transport}`))];

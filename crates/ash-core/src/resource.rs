@@ -139,17 +139,15 @@ impl IndexDef {
     }
 
     /// The columns the index covers on a resource with `multitenancy`: its keys, led by
-    /// the tenant attribute under attribute multitenancy unless it spans every tenant,
-    /// as AshPostgres scopes custom indexes.
+    /// the tenant attribute under attribute multitenancy unless it spans every tenant, as
+    /// AshPostgres scopes custom indexes (the tenant first, wherever it was declared).
     pub fn columns(&self, multitenancy: Option<MultitenancyDef>) -> Vec<&'static str> {
-        let mut columns = self.keys.to_vec();
-        if let Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) = multitenancy
-            && !self.all_tenants
-            && !columns.contains(&tenant)
-        {
-            columns.insert(0, tenant);
+        match multitenancy {
+            Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) if !self.all_tenants => {
+                std::iter::once(tenant).chain(self.keys.iter().copied().filter(|key| *key != tenant)).collect()
+            }
+            _ => self.keys.to_vec(),
         }
-        columns
     }
 
     pub const fn with_predicate(mut self, predicate: &'static str) -> Self {

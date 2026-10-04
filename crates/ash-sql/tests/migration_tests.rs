@@ -482,6 +482,7 @@ fn indexes_lead_with_the_tenant_attribute() {
         IndexDef::new("by_username", &["username"]),
         IndexDef::new("by_username_anywhere", &["username"]).all_tenants(),
         IndexDef::new("by_org_username", &["org", "username"]),
+        IndexDef::new("by_username_org", &["username", "org"]),
     ];
     let mut resource = RES_V1;
     resource.attributes = ATTRS;
@@ -491,7 +492,7 @@ fn indexes_lead_with_the_tenant_attribute() {
     let snapshot = TableSnapshot::from_resource(&resource, &PostgresDialect);
     let columns: Vec<Vec<&str>> =
         snapshot.indexes.iter().map(|index| index.columns.iter().map(String::as_str).collect()).collect();
-    assert_eq!(columns, [vec!["org", "username"], vec!["username"], vec!["org", "username"]]);
+    assert_eq!(columns, [vec!["org", "username"], vec!["username"], vec!["org", "username"], vec!["org", "username"]]);
     // Installing without migrations creates them alike.
     let ddl = ash_sql::QueryCompiler::new(&PostgresDialect).compile_create_indexes(&resource).unwrap();
     assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");

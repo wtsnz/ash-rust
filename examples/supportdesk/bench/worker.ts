@@ -28,8 +28,13 @@ export type Job = {
 };
 
 export type JobResult = {
+  /** How long each operation started (closed loop) or due (open loop) within the window
+   *  took, however late it finished: those that succeeded, and those that failed. */
   latencies: Float64Array;
+  failures: Float64Array;
   errors: number;
+  /** Operations that succeeded and finished within the window: its throughput. */
+  completed: number;
   /** Every request that succeeded, warming up or measured. */
   succeeded: number;
   /** Requests unanswered when the window closed and the drain ran out. */
@@ -42,22 +47,27 @@ export type JobResult = {
 const run = async (job: Job): Promise<JobResult> => {
   const op = scenarios.find((s) => s.name === job.scenario)!.ops[job.transport]!;
   const latencies: number[] = [];
+  const failures: number[] = [];
   let errors = 0;
+  let completed = 0;
   let succeeded = 0;
   let late = 0;
   let pending = 0;
   const firstErrors: unknown[] = [];
-  const settle = (started: number, measured: boolean, outcome: { ok: boolean; body: unknown } | Error) => {
+  const now = () => performance.timeOrigin + performance.now();
+  const settle = (started: number, outcome: { ok: boolean; body: unknown } | Error) => {
     const ok = !(outcome instanceof Error) && outcome.ok;
+    const finished = now();
     if (ok) succeeded += 1;
-    if (!measured) return;
-    if (ok) latencies.push(performance.timeOrigin + performance.now() - started);
+    if (ok && finished >= job.from && finished <= job.until) completed += 1;
+    if (started < job.from || started >= job.until) return;
+    if (ok) latencies.push(finished - started);
     else {
       errors += 1;
+      failures.push(finished - started);
       if (firstErrors.length < 3) firstErrors.push(outcome instanceof Error ? String(outcome) : (outcome as any).body);
     }
   };
-  const now = () => performance.timeOrigin + performance.now();
 
   if (job.clients) {
     await Promise.all(
@@ -65,11 +75,10 @@ const run = async (job: Job): Promise<JobResult> => {
         const r = rng(job.seed ^ (index * 7919 + client * 104729));
         while (now() < job.until) {
           const started = now();
-          const measured = started >= job.from;
           try {
-            settle(started, measured, await op(job.base, r, w));
+            settle(started, await op(job.base, r, w));
           } catch (error) {
-            settle(started, measured, error as Error);
+            settle(started, error as Error);
           }
         }
       }),
@@ -86,17 +95,26 @@ const run = async (job: Job): Promise<JobResult> => {
       const r = rng(job.seed ^ (index * 7919 + i * 104729));
       pending += 1;
       op(job.base, r, w)
-        .then((outcome) => settle(due, due >= job.from, outcome))
-        .catch((error) => settle(due, due >= job.from, error))
+        .then((outcome) => settle(due, outcome))
+        .catch((error) => settle(due, error))
         .finally(() => (pending -= 1));
     }
     const drain = now() + 15_000;
     while (pending > 0 && now() < drain) await sleep(5);
   }
-  return { latencies: Float64Array.from(latencies), errors, succeeded, unfinished: pending, late, firstErrors };
+  return {
+    latencies: Float64Array.from(latencies),
+    failures: Float64Array.from(failures),
+    errors,
+    completed,
+    succeeded,
+    unfinished: pending,
+    late,
+    firstErrors,
+  };
 };
 
 parentPort!.on("message", async (job: Job) => {
   const result = await run(job);
-  parentPort!.postMessage(result, [result.latencies.buffer as ArrayBuffer]);
+  parentPort!.postMessage(result, [result.latencies.buffer as ArrayBuffer, result.failures.buffer as ArrayBuffer]);
 });
