@@ -9,12 +9,12 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 2 | ash-graphql ran every request and subscription with the schema's context: no actor or tenant per request or per socket, and shared subscriptions would have been shared across tenants. AshGraphql takes them from the connection. | — | fixed in this branch: `graphql_router_with` and `RequestData` |
 | 3 | Field policies refused writes, which Ash's don't: they govern reads only. | — | fixed in this branch |
 | 4 | A typed record can't hold a redacted field that isn't `Option`: redaction yields null, so `R::from_fields` fails on a non-nullable attribute under a field policy. Ash marks the field forbidden whatever its type. | `requester_email` is nullable in both apps, and `open` requires it. | open |
-| 5 | No DSL for an atomic expression update, Ash's `atomic_update(:view_count, expr(view_count + 1))`. | A `CustomChange` with an atomic plan (`changes.rs`). | open |
+| 5 | No DSL for an atomic expression update, Ash's `atomic_update(:view_count, expr(view_count + 1))`. | — | fixed: `change atomic_update(field, expr)` |
 | 6 | A generic action's `run`, written in the DSL, is generic over any data layer, so it can't open a transaction (`TransactionSupport`). Ash's generic actions take `transaction? true`. | The server supplies `.run(...)`, where the data layer is Postgres. | open |
 | 7 | No AshTypescript RPC: ash-typescript generates a GraphQL client, not AshTypescript's `rpc_action` methods over `/rpc/run`. | — | served in this branch: `ash_typescript::rpc`, wire-compatible with `AshTypescript.Rpc.run_action`. Generating the typed client is still open (15) |
 | 8 | A redacted field comes back null with no error. AshGraphql also reports it, as a `forbidden_field` error with the field's path, alongside the null. | `parity` counts AshGraphql's `forbidden_field` errors and leaves them out of the comparison. | open |
 | 9 | An action's or calculation's argument was declared as text unless it was a UUID, text, an integer or a boolean: a list or a map argument refused the list or map a client sent. | — | fixed in this branch |
-| 10 | An argument takes no default, as Ash's `default: []` does. | `comments` is optional in the Rust desk, where the Elixir one defaults it to `[]`. | open |
+| 10 | An argument takes no default, as Ash's `default: []` does. | — | fixed: `argument name: T [default: expr];` |
 | 11 | Validation stops at the first invalid field. Ash reports every one. | — | fixed in this branch: every failure reported (`Error::Multiple`) |
 | 12 | An update or destroy by id ignored the read action's policies. AshGraphql and AshTypescript find the record through the read action as the actor (`Ash.bulk_update` over its query), so one the actor can't read is not found, not forbidden. | — | fixed in this branch, for GraphQL and RPC alike |
 | 13 | A list attribute or argument (`AttrType::Array`) has no element type, so GraphQL serves a list of maps as `[String]`, where AshGraphql serves `{:array, :map}` as `[Json]`. | — | open (also: no `has` filter operator on lists) |
@@ -32,6 +32,7 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 25 | RPC can't select fields within an embedded resource, typed map or union: they come back whole. | — | open |
 | 26 | A float inside a map comes back as text: `Value` has no float. | — | open |
 | 27 | Primary keys are UUIDs only. | — | open |
+| 28 | ash-rust's SQLite runs no update as one statement: it reads the record first, so concurrent updates of it can lose one another's changes. AshSqlite runs atomic updates. | — | open |
 
 ## What the twin found in Ash's packages
 

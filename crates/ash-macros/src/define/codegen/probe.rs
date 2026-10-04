@@ -202,7 +202,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         __ash_assert_assignable(&__ash_record.#field, &#argument);
                     });
                 }
-                ChangeSpec::RelateActor { field } => {
+                ChangeSpec::RelateActor { field } | ChangeSpec::AtomicUpdate { field, .. } => {
                     field_probes.push(quote_spanned! { field.span() =>
                         let _ = &__ash_record.#field;
                     });

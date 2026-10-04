@@ -4,7 +4,6 @@
 //! on Elixir Ash, to benchmark real-world Ash features against each other. See the README
 //! for the contract both apps implement.
 
-pub mod changes;
 pub mod fixture;
 pub mod resources;
 pub mod server;

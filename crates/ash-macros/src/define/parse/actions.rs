@@ -608,6 +608,14 @@ pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> 
                 "expected `manage_relationship(rel)` or `manage_relationship(rel, type: create)`",
             ))
         }
+        "atomic_update" => {
+            if call.args.len() == 2 {
+                let field = expr_to_ident(&call.args[0])?;
+                let expr = super::calculations::parse_calc_expr(&call.args[1])?;
+                return Ok(ChangeSpec::AtomicUpdate { field, expr });
+            }
+            Err(Error::new_spanned(call, "expected `atomic_update(field, expression)`"))
+        }
         "custom" => {
             if call.args.len() == 1 {
                 let expr = call.args[0].clone();
@@ -653,6 +661,7 @@ pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> 
                 "relate_actor",
                 "set_from_arg",
                 "manage_relationship",
+                "atomic_update",
                 "before_action",
                 "after_action",
                 "after_transaction",

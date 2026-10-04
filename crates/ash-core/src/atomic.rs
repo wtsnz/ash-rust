@@ -27,6 +27,14 @@ pub enum AtomicExpr {
     /// The record's attribute, as stored when the statement runs.
     Field(String),
     Add(Box<AtomicExpr>, Box<AtomicExpr>),
+    Sub(Box<AtomicExpr>, Box<AtomicExpr>),
+    Mul(Box<AtomicExpr>, Box<AtomicExpr>),
+    /// Division, integer division for integers, as SQL's.
+    Div(Box<AtomicExpr>, Box<AtomicExpr>),
+    Lower(Box<AtomicExpr>),
+    Upper(Box<AtomicExpr>),
+    /// Text joined end to end; nil if any part is.
+    Concat(Vec<AtomicExpr>),
     /// The length of text, in characters.
     StringLength(Box<AtomicExpr>),
     /// Text without leading and trailing whitespace.
@@ -100,10 +108,35 @@ impl AtomicExpr {
         match self {
             Self::Value(value) => value.clone(),
             Self::Field(name) => row.get(name).cloned().unwrap_or(Value::Null),
-            Self::Add(a, b) => match (eval(a), eval(b)) {
-                (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
+            Self::Add(a, b) | Self::Sub(a, b) | Self::Mul(a, b) | Self::Div(a, b) => match (eval(a), eval(b)) {
+                (Value::Int(x), Value::Int(y)) => match self {
+                    Self::Add(..) => Value::Int(x + y),
+                    Self::Sub(..) => Value::Int(x - y),
+                    Self::Mul(..) => Value::Int(x * y),
+                    _ if y == 0 => Value::Null,
+                    _ => Value::Int(x / y),
+                },
                 _ => Value::Null,
             },
+            Self::Lower(e) => match eval(e) {
+                Value::String(s) => Value::String(s.to_lowercase()),
+                _ => Value::Null,
+            },
+            Self::Upper(e) => match eval(e) {
+                Value::String(s) => Value::String(s.to_uppercase()),
+                _ => Value::Null,
+            },
+            Self::Concat(parts) => {
+                let mut out = String::new();
+                for part in parts {
+                    match eval(part) {
+                        Value::Null => return Value::Null,
+                        Value::String(s) => out.push_str(&s),
+                        other => out.push_str(&other.to_string()),
+                    }
+                }
+                Value::String(out)
+            }
             Self::StringLength(e) => match eval(e) {
                 Value::String(s) => Value::Int(s.chars().count() as i64),
                 _ => Value::Null,

@@ -220,6 +220,10 @@ pub fn apply_changes_with_context(
                 c.apply(&mut ctx)?;
             }
             Change::ManageRelationship { .. } => {}
+            Change::AtomicUpdate { field, expr } => {
+                let value = crate::expr::eval_with_args(expr, fields, arguments)?;
+                fields.insert((*field).to_string(), value);
+            }
             Change::Func(f) => {
                 let mut ctx = crate::action::ChangeContext {
                     fields,

@@ -1431,7 +1431,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             AtomicExpr::Field(name) => resource.attribute(name).map(|attr| attr.ty),
             AtomicExpr::StringLength(_) => Some(AttrType::Integer),
             AtomicExpr::Trim(inner) => Self::atomic_type(resource, inner),
-            AtomicExpr::Add(a, b) => Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b)),
+            AtomicExpr::Add(a, b) | AtomicExpr::Sub(a, b) | AtomicExpr::Mul(a, b) | AtomicExpr::Div(a, b) => {
+                Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b))
+            }
+            AtomicExpr::Lower(_) | AtomicExpr::Upper(_) | AtomicExpr::Concat(_) => Some(AttrType::String),
             AtomicExpr::Coalesce(items) => items.iter().find_map(|e| Self::atomic_type(resource, e)),
             AtomicExpr::If { then, otherwise, .. } => {
                 Self::atomic_type(resource, then).or_else(|| Self::atomic_type(resource, otherwise))
@@ -1462,9 +1465,30 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 }
                 ident(self.dialect, name)?
             }
-            AtomicExpr::Add(a, b) => {
+            AtomicExpr::Add(a, b) | AtomicExpr::Sub(a, b) | AtomicExpr::Mul(a, b) | AtomicExpr::Div(a, b) => {
+                let op = match expr {
+                    AtomicExpr::Add(..) => "+",
+                    AtomicExpr::Sub(..) => "-",
+                    AtomicExpr::Mul(..) => "*",
+                    _ => "/",
+                };
                 let ty = typed(a, b).or(ty);
-                format!("({} + {})", self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?)
+                let (left, right) = (self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?);
+                if op == "/" {
+                    // Nil, not an error, dividing by zero, as memory reads it.
+                    format!("({left} / NULLIF({right}, 0))")
+                } else {
+                    format!("({left} {op} {right})")
+                }
+            }
+            AtomicExpr::Lower(e) => format!("lower({})", self.compile_atomic_expr(resource, e, Some(AttrType::String))?),
+            AtomicExpr::Upper(e) => format!("upper({})", self.compile_atomic_expr(resource, e, Some(AttrType::String))?),
+            AtomicExpr::Concat(parts) => {
+                let parts = parts
+                    .iter()
+                    .map(|part| self.compile_atomic_expr(resource, part, Some(AttrType::String)))
+                    .collect::<Result<Vec<_>>>()?;
+                format!("({})", parts.join(" || "))
             }
             AtomicExpr::StringLength(e) => format!("char_length({})", self.compile_atomic_expr(resource, e, None)?),
             AtomicExpr::Trim(e) => format!("btrim({})", self.compile_atomic_expr(resource, e, None)?),

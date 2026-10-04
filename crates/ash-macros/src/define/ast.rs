@@ -355,6 +355,11 @@ pub enum ChangeSpec {
         relationship: Ident,
         rel_type: Ident,
     },
+    /// `atomic_update(field, expr)`: the field set to an expression over the record.
+    AtomicUpdate {
+        field: Ident,
+        expr: crate::define::ast::CalculationExprSpec,
+    },
     BeforeAction(Expr),
     AfterAction(Expr),
     AfterTransaction(Expr),

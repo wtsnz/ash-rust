@@ -6,7 +6,6 @@ use super::agent::Agent;
 use super::comment::Comment;
 use super::tag::Tag;
 use super::ticket_tag::TicketTag;
-use crate::changes::{COUNT_REOPEN, COUNT_VIEW};
 
 #[state_machine]
 resource! {
@@ -134,13 +133,13 @@ resource! {
             update resolve {}
 
             update reopen {
-                change custom(&COUNT_REOPEN);
+                change atomic_update(reopen_count, reopen_count + 1);
             }
 
             update close {}
 
             update view {
-                change custom(&COUNT_VIEW);
+                change atomic_update(view_count, view_count + 1);
             }
 
             update edit {

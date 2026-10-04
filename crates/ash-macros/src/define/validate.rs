@@ -947,6 +947,7 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
                 ChangeSpec::Set { value, .. } | ChangeSpec::SetNew { field: _, value } => {
                     mentions_ident(quote!(#value), &arg.name)
                 }
+                ChangeSpec::AtomicUpdate { expr, .. } => calc_mentions_arg(expr, &arg.name),
                 _ => false,
             });
             let used_in_validate = action.validations.iter().any(|val| match val {
@@ -2142,5 +2143,22 @@ mod tests {
             });
             assert_eq!(notes.contains("is never used"), expect_warning, "{label}: {notes}");
         }
+    }
+}
+
+/// Whether `expr` reads the argument `name`: `arg(name)`.
+fn calc_mentions_arg(expr: &CalculationExprSpec, name: &Ident) -> bool {
+    use CalculationExprSpec as E;
+    match expr {
+        E::Arg(arg) => arg == name,
+        E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Div(a, b) | E::Eq(a, b) | E::Ne(a, b) | E::Gt(a, b) | E::Gte(a, b) | E::Lt(a, b) | E::Lte(a, b) => {
+            calc_mentions_arg(a, name) || calc_mentions_arg(b, name)
+        }
+        E::Concat(parts) | E::Coalesce(parts) => parts.iter().any(|part| calc_mentions_arg(part, name)),
+        E::Lower(e) | E::Upper(e) | E::Length(e) => calc_mentions_arg(e, name),
+        E::IfElse { cond, then_expr, else_expr } => {
+            calc_mentions_arg(cond, name) || calc_mentions_arg(then_expr, name) || calc_mentions_arg(else_expr, name)
+        }
+        E::StringLength(_) | E::Field(_) | E::LitInt(_) | E::LitString(_) | E::LitBool(_) | E::Null | E::Custom(_) => false,
     }
 }

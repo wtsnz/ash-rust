@@ -580,6 +580,13 @@ pub enum Change {
         relationship: &'static str,
         rel_type: ManagedRelType,
     },
+    /// Sets `field` to `expr` over the record as stored, as Ash's
+    /// `atomic_update(:field, expr(...))`: in the update's statement where it can run as
+    /// one, or computed from the record read first.
+    AtomicUpdate {
+        field: &'static str,
+        expr: &'static crate::expr::Expr,
+    },
     BeforeAction(BeforeActionFn),
     AfterAction(AfterActionFn),
     AfterTransaction(AfterTransactionFn),
@@ -645,6 +652,7 @@ impl std::fmt::Debug for Change {
                 .field("relationship", relationship)
                 .field("rel_type", rel_type)
                 .finish(),
+            Self::AtomicUpdate { field, .. } => f.debug_struct("AtomicUpdate").field("field", field).finish(),
             Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
             Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
             Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),

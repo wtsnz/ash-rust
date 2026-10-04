@@ -195,6 +195,10 @@ pub(crate) fn plan_update(
                     after_transactions.push(Box::new(*hook) as DynamicAfterTransactionHook);
                 }
             }
+            Change::AtomicUpdate { field, expr } => match atomic_from_expr(expr, arguments) {
+                Some(expr) => update.set(*field, expr),
+                None => return Ok(Err(format!("its update of `{field}` can't run in the data layer"))),
+            },
             Change::BeforeAction(_) => return Ok(Err("it has a before_action hook".into())),
             Change::ManageRelationship { .. } => return Ok(Err("it manages relationships".into())),
             Change::Func(_) => return Ok(Err("it has a change function".into())),
@@ -380,4 +384,72 @@ fn builtin_conditions(resource: &ResourceDef, validation: &Validation, value: At
         }
         Validation::StringLength { .. } | Validation::Custom(_) | Validation::Func(_) => Vec::new(),
     }
+}
+
+/// `expr`, a resource expression, as an atomic one over the record as stored, its
+/// arguments' values known: `None` where it calls Rust, which a statement can't.
+pub(crate) fn atomic_from_expr(expr: &crate::expr::Expr, arguments: &FieldMap) -> Option<AtomicExpr> {
+    use crate::expr::Expr;
+    let of = |e: &Expr| atomic_from_expr(e, arguments);
+    let both = |a: &Expr, b: &Expr| Some((Box::new(of(a)?), Box::new(of(b)?)));
+    Some(match *expr {
+        Expr::Field(name) => AtomicExpr::field(name),
+        Expr::Arg(name) => AtomicExpr::Value(arguments.get(name).cloned().unwrap_or(Value::Null)),
+        Expr::LitInt(n) => AtomicExpr::value(n),
+        Expr::LitString(s) => AtomicExpr::value(s.to_string()),
+        Expr::LitBool(b) => AtomicExpr::value(b),
+        Expr::Null => AtomicExpr::Value(Value::Null),
+        Expr::StringLength(name) => AtomicExpr::StringLength(Box::new(AtomicExpr::field(name))),
+        Expr::Length(e) => AtomicExpr::StringLength(Box::new(of(e)?)),
+        Expr::Lower(e) => AtomicExpr::Lower(Box::new(of(e)?)),
+        Expr::Upper(e) => AtomicExpr::Upper(Box::new(of(e)?)),
+        Expr::Concat(parts) => AtomicExpr::Concat(parts.iter().map(|e| of(e)).collect::<Option<_>>()?),
+        Expr::Coalesce(parts) => AtomicExpr::Coalesce(parts.iter().map(|e| of(e)).collect::<Option<_>>()?),
+        Expr::Add(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Add(a, b)
+        }
+        Expr::Sub(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Sub(a, b)
+        }
+        Expr::Mul(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Mul(a, b)
+        }
+        Expr::Div(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Div(a, b)
+        }
+        Expr::Eq(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Eq(a, b)
+        }
+        Expr::Ne(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Not(Box::new(AtomicExpr::Eq(a, b)))
+        }
+        Expr::Gt(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Gt(a, b)
+        }
+        Expr::Lt(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Lt(a, b)
+        }
+        Expr::Gte(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Not(Box::new(AtomicExpr::Lt(a, b)))
+        }
+        Expr::Lte(a, b) => {
+            let (a, b) = both(a, b)?;
+            AtomicExpr::Not(Box::new(AtomicExpr::Gt(a, b)))
+        }
+        Expr::IfElse { cond, then_expr, else_expr } => AtomicExpr::If {
+            condition: Box::new(of(cond)?),
+            then: Box::new(of(then_expr)?),
+            otherwise: Box::new(of(else_expr)?),
+        },
+        Expr::Custom(_) => return None,
+    })
 }
