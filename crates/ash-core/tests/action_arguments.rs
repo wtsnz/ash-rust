@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, resource};
+use ash_core::{AttrType, Context, Error, FieldMap, Resource, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -63,10 +63,11 @@ async fn test_action_arguments_validation_failure() {
         .await
         .expect_err("should fail string_length validation on argument");
 
+    let text = err.message();
     match err {
-        Error::Validation { field, message } => {
+        Error::Validation { field, .. } => {
             assert_eq!(field, "reason");
-            assert!(message.contains("at least 5 characters"));
+            assert_eq!(text, "must have length of at least 5");
         }
         other => panic!("expected Error::Validation, got {other:?}"),
     }
@@ -91,4 +92,113 @@ async fn test_action_arguments_on_update() {
         .expect("should approve");
 
     assert_eq!(approved.status, "approved");
+}
+
+// The action only declares its arguments: nothing uses them.
+#[allow(deprecated)]
+mod shipments {
+    use ash_core::{FieldMap, resource};
+    use uuid::Uuid;
+
+resource! {
+Shipment {
+    table "shipments";
+
+attributes {
+    id: Uuid [pk];
+    weight: i64;
+}
+
+calculations {
+    scaled(factor: f64, label: Option<String>): i64 = weight;
+}
+
+actions {
+    create pack {
+        accept [weight];
+        argument items: Vec<FieldMap>;
+        argument options: Option<FieldMap>;
+        argument rate: f64;
+        argument fragile: bool;
+    }
+}
+}}
+}
+use shipments::Shipment;
+
+// An argument has the type it's declared with, as an attribute does: a list, a map, a
+// float. Each used to be declared as text whatever its type, so a client that sent a list
+// or a map, through any API that casts by the argument's type, was refused.
+#[test]
+fn test_arguments_take_their_declared_types() {
+    let pack = Shipment::DEF.action("pack").unwrap();
+    let ty = |name: &str| pack.arguments.iter().find(|arg| arg.name == name).map(|arg| (arg.ty, arg.allow_nil));
+    assert_eq!(ty("items"), Some((AttrType::Array { of: &AttrType::Map }, false)));
+    assert_eq!(ty("options"), Some((AttrType::Map, true)));
+    assert_eq!(ty("rate"), Some((AttrType::Float, false)));
+    assert_eq!(ty("fragile"), Some((AttrType::Boolean, false)));
+
+    let scaled = Shipment::DEF.calculation("scaled").unwrap();
+    let types: Vec<_> = scaled.arguments.iter().map(|arg| (arg.name, arg.ty, arg.allow_nil)).collect();
+    assert_eq!(types, [("factor", AttrType::Float, false), ("label", AttrType::String, true)]);
+}
+
+#[tokio::test]
+async fn test_list_argument_reaches_the_action() {
+    let ctx = Context::new(Memory::new());
+    let mut item = FieldMap::new();
+    item.insert("sku".into(), Value::String("A-1".into()));
+    let shipment = Shipment::pack(&ctx).weight(3).items(vec![item]).rate(1.5).fragile(true).await;
+    assert!(shipment.is_ok(), "{shipment:?}");
+}
+
+mod defaults {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Memo {
+            table "memos";
+
+            attributes {
+                id: Uuid [pk];
+                body: String;
+                label: String;
+            }
+
+            actions {
+                create write {
+                    primary;
+                    accept [body];
+                    argument label: String [default: "general".to_string()];
+                    change set_from_arg(label, label);
+                }
+
+                generic echo {
+                    argument word: String [default: "hello".to_string()];
+                    returns String;
+                    run |input| async move { Ok(input.word) };
+                }
+            }
+        }
+    }
+}
+use defaults::Memo;
+
+// An argument the input doesn't give takes its default, as Ash's do, in a typed action,
+// a dynamic one, and a generic one.
+#[tokio::test]
+async fn arguments_take_their_defaults() {
+    let ctx = Context::new(Memory::new());
+    let typed = Memo::write(&ctx).body("hi").await.unwrap();
+    assert_eq!(typed.label, "general");
+    let given = Memo::write(&ctx).body("hi").label("work").await.unwrap();
+    assert_eq!(given.label, "work");
+
+    let mut input = FieldMap::new();
+    input.insert("body".into(), Value::String("hi".into()));
+    let dynamic = ash_core::create_dynamic(&ctx, &Memo::DEF, Memo::DEF.action("write").unwrap(), input).await.unwrap();
+    assert_eq!(dynamic.get("label"), Some(&Value::String("general".into())));
+
+    assert_eq!(Memo::echo(&ctx).call().await.unwrap(), "hello");
 }

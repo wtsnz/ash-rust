@@ -10,7 +10,6 @@ use ash_core::{
     AggregateKind, AttrType, CompiledQuery, DataLayer, Error, FieldMap, Filter, ResourceDef,
     Result, SchemaSupport, TransactionSupport, Value,
 };
-use uuid::Uuid;
 
 /// The store, shared by clones. Reads run side by side and writes one at a time, as an
 /// ETS table with `read_concurrency` does for the ETS data layer.
@@ -26,7 +25,7 @@ impl Memory {
         }
     }
 
-    pub fn from_tables(tables: HashMap<String, HashMap<Uuid, FieldMap>>) -> Self {
+    pub fn from_tables(tables: HashMap<String, HashMap<Value, FieldMap>>) -> Self {
         Self {
             tables: Arc::new(RwLock::new(tables)),
         }
@@ -52,8 +51,8 @@ impl Memory {
 /// alone neither pays to scan for a clash nor is refused over one already stored.
 fn check_identities(
     resource: &ResourceDef,
-    table: &HashMap<Uuid, FieldMap>,
-    id: Uuid,
+    table: &HashMap<Value, FieldMap>,
+    id: &Value,
     fields: &FieldMap,
     before: Option<&FieldMap>,
 ) -> Result<()> {
@@ -63,16 +62,18 @@ fn check_identities(
         if ident.predicate.is_some() {
             continue;
         }
+        // Unique within the tenant, unless the identity spans every tenant.
+        let columns = ident.columns(resource.multitenancy);
         if let Some(before) = before
-            && ident.keys.iter().all(|k| fields.get(*k) == before.get(*k))
+            && columns.iter().all(|k| fields.get(*k) == before.get(*k))
         {
             continue;
         }
         for (existing_id, row) in table.iter() {
-            if *existing_id == id {
+            if existing_id == id {
                 continue;
             }
-            let matches_all = ident.keys.iter().all(|k| {
+            let matches_all = columns.iter().all(|k| {
                 let new_val = fields.get(*k).filter(|v| !v.is_null());
                 let existing_val = row.get(*k).filter(|v| !v.is_null());
                 match (new_val, existing_val) {
@@ -97,6 +98,36 @@ fn check_identities(
     Ok(())
 }
 
+/// Whether `row` is the tenant's, as Ash filters every update and destroy to the tenant's
+/// rows under attribute multitenancy: another tenant's record isn't there to write.
+fn in_tenant(resource: &ResourceDef, tenant: Option<&str>, row: &FieldMap) -> bool {
+    resource.tenant_filter(tenant).is_none_or(|filter| filter.matches_on(resource, row))
+}
+
+/// The key of a new record: the one it was given, or for an integer key the data layer
+/// assigns, the next after the highest in the table, set on the record too.
+fn assign_key(
+    resource: &ResourceDef,
+    table: &HashMap<Value, FieldMap>,
+    id: Value,
+    fields: &mut FieldMap,
+) -> Result<Value> {
+    if !id.is_null() {
+        return Ok(id);
+    }
+    let pk = resource.primary_key().ok_or_else(|| Error::Invalid(format!("{} has no primary key", resource.name)))?;
+    if pk.ty != AttrType::Integer {
+        return Err(Error::Missing { field: pk.name.to_string() });
+    }
+    let next = table.keys().filter_map(|key| match key {
+        Value::Int(n) => Some(*n),
+        _ => None,
+    });
+    let id = Value::Int(next.max().unwrap_or(0) + 1);
+    fields.insert(pk.name.to_string(), id.clone());
+    Ok(id)
+}
+
 /// The table holding `resource`'s rows for `tenant`. A context-tenant resource keeps a
 /// table per tenant, as Ash's ETS data layer does, and its rows with no tenant (a global
 /// resource's) in the shared table; every other resource has one table.
@@ -114,19 +145,21 @@ impl DataLayer for Memory {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
+            let mut fields = fields;
             let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
+            let id = assign_key(resource, table, id, &mut fields)?;
             if table.contains_key(&id) {
                 return Err(Error::DataLayer(format!(
                     "duplicate id {id} in {}",
                     resource.name
                 )));
             }
-            check_identities(resource, table, id, &fields, None)?;
+            check_identities(resource, table, &id, &fields, None)?;
             table.insert(id, fields.clone());
             Ok(fields)
         })())
@@ -136,13 +169,13 @@ impl DataLayer for Memory {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
-            let mut current_row = table.get(&id).ok_or(Error::NotFound)?.clone();
+            let mut current_row = table.get(&id).filter(|row| in_tenant(resource, tenant, row)).ok_or(Error::NotFound)?.clone();
 
             if let Some(v_attr) = resource.optimistic_lock_attribute()
                 && let Some(Value::Int(new_v)) = fields.get(v_attr)
@@ -165,7 +198,7 @@ impl DataLayer for Memory {
 
             current_row.extend(fields);
             let before = table.get(&id).ok_or(Error::NotFound)?;
-            check_identities(resource, table, id, &current_row, Some(before))?;
+            check_identities(resource, table, &id, &current_row, Some(before))?;
             table.insert(id, current_row.clone());
             Ok(current_row)
         })())
@@ -175,7 +208,7 @@ impl DataLayer for Memory {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
@@ -191,10 +224,11 @@ impl DataLayer for Memory {
             }
             let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
+            let columns = identity.columns(resource.multitenancy);
             let existing_entry = table
                 .iter()
                 .find(|(_, row)| {
-                    identity.keys.iter().all(|k| {
+                    columns.iter().all(|k| {
                         let new_val = fields.get(*k).filter(|v| !v.is_null());
                         let existing_val = row.get(*k).filter(|v| !v.is_null());
                         match (new_val, existing_val) {
@@ -204,7 +238,7 @@ impl DataLayer for Memory {
                         }
                     })
                 })
-                .map(|(existing_id, row)| (*existing_id, row.clone()));
+                .map(|(existing_id, row)| (existing_id.clone(), row.clone()));
 
             if let Some((existing_id, mut existing_row)) = existing_entry {
                 let to_update: Vec<(String, Value)> = if update_fields.is_empty() {
@@ -224,7 +258,9 @@ impl DataLayer for Memory {
                 table.insert(existing_id, existing_row.clone());
                 Ok(existing_row)
             } else {
-                check_identities(resource, table, id, &fields, None)?;
+                let mut fields = fields;
+                let id = assign_key(resource, table, id, &mut fields)?;
+                check_identities(resource, table, &id, &fields, None)?;
                 table.insert(id, fields.clone());
                 Ok(fields)
             }
@@ -235,12 +271,15 @@ impl DataLayer for Memory {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
     ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
-            table.remove(&id).ok_or(Error::NotFound)?;
+            if !table.get(&id).is_some_and(|row| in_tenant(resource, tenant, row)) {
+                return Err(Error::NotFound);
+            }
+            table.remove(&id);
             Ok(())
         })())
     }
@@ -249,20 +288,21 @@ impl DataLayer for Memory {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
             let mut results = Vec::with_capacity(rows.len());
-            for (id, fields) in rows {
+            for (id, mut fields) in rows {
+                let id = assign_key(resource, table, id, &mut fields)?;
                 if table.contains_key(&id) {
                     return Err(Error::DataLayer(format!(
                         "duplicate id {id} in {}",
                         resource.name
                     )));
                 }
-                check_identities(resource, table, id, &fields, None)?;
+                check_identities(resource, table, &id, &fields, None)?;
                 table.insert(id, fields.clone());
                 results.push(fields);
             }
@@ -274,13 +314,15 @@ impl DataLayer for Memory {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        ids: &[Uuid],
+        ids: &[Value],
     ) -> impl Future<Output = Result<()>> + Send {
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             for id in ids {
-                table.remove(id);
+                if table.get(id).is_some_and(|row| in_tenant(resource, tenant, row)) {
+                    table.remove(id);
+                }
             }
             Ok(())
         })())
@@ -335,12 +377,12 @@ impl DataLayer for Memory {
 
             let table = tables.entry(key).or_default();
             for row in &updated {
-                let id = row.get(pk).and_then(Value::as_uuid).ok_or(Error::NotFound)?;
-                check_identities(resource, table, id, row, table.get(&id))?;
+                let id = row.get(pk).filter(|id| !id.is_null()).ok_or(Error::NotFound)?;
+                check_identities(resource, table, id, row, table.get(id))?;
             }
             for row in &updated {
-                if let Some(id) = row.get(pk).and_then(Value::as_uuid) {
-                    table.insert(id, row.clone());
+                if let Some(id) = row.get(pk).filter(|id| !id.is_null()) {
+                    table.insert(id.clone(), row.clone());
                 }
             }
             Ok(updated)
@@ -400,7 +442,7 @@ impl DataLayer for Memory {
             };
             let mut removed = Vec::with_capacity(destroyed.len());
             for row in destroyed {
-                if let Some(stored) = row.get(pk).and_then(Value::as_uuid).and_then(|id| table.remove(&id)) {
+                if let Some(stored) = row.get(pk).and_then(|id| table.remove(id)) {
                     removed.push(stored);
                 }
             }
@@ -437,19 +479,30 @@ impl DataLayer for Memory {
             let by_sort: Vec<&str> = query.sort.iter().map(|sort| sort.field.as_str()).collect();
             compute(&tables, tenant, resource, query, &mut rows, &by_sort, &mut computed)?;
             if !query.sort.is_empty() {
+                // A guarded sort reads its field as null where the guard doesn't hold.
+                let sort_value = |row: &FieldMap, sort: &ash_core::Sort| match &sort.guard {
+                    Some(guard) if !row_matches_filter(&tables, tenant, resource, guard, row) => Value::Null,
+                    _ => row.get(&sort.field).cloned().unwrap_or(Value::Null),
+                };
                 rows.sort_by(|left, right| {
                     let mut order = Ordering::Equal;
                     for sort in &query.sort {
-                        let left_value = left.get(&sort.field).cloned().unwrap_or(Value::Null);
-                        let right_value = right.get(&sort.field).cloned().unwrap_or(Value::Null);
-                        order = compare_typed(
-                            field_type(resource, &sort.field),
-                            &left_value,
-                            &right_value,
-                        );
-                        if sort.descending {
-                            order = order.reverse();
-                        }
+                        let left_value = sort_value(left, sort);
+                        let right_value = sort_value(right, sort);
+                        // Nulls sort where the sort places them: by default last
+                        // ascending and first descending, as Ash and Postgres order them.
+                        let nulls_first = sort.nulls_first();
+                        order = match (left_value.is_null(), right_value.is_null()) {
+                            (true, true) => Ordering::Equal,
+                            (true, false) if nulls_first => Ordering::Less,
+                            (true, false) => Ordering::Greater,
+                            (false, true) if nulls_first => Ordering::Greater,
+                            (false, true) => Ordering::Less,
+                            (false, false) => {
+                                let order = compare_typed(field_type(resource, &sort.field), &left_value, &right_value);
+                                if sort.descending { order.reverse() } else { order }
+                            }
+                        };
                         if order != Ordering::Equal {
                             break;
                         }
@@ -495,7 +548,7 @@ fn is_ci_string(resource: &ResourceDef, field: &str) -> bool {
     field_type(resource, field) == Some(AttrType::CiString)
 }
 
-type Tables = HashMap<String, HashMap<Uuid, FieldMap>>;
+type Tables = HashMap<String, HashMap<Value, FieldMap>>;
 
 /// `tenant` is the query's: rows reached through a relationship are limited to it, as
 /// the rows of the query itself are.
@@ -624,6 +677,10 @@ fn eval_filter(
             in_list(present(field), values, |got, value| same_value(ty, got, value))
         }
         Filter::IsNil(field) => Some(present(field).is_none()),
+        Filter::Has(field, value) => present(field).map(|got| match got {
+            Value::Array(items) => items.contains(value),
+            _ => false,
+        }),
         Filter::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
         Filter::StartsWith(field, needle) => {
             text(field, needle, |text, needle| text.starts_with(needle))
@@ -1039,7 +1096,7 @@ impl TransactionSupport for Memory {
                     for (id, comm_row) in committed_table {
                         let snap_row = snap_table.and_then(|t| t.get(id));
                         if snap_row != Some(comm_row) {
-                            live_table.insert(*id, comm_row.clone());
+                            live_table.insert(id.clone(), comm_row.clone());
                         }
                     }
                 }

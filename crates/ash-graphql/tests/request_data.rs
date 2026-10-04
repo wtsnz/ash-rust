@@ -33,7 +33,7 @@ resource! {
 
         actions {
             create create { primary; accept [label]; }
-            read read { primary; }
+            read read { primary; pagination keyset: true, countable: true, required: false; }
             update relabel { primary; accept [label]; }
         }
     }

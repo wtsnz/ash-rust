@@ -3,7 +3,6 @@ use ash_core::{
     AggregateDef, AggregateFilter, AggregateKind, AttrType, CalculationDef, CompiledQuery, Error,
     Expr, FieldMap, Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
-use uuid::Uuid;
 
 use crate::dialect::{AggregateStrategy, SqlDialect, TextMatch};
 use crate::param::SqlParam;
@@ -144,6 +143,19 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn with_tenant(mut self, tenant: Option<&str>) -> Self {
         self.tenant = tenant.map(str::to_string);
         self
+    }
+
+    /// ` AND <tenant attribute> = <tenant>` for a write to a resource with attribute
+    /// multitenancy, as Ash filters every update and destroy to the tenant's rows: a
+    /// record from another tenant isn't there to write. `qualifier` names the table.
+    fn tenant_condition(&mut self, resource: &ResourceDef, qualifier: Option<&str>) -> Result<String> {
+        let Some(ash_core::Filter::Eq(attribute, tenant)) = resource.tenant_filter(self.tenant.as_deref()) else {
+            return Ok(String::new());
+        };
+        let column = ident(self.dialect, &attribute)?;
+        let column = qualifier.map_or(column.clone(), |table| format!("{table}.{column}"));
+        let p = self.push_param(tenant);
+        Ok(format!(" AND {column} = {p}"))
     }
 
     /// `resource`'s table as this statement reaches it: in the tenant's schema for a
@@ -516,6 +528,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NULL"))
             }
+            Filter::Has(field, val) => {
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
+                let p = self.push_param(self.dialect.has_param(val.clone()));
+                Ok(self.dialect.render_has(&op, &p))
+            }
             Filter::Contains(field, needle) => {
                 self.compile_text_match(resource, field, TextMatch::Contains, needle, scope_alias)
             }
@@ -849,15 +866,37 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
     }
 
+    /// Where `sort` puts nulls: where it says, or as Ash does by default, which the
+    /// dialect may need to spell out.
+    fn null_order(&self, sort: &Sort) -> &'static str {
+        match sort.nulls_first {
+            Some(true) => " NULLS FIRST",
+            Some(false) => " NULLS LAST",
+            None => self.dialect.null_order(sort.descending),
+        }
+    }
+
+    /// What `sort` orders by: its field, or null where its guard doesn't hold.
+    fn sort_operand(&mut self, resource: &ResourceDef, sort: &Sort) -> Result<String> {
+        let col = self.compile_operand(resource, &sort.field)?;
+        match &sort.guard {
+            None => Ok(col),
+            Some(guard) => {
+                let condition = self.compile_filter(resource, guard)?;
+                Ok(format!("CASE WHEN {condition} THEN {col} END"))
+            }
+        }
+    }
+
     pub fn compile_sort(&mut self, resource: &ResourceDef, sorts: &[Sort]) -> Result<String> {
         if sorts.is_empty() {
             return Ok(String::new());
         }
         let mut clauses = Vec::new();
         for sort in sorts {
-            let col = self.compile_operand(resource, &sort.field)?;
+            let col = self.sort_operand(resource, sort)?;
             let dir = if sort.descending { "DESC" } else { "ASC" };
-            clauses.push(format!("{col} {dir}"));
+            clauses.push(format!("{col} {dir}{}", self.null_order(sort)));
         }
         Ok(format!(" ORDER BY {}", clauses.join(", ")))
     }
@@ -871,7 +910,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if sorts.is_empty() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.push_param(Value::Uuid(cursor.id));
+            let p = self.bind_field(resource, pk, cursor.id.clone());
             return Ok(format!("{pk_col} > {p}"));
         }
 
@@ -879,14 +918,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         for (i, sort) in sorts.iter().enumerate() {
             let mut prefix_match = Vec::new();
             for prev in sorts.iter().take(i) {
-                let prev_col = self.compile_operand(resource, &prev.field)?;
+                let prev_col = self.sort_operand(resource, prev)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
 
-            let col = self.compile_operand(resource, &sort.field)?;
+            let col = self.sort_operand(resource, sort)?;
             let op = if sort.descending { "<" } else { ">" };
             if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &sort.field) {
                 let p = self.bind_field(resource, &sort.field, val.clone());
@@ -903,14 +942,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if !sorts.iter().any(|s| s.field == pk) {
             let mut prefix_match = Vec::new();
             for prev in sorts {
-                let prev_col = self.compile_operand(resource, &prev.field)?;
+                let prev_col = self.sort_operand(resource, prev)?;
                 if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
                     let p = self.bind_field(resource, &prev.field, val.clone());
                     prefix_match.push(format!("{prev_col} = {p}"));
                 }
             }
             let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.push_param(Value::Uuid(cursor.id));
+            let p = self.bind_field(resource, pk, cursor.id.clone());
             let mut branch = format!("{pk_col} > {p}");
             if !prefix_match.is_empty() {
                 branch = format!("{} AND {branch}", prefix_match.join(" AND "));
@@ -921,7 +960,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if conds.is_empty() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.push_param(Value::Uuid(cursor.id));
+            let p = self.bind_field(resource, pk, cursor.id.clone());
             Ok(format!("{pk_col} > {p}"))
         } else {
             Ok(format!("({})", conds.join(" OR ")))
@@ -1052,6 +1091,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 all_sorts.push(Sort {
                     field: pk.to_string(),
                     descending: false,
+                    ..Default::default()
                 });
             }
         }
@@ -1121,14 +1161,15 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if cursor.is_some() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             if !sorts.iter().any(|s| s.field == pk) {
-                sorts.push(Sort { field: pk.to_string(), descending: false });
+                sorts.push(Sort { field: pk.to_string(), descending: false, ..Default::default() });
             }
         }
         let mut order = Vec::new();
         for (i, sort) in sorts.iter().enumerate() {
             let alias = ident(self.dialect, &format!("__ash_sort_{i}"))?;
-            items.push(format!("{} AS {alias}", self.compile_operand(resource, &sort.field)?));
-            order.push((alias, if sort.descending { "DESC" } else { "ASC" }));
+            items.push(format!("{} AS {alias}", self.sort_operand(resource, sort)?));
+            let dir = if sort.descending { "DESC" } else { "ASC" };
+            order.push((alias, format!("{dir}{}", self.null_order(sort))));
         }
 
         let mut inner = format!("SELECT {} FROM {}", items.join(", "), self.table(resource)?);
@@ -1407,7 +1448,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             AtomicExpr::Field(name) => resource.attribute(name).map(|attr| attr.ty),
             AtomicExpr::StringLength(_) => Some(AttrType::Integer),
             AtomicExpr::Trim(inner) => Self::atomic_type(resource, inner),
-            AtomicExpr::Add(a, b) => Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b)),
+            AtomicExpr::Add(a, b) | AtomicExpr::Sub(a, b) | AtomicExpr::Mul(a, b) | AtomicExpr::Div(a, b) => {
+                Self::atomic_type(resource, a).or_else(|| Self::atomic_type(resource, b))
+            }
+            AtomicExpr::Lower(_) | AtomicExpr::Upper(_) | AtomicExpr::Concat(_) => Some(AttrType::String),
             AtomicExpr::Coalesce(items) => items.iter().find_map(|e| Self::atomic_type(resource, e)),
             AtomicExpr::If { then, otherwise, .. } => {
                 Self::atomic_type(resource, then).or_else(|| Self::atomic_type(resource, otherwise))
@@ -1438,9 +1482,30 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 }
                 ident(self.dialect, name)?
             }
-            AtomicExpr::Add(a, b) => {
+            AtomicExpr::Add(a, b) | AtomicExpr::Sub(a, b) | AtomicExpr::Mul(a, b) | AtomicExpr::Div(a, b) => {
+                let op = match expr {
+                    AtomicExpr::Add(..) => "+",
+                    AtomicExpr::Sub(..) => "-",
+                    AtomicExpr::Mul(..) => "*",
+                    _ => "/",
+                };
                 let ty = typed(a, b).or(ty);
-                format!("({} + {})", self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?)
+                let (left, right) = (self.compile_atomic_expr(resource, a, ty)?, self.compile_atomic_expr(resource, b, ty)?);
+                if op == "/" {
+                    // Nil, not an error, dividing by zero, as memory reads it.
+                    format!("({left} / NULLIF({right}, 0))")
+                } else {
+                    format!("({left} {op} {right})")
+                }
+            }
+            AtomicExpr::Lower(e) => format!("lower({})", self.compile_atomic_expr(resource, e, Some(AttrType::String))?),
+            AtomicExpr::Upper(e) => format!("upper({})", self.compile_atomic_expr(resource, e, Some(AttrType::String))?),
+            AtomicExpr::Concat(parts) => {
+                let parts = parts
+                    .iter()
+                    .map(|part| self.compile_atomic_expr(resource, part, Some(AttrType::String)))
+                    .collect::<Result<Vec<_>>>()?;
+                format!("({})", parts.join(" || "))
             }
             AtomicExpr::StringLength(e) => format!("char_length({})", self.compile_atomic_expr(resource, e, None)?),
             AtomicExpr::Trim(e) => format!("btrim({})", self.compile_atomic_expr(resource, e, None)?),
@@ -1551,7 +1616,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if !update.conditions.is_empty() {
             sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
         }
-        sql.push_str(" RETURNING __ash_t.*");
+        sql.push_str(" RETURNING ");
+        sql.push_str(self.dialect.returning_updated());
         if let Some(err) = self.invalid_param.take() {
             return Err(err);
         }
@@ -1641,7 +1707,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let p = self.push_param(Value::Int(limit as i64));
             subquery.push_str(&format!(" LIMIT {p}"));
         }
-        subquery.push_str(" FOR UPDATE");
+        subquery.push_str(self.dialect.lock_clause());
         Ok(subquery)
     }
 
@@ -1656,16 +1722,22 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         for attr in resource.attributes {
             if let Some(val) = fields.get(attr.name) {
+                // A key the database assigns is left out, for it to assign.
+                if attr.primary_key && val.is_null() {
+                    continue;
+                }
                 col_names.push(ident(self.dialect, attr.name)?);
                 placeholders.push(self.bind_typed(attr.ty, val.clone()));
             }
         }
 
-        let mut sql = format!(
-            "INSERT INTO {table} ({}) VALUES ({})",
-            col_names.join(", "),
-            placeholders.join(", ")
-        );
+        // Nothing given, as for a record of only a key the database assigns: every
+        // column its default.
+        let mut sql = if col_names.is_empty() {
+            format!("INSERT INTO {table} DEFAULT VALUES")
+        } else {
+            format!("INSERT INTO {table} ({}) VALUES ({})", col_names.join(", "), placeholders.join(", "))
+        };
 
         if self.dialect.supports_returning() {
             sql.push_str(" RETURNING *");
@@ -1677,16 +1749,24 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_bulk_insert(
         &mut self,
         resource: &ResourceDef,
-        rows: &[(Uuid, FieldMap)],
+        rows: &[(Value, FieldMap)],
     ) -> Result<CompiledSql> {
         if rows.is_empty() {
             return Ok(CompiledSql::new(String::new(), Vec::new()));
         }
         let table = self.table(resource)?;
 
+        // A key the database assigns is left out, for it to assign.
+        let assigned = rows.iter().all(|(id, fields)| {
+            id.is_null()
+                && resource.primary_key().is_none_or(|pk| fields.get(pk.name).is_none_or(Value::is_null))
+        });
         let mut col_names = Vec::new();
         let mut attrs = Vec::new();
         for attr in resource.attributes {
+            if attr.primary_key && assigned {
+                continue;
+            }
             col_names.push(ident(self.dialect, attr.name)?);
             attrs.push(attr);
         }
@@ -1696,10 +1776,15 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let mut placeholders = Vec::with_capacity(attrs.len());
             for attr in &attrs {
                 let val = if attr.primary_key {
-                    fields.get(attr.name).cloned().unwrap_or(Value::Uuid(*id))
+                    fields.get(attr.name).filter(|v| !v.is_null()).cloned().unwrap_or_else(|| id.clone())
                 } else {
                     fields.get(attr.name).cloned().unwrap_or(Value::Null)
                 };
+                // A row whose key the database assigns, among rows given theirs.
+                if attr.assigned_on_insert() && val.is_null() {
+                    placeholders.push(self.dialect.assigned_key_value().to_string());
+                    continue;
+                }
                 placeholders.push(self.bind_typed(attr.ty, val));
             }
             row_placeholders.push(format!("({})", placeholders.join(", ")));
@@ -1721,7 +1806,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_update(
         &mut self,
         resource: &ResourceDef,
-        id: Uuid,
+        id: Value,
         fields: &FieldMap,
     ) -> Result<CompiledSql> {
         let pk = resource
@@ -1747,12 +1832,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         let pk_col = ident(self.dialect, pk.name)?;
-        let pk_param = self.push_param(Value::Uuid(id));
+        let pk_param = self.bind_typed(pk.ty, id);
 
         let mut sql = format!(
             "UPDATE {table} SET {} WHERE {pk_col} = {pk_param}",
             set_clauses.join(", ")
         );
+        sql.push_str(&self.tenant_condition(resource, None)?);
 
         if let Some(v_attr) = resource.optimistic_lock_attribute()
             && let Some(Value::Int(new_v)) = fields.get(v_attr)
@@ -1780,7 +1866,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         &mut self,
         resource: &ResourceDef,
         columns: &[&str],
-        rows: &[(Uuid, &FieldMap)],
+        rows: &[(Value, &FieldMap)],
     ) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()
@@ -1811,7 +1897,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
         let mut values = Vec::with_capacity(rows.len());
         for (id, fields) in rows {
-            let mut tuple = vec![self.bind_typed(pk.ty, Value::Uuid(*id))];
+            let mut tuple = vec![self.bind_typed(pk.ty, id.clone())];
             for (name, ty, partial) in &types {
                 if *partial {
                     tuple.push(if fields.contains_key(*name) { "TRUE" } else { "FALSE" }.to_string());
@@ -1821,8 +1907,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             values.push(format!("({})", tuple.join(", ")));
         }
+        let tenant = self.tenant_condition(resource, Some(&table))?;
         let sql = format!(
-            "UPDATE {table} SET {} FROM (VALUES {}) AS \"v\" ({}) WHERE {table}.{pk_col} = \"v\".{pk_col} RETURNING {table}.*",
+            "UPDATE {table} SET {} FROM (VALUES {}) AS \"v\" ({}) WHERE {table}.{pk_col} = \"v\".{pk_col}{tenant} RETURNING {table}.*",
             set_clauses.join(", "),
             values.join(", "),
             aliases.join(", "),
@@ -1830,22 +1917,23 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
-    pub fn compile_delete(&mut self, resource: &ResourceDef, id: Uuid) -> Result<CompiledSql> {
+    pub fn compile_delete(&mut self, resource: &ResourceDef, id: Value) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
         let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
-        let p = self.push_param(Value::Uuid(id));
+        let p = self.bind_typed(pk.ty, id);
+        let tenant = self.tenant_condition(resource, None)?;
 
-        let sql = format!("DELETE FROM {table} WHERE {pk_col} = {p}");
+        let sql = format!("DELETE FROM {table} WHERE {pk_col} = {p}{tenant}");
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
     pub fn compile_bulk_delete(
         &mut self,
         resource: &ResourceDef,
-        ids: &[Uuid],
+        ids: &[Value],
     ) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()
@@ -1860,11 +1948,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             ));
         }
 
-        let vals: Vec<Value> = ids.iter().map(|id| Value::Uuid(*id)).collect();
+        let vals: Vec<Value> = ids.to_vec();
         let param = self.push_list_param(vals);
         let condition = self.dialect.render_in_list(&pk_col, &param);
+        let tenant = self.tenant_condition(resource, None)?;
 
-        let sql = format!("DELETE FROM {table} WHERE {condition}");
+        let sql = format!("DELETE FROM {table} WHERE {condition}{tenant}");
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
@@ -1886,7 +1975,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         compiled.sql.push(' ');
         compiled
             .sql
-            .push_str(&self.dialect.upsert_clause(identity, update_fields));
+            .push_str(&self.dialect.upsert_clause(identity, &identity.columns(resource.multitenancy), update_fields));
 
         if self.dialect.supports_returning() {
             compiled.sql.push_str(" RETURNING *");
@@ -1917,7 +2006,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 &format!("idx_{}_{}", resource.table_name(), identity.name),
             )?;
             let mut key_cols = Vec::new();
-            for key in identity.keys {
+            for key in identity.columns(resource.multitenancy) {
                 key_cols.push(ident(self.dialect, key)?);
             }
             stmts.push(crate::generator::format_create_index(
@@ -1940,7 +2029,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 &format!("idx_{}_{}", resource.table_name(), index.name),
             )?;
             let mut key_cols = Vec::new();
-            for key in index.keys {
+            for key in index.columns(resource.multitenancy) {
                 key_cols.push(ident(self.dialect, key)?);
             }
             let mut include_cols = Vec::new();

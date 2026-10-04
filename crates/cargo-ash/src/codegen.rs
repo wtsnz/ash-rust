@@ -369,7 +369,7 @@ fn run_with<D: SqlDialect>(
             columns.sort_unstable();
             let is_pk = target.primary_key().is_some_and(|pk| columns == [pk.name]);
             let is_identity = target.identities.iter().any(|identity| {
-                let mut keys = identity.keys.to_vec();
+                let mut keys = identity.columns(target.multitenancy);
                 keys.sort_unstable();
                 identity.predicate.is_none() && keys == columns
             });

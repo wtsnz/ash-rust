@@ -3,7 +3,7 @@ defmodule Supportdesk.Desk.Ticket do
   use Ash.Resource,
     domain: Supportdesk.Desk,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshStateMachine, AshGraphql.Resource],
+    extensions: [AshStateMachine, AshGraphql.Resource, AshTypescript.Resource],
     authorizers: [Ash.Policy.Authorizer],
     notifiers: [Ash.Notifier.PubSub]
 
@@ -14,6 +14,11 @@ defmodule Supportdesk.Desk.Ticket do
   postgres do
     table "tickets"
     repo Supportdesk.Repo
+
+    # Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+    custom_indexes do
+      index [:assignee_id]
+    end
   end
 
   multitenancy do
@@ -92,6 +97,11 @@ defmodule Supportdesk.Desk.Ticket do
   calculations do
     calculate :weight, :integer, expr(priority * 10), public?: true
     calculate :subject_length, :integer, expr(string_length(subject)), public?: true
+
+    calculate :scaled_priority, :integer, expr(priority * ^arg(:factor)) do
+      public? true
+      argument :factor, :integer, allow_nil?: false
+    end
   end
 
   policies do
@@ -131,10 +141,27 @@ defmodule Supportdesk.Desk.Ticket do
       pagination keyset?: true, countable: true, required?: false
     end
 
+    # Each ticket it finds notes the start of its id, as metadata.
+    read :noted do
+      pagination keyset?: true, countable: true, required?: false
+      metadata :short_id, :string, allow_nil?: false
+
+      prepare after_action(fn _query, records, _context ->
+                {:ok,
+                 Enum.map(records, &Ash.Resource.put_metadata(&1, :short_id, String.slice(&1.id, 0, 8)))}
+              end)
+    end
+
     create :open do
       primary? true
       accept [:subject, :body, :priority, :confidential, :requester_email]
       argument :comments, {:array, :map}, default: []
+      metadata :comments_given, :integer, allow_nil?: false
+
+      change after_action(fn changeset, record, _context ->
+               given = length(Ash.Changeset.get_argument(changeset, :comments) || [])
+               {:ok, Ash.Resource.put_metadata(record, :comments_given, given)}
+             end)
       validate present(:requester_email)
       validate string_length(:subject, min: 3, max: 200)
       validate numericality(:priority, greater_than_or_equal_to: 1, less_than_or_equal_to: 4)
@@ -243,6 +270,10 @@ defmodule Supportdesk.Desk.Ticket do
     ticket |> Ash.Changeset.for_update(:assign, %{assignee_id: agent.id}, opts) |> Ash.update()
   end
 
+  typescript do
+    type_name "Ticket"
+  end
+
   graphql do
     type :ticket
 
@@ -262,6 +293,7 @@ defmodule Supportdesk.Desk.Ticket do
       update :view_ticket, :view
       update :edit_ticket, :edit
       destroy :destroy_ticket, :destroy
+      action :route_ticket, :route
     end
 
     subscriptions do

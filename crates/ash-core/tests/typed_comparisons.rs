@@ -62,7 +62,7 @@ async fn memory_compares_like_the_column_type() {
         (3, "100.25", "-3", "linus@example.org"),
     ] {
         let (id, fields) = row(n, weight, amount, email);
-        memory.create(&Reading::DEF, None, id, fields).await.unwrap();
+        memory.create(&Reading::DEF, None, ash_core::Value::from(id), fields).await.unwrap();
     }
 
     let mut over = ids(&memory, Some(Filter::gt("weight", "9.6")), vec![]).await;
@@ -71,6 +71,7 @@ async fn memory_compares_like_the_column_type() {
     let by_weight = Sort {
         field: "weight".into(),
         descending: false,
+        ..Default::default()
     };
     assert_eq!(ids(&memory, None, vec![by_weight]).await, [1, 2, 3]);
     assert_eq!(ids(&memory, Some(Filter::eq("weight", "9.50")), vec![]).await, [1]);
@@ -90,7 +91,7 @@ async fn memory_compares_like_the_column_type() {
     );
 
     let (id, duplicate) = row(4, "1", "0", "ADA@example.COM");
-    let result = memory.create(&Reading::DEF, None, id, duplicate).await;
+    let result = memory.create(&Reading::DEF, None, ash_core::Value::from(id), duplicate).await;
     assert!(
         matches!(result, Err(Error::IdentityConflict { .. })),
         "CiString identities ignore case: {result:?}"

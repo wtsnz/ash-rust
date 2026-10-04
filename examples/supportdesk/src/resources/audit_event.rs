@@ -20,9 +20,15 @@ resource! {
             kind: String;
         }
 
+        indexes {
+            // Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+            index by_ticket: [ticket_id];
+        }
+
         actions {
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
             }
 
             create record {

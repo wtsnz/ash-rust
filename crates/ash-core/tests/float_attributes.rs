@@ -82,3 +82,17 @@ async fn sqlite_float_attributes() {
     sqlite.install_resources(&[&Beacon::DEF]).await.unwrap();
     floats_round_trip(sqlite).await;
 }
+
+// A number that isn't an integer stays a number in a map, as JSON holds it, where it
+// used to become text.
+#[test]
+fn maps_keep_their_floats() {
+    use ash_core::Value;
+    let json = serde_json::json!({ "ratio": 1.5, "count": 2, "nested": [0.25] });
+    let value = Value::from_plain_json(json.clone());
+    assert_eq!(value.as_map().unwrap()["ratio"], Value::Float(1.5));
+    assert_eq!(value.to_plain_json(), json);
+    // Numbers order by value, an integer before a float equal to it.
+    assert!(Value::Int(1) < Value::Float(1.5) && Value::Float(1.5) < Value::Int(2));
+    assert!(Value::Int(2) < Value::Float(2.0) && Value::Float(2.0) != Value::Int(2));
+}

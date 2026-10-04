@@ -7,9 +7,11 @@
 //! ```
 //!
 //! Both must have loaded the same fixture. Writes change both desks the same way, so the
-//! comparisons that follow them still hold. AshGraphql reports each redacted field as a
-//! `forbidden_field` error as well as a null, which ash-graphql doesn't (see GAPS.md):
-//! those errors are counted, and left out of the comparison.
+//! comparisons that follow them still hold. Both report each redacted field as a
+//! `forbidden_field` error as well as a null: those errors are compared, and counted.
+//!
+//! The same goes for AshTypescript's RPC (`POST /rpc/run`): the data each action answers,
+//! and the types of the errors it fails with.
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -69,21 +71,79 @@ impl Desk {
     }
 }
 
-/// What's compared of a GraphQL response: its data, and its errors' codes but for
-/// `forbidden_field`, which only AshGraphql reports.
+/// What's compared of a GraphQL response: its data, and its errors' paths, in path
+/// order, with the code of each `forbidden_field` error (top level in Absinthe's errors,
+/// in `extensions` in async-graphql's), which are counted.
 fn comparable(response: &Value, forbidden: &mut usize) -> Value {
+    let mut errors: Vec<Value> = response["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|error| {
+            let redacted = error["code"] == "forbidden_field" || error["extensions"]["code"] == "forbidden_field";
+            *forbidden += usize::from(redacted);
+            if redacted {
+                json!({ "path": error["path"], "code": "forbidden_field" })
+            } else {
+                json!({ "path": error["path"] })
+            }
+        })
+        .collect();
+    errors.sort_by_key(|error| error["path"].to_string());
+    json!({ "data": strip_cursors(&response["data"]), "errors": errors })
+}
+
+/// What's compared of an RPC response: its data, but for keyset cursors, or the types of
+/// its errors.
+fn rpc_comparable(response: &Value) -> Value {
+    if response["success"] == true {
+        json!({ "data": strip_cursors(&response["data"]), "metadata": response["metadata"] })
+    } else {
+        let types: Vec<Value> = response["errors"].as_array().into_iter().flatten().map(|e| e["type"].clone()).collect();
+        json!({ "errors": types })
+    }
+}
+
+/// What's compared of an RPC response in full: its data but for cursors, or its errors
+/// whole, but for what can't match: an internal error's id and message (only its type and
+/// path), a resource's name (Elixir's is its module's), and Ash's "Bread Crumbs".
+fn rpc_shape(response: &Value) -> Value {
+    if response["success"] == true {
+        return json!({ "data": strip_cursors(&response["data"]) });
+    }
     let errors: Vec<Value> = response["errors"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|error| {
-            let redacted = error["code"] == "forbidden_field";
-            *forbidden += usize::from(redacted);
-            !redacted
+        .map(|error| {
+            if error["type"] == "internal_error" {
+                return json!({ "type": "internal_error", "path": error["path"] });
+            }
+            let mut error = error.clone();
+            if let Some(map) = error.as_object_mut() {
+                map.remove("errorId");
+                if let Some(resource) = map.get_mut("vars").and_then(|vars| vars.get_mut("resource"))
+                    && let Some(name) = resource.as_str().and_then(|name| name.rsplit('.').next())
+                {
+                    *resource = json!(name);
+                }
+                if let Some(message) = map.get_mut("message")
+                    && let Some(text) = message.as_str().filter(|text| text.starts_with("Bread Crumbs:"))
+                {
+                    *message = json!(text.rsplit("\n\n\n").next().unwrap_or(text));
+                }
+            }
+            error
         })
-        .map(|error| json!({ "path": error["path"] }))
         .collect();
-    json!({ "data": strip_cursors(&response["data"]), "errors": errors })
+    json!({ "errors": errors })
+}
+
+/// A validation's answer, its errors in no order.
+fn validated(response: &Value) -> Value {
+    let mut errors: Vec<String> = response["errors"].as_array().into_iter().flatten().map(Value::to_string).collect();
+    errors.sort();
+    json!({ "success": response["success"], "errors": errors })
 }
 
 /// Keyset cursors encode the same position differently on each desk.
@@ -91,7 +151,7 @@ fn strip_cursors(value: &Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.iter()
-                .filter(|(key, _)| !matches!(key.as_str(), "startKeyset" | "endKeyset"))
+                .filter(|(key, _)| !matches!(key.as_str(), "startKeyset" | "endKeyset" | "nextPage" | "previousPage"))
                 .map(|(key, value)| (key.clone(), strip_cursors(value)))
                 .collect(),
         ),
@@ -197,6 +257,29 @@ async fn main() -> ExitCode {
         .unwrap()
         .to_string();
 
+    let tickets: Vec<&Value> = fixture["tickets"].as_array().unwrap().iter().filter(|t| t["org"] == ORG).collect();
+    let ticket = |what: &str, pick: &dyn Fn(&Value) -> bool| {
+        tickets.iter().find(|t| t["id"] != assigned.as_str() && pick(t)).unwrap_or_else(|| panic!("{what}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let commented = |t: &Value| fixture["comments"].as_array().unwrap().iter().any(|c| c["ticket_id"] == t["id"]);
+    // An open ticket with comments, for RPC's reads and writes; a confidential new one,
+    // which a viewer can't read; and a new one anyone reads.
+    let open = ticket("an open ticket with comments", &|t| t["status"] == "open" && t["confidential"] == false && commented(t));
+    let secret = ticket("a confidential new ticket", &|t| t["status"] == "new" && t["confidential"] == true);
+    let plain = ticket("a new ticket", &|t| t["status"] == "new" && t["confidential"] == false);
+    // When the fixture's last ticket was opened: reads ordered by id or by assignee hold
+    // to the fixture's tickets, as those parity opens get random ids on each desk.
+    let seeded = tickets.iter().filter_map(|t| t["inserted_at"].as_str()).max().expect("tickets").to_string();
+    // A requester's email, which field policies hide from all but an admin and the assignee.
+    let email = tickets.iter().find(|t| t["confidential"] == false && t["requester_email"].is_string()).expect("an email")
+        ["requester_email"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
     let desks = [Desk::new("rust", &rust_url), Desk::new("elixir", &elixir_url)];
     let mut report = Report { passed: 0, failed: Vec::new(), forbidden: 0 };
     let both = |query: &'static str, who: As, variables: Value| {
@@ -223,28 +306,86 @@ async fn main() -> ExitCode {
         let (r2, e2) = (comparable(&r2, &mut report.forbidden), comparable(&e2, &mut report.forbidden));
         report.check(&format!("inbox page 2 as {}", who.role), &r2, &e2);
     }
+    // A filter on a field the actor can't read finds nothing by it: the field reads as null
+    // where it's hidden.
+    let by_email = "query E($email: String!) { listTickets(first: 5, filter: { requesterEmail: { eq: $email } }, sort: [{ field: ID }]) { count results { id requesterEmail } } }";
+    for who in [&viewer, &admin] {
+        let (r, e) = both(by_email, who.clone(), json!({ "email": email })).await;
+        let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
+        report.check(&format!("filter by a hidden field as {}", who.role), &r, &e);
+    }
 
     println!("Writes:");
     let ticket_q = "query T($id: ID!) { getTicket(id: $id) { status viewCount version requesterEmail assignee { name } } }";
     let id = json!({ "id": assigned });
-    for (name, mutation, who) in [
-        ("view as agent", "mutation M($id: ID!) { viewTicket(id: $id) { result { viewCount version } errors { code } } }", &agent),
-        ("start as agent", "mutation M($id: ID!) { startTicket(id: $id) { result { status } errors { code } } }", &agent),
-        ("close an open ticket", "mutation M($id: ID!) { closeTicket(id: $id) { result { status } errors { code } } }", &agent),
-        ("resolve as viewer", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &viewer),
-        ("resolve as agent", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &agent),
+    let start = "mutation M($id: ID!) { startTicket(id: $id) { result { status } errors { code } } }";
+    // Whether to compare the errors' codes too: the desks code unexpected errors apart.
+    for (name, mutation, who, id, codes) in [
+        ("view as agent", "mutation M($id: ID!) { viewTicket(id: $id) { result { viewCount version } errors { code } } }", &agent, &id, false),
+        ("start as agent", start, &agent, &id, false),
+        ("close an open ticket", "mutation M($id: ID!) { closeTicket(id: $id) { result { status } errors { code } } }", &agent, &id, false),
+        ("resolve as viewer", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &viewer, &id, false),
+        ("resolve as agent", "mutation M($id: ID!) { resolveTicket(id: $id) { result { status } errors { code } } }", &agent, &id, false),
+        // Found through the read, whose policies hide it from a viewer: not found, not forbidden.
+        ("start a ticket the viewer can't read", start, &viewer, &json!({ "id": secret }), true),
     ] {
         let (r, e) = both(mutation, who.clone(), id.clone()).await;
         let outcome = |v: &Value| {
             let result = v["data"].as_object().and_then(|d| d.values().next()).cloned().unwrap_or(Value::Null);
             let failed = !result["errors"].as_array().is_none_or(Vec::is_empty) || result["result"].is_null();
-            json!({ "result": if failed { Value::Null } else { result["result"].clone() }, "failed": failed })
+            let codes = if codes { result["errors"].clone() } else { Value::Null };
+            json!({ "result": if failed { Value::Null } else { result["result"].clone() }, "failed": failed, "codes": codes })
         };
         report.check(name, &outcome(&r), &outcome(&e));
     }
     let (r, e) = both(ticket_q, agent.clone(), id.clone()).await;
     let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
     report.check("the ticket after the writes, as its assignee", &r, &e);
+
+    println!("RPC:");
+    let nested_comments = json!({ "comments": { "fields": ["body", "internal"], "sort": "insertedAt,id", "filter": { "internal": { "eq": false } } } });
+    for (name, who, body) in [
+        ("list, filtered and sorted", &agent, json!({ "action": "list_tickets", "fields": ["id", "subject", "requesterEmail", "commentCount", "weight", { "assignee": ["name"] }], "sort": "-insertedAt,id", "filter": { "priority": { "greaterThanOrEqual": 4 } } })),
+        ("list, with metadata", &agent, json!({ "action": "list_noted_tickets", "fields": ["id"], "sort": "-insertedAt,id", "page": { "limit": 3 }, "metadataFields": ["shortId"] })),
+        ("get, with metadata asked for twice and unknown", &admin, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id"], "metadataFields": ["shortId", "short_id", "nope"] })),
+        ("a keyset page, counted", &viewer, json!({ "action": "list_tickets", "fields": ["id", "subject"], "sort": "-insertedAt,id", "page": { "limit": 3, "count": true } })),
+        ("an offset page", &agent, json!({ "action": "list_tickets", "fields": ["id"], "sort": "-insertedAt,id", "page": { "limit": 2, "offset": 4 } })),
+        ("get, with relationships", &admin, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", "status", "requesterEmail", "weight", nested_comments, { "tags": { "fields": ["name"], "sort": "name" } }] })),
+        ("get, as a viewer", &viewer, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", { "comments": ["internal"] }] })),
+        ("get, missing", &agent, json!({ "action": "get_ticket", "getBy": { "id": "00000000-0000-0000-0000-000000000000" }, "fields": ["id"] })),
+        // As a viewer: AshTypescript reads a relationship selected with options without the
+        // actor (see GAPS.md), so an agent's nested internal notes are hidden there.
+        ("nested limit and sort", &viewer, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "limit": 2, "sort": "-insertedAt,id" } }], "sort": "-insertedAt,id", "page": { "limit": 2 } })),
+        ("nested filter", &agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["internal"], "filter": { "internal": { "eq": false } } } }], "sort": "-insertedAt,id", "page": { "limit": 2, "offset": 0 } })),
+        ("agents", &agent, json!({ "action": "list_agents", "fields": ["name", "openAssigned"], "sort": "name", "filter": { "role": { "eq": "agent" } } })),
+        ("view", &agent, json!({ "action": "view_ticket", "identity": open, "fields": ["viewCount", "version"] })),
+        ("assign, selecting nothing", &agent, json!({ "action": "assign_ticket", "identity": open, "input": { "assigneeId": agent.id } })),
+        ("start, as a viewer who can't read it", &viewer, json!({ "action": "start_ticket", "identity": secret, "fields": ["status"] })),
+        ("start, as a viewer", &viewer, json!({ "action": "start_ticket", "identity": plain, "fields": ["status"] })),
+        ("start", &agent, json!({ "action": "start_ticket", "identity": secret, "fields": ["status"] })),
+        ("close an open ticket", &agent, json!({ "action": "close_ticket", "identity": open, "fields": ["status"] })),
+        ("open, invalid", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello there", "body": "b", "priority": 9, "requesterEmail": "a@b.c" }, "fields": ["id"] })),
+        ("open, with comments", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello there", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": [{ "body": "first" }] }, "fields": ["subject", "status", "requesterEmail", "commentCount", { "comments": ["body"] }, { "author": ["name"] }] })),
+        ("open, its metadata only", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello again", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": [{ "body": "one" }, { "body": "two" }] }, "metadataFields": ["commentsGiven"] })),
+        ("create a comment", &agent, json!({ "action": "create_comment", "input": { "ticketId": open, "body": "via rpc" }, "fields": ["body", "internal", "authorId"] })),
+        ("route", &agent, json!({ "action": "route_ticket", "input": { "subject": "Printer on fire", "body": "Smoke", "priority": 3, "requesterEmail": "pat@example.com" } })),
+        ("an unknown action", &agent, json!({ "action": "nope", "fields": ["id"] })),
+        ("an unknown field", &agent, json!({ "action": "list_tickets", "fields": ["id", "nope"] })),
+        ("a relationship without fields", &agent, json!({ "action": "list_tickets", "fields": ["id", "assignee"] })),
+        ("filter by a hidden field", &viewer, json!({ "action": "list_tickets", "fields": ["id"], "filter": { "requesterEmail": { "eq": email } } })),
+        // The agent sees the emails of the tickets assigned to it: those first, the rest as null.
+        ("sort by a field hidden on some", &agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "requesterEmail"], "sort": "requesterEmail,id", "page": { "limit": 5 } })),
+        ("sort by a field hidden on some, descending", &agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "requesterEmail"], "sort": "-requesterEmail,id", "page": { "limit": 5 } })),
+    ] {
+        let r = desks[0].post("/rpc/run", who, body.clone()).await.1;
+        let e = desks[1].post("/rpc/run", who, body).await.1;
+        // A new record's id is each desk's own.
+        let comparable = |v: &Value| match &v["data"] {
+            Value::String(id) if uuid::Uuid::parse_str(id).is_ok() => json!({ "data": "an id" }),
+            _ => rpc_comparable(v),
+        };
+        report.check(name, &comparable(&r), &comparable(&e));
+    }
 
     println!("JSON endpoints:");
     let route = json!({
@@ -276,6 +417,105 @@ async fn main() -> ExitCode {
         report.check(name, &keep(rs, &rb), &keep(es, &eb));
     }
 
+    println!("RPC requests, errors and all:");
+    let t = open.as_str();
+    for (who, body) in [
+        (&agent, json!({ "action": "nope", "fields": ["id"] })),
+        (&agent, json!({ "action": "list_tickets" })),
+        (&agent, json!({ "action": "list_tickets", "fields": [] })),
+        (&agent, json!({ "action": "list_tickets", "fields": "id" })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"] })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": t, "nope": 1 } })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": { "eq": t } } })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": t }, "filter": { "priority": { "eq": 1 } } })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"], "getBy": { "id": t }, "page": { "limit": 1 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": { "limit": 2, "bogus": 1 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": 5 })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "id"] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "input": null })),
+        (&agent, json!({ "action": "view_ticket", "identity": t, "sort": "id" })),
+        (&agent, json!({ "action": "view_ticket", "fields": ["id"] })),
+        (&agent, json!({ "action": "view_ticket", "identity": { "nope": 1 }, "fields": ["id"] })),
+        (&agent, json!({ "action": "view_ticket", "identity": { "id": t }, "fields": ["id"] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": [] }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": "body" }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "assignee": { "fields": ["name"], "limit": 1 } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "subject": { "fields": ["x"], "limit": 1 } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "page": { "limit": 1 }, "limit": 1 } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["body"], "page": { "bogus": 1 } } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "commentCount": ["x"] }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "weight": { "args": {} } }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": ["nope"] }] })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", 5] })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "priority", { "scaledPriority": { "args": { "factor": 3 } } }], "sort": "id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id", "scaledPriority"] })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", { "comments": { "fields": ["id"], "sort": ["-insertedAt", "id"], "page": { "limit": 2, "count": true } } }], "sort": "id", "page": { "limit": 2 } })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "assigneeId"], "sort": "++assigneeId,id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "assigneeId"], "sort": "--assigneeId,id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": { "limit": 2, "after": "garbage" } })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "x", "body": "b", "priority": 9, "requesterEmail": "a@b.c" }, "fields": ["id"] })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "body": "b", "priority": "high", "requesterEmail": "a@b.c" }, "fields": ["id"] })),
+        (&agent, json!({ "action": "create_comment", "input": { "ticketId": t, "body": "   " }, "fields": ["id"] })),
+        (&agent, json!({ "action": "route_ticket", "input": { "subject": "Hello", "body": "b", "priority": 2 } })),
+        (&agent, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "x" }, "fields": ["id"] })),
+        (&viewer, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "x" }, "fields": ["id"] })),
+        (&agent, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "  Trimmed subject  " }, "fields": ["subject"] })),
+        (&agent, json!({ "action": "destroy_ticket", "identity": "00000000-0000-0000-0000-000000000001", "fields": ["id", "weight"] })),
+    ] {
+        let r = desks[0].post("/rpc/run", who, body.clone()).await.1;
+        let e = desks[1].post("/rpc/run", who, body.clone()).await.1;
+        report.check(&short(&body), &rpc_shape(&r), &rpc_shape(&e));
+    }
+
+    println!("RPC validation:");
+    for (who, body) in [
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "x", "body": "b", "priority": 9, "requesterEmail": "a@b.c" } })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "body": "b", "priority": 2, "requesterEmail": "a@b.c" } })),
+        (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "priority": "high" } })),
+        (&agent, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "x" } })),
+        (&agent, json!({ "action": "edit_ticket", "identity": "00000000-0000-0000-0000-000000000000", "input": { "subject": "Hello" } })),
+        (&viewer, json!({ "action": "edit_ticket", "identity": t, "input": { "subject": "Good subject" } })),
+        (&agent, json!({ "action": "route_ticket", "input": { "subject": "x" } })),
+        (&agent, json!({ "action": "list_tickets" })),
+        (&agent, json!({ "action": "get_ticket", "fields": ["id"] })),
+    ] {
+        let r = desks[0].post("/rpc/validate", who, body.clone()).await.1;
+        let e = desks[1].post("/rpc/validate", who, body.clone()).await.1;
+        report.check(&short(&body), &validated(&r), &validated(&e));
+    }
+
+    println!("GraphQL generic actions and managed relationships:");
+    let route_m = "mutation R($input: RouteTicketInput!) { routeTicket(input: $input) }";
+    let route_input = json!({ "subject": "Printer on fire", "body": "Smoke", "priority": 3, "requesterEmail": "pat@example.com" });
+    // A new record's id is each desk's own.
+    let an_id = |mut v: Value| {
+        if v["data"]["routeTicket"].as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) {
+            v["data"]["routeTicket"] = json!("an id");
+        }
+        v
+    };
+    for (name, who, input) in [
+        ("routeTicket", &agent, route_input.clone()),
+        ("routeTicket as a viewer", &viewer, route_input.clone()),
+        ("routeTicket, invalid", &agent, json!({ "subject": "x", "body": "y", "priority": 9, "requesterEmail": "a@b.c" })),
+    ] {
+        let r = an_id(desks[0].graphql(who, route_m, json!({ "input": input.clone() })).await);
+        let e = an_id(desks[1].graphql(who, route_m, json!({ "input": input })).await);
+        let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
+        report.check(name, &r, &e);
+    }
+    let open_m = "mutation O($input: OpenTicketInput!) { openTicket(input: $input) { result { subject commentCount comments(sort: [{ field: BODY }]) { body internal } } metadata { commentsGiven } errors { code fields } } }";
+    for (name, comments) in [
+        ("openTicket, its comments managed", json!([{ "body": "Called it in" }, { "body": "Escalate", "internal": true }])),
+        ("openTicket, a managed comment invalid", json!([{ "internal": true }])),
+    ] {
+        let input = json!({ "subject": "Hello there", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": comments });
+        let r = desks[0].graphql(&agent, open_m, json!({ "input": input.clone() })).await;
+        let e = desks[1].graphql(&agent, open_m, json!({ "input": input })).await;
+        let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
+        report.check(name, &r, &e);
+    }
+
     println!("Subscriptions:");
     let mut heard = Vec::new();
     for desk in &desks {
@@ -284,10 +524,10 @@ async fn main() -> ExitCode {
     report.check("ticketUpdated, heard by the assignee", &heard[0], &heard[1]);
 
     println!(
-        "\n{} matched, {} differed; AshGraphql also reported {} redacted fields as forbidden_field errors",
+        "\n{} matched, {} differed; {} redacted fields reported as forbidden_field errors, by both desks",
         report.passed,
         report.failed.len(),
-        report.forbidden
+        report.forbidden / 2
     );
     if report.failed.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
@@ -305,6 +545,15 @@ async fn listen_once(desk: &Desk, who: &As, ticket: &str) -> Value {
     };
     let send = |value: Value| Message::Text(value.to_string().into());
     socket.send(send(json!({ "type": "connection_init", "payload": {} }))).await.unwrap();
+    // Subscribe once the server has accepted the connection, as the protocol has it.
+    let acked = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(acked, socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) if text.contains("connection_ack") => break,
+            Ok(Some(Ok(_))) => {}
+            _ => return json!(format!("{} never acknowledged the socket", desk.name)),
+        }
+    }
     let query = "subscription { ticketUpdated { updated { id viewCount } } }";
     socket.send(send(json!({ "id": "1", "type": "subscribe", "payload": { "query": query } }))).await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;

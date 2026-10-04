@@ -88,6 +88,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut soft = false;
     let mut require_atomic = true;
     let mut atomic_upgrade_with = None;
+    let mut pagination = None;
+    let mut transaction = false;
+    let mut metadata = Vec::new();
     let mut cascade_destroy = Vec::new();
     let mut run_expr = None;
     let mut accept_kw = None;
@@ -131,11 +134,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     let _: Token![:] = body.parse()?;
                     let a_ty: Type = body.parse()?;
                     let allow_nil = option_inner(&a_ty).is_some();
+                    let default = parse_argument_default(&body)?;
                     arguments.push(ArgumentSpec {
                         outer_attrs: item_attrs,
                         name: a_name,
                         ty: a_ty,
                         allow_nil,
+                        default,
                     });
                     require_semi(&body, errors, "argument");
                 }
@@ -159,6 +164,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                             name: a_name,
                             ty: a_ty,
                             allow_nil,
+                            default: None,
                         });
                         if args_input.peek(Token![,]) {
                             let _: Token![,] = args_input.parse()?;
@@ -392,6 +398,27 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     atomic_upgrade_with = Some(body.parse::<Ident>()?);
                     require_semi(&body, errors, "`atomic_upgrade_with`");
                 }
+                "metadata" => {
+                    let name: Ident = body.parse()?;
+                    let _: Token![:] = body.parse()?;
+                    let ty: Type = body.parse()?;
+                    metadata.push((name, ty));
+                    require_semi(&body, errors, "`metadata`");
+                }
+                "transaction" => {
+                    if kind != ActionKind::Generic {
+                        errors.push(Error::new_spanned(&item_ident, "`transaction` only applies to generic actions"));
+                    }
+                    transaction = true;
+                    require_semi(&body, errors, "`transaction`");
+                }
+                "pagination" => {
+                    if kind != ActionKind::Read {
+                        errors.push(Error::new_spanned(&item_ident, "`pagination` only applies to read actions"));
+                    }
+                    pagination = Some(parse_pagination(&body)?);
+                    require_semi(&body, errors, "`pagination`");
+                }
                 "cascade_destroy" => {
                     if kind != ActionKind::Destroy {
                         errors.push(Error::new_spanned(
@@ -467,6 +494,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         "cascade_destroy",
                         "require_atomic",
                         "atomic_upgrade_with",
+                        "pagination",
+                        "transaction",
+                        "metadata",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &item_ident,
@@ -504,6 +534,9 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         soft,
         require_atomic,
         atomic_upgrade_with,
+        pagination,
+        transaction,
+        metadata,
         cascade_destroy,
     })
 }
@@ -595,6 +628,14 @@ pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> 
                 "expected `manage_relationship(rel)` or `manage_relationship(rel, type: create)`",
             ))
         }
+        "atomic_update" => {
+            if call.args.len() == 2 {
+                let field = expr_to_ident(&call.args[0])?;
+                let expr = super::calculations::parse_calc_expr(&call.args[1])?;
+                return Ok(ChangeSpec::AtomicUpdate { field, expr });
+            }
+            Err(Error::new_spanned(call, "expected `atomic_update(field, expression)`"))
+        }
         "custom" => {
             if call.args.len() == 1 {
                 let expr = call.args[0].clone();
@@ -640,6 +681,7 @@ pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> 
                 "relate_actor",
                 "set_from_arg",
                 "manage_relationship",
+                "atomic_update",
                 "before_action",
                 "after_action",
                 "after_transaction",
@@ -973,8 +1015,9 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 let val: usize = lit.base10_parse()?;
                 Ok(PreparationSpec::Offset(val))
             }
+            "after_action" => Ok(PreparationSpec::AfterAction(content.parse()?)),
             _ => {
-                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset"];
+                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset", "after_action"];
                 Err(crate::ast_helpers::unknown_ident_error(
                     &func_name,
                     PREPARATION_NAMES,
@@ -1014,7 +1057,7 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 Ok(PreparationSpec::Offset(val))
             }
             _ => {
-                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset"];
+                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset", "after_action"];
                 Err(crate::ast_helpers::unknown_ident_error(
                     &func_name,
                     PREPARATION_NAMES,
@@ -1028,4 +1071,73 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
             "expected `(...)` or `: ...` after preparation name",
         ))
     }
+}
+
+/// `keyset: true, offset: false, countable: by_default, default_limit: 25,
+/// max_page_size: 100, required: false`, up to the `;`.
+fn parse_pagination(input: syn::parse::ParseStream) -> Result<crate::define::ast::PaginationSpec> {
+    let mut spec = crate::define::ast::PaginationSpec::default();
+    while !input.is_empty() && !input.peek(Token![;]) {
+        let key: Ident = input.parse()?;
+        let _: Token![:] = input.parse()?;
+        let flag = |input: syn::parse::ParseStream| -> Result<bool> { Ok(input.parse::<syn::LitBool>()?.value) };
+        match key.to_string().as_str() {
+            "keyset" => spec.keyset = flag(input)?,
+            "offset" => spec.offset = flag(input)?,
+            "required" => spec.required = Some(flag(input)?),
+            "countable" => {
+                let value = if input.peek(syn::LitBool) {
+                    let lit: syn::LitBool = input.parse()?;
+                    Ident::new(if lit.value { "true" } else { "false" }, lit.span)
+                } else {
+                    let ident: Ident = input.parse()?;
+                    if ident != "by_default" {
+                        return Err(Error::new_spanned(ident, "expected `true`, `false` or `by_default`"));
+                    }
+                    ident
+                };
+                spec.countable = Some(value);
+            }
+            "default_limit" => spec.default_limit = Some(input.parse()?),
+            "max_page_size" => {
+                spec.max_page_size = Some(if input.peek(Ident) {
+                    let ident: Ident = input.parse()?;
+                    if ident != "nil" {
+                        return Err(Error::new_spanned(ident, "expected a number or `nil`"));
+                    }
+                    None
+                } else {
+                    Some(input.parse()?)
+                });
+            }
+            _ => {
+                return Err(Error::new_spanned(
+                    key,
+                    "expected `keyset`, `offset`, `countable`, `default_limit`, `max_page_size` or `required`",
+                ));
+            }
+        }
+        if input.peek(Token![,]) {
+            let _: Token![,] = input.parse()?;
+        }
+    }
+    if !spec.keyset && !spec.offset {
+        return Err(input.error("pagination needs `keyset: true` or `offset: true`"));
+    }
+    Ok(spec)
+}
+
+/// An argument's `[default: expr]`, if it has one.
+fn parse_argument_default(input: ParseStream) -> Result<Option<Expr>> {
+    if !input.peek(syn::token::Bracket) {
+        return Ok(None);
+    }
+    let content;
+    syn::bracketed!(content in input);
+    let key: Ident = content.parse()?;
+    if key != "default" {
+        return Err(Error::new_spanned(key, "expected `default: <expr>`"));
+    }
+    let _: Token![:] = content.parse()?;
+    Ok(Some(content.parse()?))
 }

@@ -7,7 +7,7 @@ use crate::value::Value;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct KeysetCursor {
-    pub id: Uuid,
+    pub id: Value,
     pub values: Vec<(String, Value)>,
 }
 
@@ -30,7 +30,7 @@ impl KeysetCursor {
         }
         if let Ok(id) = Uuid::parse_str(cursor_str) {
             return Some(Self {
-                id,
+                id: Value::Uuid(id),
                 values: Vec::new(),
             });
         }
@@ -56,37 +56,64 @@ pub fn keyset_sort(resource: &ResourceDef, mut sort: Vec<Sort>) -> Vec<Sort> {
         sort.push(Sort {
             field: key.to_string(),
             descending: false,
+            ..Default::default()
         });
     }
     sort
 }
 
-/// The filter for the records after (or before) a keyset: `sorts` holds each sort
-/// field, the keyset's value for it, and whether it sorts descending.
-pub fn build_keyset_filter(sorts: &[(String, Value, bool)], is_after: bool) -> Option<Filter> {
-    if sorts.is_empty() {
-        return None;
-    }
-    let (field, val, desc) = &sorts[0];
-    let cond = if is_after {
-        if !desc {
-            Filter::Gt(field.clone(), val.clone())
-        } else {
-            Filter::Lt(field.clone(), val.clone())
-        }
-    } else if !desc {
-        Filter::Lt(field.clone(), val.clone())
-    } else {
-        Filter::Gt(field.clone(), val.clone())
+/// The filter for the records after (or before) a keyset: `values` holds the keyset's
+/// value for each of `sorts`. Nulls sort where each sort places them (by default, as Ash
+/// orders them, last ascending and first descending), so a null value, or a field that
+/// may hold one, needs its own branch: past a null only nulls follow, or every value
+/// does, and past a value the nulls beyond it follow too. A guarded sort's field reads as null wherever its guard doesn't hold.
+pub fn build_keyset_filter(resource: &ResourceDef, sorts: &[Sort], values: &[Value], is_after: bool) -> Option<Filter> {
+    let (sort, value) = (sorts.first()?, values.first()?);
+    // After a record in an ascending sort, or before one in a descending sort, values
+    // grow; nulls lie ahead after a record when they sort last, before one when first.
+    let growing = is_after != sort.descending;
+    let nulls_ahead = is_after != sort.nulls_first();
+    let nullable = sort.guard.is_some()
+        || resource.attribute(&sort.field).is_none_or(|attr| attr.allow_nil);
+    let field = sort.field.clone();
+    let guarded = |filter: Filter| match &sort.guard {
+        Some(guard) => Filter::and([guard.clone(), filter]),
+        None => filter,
     };
-
-    if sorts.len() == 1 {
-        Some(cond)
+    let is_nil = || match &sort.guard {
+        Some(guard) => Filter::or([!guard.clone(), Filter::IsNil(field.clone())]),
+        None => Filter::IsNil(field.clone()),
+    };
+    let (beyond, tied) = if value.is_null() {
+        let beyond = if nulls_ahead { Filter::False } else { !is_nil() };
+        (beyond, is_nil())
     } else {
-        let eq = Filter::Eq(field.clone(), val.clone());
-        let rest = build_keyset_filter(&sorts[1..], is_after)?;
-        Some(Filter::or([cond, Filter::and([eq, rest])]))
+        let past = guarded(if growing {
+            Filter::Gt(field.clone(), value.clone())
+        } else {
+            Filter::Lt(field.clone(), value.clone())
+        });
+        let beyond = if nulls_ahead && nullable { Filter::or([past, is_nil()]) } else { past };
+        (beyond, guarded(Filter::Eq(field.clone(), value.clone())))
+    };
+    match build_keyset_filter(resource, &sorts[1..], &values[1..], is_after) {
+        None => Some(beyond),
+        Some(rest) => Some(Filter::or([beyond, Filter::and([tied, rest])])),
     }
+}
+
+/// The keyset's value for each of `sorts`: the primary key's from its id when the keyset
+/// doesn't carry it.
+pub fn keyset_values(resource: &ResourceDef, cursor: &KeysetCursor, sorts: &[Sort]) -> Vec<Value> {
+    let pk = resource.primary_key().map(|attr| attr.name);
+    sorts
+        .iter()
+        .map(|sort| match cursor.values.iter().find(|(field, _)| *field == sort.field) {
+            Some((_, value)) => value.clone(),
+            None if Some(sort.field.as_str()) == pk => cursor.id.clone(),
+            None => Value::Null,
+        })
+        .collect()
 }
 
 pub(crate) fn cursor_for_record<R: Resource>(record: &R, sort: &[Sort]) -> String {
@@ -97,7 +124,7 @@ pub(crate) fn cursor_for_record<R: Resource>(record: &R, sort: &[Sort]) -> Strin
         values.push((s.field.clone(), val));
     }
     KeysetCursor {
-        id: record.id(),
+        id: record.pk(),
         values,
     }
     .encode()

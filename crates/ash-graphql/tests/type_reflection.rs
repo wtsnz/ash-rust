@@ -118,7 +118,13 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
 
     // 1. Unauthenticated request (no actor) -> secret_notes must be redacted (null)
     let res = schema.execute(Request::new(gql_query)).await;
-    assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
+    // Reported as AshGraphql reports a field a policy hides: a `forbidden_field` error
+    // at its path.
+    let [error] = &res.errors[..] else { panic!("Errors: {:?}", res.errors) };
+    assert_eq!(error.message, "forbidden field");
+    let code = error.extensions.as_ref().and_then(|e| e.get("code")).cloned();
+    assert_eq!(code, Some(async_graphql::Value::from("forbidden_field")));
+    assert_eq!(serde_json::to_value(&error.path).unwrap(), serde_json::json!(["ticket", "secretNotes"]));
     let val = res.data.into_json().unwrap();
     let ticket_json = &val["ticket"];
     assert_eq!(ticket_json["title"], "Fix GraphQL bug");

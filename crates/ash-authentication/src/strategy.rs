@@ -382,7 +382,7 @@ impl<R: Resource> AuthStrategy<R> {
 
         let updated_raw = ctx
             .data
-            .update(self.resource_def, ctx.tenant.as_deref(), user_id, update_fields)
+            .update(self.resource_def, ctx.tenant.as_deref(), user_id.into(), update_fields)
             .await
             .map_err(AuthError::Core)?;
 
@@ -503,7 +503,7 @@ impl<R: Resource> AuthStrategy<R> {
 
         let updated_raw = ctx
             .data
-            .update(self.resource_def, ctx.tenant.as_deref(), claims.sub, update_fields)
+            .update(self.resource_def, ctx.tenant.as_deref(), claims.sub.into(), update_fields)
             .await
             .map_err(AuthError::Core)?;
 

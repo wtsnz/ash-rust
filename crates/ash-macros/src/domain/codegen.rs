@@ -52,7 +52,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
 
         if !has_explicit_getter {
             resource_methods.push(quote! {
-                pub async fn #getter_ident(&self, id: ::uuid::Uuid) -> ::ash_core::Result<#res_ident> {
+                pub async fn #getter_ident(&self, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<#res_ident> {
                     ::ash_core::get::<#res_ident, D>(&self.ctx, id).await
                 }
             });
@@ -70,7 +70,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
 
             if ci.get_by.is_some() {
                 resource_methods.push(quote! {
-                    pub async fn #fn_name(&self, id: ::uuid::Uuid) -> ::ash_core::Result<#res_ident> {
+                    pub async fn #fn_name(&self, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<#res_ident> {
                         ::ash_core::get::<#res_ident, D>(&self.ctx, id).await
                     }
                 });
@@ -91,8 +91,8 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                     }
                     _ => {
                         resource_methods.push(quote! {
-                            pub async fn #fn_name(&self, id: ::uuid::Uuid) -> ::ash_core::Result<()> {
-                                ::ash_core::destroy::<#res_ident, D>(&self.ctx, stringify!(#action_name), id).await
+                            pub async fn #fn_name(&self, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<()> {
+                                ::ash_core::destroy::<#res_ident, D>(&self.ctx, stringify!(#action_name), id.into()).await
                             }
                         });
                     }
@@ -114,10 +114,10 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                         resource_methods.push(quote! {
                             pub async fn #fn_name(
                                 &self,
-                                id: ::uuid::Uuid,
+                                id: impl ::std::convert::Into<::ash_core::Value>,
                                 #(#arg_names: impl ::std::convert::Into<#arg_tys>),*
                             ) -> ::ash_core::Result<#res_ident> {
-                                #res_ident::#action_name(&self.ctx, id)#(.#arg_names(#arg_names.into()))*.await
+                                #res_ident::#action_name(&self.ctx, ::ash_core::ActionTarget::<#res_ident>::Id(id.into()))#(.#arg_names(#arg_names.into()))*.await
                             }
                         });
                     }
@@ -158,7 +158,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                     if false {
                         fn __ash_probe_action(
                             __ctx: &::ash_core::Context<::ash_core::NoDataLayer>,
-                            __id: ::uuid::Uuid,
+                            __id: ::ash_core::Value,
                         ) {
                             let _ = <#res_ident>::#method(__ctx, __id);
                         }
@@ -287,12 +287,12 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                 ::ash_core::query(&self.ctx)
             }
 
-            pub async fn get<R: ::ash_core::Resource>(&self, id: ::uuid::Uuid) -> ::ash_core::Result<R> {
+            pub async fn get<R: ::ash_core::Resource>(&self, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<R> {
                 ::ash_core::get::<R, D>(&self.ctx, id).await
             }
 
-            pub async fn destroy<R: ::ash_core::Resource>(&self, action: &str, id: ::uuid::Uuid) -> ::ash_core::Result<()> {
-                ::ash_core::destroy::<R, D>(&self.ctx, action, id).await
+            pub async fn destroy<R: ::ash_core::Resource>(&self, action: &str, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<()> {
+                ::ash_core::destroy::<R, D>(&self.ctx, action, id.into()).await
             }
 
             #(#resource_methods)*

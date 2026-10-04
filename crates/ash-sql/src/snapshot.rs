@@ -88,7 +88,7 @@ impl TableSnapshot {
         for id in resource.identities {
             identities.push(IdentitySnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), id.name),
-                columns: id.keys.iter().map(|k| k.to_string()).collect(),
+                columns: id.columns(resource.multitenancy).into_iter().map(str::to_string).collect(),
                 unique: true,
                 predicate: id.predicate.map(str::to_string),
                 nils_distinct: id.nils_distinct,
@@ -102,7 +102,7 @@ impl TableSnapshot {
         for index in resource.indexes {
             indexes.push(IndexSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), index.name),
-                columns: index.keys.iter().map(|k| k.to_string()).collect(),
+                columns: index.columns(resource.multitenancy).into_iter().map(str::to_string).collect(),
                 predicate: index.predicate.map(str::to_string),
                 method: index.method.filter(|_| postgres).map(str::to_string),
                 include: if postgres {
@@ -412,6 +412,7 @@ pub fn sql_literal<D: SqlDialect>(dialect: &D, value: &Value) -> Option<String> 
         Value::Null => Some("NULL".to_string()),
         Value::Bool(v) => Some(dialect.boolean_literal(*v).to_string()),
         Value::Int(v) => Some(v.to_string()),
+        Value::Float(v) => Some(v.to_string()),
         Value::String(v) => Some(format!("'{}'", v.replace('\'', "''"))),
         Value::Uuid(v) => Some(format!("'{v}'")),
         Value::Map(_) | Value::Array(_) => {
@@ -431,6 +432,7 @@ fn value_json(value: &Value) -> String {
         Value::Bool(true) => "true".to_string(),
         Value::Bool(false) => "false".to_string(),
         Value::Int(v) => v.to_string(),
+        Value::Float(v) => v.to_string(),
         Value::Uuid(v) => format!("\"{v}\""),
         Value::String(v) => format!("\"{}\"", json_escape(v)),
         Value::Array(items) => {

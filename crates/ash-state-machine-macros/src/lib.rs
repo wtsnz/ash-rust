@@ -150,7 +150,16 @@ fn expand_state_machine_transformer(mut resource: ResourceTokens) -> Result<Toke
         resource.append_to_section("attributes", quote! { id: ::uuid::Uuid [pk]; });
     }
     if !resource.declares_attribute(&state_attr_ident) {
-        resource.append_to_section("attributes", quote! { #state_attr_ident: String; });
+        // One of the machine's states, as AshStateMachine constrains its state attribute.
+        let mut states = vec![sm.initial.clone()];
+        for transition in &sm.transitions {
+            for state in transition.from.iter().chain([&transition.to]) {
+                if !states.contains(state) {
+                    states.push(state.clone());
+                }
+            }
+        }
+        resource.append_to_section("attributes", quote! { #state_attr_ident: String [one_of: [#(#states),*]]; });
     }
 
     // 2. Transform `actions`:

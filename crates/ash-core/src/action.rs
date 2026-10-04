@@ -1,7 +1,7 @@
 use crate::actor::Actor;
 use crate::error::{Error, Result};
 use crate::resource::AttrType;
-use crate::value::{ConstValue, FieldMap};
+use crate::value::{ConstValue, FieldMap, Value};
 
 /// Dynamic hook running before persistence with mutable access to attributes.
 pub type DynamicBeforeActionHook = Box<dyn FnOnce(&mut FieldMap) -> Result<()> + Send + 'static>;
@@ -30,29 +30,49 @@ pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
 ///   avoiding an extra query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionTarget<R> {
-    Id(uuid::Uuid),
+    /// A record by its primary key.
+    Id(Value),
     Record(R),
 }
 
 impl<R: crate::resource::Resource> ActionTarget<R> {
-    /// Returns the entity ID of this target, whether given as an ID or extracted from an existing record.
-    pub fn id(&self) -> uuid::Uuid {
+    /// The primary key of this target, whether given as a key or read from an existing record.
+    pub fn id(&self) -> Value {
         match self {
-            Self::Id(id) => *id,
-            Self::Record(rec) => rec.id(),
+            Self::Id(id) => id.clone(),
+            Self::Record(rec) => rec.pk(),
         }
     }
 }
 
-impl<R> From<uuid::Uuid> for ActionTarget<R> {
-    fn from(id: uuid::Uuid) -> Self {
-        Self::Id(id)
-    }
+/// A target by its primary key, of whichever type the resource's key is.
+macro_rules! target_by_key {
+    ($($ty:ty),*) => {$(
+        impl<R> From<$ty> for ActionTarget<R> {
+            fn from(id: $ty) -> Self {
+                Self::Id(Value::from(id))
+            }
+        }
+    )*};
 }
+
+target_by_key!(uuid::Uuid, i64, String, &str, Value);
 
 impl<R> From<&uuid::Uuid> for ActionTarget<R> {
     fn from(id: &uuid::Uuid) -> Self {
-        Self::Id(*id)
+        Self::Id(Value::Uuid(*id))
+    }
+}
+
+impl<R> From<&String> for ActionTarget<R> {
+    fn from(id: &String) -> Self {
+        Self::Id(Value::String(id.clone()))
+    }
+}
+
+impl<R> From<&Value> for ActionTarget<R> {
+    fn from(id: &Value) -> Self {
+        Self::Id(id.clone())
     }
 }
 
@@ -150,6 +170,8 @@ pub struct ArgumentDef {
     pub name: &'static str,
     pub ty: AttrType,
     pub allow_nil: bool,
+    /// Its value when input doesn't give it, as Ash's argument `default`.
+    pub default: Option<fn() -> crate::value::Value>,
 }
 
 impl ArgumentDef {
@@ -158,6 +180,7 @@ impl ArgumentDef {
             name,
             ty,
             allow_nil: false,
+            default: None,
         }
     }
 
@@ -166,6 +189,24 @@ impl ArgumentDef {
             name,
             ty,
             allow_nil: true,
+            default: None,
+        }
+    }
+
+    /// This argument, `default` when input doesn't give it.
+    pub const fn with_default(mut self, default: fn() -> crate::value::Value) -> Self {
+        self.default = Some(default);
+        self
+    }
+}
+
+/// `arguments` with each default an argument `input` doesn't give, as Ash fills them in.
+pub fn apply_argument_defaults(arguments: &[ArgumentDef], input: &mut crate::value::FieldMap) {
+    for arg in arguments {
+        if let Some(default) = arg.default
+            && !input.contains_key(arg.name)
+        {
+            input.insert(arg.name.to_string(), default());
         }
     }
 }
@@ -207,7 +248,13 @@ pub enum PreparationDef {
     },
     Limit(usize),
     Offset(usize),
+    /// Runs on the records the read found, with the read's arguments, as Ash's
+    /// `prepare after_action(...)`: to note metadata on them, say.
+    AfterAction(AfterReadFn),
 }
+
+/// What a read's `after_action` preparation runs on the records it found.
+pub type AfterReadFn = fn(&crate::value::FieldMap, &mut [crate::value::FieldMap]) -> Result<()>;
 
 impl std::fmt::Debug for PreparationDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -221,6 +268,7 @@ impl std::fmt::Debug for PreparationDef {
                 .finish(),
             Self::Limit(n) => f.debug_tuple("Limit").field(n).finish(),
             Self::Offset(n) => f.debug_tuple("Offset").field(n).finish(),
+            Self::AfterAction(_) => f.write_str("PreparationDef::AfterAction(..)"),
         }
     }
 }
@@ -274,6 +322,106 @@ pub struct ActionDef {
     /// which records it reaches, as Ash's `atomic_upgrade_with`; the primary read when
     /// `None`.
     pub atomic_upgrade_with: Option<&'static str>,
+    /// For a read: how it pages, as Ash's `pagination`. `None`: it doesn't.
+    pub pagination: Option<Pagination>,
+    /// For a generic action: what it returns, as Ash's `returns`; `None` when nothing.
+    pub returns: Option<AttrType>,
+    /// For a generic action: whether it runs in a transaction, as Ash's `transaction?`.
+    pub transaction: bool,
+    /// What the action may note on the records it answers, beyond their fields, as Ash's
+    /// action `metadata` (see [`crate::put_metadata`]).
+    pub metadata: &'static [MetadataDef],
+}
+
+/// Something an action notes on a record it answers, as Ash's `metadata :name, :type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetadataDef {
+    pub name: &'static str,
+    pub ty: AttrType,
+    pub allow_nil: bool,
+}
+
+impl MetadataDef {
+    pub const fn new(name: &'static str, ty: AttrType) -> Self {
+        Self { name, ty, allow_nil: true }
+    }
+
+    pub const fn required(name: &'static str, ty: AttrType) -> Self {
+        Self { name, ty, allow_nil: false }
+    }
+}
+
+/// How a read action pages, as Ash's `pagination` declares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pagination {
+    /// Pages after or before a record's keyset.
+    pub keyset: bool,
+    /// Pages by offset.
+    pub offset: bool,
+    /// Whether a page may count every record its read finds.
+    pub countable: Countable,
+    /// The page size when a page doesn't give one.
+    pub default_limit: Option<usize>,
+    /// The largest page; a larger limit is cut to it. Ash's default is 250.
+    pub max_page_size: Option<usize>,
+    /// Whether every read pages (with the default limit when none is given). Ash's
+    /// default.
+    pub required: bool,
+}
+
+/// Whether a page may count its read's records, as Ash's `countable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Countable {
+    No,
+    /// When the page asks.
+    Yes,
+    /// Unless the page asks not to.
+    ByDefault,
+}
+
+impl Pagination {
+    /// Keyset pages, with Ash's defaults otherwise.
+    pub const fn keyset() -> Self {
+        Self {
+            keyset: true,
+            offset: false,
+            countable: Countable::No,
+            default_limit: None,
+            max_page_size: Some(250),
+            required: true,
+        }
+    }
+
+    /// Offset pages, with Ash's defaults otherwise.
+    pub const fn offset() -> Self {
+        Self { keyset: false, offset: true, ..Self::keyset() }
+    }
+
+    /// Offset pages as well.
+    pub const fn and_offset(mut self) -> Self {
+        self.offset = true;
+        self
+    }
+
+    pub const fn countable(mut self, countable: Countable) -> Self {
+        self.countable = countable;
+        self
+    }
+
+    pub const fn default_limit(mut self, limit: usize) -> Self {
+        self.default_limit = Some(limit);
+        self
+    }
+
+    pub const fn max_page_size(mut self, max: Option<usize>) -> Self {
+        self.max_page_size = max;
+        self
+    }
+
+    pub const fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
 }
 
 impl ActionDef {
@@ -292,6 +440,10 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
+            returns: None,
+            transaction: false,
+            metadata: &[],
         }
     }
 
@@ -310,6 +462,10 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
+            returns: None,
+            transaction: false,
+            metadata: &[],
         }
     }
 
@@ -328,6 +484,10 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
+            returns: None,
+            transaction: false,
+            metadata: &[],
         }
     }
 
@@ -346,6 +506,10 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
+            returns: None,
+            transaction: false,
+            metadata: &[],
         }
     }
 
@@ -364,6 +528,10 @@ impl ActionDef {
             cascade_destroy: &[],
             require_atomic: true,
             atomic_upgrade_with: None,
+            pagination: None,
+            returns: None,
+            transaction: false,
+            metadata: &[],
         }
     }
 
@@ -409,6 +577,29 @@ impl ActionDef {
     /// [`atomic_upgrade_with`](Self::atomic_upgrade_with).
     pub const fn atomic_upgrade_with(mut self, read: &'static str) -> Self {
         self.atomic_upgrade_with = Some(read);
+        self
+    }
+
+    /// What a generic action returns, as Ash's `returns`.
+    pub const fn returns(mut self, ty: AttrType) -> Self {
+        self.returns = Some(ty);
+        self
+    }
+
+    /// Whether a generic action runs in a transaction, as Ash's `transaction?`.
+    pub const fn transaction(mut self, transaction: bool) -> Self {
+        self.transaction = transaction;
+        self
+    }
+
+    /// How a read pages, as Ash's `pagination`.
+    pub const fn metadata(mut self, metadata: &'static [MetadataDef]) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub const fn pagination(mut self, pagination: Pagination) -> Self {
+        self.pagination = Some(pagination);
         self
     }
 
@@ -472,6 +663,13 @@ pub enum Change {
     ManageRelationship {
         relationship: &'static str,
         rel_type: ManagedRelType,
+    },
+    /// Sets `field` to `expr` over the record as stored, as Ash's
+    /// `atomic_update(:field, expr(...))`: in the update's statement where it can run as
+    /// one, or computed from the record read first.
+    AtomicUpdate {
+        field: &'static str,
+        expr: &'static crate::expr::Expr,
     },
     BeforeAction(BeforeActionFn),
     AfterAction(AfterActionFn),
@@ -538,6 +736,7 @@ impl std::fmt::Debug for Change {
                 .field("relationship", relationship)
                 .field("rel_type", rel_type)
                 .finish(),
+            Self::AtomicUpdate { field, .. } => f.debug_struct("AtomicUpdate").field("field", field).finish(),
             Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
             Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
             Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),
@@ -568,6 +767,68 @@ pub enum Validation {
     },
     Custom(&'static dyn CustomValidation),
     Func(fn(&ValidationContext<'_>) -> Result<()>),
+}
+
+impl Validation {
+    /// The error a built-in validation fails with, as Ash describes it: its message a
+    /// template, with its vars (`must have length of between %{min} and %{max}`). `None`
+    /// for a custom validation, which gives its own.
+    pub fn error(&self) -> Option<Error> {
+        use crate::value::Value;
+        let text = |text: &str| Value::String(text.to_string());
+        let number = |n: Option<i64>| n.map_or(Value::Null, Value::Int);
+        Some(match *self {
+            Self::Present { field } => Error::validation(
+                field,
+                "must be present",
+                vec![
+                    ("attributes".into(), Value::Array(vec![text(field)])),
+                    ("exactly".into(), Value::Int(1)),
+                    ("fields".into(), Value::Array(vec![text(field)])),
+                    ("keys".into(), text(field)),
+                ],
+            ),
+            Self::StringLength { field, min, max } => {
+                let (message, vars) = match (min, max) {
+                    (Some(min), Some(max)) => (
+                        "must have length of between %{min} and %{max}",
+                        vec![("min".into(), Value::Int(min as i64)), ("max".into(), Value::Int(max as i64))],
+                    ),
+                    (Some(min), None) => ("must have length of at least %{min}", vec![("min".into(), Value::Int(min as i64))]),
+                    (None, Some(max)) => ("must have length of no more than %{max}", vec![("max".into(), Value::Int(max as i64))]),
+                    (None, None) => return None,
+                };
+                Error::validation(field, message, vars)
+            }
+            Self::OneOf { field, allowed } => {
+                Error::validation(field, "expected one of %{values}", vec![("values".into(), text(&allowed.join(", ")))])
+            }
+            // As Ash's `compare`, with bounds it may and may not be at.
+            Self::Numericality { field, min, max } => {
+                let mut parts = Vec::new();
+                if min.is_some() {
+                    parts.push("must be greater than or equal to %{greater_than_or_equal_to}");
+                }
+                if max.is_some() {
+                    parts.push("must be less than or equal to %{less_than_or_equal_to}");
+                }
+                Error::validation(
+                    field,
+                    parts.join(" and "),
+                    vec![
+                        ("greater_than".into(), Value::Null),
+                        ("less_than".into(), Value::Null),
+                        ("greater_than_or_equal_to".into(), number(min)),
+                        ("less_than_or_equal_to".into(), number(max)),
+                        ("is_equal".into(), Value::Null),
+                        ("is_not_equal".into(), Value::Null),
+                        ("is_nil".into(), Value::Null),
+                    ],
+                )
+            }
+            Self::Custom(_) | Self::Func(_) => return None,
+        })
+    }
 }
 
 impl std::fmt::Debug for Validation {

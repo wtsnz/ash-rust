@@ -240,7 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         u.insert("id".into(), Value::Uuid(u_id));
         u.insert("name".into(), Value::String(format!("Staff Engineer #{i}")));
         u.insert("email".into(), Value::String(format!("staff{i}@company.com")));
-        mem.create(&USER_DEF, None, u_id, u).await?;
+        mem.create(&USER_DEF, None, Value::from(u_id), u).await?;
         author_ids.push(u_id);
     }
 
@@ -261,7 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("author_id".into(), Value::Uuid(author_id));
-        mem.create(&TICKET_DEF, None, t_id, t).await?;
+        mem.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
     }
 
     let schema = AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF])
@@ -415,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     mut_u.insert("id".into(), Value::Uuid(mut_author_id));
     mut_u.insert("name".into(), Value::String("Mut Author".into()));
     mut_u.insert("email".into(), Value::String("mut@example.com".into()));
-    mut_mem.create(&USER_DEF, None, mut_author_id, mut_u).await?;
+    mut_mem.create(&USER_DEF, None, Value::from(mut_author_id), mut_u).await?;
 
     let mut_ctx = Context::new(mut_mem);
     let mut_schema = AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF])
@@ -461,7 +461,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     u.insert("id".into(), Value::Uuid(sql_author_id));
     u.insert("name".into(), Value::String("Database Admin".into()));
     u.insert("email".into(), Value::String("dba@company.com".into()));
-    sqlite_db.create(&SQLITE_USER_DEF, None, sql_author_id, u).await?;
+    sqlite_db.create(&SQLITE_USER_DEF, None, Value::from(sql_author_id), u).await?;
 
     for i in 1..=100 {
         let t_id = Uuid::new_v4();
@@ -471,7 +471,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.insert("status".into(), Value::String("OPEN".into()));
         t.insert("priority".into(), Value::Int(1));
         t.insert("author_id".into(), Value::Uuid(sql_author_id));
-        sqlite_db.create(&SQLITE_TICKET_DEF, None, t_id, t).await?;
+        sqlite_db.create(&SQLITE_TICKET_DEF, None, Value::from(t_id), t).await?;
     }
 
     let sqlite_ctx = Context::new(sqlite_db);

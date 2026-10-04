@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use ash_core::{
-    Actor, BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap, Filter, Resource,
+    Actor, BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap, Resource,
     TransactionSupport, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -65,12 +65,15 @@ pub fn router<D: TransactionSupport + 'static>(
     let schema = AshGraphQL::builder(&DESK_DEF)
         .with_pubsub(pubsub)
         .with_dataloader()
+        .mutation_action::<Ticket, D>("route_ticket", "route")
         .finish_with_context(base.clone())?;
     let graphql = ash_graphql::axum::graphql_router_with(
         schema,
         Arc::new(SubscriptionHub::default()),
         Arc::new(Headers(base.clone())),
     );
+    let rpc_base = base.clone();
+    let rpc = ash_typescript::rpc::axum::rpc_router(rpc::<D>(), move |headers| request_context(&rpc_base, headers));
     let app = Arc::new(App { base, seeded_ms });
     let api = Router::new()
         .route("/api/route", post(route::<D>))
@@ -79,7 +82,7 @@ pub fn router<D: TransactionSupport + 'static>(
         .route("/health", get(|| async { "OK" }))
         .route("/health/seeded", get(seeded::<D>))
         .with_state(app);
-    Ok(graphql.merge(api))
+    Ok(graphql.merge(rpc).merge(api))
 }
 
 async fn seeded<D>(State(app): State<Arc<App<D>>>) -> Json<serde_json::Value> {
@@ -95,7 +98,9 @@ impl IntoResponse for Failure {
             Error::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Error::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Error::StaleRecord { .. } => (StatusCode::CONFLICT, "stale_record"),
-            Error::Validation { .. } | Error::Invalid(_) | Error::Missing { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "invalid"),
+            Error::Validation { .. } | Error::Invalid(_) | Error::Missing { .. } | Error::Multiple(_) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "invalid")
+            }
             Error::TenantRequired { .. } => (StatusCode::BAD_REQUEST, "tenant_required"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "error"),
         };
@@ -146,45 +151,61 @@ async fn route<D: TransactionSupport + 'static>(
     Json(input): Json<RouteInput>,
 ) -> Result<Json<serde_json::Value>, Failure> {
     let ctx = request_context(&app.base, &headers);
-    let id = Ticket::route(&ctx)
-        .subject(input.subject)
-        .body(input.body)
-        .priority(input.priority)
-        .requester_email(input.requester_email)
-        .comments(comment_fields(input.comments))
-        .run(|input| async move {
-            let (subject, body, priority, email, comments) =
-                (input.subject, input.body, input.priority, input.requester_email, input.comments);
-            input
-                .ctx
-                .transaction(move |tx| async move {
-                    let ticket = Ticket::open(&tx)
-                        .subject(subject)
-                        .body(body)
-                        .priority(priority)
-                        .requester_email(email)
-                        .comments(comments)
-                        .await?;
-                    // The active agent or admin with the fewest open tickets.
-                    let staff = Filter::in_list("role", vec![Value::from("agent"), Value::from("admin")]);
-                    let agent = Agent::query(&tx)
-                        .filter(Filter::And(vec![Filter::eq("active", true), staff]))
-                        .load_aggregate(Agent::open_assigned)
-                        .sort(Agent::open_assigned)
-                        .sort(Agent::name)
-                        .first()
-                        .await?;
-                    let ticket = match agent {
-                        Some(agent) => ticket.assign_on(&tx).assignee_id(Some(agent.id)).await?,
-                        None => ticket,
-                    };
-                    AuditEvent::record(&tx).ticket_id(ticket.id).kind("routed".to_string()).await?;
-                    Ok(ticket.id)
-                })
-                .await
-        })
-        .await?;
+    let id = route_ticket(
+        &ctx,
+        input.subject,
+        input.body,
+        input.priority,
+        input.requester_email,
+        comment_fields(input.comments),
+    )
+    .await?;
     Ok(Json(json!({ "id": id })))
+}
+
+/// Runs the `route` generic action, for the JSON endpoint.
+pub async fn route_ticket<D: TransactionSupport + 'static>(
+    ctx: &Context<D>,
+    subject: String,
+    body: String,
+    priority: i64,
+    requester_email: String,
+    comments: Vec<FieldMap>,
+) -> ash_core::Result<Uuid> {
+    Ticket::route(ctx)
+        .subject(subject)
+        .body(body)
+        .priority(priority)
+        .requester_email(requester_email)
+        .comments(comments)
+        .call()
+        .await
+}
+
+/// The actions the desk serves over AshTypescript's RPC, as the Elixir desk's
+/// `typescript_rpc` block declares them.
+pub fn rpc<D: TransactionSupport + 'static>() -> ash_typescript::rpc::Rpc<D> {
+    use crate::{Comment, Tag};
+    ash_typescript::rpc::Rpc::new()
+        .action::<Ticket>("list_tickets", "read")
+        .action::<Ticket>("list_noted_tickets", "noted")
+        .get_by::<Ticket>("get_ticket", "read", &["id"])
+        .action::<Ticket>("open_ticket", "open")
+        .action::<Ticket>("assign_ticket", "assign")
+        .action::<Ticket>("start_ticket", "start")
+        .action::<Ticket>("hold_ticket", "hold")
+        .action::<Ticket>("resolve_ticket", "resolve")
+        .action::<Ticket>("reopen_ticket", "reopen")
+        .action::<Ticket>("close_ticket", "close")
+        .action::<Ticket>("view_ticket", "view")
+        .action::<Ticket>("edit_ticket", "edit")
+        .action::<Ticket>("destroy_ticket", "destroy")
+        .action::<Ticket>("route_ticket", "route")
+        .action::<Comment>("list_comments", "read")
+        .action::<Comment>("create_comment", "create")
+        .action::<Agent>("list_agents", "read")
+        .action::<Tag>("list_tags", "read")
+        .action::<AuditEvent>("list_audit_events", "read")
 }
 
 #[derive(Deserialize)]

@@ -10,8 +10,12 @@ description = "TypeScript definitions, Zod validation schemas, and isomorphic cl
 ash-core = { path = "../ash-core" }
 ash-sql = { path = "../ash-sql", default-features = false, optional = true }
 thiserror = "2"
+serde_json = "1"
+uuid.workspace = true
+axum = { version = "0.8", optional = true, features = ["ws"] }
 
 [features]
+axum = ["dep:axum"]
 default = ["snapshot"]
 snapshot = ["dep:ash-sql"]
 
@@ -23,6 +27,9 @@ ash-pubsub = { path = "../ash-pubsub" }
 ash-sql = { path = "../ash-sql" }
 axum = "0.8"
 tempfile = "3"
+tokio-tungstenite = "0.29"
+async-graphql = { version = "7", features = ["dynamic-schema"] }
+futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }
 uuid.workspace = true
 

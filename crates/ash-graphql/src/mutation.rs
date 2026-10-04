@@ -6,9 +6,9 @@ use crate::preload::{load_selected, preload, selected};
 use ash_core::update_dynamic_expecting;
 use ash_core::{ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value};
 use async_graphql::dynamic::*;
-use uuid::Uuid;
 
 use crate::error::{MUTATION_ERROR, UserError};
+use crate::managed::managed_inputs;
 use crate::names::{camel, pascal};
 use crate::types::{attr_type_to_type_ref, parse_input_val};
 
@@ -41,6 +41,11 @@ pub fn mutation_payload_name(action_name: &str, resource_name: &str) -> String {
     format!("{}{}Result", pascal(action_name), resource_name)
 }
 
+/// `open` on `Ticket` → `OpenTicketMetadata`: the metadata a mutation's action notes.
+pub fn mutation_metadata_name(action_name: &str, resource_name: &str) -> String {
+    format!("{}{}Metadata", pascal(action_name), resource_name)
+}
+
 /// What a mutation's input holds: the attributes the action accepts and its arguments,
 /// each with whether it's required. A create requires an accepted attribute that can't be
 /// nil and has no default; an update requires none.
@@ -58,7 +63,7 @@ fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str
         }
     }
     for arg in action.arguments {
-        fields.push((arg.name, arg.ty, !arg.allow_nil));
+        fields.push((arg.name, arg.ty, !arg.allow_nil && arg.default.is_none()));
     }
     if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
         && let Some(version) = resource.optimistic_lock_attribute()
@@ -68,18 +73,47 @@ fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str
     fields
 }
 
-/// Registers `<Mutation>Result { result, errors }`. A destroy's result is the record it
-/// destroyed.
+/// Registers `<Mutation>Result { result, errors }`, and where the action notes metadata,
+/// its `metadata` (`<Mutation>Metadata`), as AshGraphql adds it. A destroy's result is
+/// the record it destroyed.
 pub fn register_action_payload(
-    builder: SchemaBuilder,
+    mut builder: SchemaBuilder,
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
     fn payload<'a>(ctx: &ResolverContext<'a>) -> Option<&'a MutationPayload> {
         ctx.parent_value.downcast_ref::<MutationPayload>()
     }
+    let mut result = Object::new(mutation_payload_name(action.name, resource.name));
+    if !action.metadata.is_empty() {
+        let name = mutation_metadata_name(action.name, resource.name);
+        let mut metadata = Object::new(&name);
+        for def in action.metadata {
+            let (field, ty) = (def.name, def.ty);
+            metadata = metadata.field(Field::new(
+                camel(field),
+                attr_type_to_type_ref(resource.name, field, ty, def.allow_nil),
+                move |ctx| {
+                    FieldFuture::new(async move {
+                        let record = ctx.parent_value.downcast_ref::<FieldMap>();
+                        Ok(record
+                            .and_then(|record| ash_core::get_metadata(record, field))
+                            .filter(|value| !value.is_null())
+                            .map(|value| FieldValue::value(crate::types::ash_value_to_graphql_value_typed(value, ty))))
+                    })
+                },
+            ));
+        }
+        builder = builder.register(metadata);
+        // What the written record notes, read from it.
+        result = result.field(Field::new("metadata", TypeRef::named(name), |ctx| {
+            FieldFuture::new(async move {
+                Ok(payload(&ctx).and_then(|p| p.result.as_ref()).map(|record| FieldValue::borrowed_any(record)))
+            })
+        }));
+    }
     builder.register(
-        Object::new(mutation_payload_name(action.name, resource.name))
+        result
             .field(Field::new("result", TypeRef::named(resource.name), |ctx| {
                 FieldFuture::new(async move {
                     Ok(payload(&ctx)
@@ -100,9 +134,10 @@ pub fn register_action_payload(
     )
 }
 
-/// Registers `<Mutation>Input`, if the action takes any input.
+/// Registers `<Mutation>Input`, if the action takes any input, and the input objects of
+/// the relationships it manages.
 pub fn register_action_input(
-    builder: SchemaBuilder,
+    mut builder: SchemaBuilder,
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
@@ -110,12 +145,17 @@ pub fn register_action_input(
     if fields.is_empty() {
         return builder;
     }
+    let managed = managed_inputs(resource, action);
     let mut input = InputObject::new(mutation_input_name(action.name, resource.name));
     for (name, ty, required) in fields {
-        input = input.field(InputValue::new(
-            camel(name),
-            attr_type_to_type_ref(resource.name, name, ty, !required),
-        ));
+        let type_ref = match managed.iter().find(|(argument, _)| *argument == name) {
+            Some((_, managed)) => managed.type_ref(!required),
+            None => crate::types::input_type_ref(resource.name, name, ty, !required),
+        };
+        input = input.field(InputValue::new(camel(name), type_ref));
+    }
+    for (_, managed) in &managed {
+        builder = managed.register(builder, resource);
     }
     builder.register(input)
 }
@@ -123,7 +163,7 @@ pub fn register_action_input(
 fn failed(err: &AshError) -> Option<FieldValue<'static>> {
     Some(FieldValue::owned_any(MutationPayload {
         result: None,
-        errors: vec![UserError::from_ash_error(err)],
+        errors: err.each().into_iter().map(UserError::from_ash_error).collect(),
     }))
 }
 
@@ -153,6 +193,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 let mut version = None;
                 if let Some(given) = ctx.args.get("input").filter(|value| !value.is_null()) {
                     let given = given.object()?;
+                    let managed = managed_inputs(resource, action);
                     for (name, ty, _) in input_fields(action, resource) {
                         let Some(value) = given.get(&camel(name)) else {
                             continue;
@@ -164,7 +205,11 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                             version = value.i64().ok();
                             continue;
                         }
-                        let value = if value.is_null() { Value::Null } else { parse_input_val(&value, ty)? };
+                        let value = match managed.iter().find(|(argument, _)| *argument == name) {
+                            Some((_, managed)) => managed.parse(value.as_value())?,
+                            None if value.is_null() => Value::Null,
+                            None => parse_input_val(&value, ty)?,
+                        };
                         input.insert(name.to_string(), value);
                     }
                 }
@@ -186,8 +231,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     .args
                     .get("id")
                     .ok_or_else(|| async_graphql::Error::new("Missing required id argument"))?;
-                let id = Uuid::parse_str(id_arg.string()?)
-                    .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
+                let id = crate::types::parse_id(resource, id_arg.as_value())?;
 
                 // An update runs by id, as AshGraphql's does: as one statement where it can,
                 // the record's visibility, the action's validations and policies and the

@@ -55,13 +55,17 @@ pub fn pk_name(def: &ResourceDef) -> Result<&'static str> {
         .ok_or(Error::NoPrimaryKey(def.name))
 }
 
-pub fn split_input(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
+pub fn split_input(resource: &ResourceDef, action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
     let mut fields = FieldMap::new();
     let mut arguments = FieldMap::new();
-    for (field, value) in input {
+    for (field, mut value) in input {
         if action.accept.contains(&field.as_str()) {
+            if let Some(attribute) = resource.attribute(&field) {
+                cast_text(attribute.ty, &mut value);
+            }
             fields.insert(field, value);
-        } else if action.has_argument(&field) {
+        } else if let Some(arg) = action.arguments.iter().find(|arg| arg.name == field) {
+            cast_text(arg.ty, &mut value);
             arguments.insert(field, value);
         } else {
             return Err(Error::NotAccepted {
@@ -70,8 +74,9 @@ pub fn split_input(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, Fie
             });
         }
     }
+    crate::action::apply_argument_defaults(action.arguments, &mut arguments);
     for arg in action.arguments {
-        if !arg.allow_nil && !arguments.contains_key(arg.name) {
+        if !arg.allow_nil && arguments.get(arg.name).is_none_or(Value::is_null) {
             return Err(Error::Missing {
                 field: arg.name.to_string(),
             });
@@ -80,19 +85,40 @@ pub fn split_input(action: &ActionDef, input: FieldMap) -> Result<(FieldMap, Fie
     Ok((fields, arguments))
 }
 
-#[allow(dead_code)]
-pub fn accept(action: &ActionDef, input: FieldMap) -> Result<FieldMap> {
-    let (fields, _args) = split_input(action, input)?;
-    Ok(fields)
+/// Text as Ash's string types cast it by default: trimmed, and nil when that leaves
+/// nothing (`trim?: true`, `allow_empty?: false`).
+pub(crate) fn cast_text(ty: AttrType, value: &mut Value) {
+    if !matches!(ty, AttrType::String | AttrType::CiString) {
+        return;
+    }
+    if let Value::String(text) = value {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            *value = Value::Null;
+        } else if trimmed.len() != text.len() {
+            *text = trimmed.to_string();
+        }
+    }
 }
 
+
+/// Gives a new record its generated primary key where it has none: a UUID made here, as
+/// Ash's `uuid_primary_key`. Any other generated key (an integer, as Ash's
+/// `integer_primary_key`) the data layer assigns as it writes the record.
 pub fn generate_pk(def: &ResourceDef, fields: &mut FieldMap) {
     if let Some(pk) = def.primary_key()
         && pk.generated
+        && pk.ty == crate::resource::AttrType::Uuid
         && !fields.contains_key(pk.name)
     {
         fields.insert(pk.name.to_string(), Value::Uuid(Uuid::new_v4()));
     }
+}
+
+/// A new record's primary key: what it holds, or `Null` where the data layer assigns it.
+pub(crate) fn new_pk(def: &ResourceDef, fields: &FieldMap) -> Result<Value> {
+    let pk = pk_name(def)?;
+    Ok(fields.get(pk).cloned().unwrap_or(Value::Null))
 }
 
 pub fn apply_changes(
@@ -204,6 +230,10 @@ pub fn apply_changes_with_context(
                 c.apply(&mut ctx)?;
             }
             Change::ManageRelationship { .. } => {}
+            Change::AtomicUpdate { field, expr } => {
+                let value = crate::expr::eval_with_args(expr, fields, arguments)?;
+                fields.insert((*field).to_string(), value);
+            }
             Change::Func(f) => {
                 let mut ctx = crate::action::ChangeContext {
                     fields,
@@ -253,91 +283,42 @@ pub fn run_validations_with_context(
     arguments: &FieldMap,
 ) -> Result<()> {
     let get_val = |f: &str| fields.get(f).or_else(|| arguments.get(f));
+    // Every validation runs, and every failure is reported, as Ash's are.
+    let mut errors = Vec::new();
     for validation in action.validations {
-        match validation {
+        let ctx = crate::action::ValidationContext { record, fields, actor, tenant, metadata, arguments };
+        let result = match validation {
             Validation::Present { field }
             | Validation::StringLength { field, .. }
             | Validation::OneOf { field, .. }
-            | Validation::Numericality { field, .. } => {
-                check_builtin_validation(validation, get_val(field))?;
-            }
-            Validation::Custom(c) => {
-                let ctx = crate::action::ValidationContext {
-                    record,
-                    fields,
-                    actor,
-                    tenant,
-                    metadata,
-                    arguments,
-                };
-                c.validate(&ctx)?;
-            }
-            Validation::Func(f) => {
-                let ctx = crate::action::ValidationContext {
-                    record,
-                    fields,
-                    actor,
-                    tenant,
-                    metadata,
-                    arguments,
-                };
-                f(&ctx)?;
-            }
+            | Validation::Numericality { field, .. } => check_builtin_validation(validation, get_val(field)),
+            Validation::Custom(c) => c.validate(&ctx),
+            Validation::Func(f) => f(&ctx),
+        };
+        if let Err(error) = result {
+            errors.push(error);
         }
     }
-    Ok(())
+    Error::collect(errors)
 }
 
 /// Checks a built-in validation (`present`, `string_length`, `one_of`, `numericality`)
 /// against the value it validates, as its field will hold it.
 pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&Value>) -> Result<()> {
-    match validation {
-        Validation::Present { field } => match value {
-            None | Some(Value::Null) => {
-                return Err(Error::Validation {
-                    field: (*field).to_string(),
-                    message: "must be present".to_string(),
-                });
-            }
-            Some(Value::String(s)) if s.trim().is_empty() => {
-                return Err(Error::Validation {
-                    field: (*field).to_string(),
-                    message: "must be present".to_string(),
-                });
-            }
-            _ => {}
+    let fails = match *validation {
+        Validation::Present { .. } => match value {
+            None | Some(Value::Null) => true,
+            Some(Value::String(s)) => s.trim().is_empty(),
+            _ => false,
         },
-        Validation::StringLength { field, min, max } => {
-            if let Some(Value::String(s)) = value {
-                let char_count = s.chars().count();
-                if let Some(min_val) = min
-                    && char_count < *min_val
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at least {min_val} characters"),
-                    });
-                }
-                if let Some(max_val) = max
-                    && char_count > *max_val
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at most {max_val} characters"),
-                    });
-                }
+        Validation::StringLength { min, max, .. } => match value {
+            Some(Value::String(s)) => {
+                let length = s.chars().count();
+                min.is_some_and(|min| length < min) || max.is_some_and(|max| length > max)
             }
-        }
-        Validation::OneOf { field, allowed } => {
-            if let Some(Value::String(s)) = value
-                && !allowed.contains(&s.as_str())
-            {
-                return Err(Error::Validation {
-                    field: (*field).to_string(),
-                    message: format!("must be one of: {}", allowed.join(", ")),
-                });
-            }
-        }
+            _ => false,
+        },
+        Validation::OneOf { allowed, .. } => matches!(value, Some(Value::String(s)) if !allowed.contains(&s.as_str())),
         Validation::Numericality { field, min, max } => {
             // Integers, and floats and decimals stored as their text, as Ash's
             // numericality checks every kind of number.
@@ -346,42 +327,18 @@ pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&V
                 Some(Value::Int(n)) => Some(*n as f64),
                 Some(Value::String(text)) => match text.parse::<f64>() {
                     Ok(n) if n.is_finite() => Some(n),
-                    _ => {
-                        return Err(Error::Validation {
-                            field: (*field).to_string(),
-                            message: "must be a number".to_string(),
-                        });
-                    }
+                    _ => return Err(Error::validation(field, "must be a number", Vec::new())),
                 },
-                Some(_) => {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: "must be a number".to_string(),
-                    });
-                }
+                Some(_) => return Err(Error::validation(field, "must be a number", Vec::new())),
             };
-            if let Some(n) = number {
-                if let Some(min_val) = min
-                    && n < *min_val as f64
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at least {min_val}"),
-                    });
-                }
-                if let Some(max_val) = max
-                    && n > *max_val as f64
-                {
-                    return Err(Error::Validation {
-                        field: (*field).to_string(),
-                        message: format!("must be at most {max_val}"),
-                    });
-                }
-            }
+            number.is_some_and(|n| min.is_some_and(|min| n < min as f64) || max.is_some_and(|max| n > max as f64))
         }
-        Validation::Custom(_) | Validation::Func(_) => {}
+        Validation::Custom(_) | Validation::Func(_) => false,
+    };
+    match validation.error() {
+        Some(error) if fails => Err(error),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 pub fn and_filters(left: Option<Filter>, right: Option<Filter>) -> Option<Filter> {
@@ -464,7 +421,7 @@ pub fn apply_tenant_to_fields(
 pub fn validate(def: &ResourceDef, fields: &mut FieldMap) -> Result<()> {
     for attribute in def.attributes {
         match fields.get_mut(attribute.name) {
-            None | Some(Value::Null) if attribute.allow_nil => {}
+            None | Some(Value::Null) if attribute.allow_nil || attribute.assigned_on_insert() => {}
             None | Some(Value::Null) => {
                 return Err(Error::Missing {
                     field: attribute.name.to_string(),
@@ -507,14 +464,14 @@ pub(crate) fn validate_given(def: &ResourceDef, fields: &mut FieldMap) -> Result
     Ok(())
 }
 
-fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
+pub(crate) fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> {
     let ok = match (attribute.ty, value) {
         (AttrType::Uuid, Value::Uuid(_))
         | (AttrType::String, Value::String(_))
         | (AttrType::Integer, Value::Int(_))
         | (AttrType::Boolean, Value::Bool(_))
-        | (AttrType::Map, Value::Map(_))
-        | (AttrType::Array, Value::Array(_)) => true,
+        | (AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }, Value::Map(_))
+        | (AttrType::Array { .. }, Value::Array(_)) => true,
         (AttrType::UtcDatetime { precision }, Value::String(got)) => match precision.normalize(got) {
             Ok(_) => true,
             Err(_) => {

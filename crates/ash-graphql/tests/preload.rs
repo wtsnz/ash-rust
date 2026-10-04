@@ -47,15 +47,15 @@ impl Counting {
 }
 
 impl DataLayer for Counting {
-    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
         self.inner.create(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
         self.inner.update(resource, tenant, id, fields).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         self.inner.destroy(resource, tenant, id).await
     }
 
@@ -131,7 +131,7 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
         // One of the author's posts, though they've written several.
         rel("one_post", RelKind::HasOne, || &POST_DEF, "id", "author_id"),
     ],
-    actions: &[ActionDef::read("read").primary()],
+    actions: &[ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false))],
     policies: &[],
     field_policies: &[],
     calculations: &[],
@@ -183,7 +183,7 @@ static POST_DEF: ResourceDef = ResourceDef {
         rel("comments", RelKind::HasMany, || &COMMENT_DEF, "id", "post_id"),
     ],
     actions: &[
-        ActionDef::read("read").primary(),
+        ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
         ActionDef::create("create").accept(&["title", "author_id"]),
         ActionDef::update("retitle").accept(&["title"]),
         ActionDef::destroy("destroy"),
@@ -219,7 +219,7 @@ async fn insert(data: &Counting, def: &ResourceDef, fields: &[(&str, Value)]) ->
     let id = Uuid::new_v4();
     let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(def, None, id, map).await.unwrap();
+    data.create(def, None, Value::from(id), map).await.unwrap();
     id
 }
 
@@ -258,7 +258,9 @@ async fn run(data: &Counting, query: &str, actor: Option<Actor>) -> Json {
         ctx = ctx.with_actor(actor);
     }
     let res = schema.execute(Request::new(query).data(ctx)).await;
-    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    // Fields a policy hides are null, and reported so.
+    let forbidden = |e: &async_graphql::ServerError| e.message == "forbidden field";
+    assert!(res.errors.iter().all(forbidden), "{:?}", res.errors);
     res.data.into_json().unwrap()
 }
 
@@ -625,7 +627,7 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
 #[tokio::test]
 async fn a_mutation_result_checks_field_policies_against_the_record_as_stored() {
     let (data, post) = seeded().await;
-    data.update(&POST_DEF, None, post, FieldMap::from([("label".to_string(), Value::from("secret"))])).await.unwrap();
+    data.update(&POST_DEF, None, Value::from(post), FieldMap::from([("label".to_string(), Value::from("secret"))])).await.unwrap();
     let page = run(
         &data,
         &format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "Labelled" }}) {{ result {{ title commentCount }} }} }}"#),

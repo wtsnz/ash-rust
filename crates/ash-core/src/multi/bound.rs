@@ -1,9 +1,9 @@
 use std::future::Future;
-use uuid::Uuid;
 
 use crate::bulk::{BulkCreateOptions, BulkDestroyOptions};
 use crate::changeset::IntoFieldMap;
 use crate::context::Context;
+use crate::value::Value;
 use crate::data_layer::{DataLayer, TransactionSupport};
 use crate::error::Result;
 use crate::resource::Resource;
@@ -110,7 +110,7 @@ impl<D: DataLayer + 'static> BoundMulti<D> {
         mut self,
         name: impl Into<String>,
         action: &'static str,
-        ids: impl IntoIterator<Item = Uuid>,
+        ids: impl IntoIterator<Item = impl Into<Value>>,
         opts: BulkDestroyOptions,
     ) -> Self
     where

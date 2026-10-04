@@ -40,6 +40,7 @@ pub(crate) fn preloaded_key(relationship: &str, field: &SelectionField<'_>) -> a
 /// record's rows. Arguments not given (or null) leave the destination's read to decide.
 pub(crate) fn related_query<'v>(
     destination: &'static ResourceDef,
+    actor: Option<&ash_core::Actor>,
     arguments: impl IntoIterator<Item = (&'v str, &'v GqlValue)>,
 ) -> async_graphql::Result<RelatedQuery> {
     let mut query = RelatedQuery::default();
@@ -52,8 +53,8 @@ pub(crate) fn related_query<'v>(
             continue;
         }
         match name {
-            "filter" => query.filter = Some(parse_resource_filter(destination, value)?),
-            "sort" => query.sort = parse_resource_sort(destination, value)?,
+            "filter" => query.filter = Some(parse_resource_filter(destination, actor, value)?),
+            "sort" => query.sort = parse_resource_sort(destination, actor, value)?,
             "limit" => query.limit = number(value),
             "offset" => query.offset = number(value),
             _ => {}
@@ -190,11 +191,15 @@ pub(crate) async fn load_selected<D: DataLayer>(
     };
     let mut loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;
     for row in &mut loaded {
-        ash_core::redact_fields(resource, ash.actor.as_ref(), row).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+        crate::redact::redact_record(resource, ash.actor.as_ref(), row);
     }
     for record in records.iter_mut() {
         if let Some(row) = loaded.iter().find(|row| row.get(pk) == record.get(pk)) {
             for name in &loaded_names {
+                let marker = crate::redact::forbidden_marker(name);
+                if let Some(value) = row.get(&marker) {
+                    record.insert(marker, value.clone());
+                }
                 if let Some(value) = row.get(name) {
                     record.insert(name.clone(), value.clone());
                 }
@@ -240,6 +245,7 @@ pub(crate) fn preload<'a, D: DataLayer>(
                     let arguments = field.arguments()?;
                     let query = related_query(
                         (rel.destination)(),
+                        ash.actor.as_ref(),
                         arguments.iter().map(|(name, value)| (name.as_str(), value)),
                     )?;
                     wanted.push(Wanted { rel, key, query, children });

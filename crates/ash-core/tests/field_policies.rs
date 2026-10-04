@@ -305,3 +305,63 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
         "the user's raise stands, and the rename didn't overwrite it with the redacted null"
     );
 }
+
+pub mod payslip_mod {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Payslip {
+            table "payslips";
+
+            actor {
+                role: String;
+            }
+
+            attributes {
+                id: Uuid [pk];
+                employee: String;
+                salary: i64;
+            }
+
+            policies {
+                policy always {
+                    authorize_if actor_present;
+                }
+            }
+
+            field_policies {
+                field salary {
+                    authorize_if actor_attribute_equals(role, "admin");
+                }
+            }
+
+            actions {
+                create create { primary; accept [employee, salary]; }
+                read read { primary; }
+                update rename { accept [employee]; }
+            }
+        }
+    }
+}
+use payslip_mod::{Payslip, PayslipActions};
+
+// A typed record holds a field a field policy hides whatever its type: forbidden, as Ash
+// puts `%Ash.ForbiddenField{}` there. Written back, it's left as stored.
+#[tokio::test]
+async fn typed_records_hold_hidden_fields_whatever_their_type() {
+    let ctx = Context::new(Memory::new());
+    let admin = ctx.with_actor(Actor::new(Uuid::new_v4()).with_role("admin"));
+    let clerk = ctx.with_actor(Actor::new(Uuid::new_v4()).with_role("clerk"));
+    let created = Payslip::create(&admin).employee("Ada").salary(100).await.unwrap();
+    assert_eq!(created.salary, 100);
+
+    let seen = Payslip::query(&clerk).all().await.unwrap();
+    assert_eq!(seen[0].employee, "Ada");
+    assert!(seen[0].salary.is_forbidden(), "{:?}", seen[0].salary);
+
+    let renamed = seen[0].rename(&clerk).employee("Ada L").await.unwrap();
+    assert!(renamed.salary.is_forbidden());
+    let stored = Payslip::query(&admin).all().await.unwrap();
+    assert_eq!(stored[0].salary, ash_core::Guarded::Value(100));
+}

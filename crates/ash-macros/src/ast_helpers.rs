@@ -1,3 +1,5 @@
+use proc_macro2::TokenStream;
+use quote::quote;
 use syn::{Expr, ExprLit, GenericArgument, Ident, Lit, PathArguments, Result, Type, TypePath};
 
 pub fn screaming_snake(name: &str) -> String {
@@ -87,6 +89,49 @@ pub fn is_integer(ty: &Type) -> bool {
                     | "usize"
             )
         })
+}
+
+/// The `AttrType` an action or calculation argument of type `ty` takes (`Option` making
+/// it optional, not changing its type): a list for a `Vec`, a map for a `FieldMap` or
+/// other map, and otherwise the type's own, as an attribute of that type has it.
+pub fn argument_attr_type(ty: &Type) -> TokenStream {
+    let inner = option_inner(ty).unwrap_or(ty);
+    if is_uuid(inner) {
+        quote! { ::ash_core::AttrType::Uuid }
+    } else if is_string(inner) {
+        quote! { ::ash_core::AttrType::String }
+    } else if is_integer(inner) {
+        quote! { ::ash_core::AttrType::Integer }
+    } else if is_bool(inner) {
+        quote! { ::ash_core::AttrType::Boolean }
+    } else if let Some(item) = vec_inner(inner) {
+        let item = argument_attr_type(item);
+        quote! { ::ash_core::AttrType::Array { of: &#item } }
+    } else if last_ident(inner).is_some_and(|i| matches!(i.to_string().as_str(), "FieldMap" | "HashMap" | "BTreeMap" | "Map")) {
+        quote! { ::ash_core::AttrType::Map }
+    } else {
+        quote! { <#inner as ::ash_core::AshType>::ATTR_TYPE }
+    }
+}
+
+/// The `AttrType` a generic action returning `ty` returns, for its definition: as an
+/// argument of that type takes, where that's known from its name, else a map (a struct,
+/// say, which needn't be an Ash type).
+pub fn returns_attr_type(ty: &Type) -> TokenStream {
+    let inner = option_inner(ty).unwrap_or(ty);
+    let known = is_uuid(inner)
+        || is_string(inner)
+        || is_integer(inner)
+        || is_bool(inner)
+        || vec_inner(inner).is_some()
+        || last_ident(inner).is_some_and(|i| matches!(i.to_string().as_str(), "FieldMap" | "HashMap" | "BTreeMap" | "Map" | "f64" | "f32"));
+    if !known {
+        return quote! { ::ash_core::AttrType::Map };
+    }
+    if last_ident(inner).is_some_and(|i| i == "f64" || i == "f32") {
+        return quote! { ::ash_core::AttrType::Float };
+    }
+    argument_attr_type(ty)
 }
 
 pub fn generic_arg0(ty: &Type) -> Option<&Type> {

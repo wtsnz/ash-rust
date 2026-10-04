@@ -1,17 +1,14 @@
 use ash_core::{
-    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, Value,
+    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef,
     scope_read,
 };
 use async_graphql::dynamic::*;
-use uuid::Uuid;
 
 use crate::redact::redact_record;
-use crate::filter::parse_resource_filter;
 use crate::names::{camel, plural};
-use crate::pagination::{build_keyset_query, calculation_arguments, read_arguments, read_field_arguments};
+use crate::pagination::{PageStrategy, build_keyset_query, build_offset_query, read_field_arguments, scoped_read};
 use crate::preload::{Load, preload, selected};
 use crate::request::request_context;
-use crate::sort::parse_resource_sort;
 
 /// Runs `query` as a read through `action` in `ctx`: with the action's preparations and
 /// argument filters, the actor's read policies and the context's tenant.
@@ -24,10 +21,13 @@ pub(crate) async fn run_read<D: DataLayer>(
 ) -> async_graphql::Result<Vec<FieldMap>> {
     let query = scope_read(resource, action, ctx.actor.as_ref(), arguments, query)
         .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-    ctx.data
+    let mut records = ctx
+        .data
         .run_query(resource, &query)
         .await
-        .map_err(|e| async_graphql::Error::new(e.to_string()))
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    crate::pagination::after_read(action, arguments, &mut records)?;
+    Ok(records)
 }
 
 /// `Ticket` → `listTickets`.
@@ -45,9 +45,9 @@ pub fn get_query_name(resource_name: &str) -> String {
     format!("get{resource_name}")
 }
 
-/// `get<Resource>(id: ID!): <Resource>` and the keyset-paginated
-/// `list<Resources>(sort, filter, first, before, after, last): KeysetPageOf<Resource>`
-/// through the primary read, as AshGraphql's `get` and `list` queries are.
+/// `get<Resource>(id: ID!): <Resource>` and `list<Resources>(sort, filter, ...)` through
+/// the primary read, as AshGraphql's `get` and `list` queries are: the list paged as
+/// the read pages ([`build_list_query`]).
 pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
     resource: &'static ResourceDef,
 ) -> (Field, Field) {
@@ -69,12 +69,11 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                     .args
                     .get("id")
                     .ok_or_else(|| async_graphql::Error::new("Missing required id argument"))?;
-                let id = Uuid::parse_str(id_arg.string()?)
-                    .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
+                let id = crate::types::parse_id(resource, id_arg.as_value())?;
                 // A get sees what the primary read sees: an archived record is not found.
                 let fields = selected(ctx.ctx.field(), None);
                 let query = Load::of(resource, &fields, []).onto(CompiledQuery {
-                    filter: Some(Filter::eq(pk_name, Value::Uuid(id))),
+                    filter: Some(Filter::eq(pk_name, id)),
                     limit: Some(1),
                     tenant: ash.tenant.clone(),
                     ..CompiledQuery::default()
@@ -91,41 +90,56 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
     )
     .argument(InputValue::new("id", TypeRef::named_nn(TypeRef::ID)));
 
-    let list_field = build_keyset_query::<D>(list_query_name(resource.name), resource, read_action);
+    let list_field = build_list_query::<D>(list_query_name(resource.name), resource, read_action);
     (get_field, list_field)
 }
 
-/// A read action's own query, `<action><Resources>(sort, filter, <arguments>): [<Resource>!]!`:
-/// a plain list, as AshGraphql gives a read without pagination.
+/// A read action's own query, `<action><Resources>(sort, filter, <arguments>, ...)`, paged
+/// as the action pages ([`build_list_query`]).
 pub fn build_read_action_query<D: DataLayer + Clone + 'static>(
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> Field {
+    build_list_query::<D>(list_query_name_for_action(action.name, resource.name), resource, action)
+}
+
+/// A list query through `action`, as AshGraphql's `list` query: a `KeysetPageOf<Resource>`
+/// where the action pages by keyset, a `PageOf<Resource>` where it pages by offset only,
+/// and a plain `[<Resource>!]!` where it doesn't page.
+pub fn build_list_query<D: DataLayer + Clone + 'static>(
+    name: String,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+) -> Field {
+    match PageStrategy::of(action) {
+        Some(PageStrategy::Keyset) => build_keyset_query::<D>(name, resource, action),
+        Some(PageStrategy::Offset) => build_offset_query::<D>(name, resource, action),
+        None => build_unpaged_query::<D>(name, resource, action),
+    }
+}
+
+/// `<name>(sort, filter, <arguments>): [<Resource>!]!`: every record the read finds.
+fn build_unpaged_query<D: DataLayer + Clone + 'static>(
+    name: String,
+    resource: &'static ResourceDef,
+    action: &'static ActionDef,
+) -> Field {
     let field = Field::new(
-        list_query_name_for_action(action.name, resource.name),
+        name,
         TypeRef::named_nn_list_nn(resource.name),
         move |ctx| {
             FieldFuture::new(async move {
                 let ash = request_context::<D>(&ctx)?;
-                let arguments = read_arguments(&ctx, action)?;
-                let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
-                    Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?),
-                    None => None,
-                };
-                let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
-                    Some(sort) => parse_resource_sort(resource, sort.as_value())?,
-                    None => Vec::new(),
-                };
+                let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
                 let fields = selected(ctx.ctx.field(), None);
-                let load = Load::of(resource, &fields, sort.iter().map(|s| s.field.as_str()));
-                let query = load.onto(CompiledQuery {
-                    filter,
-                    sort,
-                    calculation_args: calculation_arguments(resource, &arguments),
-                    tenant: ash.tenant.clone(),
-                    ..CompiledQuery::default()
-                });
-                let mut records = run_read(&ash, resource, action, &arguments, query).await?;
+                let load = Load::of(resource, &fields, scoped.sort.iter().map(|s| s.field.as_str()));
+                let query = load.onto(scoped);
+                let mut records = ash
+                    .data
+                    .run_query(resource, &query)
+                    .await
+                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                crate::pagination::after_read(action, &arguments, &mut records)?;
                 for record in &mut records {
                     redact_record(resource, ash.actor.as_ref(), record);
                 }

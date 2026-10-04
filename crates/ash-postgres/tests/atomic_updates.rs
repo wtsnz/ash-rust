@@ -5,7 +5,7 @@
 use ash_core::{
     ActionDef, ActionKind, Actor, Atomic, AtomicCondition, AtomicContext, AtomicExpr, AttrType,
     AttributeDef, Change, ChangeContext, Check, Context, CustomChange, CustomValidation, DataLayer,
-    Error, FieldMap, PolicyDef, PolicyEffect, PolicyWhen, ResourceDef, Result, Validation,
+    ConstValue, Error, FieldMap, PolicyDef, PolicyEffect, PolicyWhen, ResourceDef, Result, Validation,
     ValidationContext, Value, destroy_dynamic_by_id, update_dynamic, update_dynamic_expecting,
     update_existing_dynamic,
 };
@@ -56,6 +56,7 @@ fn closed_error(status: &str) -> Error {
     Error::Validation {
         field: "status".into(),
         message: format!("is {status}, not open"),
+        vars: Vec::new(),
     }
 }
 
@@ -145,6 +146,34 @@ static COUNTER: ResourceDef = ResourceDef {
     multitenancy: None,
 };
 
+// Counters only their owner, or anyone for a public one, reads; only the owner updates
+// or destroys.
+static SECRET_POLICIES: &[PolicyDef] = &[
+    PolicyDef::when(PolicyWhen::ActionType(ActionKind::Create), &[PolicyEffect::AuthorizeIf(Check::Always)]),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Read),
+        &[
+            PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" }),
+            PolicyEffect::AuthorizeIf(Check::Eq { field: "name", value: ConstValue::Str("public") }),
+        ],
+    ),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Update),
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+    ),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Destroy),
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+    ),
+];
+
+static SECRET_COUNTER: ResourceDef = ResourceDef {
+    name: "SecretCounter",
+    table: "secret_counters",
+    policies: SECRET_POLICIES,
+    ..COUNTER
+};
+
 fn action(name: &str) -> &'static ActionDef {
     COUNTER.action(name).expect("an action")
 }
@@ -205,7 +234,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert_eq!(closed.get("status"), Some(&Value::from("closed")));
     let again = update_dynamic(&ctx, &COUNTER, action("close"), id, FieldMap::new()).await;
     match again {
-        Err(Error::Validation { field, message }) => {
+        Err(Error::Validation { field, message, .. }) => {
             assert_eq!(field, "status");
             assert_eq!(message, "is closed, not open");
         }
@@ -358,4 +387,64 @@ async fn destroys_run_atomically_in_postgres() {
 #[tokio::test]
 async fn destroys_run_atomically_in_memory() {
     destroy_scenario(Memory::new()).await;
+}
+
+/// An update or destroy by id finds its record through the primary read, as AshGraphql's
+/// and AshTypescript's do (`Ash.bulk_update` over a query of the read action): the read's
+/// policies filter what it finds. A record the actor can't read isn't found, even where
+/// its own policies would forbid the change too; one it can read, but not change, is
+/// forbidden. As one statement, or reading first.
+async fn read_scope_scenario<D: DataLayer + Clone + 'static>(data: D) {
+    let owner = Uuid::new_v4();
+    let ctx = Context::new(data).with_actor(Actor::new(owner));
+    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let create = |name: &'static str| {
+        ash_core::create_dynamic(
+            &ctx,
+            &SECRET_COUNTER,
+            action("create"),
+            input(&[
+                ("name", Value::from(name)),
+                ("status", Value::from("open")),
+                ("count", Value::Int(0)),
+                ("owner_id", Value::Uuid(owner)),
+            ]),
+        )
+    };
+    let private = id_of(&create("private").await.unwrap());
+    let public = id_of(&create("public").await.unwrap());
+
+    for name in ["bump", "shout_reading_first"] {
+        let hidden = update_dynamic(&stranger, &SECRET_COUNTER, action(name), private, FieldMap::new()).await;
+        assert!(matches!(hidden, Err(Error::NotFound)), "{name}: {hidden:?}");
+        let visible = update_dynamic(&stranger, &SECRET_COUNTER, action(name), public, FieldMap::new()).await;
+        assert!(matches!(visible, Err(Error::Forbidden)), "{name}: {visible:?}");
+    }
+    for name in ["remove", "archive"] {
+        let hidden = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), private, None).await;
+        assert!(matches!(hidden, Err(Error::NotFound)), "{name}: {hidden:?}");
+        let visible = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), public, None).await;
+        assert!(matches!(visible, Err(Error::Forbidden)), "{name}: {visible:?}");
+    }
+
+    // The owner reads and updates either.
+    let bumped = update_dynamic(&ctx, &SECRET_COUNTER, action("bump"), private, FieldMap::new()).await.unwrap();
+    assert_eq!(bumped.get("count"), Some(&Value::Int(1)));
+}
+
+#[tokio::test]
+async fn by_id_writes_find_their_record_through_the_read_in_postgres() {
+    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let Ok(pg) = Postgres::connect(&url).await else {
+        assert!(std::env::var("CI").is_err(), "CI runs Postgres");
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&SECRET_COUNTER]).await.unwrap();
+    read_scope_scenario(pg).await;
+}
+
+#[tokio::test]
+async fn by_id_writes_find_their_record_through_the_read_in_memory() {
+    read_scope_scenario(Memory::new()).await;
 }

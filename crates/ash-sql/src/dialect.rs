@@ -124,10 +124,18 @@ pub trait SqlDialect: Send + Sync + 'static {
     fn column_type(&self, attr: &AttributeDef) -> String;
 
     /// Emits `ON CONFLICT (...) DO UPDATE` clause.
-    fn upsert_clause(&self, identity: &IdentityDef, update_fields: &[String]) -> String;
+    /// `ON CONFLICT` on `identity`, whose unique index covers `columns`
+    /// ([`IdentityDef::columns`]).
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String;
 
     /// Whether the dialect supports `RETURNING *` on INSERT/UPDATE.
     fn supports_returning(&self) -> bool;
+
+    /// What a multi-row `VALUES` list gives a key the database assigns, for a row with
+    /// none: its default, as Ecto writes `DEFAULT` for a missing column.
+    fn assigned_key_value(&self) -> &'static str {
+        "DEFAULT"
+    }
 
     /// How a read loads aggregates, as ash_sql's `aggregate_strategy`: each relationship's
     /// aggregates in one subquery, laterally joined to each record where the database
@@ -171,6 +179,17 @@ pub trait SqlDialect: Send + Sync + 'static {
         None
     }
 
+    /// How an atomic statement's subquery locks the records it selects: Postgres's
+    /// `FOR UPDATE`. SQLite, whose single writer serializes updates, has none.
+    fn lock_clause(&self) -> &'static str {
+        " FOR UPDATE"
+    }
+
+    /// What an atomic update returns of the table it updates, aliased `__ash_t`.
+    fn returning_updated(&self) -> &'static str {
+        "__ash_t.*"
+    }
+
     /// Functions the data layer's statements call, created with the tables: on
     /// Postgres, the `ash_raise_error` an atomic update raises its errors through.
     fn database_functions(&self) -> &'static [&'static str] {
@@ -184,6 +203,23 @@ pub trait SqlDialect: Send + Sync + 'static {
 
     /// Render a text filter on `op`. `pattern` is the placeholder bound to [`Self::text_pattern`].
     fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
+
+    /// The parameter a `has` filter binds for `value`: a JSON list holding it, which a
+    /// JSON list column contains (Postgres's `@>`).
+    fn has_param(&self, value: ash_core::Value) -> ash_core::Value {
+        ash_core::Value::Array(vec![value])
+    }
+
+    /// A list column `op` holding the value bound as `param` ([`Self::has_param`]).
+    fn render_has(&self, op: &str, param: &str) -> String {
+        format!("({op} @> {param})")
+    }
+
+    /// Where an `ORDER BY` term puts nulls, as Ash orders them: last ascending, first
+    /// descending. Postgres does so already; a dialect that doesn't says so here.
+    fn null_order(&self, _descending: bool) -> &'static str {
+        ""
+    }
 }
 
 /// How a read loads aggregates over a relationship, as ash_sql's `:lateral` and
@@ -204,6 +240,29 @@ pub enum AggregateStrategy {
 pub struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
+    fn lock_clause(&self) -> &'static str {
+        ""
+    }
+
+    // SQLite's RETURNING names only the updated table's columns, unqualified.
+    fn returning_updated(&self) -> &'static str {
+        "*"
+    }
+
+    // A list is JSON text: one of its items equals the value.
+    fn has_param(&self, value: ash_core::Value) -> ash_core::Value {
+        value
+    }
+
+    fn render_has(&self, op: &str, param: &str) -> String {
+        format!("EXISTS (SELECT 1 FROM json_each({op}) WHERE json_each.value = {param})")
+    }
+
+    // SQLite sorts nulls first ascending.
+    fn null_order(&self, descending: bool) -> &'static str {
+        if descending { " NULLS FIRST" } else { " NULLS LAST" }
+    }
+
     fn name(&self) -> &'static str {
         "sqlite"
     }
@@ -232,13 +291,15 @@ impl SqlDialect for SqliteDialect {
             | AttrType::Vector { .. }
             | AttrType::Atom { .. }
             | AttrType::Map
-            | AttrType::Array => "TEXT".to_string(),
+            | AttrType::Embedded(_)
+            | AttrType::TypedMap { .. }
+            | AttrType::Union { .. }
+            | AttrType::Array { .. } => "TEXT".to_string(),
         }
     }
 
-    fn upsert_clause(&self, identity: &IdentityDef, update_fields: &[String]) -> String {
-        let key_cols = identity
-            .keys
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String {
+        let key_cols = columns
             .iter()
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
@@ -262,6 +323,12 @@ impl SqlDialect for SqliteDialect {
 
     fn supports_returning(&self) -> bool {
         false
+    }
+
+    /// SQLite takes no `DEFAULT` in `VALUES`; a NULL `INTEGER PRIMARY KEY` is assigned
+    /// the next rowid.
+    fn assigned_key_value(&self) -> &'static str {
+        "NULL"
     }
 
     /// SQLite has no lateral joins, so aggregates group, as AshSqlite's do.
@@ -336,6 +403,11 @@ impl SqlDialect for PostgresDialect {
     }
 
     fn column_type(&self, attr: &AttributeDef) -> String {
+        // An integer key the database assigns, as AshPostgres migrates
+        // `integer_primary_key` to `bigserial`.
+        if attr.primary_key && attr.generated && attr.ty == AttrType::Integer {
+            return "BIGSERIAL".to_string();
+        }
         match attr.ty {
             AttrType::Uuid => "UUID".to_string(),
             AttrType::String => "TEXT".to_string(),
@@ -350,13 +422,12 @@ impl SqlDialect for PostgresDialect {
             AttrType::Binary => "BYTEA".to_string(),
             AttrType::Inet => "INET".to_string(),
             AttrType::Vector { dimensions } => format!("VECTOR({dimensions})"),
-            AttrType::Map | AttrType::Array => "JSONB".to_string(),
+            AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => "JSONB".to_string(),
         }
     }
 
-    fn upsert_clause(&self, identity: &IdentityDef, update_fields: &[String]) -> String {
-        let key_cols = identity
-            .keys
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String {
+        let key_cols = columns
             .iter()
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
@@ -369,7 +440,7 @@ impl SqlDialect for PostgresDialect {
         // `DO NOTHING` returns no row for an existing record, so with nothing to update
         // we rewrite a key column to itself and `RETURNING *` still yields the record.
         let fields: Vec<&str> = if update_fields.is_empty() {
-            identity.keys.iter().take(1).copied().collect()
+            columns.iter().take(1).copied().collect()
         } else {
             update_fields.iter().map(String::as_str).collect()
         };

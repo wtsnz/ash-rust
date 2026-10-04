@@ -176,7 +176,7 @@ async fn test_email_notifier_on_resource_action() -> Result<()> {
             .and_then(|v| v.as_str())
             .unwrap_or("customer@example.com");
         let amount = notif.get("amount").and_then(|v| v.as_int()).unwrap_or(0);
-        let id = notif.id;
+        let id = notif.id.clone();
 
         Email::new()
             .from("orders@mystore.com")

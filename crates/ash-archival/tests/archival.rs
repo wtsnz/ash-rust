@@ -41,6 +41,7 @@ pub mod post_mod {
 
                 read read {
                     primary;
+                    pagination keyset: true, countable: true, required: false;
                 }
 
                 /// Archived posts only.

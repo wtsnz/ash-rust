@@ -1,6 +1,6 @@
 //! Isomorphic TypeScript client SDK generator for Ash resources.
 
-use ash_core::{ActionDef, ActionKind, DomainDef, ResourceDef};
+use ash_core::{ActionDef, ActionKind, AttrType, DomainDef, ResourceDef};
 use crate::types::{input_fields, sort_fields, to_camel_case, to_pascal_case, to_upper_snake};
 
 /// Returns plural suffix helper matching ash-graphql list and connection conventions.
@@ -121,11 +121,21 @@ export class AshTransport {{
 
     const json = (await res.json()) as {{
       data?: T;
-      errors?: Array<{{ message: string; path?: (string | number)[] }}>;
+      errors?: Array<{{
+        message: string;
+        path?: (string | number)[];
+        code?: string;
+        extensions?: {{ code?: string }};
+      }}>;
     }};
 
-    if (json.errors && json.errors.length > 0) {{
-      const userErrors: AshUserError[] = json.errors.map((e) => ({{
+    // A field a policy hides comes back null with a `forbidden_field` error: the null
+    // stands for it, so it fails nothing.
+    const errors = (json.errors ?? []).filter(
+      (e) => (e.extensions?.code ?? e.code) !== "forbidden_field",
+    );
+    if (errors.length > 0) {{
+      const userErrors: AshUserError[] = errors.map((e) => ({{
         message: e.message,
         path: e.path,
       }}));
@@ -143,6 +153,27 @@ export class AshTransport {{
     )
 }
 
+/// What a field of type `ty` selects of its value: an embedded resource's or typed map's
+/// fields, or each union member's `value`, as GraphQL serves them; nothing for a scalar.
+pub(crate) fn selection_of(ty: &AttrType) -> String {
+    match ty {
+        AttrType::Array { of } => selection_of(of),
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } => {
+            let fields: Vec<String> =
+                ty.fields().unwrap_or_default().iter().map(|field| format!("{}{}", to_camel_case(field.name), selection_of(&field.ty))).collect();
+            format!(" {{ {} }}", fields.join(" "))
+        }
+        AttrType::Union { name, members } => {
+            let members: Vec<String> = members
+                .iter()
+                .map(|member| format!("... on {name}{} {{ value{} }}", crate::types::to_pascal_case(member.name), selection_of(&member.ty)))
+                .collect();
+            format!(" {{ __typename {} }}", members.join(" "))
+        }
+        _ => String::new(),
+    }
+}
+
 /// Generate selection set builder for a resource.
 pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let mut out = String::new();
@@ -151,7 +182,7 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let base_attrs = res
         .attributes
         .iter()
-        .map(|a| to_camel_case(a.name))
+        .map(|a| format!("{}{}", to_camel_case(a.name), selection_of(&a.ty)))
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -182,6 +213,27 @@ fn sort_field_names(res: &ResourceDef) -> String {
     format!("{{ {} }}", fields.join(", "))
 }
 
+/// How a resource's list query pages, as AshGraphql serves it for its primary read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Paging {
+    Keyset,
+    Offset,
+    /// A plain list of every record.
+    None,
+}
+
+impl Paging {
+    /// As AshGraphql chooses for a list query: keyset where the read pages by keyset,
+    /// else offset, else none.
+    pub(crate) fn of(res: &ResourceDef) -> Self {
+        match res.default_read().pagination {
+            None => Self::None,
+            Some(p) if p.keyset || !p.offset => Self::Keyset,
+            Some(_) => Self::Offset,
+        }
+    }
+}
+
 /// Generate resource query builder class (e.g. `TicketQueryBuilder`). With `live`, it
 /// also has `live()`.
 pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String {
@@ -191,18 +243,211 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
     } else {
         String::new()
     };
-    query_builder_class(res.name, &sort_field_names(res), constructor_params, &live_method)
+    query_builder_class(res.name, &sort_field_names(res), constructor_params, &live_method, Paging::of(res))
 }
 
-/// A query builder class over the `list<Resource>s` keyset read. `sort_names` maps each
-/// sort field the client takes to the schema's enum value for it.
+/// The reads of a query builder over a keyset-paged `list<Resource>s`.
+fn keyset_reads(name: &str, list_q: &str) -> String {
+    format!(
+        r#"  private async read(
+    paging: {{ first?: number; after?: string; last?: number; before?: string }},
+    count: boolean,
+  ): Promise<PaginatedResult<{name}>> {{
+    const fields = build{name}SelectionSet(this._include);
+    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput], $first: Int, $after: String, $last: Int, $before: String) {{
+      {list_q}(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {{
+        results {{
+          ${{fields}}
+        }}
+        startKeyset
+        endKeyset${{count ? "\n        count" : ""}}
+      }}
+    }}`;
+
+    const data = await this.transport.request<{{ {list_q}: PaginatedResult<{name}> }}>(query, {{
+      filter: this._filter,
+      sort: this.sortInput(),
+      ...paging,
+    }});
+    return data.{list_q};
+  }}
+
+  /**
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
+   */
+  public async all(): Promise<{name}[]> {{
+    const records: {name}[] = [];
+    let after: string | undefined;
+    for (;;) {{
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read({{ first: wanted, after }}, false);
+      records.push(...page.results);
+      if (page.results.length < wanted || !page.endKeyset) return records;
+      after = page.endKeyset;
+    }}
+  }}
+
+  public async first(): Promise<{name} | null> {{
+    const page = await this.read({{ first: 1 }}, false);
+    return page.results[0] ?? null;
+  }}
+
+  /**
+   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
+   * `first` records before it. Each page says the keysets at its ends, and how many
+   * records match.
+   */
+  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<{name}>> {{
+    return before !== undefined
+      ? this.read({{ last: first, before }}, true)
+      : this.read({{ first, after }}, true);
+  }}
+"#
+    )
+}
+
+/// The reads of a query builder over an offset-paged `list<Resource>s`.
+fn offset_reads(name: &str, list_q: &str) -> String {
+    format!(
+        r#"  private async read(limit: number, offset: number, count: boolean): Promise<OffsetPage<{name}>> {{
+    const fields = build{name}SelectionSet(this._include);
+    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput], $limit: Int, $offset: Int) {{
+      {list_q}(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {{
+        results {{
+          ${{fields}}
+        }}${{count ? "\n        count" : ""}}
+      }}
+    }}`;
+
+    const data = await this.transport.request<{{ {list_q}: OffsetPage<{name}> }}>(query, {{
+      filter: this._filter,
+      sort: this.sortInput(),
+      limit,
+      offset,
+    }});
+    return data.{list_q};
+  }}
+
+  /**
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each from where the last ended.
+   */
+  public async all(): Promise<{name}[]> {{
+    const records: {name}[] = [];
+    for (;;) {{
+      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
+      if (wanted <= 0) return records;
+      const page = await this.read(wanted, records.length, false);
+      records.push(...page.results);
+      if (page.results.length < wanted) return records;
+    }}
+  }}
+
+  public async first(): Promise<{name} | null> {{
+    const page = await this.read(1, 0, false);
+    return page.results[0] ?? null;
+  }}
+
+  /** An offset page: `limit` records after the first `offset`, and how many match. */
+  public async page(limit: number = 20, offset: number = 0): Promise<OffsetPage<{name}>> {{
+    return this.read(limit, offset, true);
+  }}
+"#
+    )
+}
+
+/// The reads of a query builder over an unpaged `list<Resource>s`.
+fn list_reads(name: &str, list_q: &str) -> String {
+    format!(
+        r#"  private async read(): Promise<{name}[]> {{
+    const fields = build{name}SelectionSet(this._include);
+    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput]) {{
+      {list_q}(filter: $filter, sort: $sort) {{
+        ${{fields}}
+      }}
+    }}`;
+
+    const data = await this.transport.request<{{ {list_q}: {name}[] }}>(query, {{
+      filter: this._filter,
+      sort: this.sortInput(),
+    }});
+    return data.{list_q};
+  }}
+
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<{name}[]> {{
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
+  }}
+
+  public async first(): Promise<{name} | null> {{
+    return (await this.read())[0] ?? null;
+  }}
+"#
+    )
+}
+
+/// A query builder class over the `list<Resource>s` read, paged as `paging` says.
+/// `sort_names` maps each sort field the client takes to the schema's enum value for it.
 pub(crate) fn query_builder_class(
     name: &str,
     sort_names: &str,
     constructor_params: &str,
     live_method: &str,
+    paging: Paging,
 ) -> String {
     let list_q = list_query_name(name);
+    let reads = match paging {
+        Paging::Keyset => keyset_reads(name, &list_q),
+        Paging::Offset => offset_reads(name, &list_q),
+        Paging::None => list_reads(name, &list_q),
+    };
+    let page_query_options = match paging {
+        Paging::Keyset => format!(
+            r#"
+  public pageQueryOptions(first: number = 20, after?: string, before?: string) {{
+    return {{
+      queryKey: [
+        "{name}",
+        "page",
+        {{
+          filter: this._filter,
+          sort: this._sort,
+          first,
+          after,
+          before,
+          include: this._include,
+        }},
+      ],
+      queryFn: () => this.page(first, after, before),
+    }};
+  }}
+"#
+        ),
+        Paging::Offset => format!(
+            r#"
+  public pageQueryOptions(limit: number = 20, offset: number = 0) {{
+    return {{
+      queryKey: [
+        "{name}",
+        "page",
+        {{
+          filter: this._filter,
+          sort: this._sort,
+          limit,
+          offset,
+          include: this._include,
+        }},
+      ],
+      queryFn: () => this.page(limit, offset),
+    }};
+  }}
+"#
+        ),
+        Paging::None => String::new(),
+    };
     format!(
         r#"const {name}SortFieldNames: Record<{name}SortField, string> = {sort_names};
 
@@ -244,62 +489,7 @@ export class {name}QueryBuilder {{
     }}));
   }}
 
-  private async read(
-    paging: {{ first?: number; after?: string; last?: number; before?: string }},
-    count: boolean,
-  ): Promise<PaginatedResult<{name}>> {{
-    const fields = build{name}SelectionSet(this._include);
-    const query = `query List{name}($filter: {name}FilterInput, $sort: [{name}SortInput], $first: Int, $after: String, $last: Int, $before: String) {{
-      {list_q}(filter: $filter, sort: $sort, first: $first, after: $after, last: $last, before: $before) {{
-        results {{
-          ${{fields}}
-        }}
-        startKeyset
-        endKeyset${{count ? "\n        count" : ""}}
-      }}
-    }}`;
-
-    const data = await this.transport.request<{{ {list_q}: PaginatedResult<{name}> }}>(query, {{
-      filter: this._filter,
-      sort: this.sortInput(),
-      ...paging,
-    }});
-    return data.{list_q};
-  }}
-
-  /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
-   */
-  public async all(): Promise<{name}[]> {{
-    const records: {name}[] = [];
-    let after: string | undefined;
-    for (;;) {{
-      const wanted = this._limit === undefined ? ASH_PAGE_SIZE : Math.min(ASH_PAGE_SIZE, this._limit - records.length);
-      if (wanted <= 0) return records;
-      const page = await this.read({{ first: wanted, after }}, false);
-      records.push(...page.results);
-      if (page.results.length < wanted || !page.endKeyset) return records;
-      after = page.endKeyset;
-    }}
-  }}
-
-  public async first(): Promise<{name} | null> {{
-    const page = await this.read({{ first: 1 }}, false);
-    return page.results[0] ?? null;
-  }}
-
-  /**
-   * A keyset page: `first` records after the `after` keyset, or, given `before`, the
-   * `first` records before it. Each page says the keysets at its ends, and how many
-   * records match.
-   */
-  public async page(first: number = 20, after?: string, before?: string): Promise<PaginatedResult<{name}>> {{
-    return before !== undefined
-      ? this.read({{ last: first, before }}, true)
-      : this.read({{ first, after }}, true);
-  }}
-
+{reads}
   public queryOptions() {{
     return {{
       queryKey: [
@@ -315,25 +505,7 @@ export class {name}QueryBuilder {{
       queryFn: () => this.all(),
     }};
   }}
-
-  public pageQueryOptions(first: number = 20, after?: string, before?: string) {{
-    return {{
-      queryKey: [
-        "{name}",
-        "page",
-        {{
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          before,
-          include: this._include,
-        }},
-      ],
-      queryFn: () => this.page(first, after, before),
-    }};
-  }}
-{live_method}}}
+{page_query_options}{live_method}}}
 
 "#
     )

@@ -105,10 +105,10 @@ async fn test_leap3_typed_pubsub_ergonomics() {
     let notif_all = sub_all.recv().await.expect("receive on sub_all");
     assert_eq!(notif_all.resource, "Article");
     assert_eq!(notif_all.action, "publish");
-    assert_eq!(notif_all.id, article.id);
+    assert_eq!(notif_all.id, ash_core::Value::from(article.id));
 
     let notif_publish = sub_publish.recv().await.expect("receive on sub_publish");
-    assert_eq!(notif_publish.id, article.id);
+    assert_eq!(notif_publish.id, ash_core::Value::from(article.id));
 
     // Subscribe to a specific record instance
     let mut sub_record = article.subscribe(&pubsub, Some("archive"));
@@ -122,7 +122,7 @@ async fn test_leap3_typed_pubsub_ergonomics() {
 
     let notif_record = sub_record.recv().await.expect("receive on sub_record");
     assert_eq!(notif_record.action, "archive");
-    assert_eq!(notif_record.id, article.id);
+    assert_eq!(notif_record.id, ash_core::Value::from(article.id));
 }
 
 #[tokio::test]

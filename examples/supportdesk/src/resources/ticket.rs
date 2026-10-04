@@ -1,12 +1,12 @@
-use ash_core::FieldMap;
+use ash_core::{FieldMap, Filter, Value};
 use ash_state_machine::state_machine;
 use uuid::Uuid;
 
 use super::agent::Agent;
+use super::audit_event::AuditEvent;
 use super::comment::Comment;
 use super::tag::Tag;
 use super::ticket_tag::TicketTag;
-use crate::changes::{COUNT_REOPEN, COUNT_VIEW};
 
 #[state_machine]
 resource! {
@@ -53,6 +53,11 @@ resource! {
             transition close, from: ["resolved"], to: "closed";
         }
 
+        indexes {
+            // Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+            index by_assignee: [assignee_id];
+        }
+
         relationships {
             belongs_to assignee: Agent [fk: assignee_id];
             belongs_to author: Agent [fk: author_id];
@@ -69,6 +74,7 @@ resource! {
         calculations {
             weight: i64 = priority * 10;
             subject_length: Option<i64> = string_length(subject);
+            scaled_priority(factor: i64): i64 = priority * arg(factor);
         }
 
         policies {
@@ -108,17 +114,27 @@ resource! {
         actions {
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
+            }
+
+            // Each ticket it finds notes the start of its id, as metadata.
+            read noted {
+                pagination keyset: true, countable: true, required: false;
+                metadata short_id: String;
+                prepare after_action(note_short_ids);
             }
 
             create open {
                 primary;
                 accept [subject, body, priority, confidential, requester_email];
-                argument comments: Vec<FieldMap>;
+                argument comments: Option<Vec<FieldMap>>;
+                metadata comments_given: i64;
                 validate present(requester_email);
                 validate string_length(subject, min: 3, max: 200);
                 validate numericality(priority, min: 1, max: 4);
                 change relate_actor(author_id);
                 change manage_relationship(comments, create);
+                change func(note_comments_given);
             }
 
             update assign {
@@ -132,13 +148,13 @@ resource! {
             update resolve {}
 
             update reopen {
-                change custom(&COUNT_REOPEN);
+                change atomic_update(reopen_count, reopen_count + 1);
             }
 
             update close {}
 
             update view {
-                change custom(&COUNT_VIEW);
+                change atomic_update(view_count, view_count + 1);
             }
 
             update edit {
@@ -147,16 +163,41 @@ resource! {
                 validate numericality(priority, min: 1, max: 4);
             }
 
-            /// Opens a ticket with its comments, assigns it to the active agent with the
-            /// fewest open tickets, and records it, in one transaction. The server
-            /// supplies the work (`.run(...)`), on a data layer that can transact.
+            /// Opens a ticket with its comments, assigns it to the active agent or admin
+            /// with the fewest open tickets (then by name), and records it, in one
+            /// transaction.
             generic route {
+                transaction;
                 argument subject: String;
                 argument body: String;
                 argument priority: i64;
                 argument requester_email: String;
-                argument comments: Vec<FieldMap>;
+                argument comments: Option<Vec<FieldMap>>;
                 returns Uuid;
+                run |input| async move {
+                    let ctx = input.ctx;
+                    let ticket = Ticket::open(ctx)
+                        .subject(input.subject)
+                        .body(input.body)
+                        .priority(input.priority)
+                        .requester_email(input.requester_email)
+                        .comments(input.comments)
+                        .await?;
+                    let staff = Filter::in_list("role", vec![Value::from("agent"), Value::from("admin")]);
+                    let agent = Agent::query(ctx)
+                        .filter(Filter::And(vec![Filter::eq("active", true), staff]))
+                        .load_aggregate(Agent::open_assigned)
+                        .sort(Agent::open_assigned)
+                        .sort(Agent::name)
+                        .first()
+                        .await?;
+                    let ticket = match agent {
+                        Some(agent) => ticket.assign_on(ctx).assignee_id(Some(agent.id)).await?,
+                        None => ticket,
+                    };
+                    AuditEvent::record(ctx).ticket_id(ticket.id).kind("routed".to_string()).await?;
+                    Ok(ticket.id)
+                };
             }
 
             destroy destroy {
@@ -168,4 +209,25 @@ resource! {
             }
         }
     }
+}
+
+/// Each ticket a read finds notes the start of its id, as its `short_id` metadata.
+fn note_short_ids(_arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Result<()> {
+    for record in records {
+        if let Some(id) = record.get("id").and_then(Value::as_uuid) {
+            ash_core::put_metadata(record, "short_id", id.to_string()[..8].to_string());
+        }
+    }
+    Ok(())
+}
+
+/// An opened ticket notes how many comments it was opened with, as its
+/// `comments_given` metadata.
+fn note_comments_given(ctx: &mut ash_core::ChangeContext<'_>) -> ash_core::Result<()> {
+    let given = ctx.arguments.get("comments").and_then(Value::as_array).map_or(0, <[Value]>::len) as i64;
+    ctx.after_action(move |record| {
+        ash_core::put_metadata(record, "comments_given", given);
+        Ok(())
+    });
+    Ok(())
 }

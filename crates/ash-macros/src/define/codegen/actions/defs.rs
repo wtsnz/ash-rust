@@ -4,7 +4,7 @@ use syn::Result;
 use syn::spanned::Spanned;
 
 use super::super::policies::lit_to_const_value;
-use crate::ast_helpers::{is_bool, is_integer, is_string, is_uuid, option_inner};
+use crate::ast_helpers::argument_attr_type;
 use crate::define::ast::{ChangeSpec, PreparationSpec, ResourceDefinition, ValidationSpec};
 
 pub(crate) fn filter_expr_to_tokens(expr: &syn::Expr, resource: &syn::Ident) -> TokenStream {
@@ -109,23 +109,20 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                 .map(|arg| {
                     let name_str = arg.name.to_string();
                     let allow_nil = arg.allow_nil;
-                    let inner = option_inner(&arg.ty).unwrap_or(&arg.ty);
-                    let ty_tokens = if is_uuid(inner) {
-                        quote! { ::ash_core::AttrType::Uuid }
-                    } else if is_string(inner) {
-                        quote! { ::ash_core::AttrType::String }
-                    } else if is_integer(inner) {
-                        quote! { ::ash_core::AttrType::Integer }
-                    } else if is_bool(inner) {
-                        quote! { ::ash_core::AttrType::Boolean }
-                    } else {
-                        quote! { ::ash_core::AttrType::String }
+                    let ty_tokens = argument_attr_type(&arg.ty);
+                    let default = match &arg.default {
+                        Some(expr) => {
+                            let ty = crate::ast_helpers::option_inner(&arg.ty).unwrap_or(&arg.ty);
+                            quote! { ::std::option::Option::Some(|| { let value: #ty = #expr; ::ash_core::Value::from(value) }) }
+                        }
+                        None => quote! { ::std::option::Option::None },
                     };
                     quote! {
                         ::ash_core::ArgumentDef {
                             name: #name_str,
                             ty: #ty_tokens,
                             allow_nil: #allow_nil,
+                            default: #default,
                         }
                     }
                 })
@@ -143,6 +140,11 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                     ChangeSpec::RelateActor { field } => {
                         let field_str = field.to_string();
                         Ok(quote! { ::ash_core::Change::RelateActor { field: #field_str } })
+                    }
+                    ChangeSpec::AtomicUpdate { field, expr } => {
+                        let field_str = field.to_string();
+                        let expr_tokens = crate::define::codegen::calculations::calc_expr_to_tokens(expr);
+                        Ok(quote! { ::ash_core::Change::AtomicUpdate { field: #field_str, expr: &#expr_tokens } })
                     }
                     ChangeSpec::SetFromArg { field, argument } => {
                         let field_str = field.to_string();
@@ -288,6 +290,11 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                             ::ash_core::PreparationDef::Offset(#offset)
                         });
                     }
+                    PreparationSpec::AfterAction(run) => {
+                        prep_tokens.push(quote! {
+                            ::ash_core::PreparationDef::AfterAction(#run)
+                        });
+                    }
                 }
             }
             builder_chain = quote! {
@@ -311,6 +318,50 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
         if let Some(read) = &act.atomic_upgrade_with {
             let read = read.to_string();
             builder_chain = quote! { #builder_chain.atomic_upgrade_with(#read) };
+        }
+        if act.transaction {
+            builder_chain = quote! { #builder_chain.transaction(true) };
+        }
+        if !act.metadata.is_empty() {
+            let defs = act.metadata.iter().map(|(name, ty)| {
+                let name = name.to_string();
+                let attr_ty = crate::ast_helpers::argument_attr_type(ty);
+                let allow_nil = crate::ast_helpers::option_inner(ty).is_some();
+                quote! { ::ash_core::MetadataDef { name: #name, ty: #attr_ty, allow_nil: #allow_nil } }
+            });
+            builder_chain = quote! { #builder_chain.metadata(&[#(#defs),*]) };
+        }
+        if let Some(ret) = &act.returns {
+            let ty = crate::ast_helpers::returns_attr_type(ret);
+            builder_chain = quote! { #builder_chain.returns(#ty) };
+        }
+        if let Some(spec) = &act.pagination {
+            let (keyset, offset) = (spec.keyset, spec.offset);
+            let countable = match spec.countable.as_ref().map(|ident| ident.to_string()) {
+                Some(value) if value == "true" => quote! { ::ash_core::Countable::Yes },
+                Some(value) if value == "by_default" => quote! { ::ash_core::Countable::ByDefault },
+                _ => quote! { ::ash_core::Countable::No },
+            };
+            let default_limit = match &spec.default_limit {
+                Some(limit) => quote! { ::std::option::Option::Some(#limit) },
+                None => quote! { ::std::option::Option::None },
+            };
+            let max_page_size = match &spec.max_page_size {
+                Some(Some(max)) => quote! { ::std::option::Option::Some(#max) },
+                Some(None) => quote! { ::std::option::Option::None },
+                None => quote! { ::std::option::Option::Some(250) },
+            };
+            let required = spec.required.unwrap_or(true);
+            builder_chain = quote! {
+                #builder_chain.pagination(::ash_core::Pagination {
+                    keyset: #keyset,
+                    offset: #offset,
+                    countable: #countable,
+                    default_limit: #default_limit,
+                    max_page_size: #max_page_size,
+                    required: #required,
+                })
+            };
         }
         if !act.require_atomic {
             builder_chain = quote! { #builder_chain.require_atomic(false) };

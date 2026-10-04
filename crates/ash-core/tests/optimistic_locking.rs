@@ -63,7 +63,7 @@ async fn test_optimistic_locking_memory_increments_and_detects_conflict() {
     match err {
         Error::StaleRecord { resource, id } => {
             assert_eq!(resource, "BankAccount");
-            assert_eq!(id, stale_account.id);
+            assert_eq!(id, ash_core::Value::from(stale_account.id));
         }
         other => panic!("expected Error::StaleRecord, got {other:?}"),
     }
@@ -121,7 +121,7 @@ async fn test_optimistic_locking_sqlite_increments_and_detects_conflict() {
     match err {
         Error::StaleRecord { resource, id } => {
             assert_eq!(resource, "BankAccount");
-            assert_eq!(id, stale_account.id);
+            assert_eq!(id, ash_core::Value::from(stale_account.id));
         }
         other => panic!("expected Error::StaleRecord, got {other:?}"),
     }

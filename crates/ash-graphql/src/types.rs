@@ -1,4 +1,4 @@
-use ash_core::{AttrType, FieldMap, Value as AshValue};
+use ash_core::{AttrType, FieldMap, ResourceDef, Value as AshValue};
 use async_graphql::dynamic::TypeRef;
 use async_graphql::{Name, Value as GqlValue};
 
@@ -15,19 +15,76 @@ pub fn graphql_type_name(ty: AttrType) -> &'static str {
         AttrType::Date => "Date",
         AttrType::Decimal => "Decimal",
         AttrType::Map => "Json",
+        // Their own types, as AshGraphql gives them (see `composite`).
+        AttrType::Embedded(embedded) => embedded.resource().name,
+        AttrType::TypedMap { name, .. } | AttrType::Union { name, .. } => name,
         AttrType::Atom { name: Some(name), .. } => name,
         AttrType::Atom { name: None, .. }
         | AttrType::String
         | AttrType::CiString
         | AttrType::Binary
         | AttrType::Inet
-        | AttrType::Array
         | AttrType::Vector { .. } => TypeRef::STRING,
+        // A list within a list has no GraphQL type of its own here.
+        AttrType::Array { .. } => "Json",
+    }
+}
+
+/// The record a client named by its `ID`, as the resource's primary key: a UUID, an
+/// integer, or text, as AshGraphql decodes an encoded primary key.
+pub(crate) fn parse_id(resource: &ResourceDef, value: &GqlValue) -> async_graphql::Result<AshValue> {
+    let text = match value {
+        GqlValue::String(text) => AshValue::String(text.clone()),
+        GqlValue::Number(n) => n.as_i64().map(AshValue::Int).ok_or_else(|| async_graphql::Error::new("Invalid primary key"))?,
+        _ => return Err(async_graphql::Error::new("Invalid primary key")),
+    };
+    let ty = resource.primary_key().map_or(AttrType::Uuid, |pk| pk.ty);
+    let key = match (ty, &text) {
+        (AttrType::String | AttrType::CiString, AshValue::Int(n)) => Some(AshValue::String(n.to_string())),
+        _ => ash_core::pk_cast(ty, &text),
+    };
+    key.ok_or_else(|| async_graphql::Error::new("Invalid primary key"))
+}
+
+/// A primary key as an `ID` gives it: text, as Absinthe serializes an ID.
+pub(crate) fn id_output(value: &AshValue) -> Option<GqlValue> {
+    match value {
+        AshValue::Null => None,
+        AshValue::String(text) => Some(GqlValue::String(text.clone())),
+        other => Some(GqlValue::String(other.to_string())),
     }
 }
 
 /// The custom scalars the schema's types use.
 pub const CUSTOM_SCALARS: &[&str] = &["DateTime", "Date", "Decimal", "Json"];
+
+/// The input type a value of `ty` given as `field` of `owner` takes: an embedded
+/// resource's input for that field (`<Owner><Field>Input`), a typed map's or union's
+/// `<Name>Input`, a list of them, or the type's own.
+pub fn input_type_ref(owner: &str, field: &str, ty: AttrType, allow_nil: bool) -> TypeRef {
+    let name = |ty: AttrType| match ty {
+        AttrType::Embedded(_) => format!("{owner}{}Input", crate::names::pascal(field)),
+        AttrType::TypedMap { name, .. } | AttrType::Union { name, .. } => format!("{name}Input"),
+        other => graphql_type_name(other).to_string(),
+    };
+    match ty {
+        AttrType::Array { of } if crate::composite::is_composite(*of) => {
+            if allow_nil {
+                TypeRef::named_nn_list(name(*of))
+            } else {
+                TypeRef::named_nn_list_nn(name(*of))
+            }
+        }
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => {
+            if allow_nil {
+                TypeRef::named(name(ty))
+            } else {
+                TypeRef::named_nn(name(ty))
+            }
+        }
+        _ => attr_type_to_type_ref(owner, field, ty, allow_nil),
+    }
+}
 
 /// Converts an Ash [`AttrType`] into an `async_graphql` [`TypeRef`].
 pub fn attr_type_to_type_ref(
@@ -37,11 +94,13 @@ pub fn attr_type_to_type_ref(
     allow_nil: bool,
 ) -> TypeRef {
     match ty {
-        AttrType::Array => {
+        // A list of its items' type, as AshGraphql serves `{:array, type}`.
+        AttrType::Array { of } => {
+            let item = graphql_type_name(*of);
             if allow_nil {
-                TypeRef::named_nn_list(TypeRef::STRING)
+                TypeRef::named_nn_list(item)
             } else {
-                TypeRef::named_nn_list_nn(TypeRef::STRING)
+                TypeRef::named_nn_list_nn(item)
             }
         }
         AttrType::Vector { .. } => {
@@ -70,6 +129,7 @@ pub fn ash_value_to_graphql_value(val: &AshValue) -> GqlValue {
         AshValue::Null => GqlValue::Null,
         AshValue::Bool(b) => GqlValue::Boolean(*b),
         AshValue::Int(n) => GqlValue::Number((*n).into()),
+        AshValue::Float(n) => async_graphql::Number::from_f64(*n).map_or(GqlValue::Null, GqlValue::Number),
         AshValue::String(s) => GqlValue::String(s.clone()),
         AshValue::Uuid(u) => GqlValue::String(u.to_string()),
         AshValue::Map(m) => {
@@ -171,7 +231,7 @@ pub fn graphql_value_to_ash_value(val: &GqlValue) -> AshValue {
             if let Some(i) = n.as_i64() {
                 AshValue::Int(i)
             } else if let Some(f) = n.as_f64() {
-                AshValue::Int(f.round() as i64)
+                AshValue::Float(f)
             } else {
                 AshValue::Null
             }
@@ -275,6 +335,19 @@ pub fn parse_input_value(value: &GqlValue, ty: AttrType) -> Result<AshValue, asy
                 Ok(AshValue::String(name.to_string()))
             }
         }
-        _ => Ok(AshValue::Null),
+        // A map is JSON, its keys as the client sent them.
+        AttrType::Map => Ok(graphql_value_to_ash_value(value)),
+        // Cast as the type casts its JSON: each field, or the member given.
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => ash_core::input::value_input(ty, &value.clone().into_json()?).map_err(|e| async_graphql::Error::new(e.to_string())),
+        // A list, each item as its type takes it.
+        AttrType::Array { of } => match value {
+            GqlValue::List(items) => items
+                .iter()
+                .map(|item| if matches!(item, GqlValue::Null) { Ok(AshValue::Null) } else { parse_input_value(item, *of) })
+                .collect::<Result<Vec<_>, _>>()
+                .map(AshValue::Array),
+            // A single item stands for a list of it, as GraphQL coerces one.
+            item => Ok(AshValue::Array(vec![parse_input_value(item, *of)?])),
+        },
     }
 }

@@ -67,12 +67,41 @@ pub struct IdentityDef {
     pub predicate: Option<&'static str>,
     /// When false, Postgres emits `UNIQUE NULLS NOT DISTINCT`. SQLite has no equivalent and keeps the default unique index.
     pub nils_distinct: bool,
+    /// On a resource with attribute multitenancy, whether the identity spans every
+    /// tenant. Otherwise it's unique within each tenant, as Ash's identities are unless
+    /// `all_tenants?: true`.
+    pub all_tenants: bool,
+}
+
+/// `keys`, led by the tenant attribute under attribute multitenancy unless they span
+/// every tenant, as AshPostgres scopes identities and custom indexes: the tenant first,
+/// wherever it was declared.
+fn tenant_led(keys: &'static [&'static str], multitenancy: Option<MultitenancyDef>, all_tenants: bool) -> Vec<&'static str> {
+    match multitenancy {
+        Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) if !all_tenants => {
+            std::iter::once(tenant).chain(keys.iter().copied().filter(|key| *key != tenant)).collect()
+        }
+        _ => keys.to_vec(),
+    }
 }
 
 impl IdentityDef {
     pub const fn with_nils_distinct(mut self, nils_distinct: bool) -> Self {
         self.nils_distinct = nils_distinct;
         self
+    }
+
+    pub const fn all_tenants(mut self) -> Self {
+        self.all_tenants = true;
+        self
+    }
+
+    /// The columns the identity is unique over on a resource with `multitenancy`: its
+    /// keys, within the tenant under attribute multitenancy unless it spans every tenant.
+    /// Its unique index, an upsert's conflict target and the in-memory check all use
+    /// these; a lookup by the identity gives its keys, the tenant coming from the context.
+    pub fn columns(&self, multitenancy: Option<MultitenancyDef>) -> Vec<&'static str> {
+        tenant_led(self.keys, multitenancy, self.all_tenants)
     }
 
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
@@ -82,6 +111,7 @@ impl IdentityDef {
             message: None,
             predicate: None,
             nils_distinct: true,
+            all_tenants: false,
         }
     }
 
@@ -96,6 +126,7 @@ impl IdentityDef {
             message: Some(message),
             predicate: None,
             nils_distinct: true,
+            all_tenants: false,
         }
     }
 
@@ -115,6 +146,10 @@ pub struct IndexDef {
     pub method: Option<&'static str>,
     /// Extra columns stored in the index for index-only scans (`INCLUDE (...)`), Postgres only.
     pub include: &'static [&'static str],
+    /// On a resource with attribute multitenancy, whether the index spans every tenant.
+    /// Otherwise it leads with the tenant attribute, as AshPostgres's custom indexes do
+    /// unless `all_tenants?: true`.
+    pub all_tenants: bool,
 }
 
 impl IndexDef {
@@ -125,7 +160,20 @@ impl IndexDef {
             predicate: None,
             method: None,
             include: &[],
+            all_tenants: false,
         }
+    }
+
+    pub const fn all_tenants(mut self) -> Self {
+        self.all_tenants = true;
+        self
+    }
+
+    /// The columns the index covers on a resource with `multitenancy`: its keys, led by
+    /// the tenant attribute under attribute multitenancy unless it spans every tenant, as
+    /// AshPostgres scopes custom indexes (the tenant first, wherever it was declared).
+    pub fn columns(&self, multitenancy: Option<MultitenancyDef>) -> Vec<&'static str> {
+        tenant_led(self.keys, multitenancy, self.all_tenants)
     }
 
     pub const fn with_predicate(mut self, predicate: &'static str) -> Self {
@@ -350,7 +398,13 @@ impl ResourceDef {
     /// resource that declares no read action, an implicit `read` without preparations,
     /// through which its read policies still apply.
     pub fn default_read(&self) -> &ActionDef {
-        static IMPLICIT_READ: ActionDef = ActionDef::read("read");
+        // As Ash's default read (`defaults [:read]`): paging by keyset or offset, when asked.
+        static IMPLICIT_READ: ActionDef = ActionDef::read("read").pagination(
+            crate::action::Pagination::keyset()
+                .and_offset()
+                .countable(crate::action::Countable::Yes)
+                .required(false),
+        );
         self.primary_read().unwrap_or(&IMPLICIT_READ)
     }
 
@@ -385,6 +439,40 @@ impl AttributeDef {
             primary_key: true,
             allow_nil: false,
             generated: true,
+            version: false,
+            default_fn: None,
+        }
+    }
+
+    /// An integer primary key the data layer assigns, as Ash's `integer_primary_key`: an
+    /// identity column in SQL, a counter in memory.
+    pub const fn integer_pk(name: &'static str) -> Self {
+        Self {
+            name,
+            ty: AttrType::Integer,
+            primary_key: true,
+            allow_nil: false,
+            generated: true,
+            version: false,
+            default_fn: None,
+        }
+    }
+
+    /// Whether the data layer assigns the attribute's value to a new record, as it does
+    /// an `integer_primary_key`: absent until the record is stored.
+    pub fn assigned_on_insert(&self) -> bool {
+        self.primary_key && self.generated && self.ty != AttrType::Uuid
+    }
+
+    /// A primary key of type `ty` given with each new record, as an Ash attribute with
+    /// `primary_key?: true` is.
+    pub const fn pk(name: &'static str, ty: AttrType) -> Self {
+        Self {
+            name,
+            ty,
+            primary_key: true,
+            allow_nil: false,
+            generated: false,
             version: false,
             default_fn: None,
         }
@@ -469,7 +557,10 @@ pub enum AttrType {
         name: Option<&'static str>,
     },
     Map,
-    Array,
+    /// A list of values of one type, as Ash's `{:array, type}`.
+    Array {
+        of: &'static AttrType,
+    },
     UtcDatetime { precision: crate::types::TimePrecision },
     Decimal,
     Float,
@@ -478,9 +569,79 @@ pub enum AttrType {
     CiString,
     Inet,
     Vector { dimensions: u32 },
+    /// An embedded resource, as an attribute holding one has it: its fields, as a map.
+    Embedded(EmbeddedType),
+    /// A map of declared fields, as Ash's `:map` with `fields` constraints (or a typed
+    /// struct): `#[derive(AshTypedMap)]` on a struct.
+    TypedMap { name: &'static str, fields: &'static [MapField] },
+    /// One of several typed members, as Ash's `Ash.Type.Union`, held as `{type, value}`:
+    /// `#[derive(AshUnion)]` on an enum.
+    Union { name: &'static str, members: &'static [UnionMember] },
+}
+
+/// The embedded resource an [`AttrType::Embedded`] attribute holds.
+#[derive(Clone, Copy)]
+pub struct EmbeddedType(pub &'static ResourceDef);
+
+impl EmbeddedType {
+    pub const fn resource(self) -> &'static ResourceDef {
+        self.0
+    }
+}
+
+impl PartialEq for EmbeddedType {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.name == other.0.name
+    }
+}
+
+impl Eq for EmbeddedType {}
+
+impl std::fmt::Debug for EmbeddedType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Embedded").field(&self.0.name).finish()
+    }
+}
+
+/// A field of an [`AttrType::TypedMap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapField {
+    pub name: &'static str,
+    pub ty: AttrType,
+    pub allow_nil: bool,
+}
+
+/// A member of an [`AttrType::Union`]: its name, and the type its value is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnionMember {
+    pub name: &'static str,
+    pub ty: AttrType,
 }
 
 impl AttrType {
+    /// The fields a value of this type holds, where it holds declared ones: an embedded
+    /// resource's attributes, or a typed map's fields.
+    pub fn fields(self) -> Option<Vec<MapField>> {
+        match self {
+            Self::Embedded(embedded) => Some(
+                embedded
+                    .resource()
+                    .attributes
+                    .iter()
+                    .map(|attr| MapField { name: attr.name, ty: attr.ty, allow_nil: attr.allow_nil })
+                    .collect(),
+            ),
+            Self::TypedMap { fields, .. } => Some(fields.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Whether a value of this type is held as a map: a map, an embedded resource, a
+    /// typed map or a union.
+    pub const fn is_map_like(self) -> bool {
+        matches!(self, Self::Map | Self::Embedded(_) | Self::TypedMap { .. } | Self::Union { .. })
+    }
+
     /// A UTC datetime to the second, as Ash's `:utc_datetime`.
     pub const UTC_DATETIME: Self = Self::UtcDatetime {
         precision: crate::types::TimePrecision::Second,
@@ -498,7 +659,7 @@ impl AttrType {
             Self::Boolean => "boolean",
             Self::Atom { .. } => "atom",
             Self::Map => "map",
-            Self::Array => "array",
+            Self::Array { .. } => "array",
             Self::UtcDatetime {
                 precision: crate::types::TimePrecision::Second,
             } => "utc_datetime",
@@ -512,6 +673,8 @@ impl AttrType {
             Self::CiString => "ci_string",
             Self::Inet => "inet",
             Self::Vector { .. } => "vector",
+            Self::Embedded(_) | Self::TypedMap { .. } => "map",
+            Self::Union { .. } => "union",
         }
     }
 }
@@ -741,7 +904,13 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
     type Store: crate::store::StoreTag;
     const DEF: ResourceDef;
 
-    fn id(&self) -> Uuid;
+    /// The record's primary key, whatever its type.
+    fn pk(&self) -> crate::value::Value;
+
+    /// The record's primary key, where it's a UUID. For any key, [`Resource::pk`].
+    fn id(&self) -> Uuid {
+        self.pk().as_uuid().expect("`Resource::id` is for a UUID primary key; use `pk` for any key")
+    }
     fn to_fields(&self) -> FieldMap;
     fn from_fields(fields: &FieldMap) -> Result<Self>;
 
@@ -750,6 +919,21 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
             "unknown relationship `{name}` on {}",
             Self::DEF.name
         )))
+    }
+
+    /// Runs the generic action `action` with `input`, its arguments by name, as its own
+    /// `run` does: authorized by its policies, in a transaction if it takes one, its result
+    /// as a value. An API serving the action by name runs it so. An action with no `run`
+    /// of its own: [`Error::ManualRequired`].
+    fn run_generic<'a, D: crate::data_layer::TransactionSupport + 'static>(
+        _ctx: &'a Context<D>,
+        action: &'a str,
+        _input: FieldMap,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::value::Value>> + Send + 'a>> {
+        Box::pin(async move {
+            let action = Self::DEF.action(action).map(|a| a.name).unwrap_or("unknown");
+            Err(Error::ManualRequired { action })
+        })
     }
 }
 
@@ -760,7 +944,7 @@ pub trait ResourceExt: Resource {
         &'a self,
         ctx: &'a Context<D>,
     ) -> Pin<Box<dyn Future<Output = Result<Self>> + Send + 'a>> {
-        Box::pin(async move { crate::engine::get::<Self, D>(ctx, self.id()).await })
+        Box::pin(async move { crate::engine::get::<Self, D>(ctx, self.pk()).await })
     }
 
     /// Destroy this record using its primary destroy action (or the first destroy action found).
@@ -795,7 +979,7 @@ pub trait ResourceExt: Resource {
 impl<R: Resource> ResourceExt for R {}
 
 impl<T: Resource> crate::types::AshType for T {
-    const ATTR_TYPE: AttrType = AttrType::Map;
+    const ATTR_TYPE: AttrType = AttrType::Embedded(EmbeddedType(&T::DEF));
 
     fn to_value(&self) -> crate::value::Value {
         crate::value::Value::Map(self.to_fields())

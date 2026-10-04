@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::marker::PhantomData;
 
-use uuid::Uuid;
 
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, Sort};
@@ -13,7 +12,7 @@ use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
-use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort};
+use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort, keyset_values};
 use super::read::scope_read;
 use super::relations::attach_relationships;
 
@@ -108,6 +107,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self.sort.push(Sort {
             field: field.as_field().to_string(),
             descending,
+            ..Default::default()
         });
         self
     }
@@ -227,7 +227,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 tenant: None,
             },
         )?;
-        let rows = this.ctx.data.run_query(&R::DEF, &query).await?;
+        let mut rows = this.ctx.data.run_query(&R::DEF, &query).await?;
+        super::read::after_read(action, &this.arguments, &mut rows)?;
 
         let mut records = Vec::with_capacity(rows.len());
         for mut row in rows {
@@ -310,8 +311,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             results.truncate(limit);
         }
 
-        let after = results.last().map(|r| r.id().to_string());
-        let before = results.first().map(|r| r.id().to_string());
+        let after = results.last().map(|r| r.pk().to_string());
+        let before = results.first().map(|r| r.pk().to_string());
 
         Ok(Page {
             results,
@@ -349,32 +350,19 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             && let Some(mut cursor) = KeysetCursor::decode(c_str)
         {
             if cursor.values.is_empty() {
-                if let Ok(rec) = get::<R, D>(self.ctx, cursor.id).await {
+                if let Ok(rec) = get::<R, D>(self.ctx, cursor.id.clone()).await {
                     let fields = R::to_fields(&rec);
                     for s in &self.sort {
                         let val = fields.get(&s.field).cloned().unwrap_or(Value::Null);
                         cursor.values.push((s.field.clone(), val));
                     }
                 } else {
-                    cursor.values.push((pk.clone(), Value::Uuid(cursor.id)));
+                    cursor.values.push((pk.clone(), cursor.id.clone()));
                 }
             }
 
-            let mut sort_tuples = Vec::new();
-            for s in &self.sort {
-                let mut val = cursor
-                    .values
-                    .iter()
-                    .find(|(k, _)| k == &s.field)
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or(Value::Null);
-                if val.is_null() && s.field == pk {
-                    val = Value::Uuid(cursor.id);
-                }
-                sort_tuples.push((s.field.clone(), val, s.descending));
-            }
-
-            if let Some(keyset_filter) = build_keyset_filter(&sort_tuples, !is_before) {
+            let values = keyset_values(&R::DEF, &cursor, &self.sort);
+            if let Some(keyset_filter) = build_keyset_filter(&R::DEF, &self.sort, &values, !is_before) {
                 self = self.filter(keyset_filter);
             }
         }
@@ -383,7 +371,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
 
         if is_before {
             for s in &mut self.sort {
-                s.descending = !s.descending;
+                *s = s.reversed();
             }
         }
 
@@ -426,8 +414,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         D: crate::data_layer::TransactionSupport + 'static,
     {
         let records = self.clone().load().await?;
-        let ids: Vec<Uuid> = records.iter().map(Resource::id).collect();
-        crate::bulk::bulk_destroy::<R, D>(self.ctx, action, &ids, opts).await
+        let ids: Vec<Value> = records.iter().map(Resource::pk).collect();
+        crate::bulk::bulk_destroy::<R, D, Value>(self.ctx, action, &ids, opts).await
     }
 
     /// Chunked streaming over offset-based pagination for large datasets.

@@ -1,14 +1,37 @@
-use uuid::Uuid;
+
 
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{IdentityDef, ResourceDef};
-use crate::value::FieldMap;
+use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Debug, Default)]
 pub struct Sort {
     pub field: String,
     pub descending: bool,
+    /// Where the field may be read, when a field policy hides it from the actor: it sorts
+    /// as null elsewhere, as Ash sorts a client's sort on it (`if <policy> then field else
+    /// nil`). See [`guard_input_sort`](crate::guard_input_sort).
+    pub guard: Option<Filter>,
+    /// Where nulls go: first, or last. `None`: as Ash places them, last ascending and
+    /// first descending.
+    pub nulls_first: Option<bool>,
+}
+
+impl Sort {
+    /// Whether nulls sort first.
+    pub fn nulls_first(&self) -> bool {
+        self.nulls_first.unwrap_or(self.descending)
+    }
+
+    /// This sort, the other way around: a backward page reads in it.
+    pub fn reversed(&self) -> Sort {
+        Sort {
+            descending: !self.descending,
+            nulls_first: self.nulls_first.map(|first| !first),
+            ..self.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -82,7 +105,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send;
 
@@ -90,7 +113,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send;
 
@@ -98,7 +121,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn run_query(
@@ -112,6 +135,27 @@ pub trait DataLayer: Send + Sync {
     /// `expr_error`. One that can't has updates read their record first.
     fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
         false
+    }
+
+    /// Whether this data layer raises a condition's error within an atomic statement, as
+    /// Ash's data layers that can `expr_error`. One that updates atomically but can't (as
+    /// AshSqlite) runs an update atomically only when nothing in it must raise.
+    fn can_raise_atomically(&self, resource: &ResourceDef) -> bool {
+        self.can_update_atomically(resource)
+    }
+
+    /// Runs `work` in one of this data layer's transactions, given the data layer that
+    /// writes within it, as Ash runs an action in a transaction (`transaction?: true`)
+    /// where its data layer can transact. One that can't, as Ash's ETS layer can't, gives
+    /// `None` and `work` runs as it is: the default.
+    fn in_transaction<T, F, Fut>(&self, work: F) -> impl Future<Output = Result<T>> + Send
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        work(None)
     }
 
     /// Updates the records `query` selects as `update` says, in one statement: checks
@@ -193,7 +237,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
         _identity: &IdentityDef,
         _update_fields: &[String],
@@ -208,7 +252,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         async move {
             let mut results = Vec::with_capacity(rows.len());
@@ -223,11 +267,11 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        ids: &[Uuid],
+        ids: &[Value],
     ) -> impl Future<Output = Result<()>> + Send {
         async move {
             for id in ids {
-                self.destroy(resource, tenant, *id).await?;
+                self.destroy(resource, tenant, id.clone()).await?;
             }
             Ok(())
         }
@@ -241,7 +285,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<Result<FieldMap>>>> + Send {
         async move {
             let mut results = Vec::with_capacity(rows.len());
@@ -272,7 +316,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         no_data_layer(resource)
@@ -282,7 +326,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         no_data_layer(resource)
@@ -292,7 +336,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
     ) -> impl Future<Output = Result<()>> + Send {
         no_data_layer(resource)
     }
@@ -309,7 +353,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
         _identity: &IdentityDef,
         _update_fields: &[String],

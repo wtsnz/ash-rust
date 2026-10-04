@@ -41,7 +41,7 @@ async fn seed_tickets(data: &Memory) {
         map.insert("id".into(), Value::Uuid(id));
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
-        data.create(&TICKET_DEF, None, id, map).await.unwrap();
+        data.create(&TICKET_DEF, None, Value::from(id), map).await.unwrap();
     }
 }
 
@@ -106,7 +106,7 @@ async fn a_list_without_first_pages_as_many_as_a_page_may_hold() {
         map.insert("id".into(), Value::Uuid(id));
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
-        memory.create(&TICKET_DEF, None, id, map).await.unwrap();
+        memory.create(&TICKET_DEF, None, Value::from(id), map).await.unwrap();
     }
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()

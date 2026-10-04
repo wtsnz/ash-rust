@@ -108,7 +108,7 @@ async fn insert<D: DataLayer>(data: &D, resource: &ResourceDef, fields: &[(&str,
     let id = Uuid::new_v4();
     let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(resource, None, id, map).await.unwrap();
+    data.create(resource, None, Value::from(id), map).await.unwrap();
     id
 }
 
@@ -143,7 +143,7 @@ async fn scenario<D: DataLayer>(data: D) {
     }
 
     let ours = Filter::starts_with("name", run.clone());
-    let by_name = vec![Sort { field: "name".into(), descending: false }];
+    let by_name = vec![Sort { field: "name".into(), descending: false, ..Default::default() }];
     let read = |query: CompiledQuery| {
         let data = &data;
         async move { data.run_query(&LIBRARY, &query).await.unwrap() }
@@ -190,8 +190,8 @@ async fn scenario<D: DataLayer>(data: D) {
     let rows = read(CompiledQuery {
         filter: Some(ours),
         sort: vec![
-            Sort { field: "book_count".into(), descending: true },
-            Sort { field: "name".into(), descending: false },
+            Sort { field: "book_count".into(), descending: true, ..Default::default() },
+            Sort { field: "name".into(), descending: false, ..Default::default() },
         ],
         aggregates: vec!["reader_count".into()],
         limit: Some(2),

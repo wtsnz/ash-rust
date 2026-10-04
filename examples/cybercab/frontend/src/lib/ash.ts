@@ -19,6 +19,18 @@ export interface PaginatedResult<T> {
   endKeyset?: string | null;
 }
 
+/** An offset page of records, as AshGraphql returns a read that pages by offset. */
+export interface OffsetPage<T> {
+  results: T[];
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  pageNumber?: number;
+  lastPage?: number;
+  limit?: number;
+}
+
 /** The operators AshGraphql filters a field by. */
 export interface AshFilter<T> {
   isNil?: boolean;
@@ -61,7 +73,7 @@ export interface Cab {
   halted: boolean;
   tripId?: string | null;
   lastSeenAt?: string | null;
-  status: string;
+  status: "available" | "dispatched" | "on_trip" | "returning" | "charging" | "maintenance";
   createdAt: string;
   updatedAt: string;
   depot?: Depot | null;
@@ -179,7 +191,7 @@ export interface CabFilterInput {
   halted?: AshFilter<boolean>;
   tripId?: AshFilter<string>;
   lastSeenAt?: AshFilter<string>;
-  status?: AshTextFilter;
+  status?: AshFilter<"available" | "dispatched" | "on_trip" | "returning" | "charging" | "maintenance">;
   createdAt?: AshFilter<string>;
   updatedAt?: AshFilter<string>;
   tripsCompleted?: AshFilter<number>;
@@ -336,7 +348,7 @@ export interface Trip {
   cancelledAt?: string | null;
   cancelReason?: string | null;
   rating?: number | null;
-  status: string;
+  status: "requested" | "assigned" | "arrived" | "riding" | "completed" | "cancelled";
   createdAt: string;
   updatedAt: string;
   rider?: Rider | null;
@@ -434,7 +446,7 @@ export interface TripFilterInput {
   cancelledAt?: AshFilter<string>;
   cancelReason?: AshTextFilter;
   rating?: AshFilter<number>;
-  status?: AshTextFilter;
+  status?: AshFilter<"requested" | "assigned" | "arrived" | "riding" | "completed" | "cancelled">;
   createdAt?: AshFilter<string>;
   updatedAt?: AshFilter<string>;
   routeLabel?: AshTextFilter;
@@ -609,7 +621,7 @@ export interface FleetAlert {
   acknowledgedAt?: string | null;
   resolvedAt?: string | null;
   handledBy?: string | null;
-  status: string;
+  status: "open" | "acknowledged" | "resolved";
   cab?: Cab | null;
   trip?: Trip | null;
 }
@@ -659,7 +671,7 @@ export interface FleetAlertFilterInput {
   acknowledgedAt?: AshFilter<string>;
   resolvedAt?: AshFilter<string>;
   handledBy?: AshTextFilter;
-  status?: AshTextFilter;
+  status?: AshFilter<"open" | "acknowledged" | "resolved">;
   cab?: CabFilterInput;
   trip?: TripFilterInput;
   and?: FleetAlertFilterInput[];
@@ -770,7 +782,7 @@ export const CabSchema = z.object({
   halted: z.boolean(),
   tripId: z.string().uuid().nullable().optional(),
   lastSeenAt: z.string().nullable().optional(),
-  status: z.string(),
+  status: z.enum(["available", "dispatched", "on_trip", "returning", "charging", "maintenance"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -936,7 +948,7 @@ export const TripSchema = z.object({
   cancelledAt: z.string().nullable().optional(),
   cancelReason: z.string().nullable().optional(),
   rating: z.number().int().nullable().optional(),
-  status: z.string(),
+  status: z.enum(["requested", "assigned", "arrived", "riding", "completed", "cancelled"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1092,7 +1104,7 @@ export const FleetAlertSchema = z.object({
   acknowledgedAt: z.string().nullable().optional(),
   resolvedAt: z.string().nullable().optional(),
   handledBy: z.string().nullable().optional(),
-  status: z.string(),
+  status: z.enum(["open", "acknowledged", "resolved"]),
 });
 
 export const RaiseFleetAlertInputSchema = z.object({
@@ -1250,11 +1262,21 @@ export class AshTransport {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message: string; path?: (string | number)[] }>;
+      errors?: Array<{
+        message: string;
+        path?: (string | number)[];
+        code?: string;
+        extensions?: { code?: string };
+      }>;
     };
 
-    if (json.errors && json.errors.length > 0) {
-      const userErrors: AshUserError[] = json.errors.map((e) => ({
+    // A field a policy hides comes back null with a `forbidden_field` error: the null
+    // stands for it, so it fails nothing.
+    const errors = (json.errors ?? []).filter(
+      (e) => (e.extensions?.code ?? e.code) !== "forbidden_field",
+    );
+    if (errors.length > 0) {
+      const userErrors: AshUserError[] = errors.map((e) => ({
         message: e.message,
         path: e.path,
       }));
@@ -2052,8 +2074,8 @@ export class CabQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Cab[]> {
     const records: Cab[] = [];
@@ -2125,7 +2147,7 @@ export class CabQueryBuilder {
   public live(listener: (items: Cab[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new CabClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", callSign: "text", nickname: "text", vin: "text", software: "text", depotId: "uuid", lng: "number", lat: "number", headingDeg: "number", speedKph: "number", batteryPct: "number", rangeKm: "number", odometerKm: "number", cabinTempC: "number", halted: "boolean", tripId: "uuid", lastSeenAt: "datetime", status: "text", createdAt: "datetime", updatedAt: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", callSign: "text", nickname: "text", vin: "text", software: "text", depotId: "uuid", lng: "number", lat: "number", headingDeg: "number", speedKph: "number", batteryPct: "number", rangeKm: "number", odometerKm: "number", cabinTempC: "number", halted: "boolean", tripId: "uuid", lastSeenAt: "datetime", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Cab>(
       {
         key: (record) => String(record.id),
@@ -2208,8 +2230,8 @@ export class DepotQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Depot[]> {
     const records: Depot[] = [];
@@ -2364,8 +2386,8 @@ export class RiderQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Rider[]> {
     const records: Rider[] = [];
@@ -2520,8 +2542,8 @@ export class TripQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Trip[]> {
     const records: Trip[] = [];
@@ -2593,7 +2615,7 @@ export class TripQueryBuilder {
   public live(listener: (items: Trip[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new TripClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", riderId: "uuid", zoneId: "uuid", cabId: "uuid", pickupName: "text", pickupLng: "number", pickupLat: "number", dropoffName: "text", dropoffLng: "number", dropoffLat: "number", ridePolyline: "text", approachPolyline: "text", distanceM: "number", durationS: "number", surge: "number", fareCents: "number", requestedAt: "datetime", assignedAt: "datetime", pickupEtaAt: "datetime", arrivedAt: "datetime", pickedUpAt: "datetime", dropoffEtaAt: "datetime", completedAt: "datetime", cancelledAt: "datetime", cancelReason: "text", rating: "number", status: "text", createdAt: "datetime", updatedAt: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", riderId: "uuid", zoneId: "uuid", cabId: "uuid", pickupName: "text", pickupLng: "number", pickupLat: "number", dropoffName: "text", dropoffLng: "number", dropoffLat: "number", ridePolyline: "text", approachPolyline: "text", distanceM: "number", durationS: "number", surge: "number", fareCents: "number", requestedAt: "datetime", assignedAt: "datetime", pickupEtaAt: "datetime", arrivedAt: "datetime", pickedUpAt: "datetime", dropoffEtaAt: "datetime", completedAt: "datetime", cancelledAt: "datetime", cancelReason: "text", rating: "number", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Trip>(
       {
         key: (record) => String(record.id),
@@ -2676,8 +2698,8 @@ export class ServiceZoneQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<ServiceZone[]> {
     const records: ServiceZone[] = [];
@@ -2832,8 +2854,8 @@ export class TelemetrySampleQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<TelemetrySample[]> {
     const records: TelemetrySample[] = [];
@@ -2988,8 +3010,8 @@ export class FleetAlertQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<FleetAlert[]> {
     const records: FleetAlert[] = [];
@@ -3061,7 +3083,7 @@ export class FleetAlertQueryBuilder {
   public live(listener: (items: FleetAlert[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new FleetAlertClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cabId: "uuid", tripId: "uuid", message: "text", lng: "number", lat: "number", raisedAt: "datetime", acknowledgedAt: "datetime", resolvedAt: "datetime", handledBy: "text", status: "text" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cabId: "uuid", tripId: "uuid", message: "text", lng: "number", lat: "number", raisedAt: "datetime", acknowledgedAt: "datetime", resolvedAt: "datetime", handledBy: "text" };
     return ashLiveQuery<FleetAlert>(
       {
         key: (record) => String(record.id),
@@ -3144,8 +3166,8 @@ export class PulseSampleQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<PulseSample[]> {
     const records: PulseSample[] = [];

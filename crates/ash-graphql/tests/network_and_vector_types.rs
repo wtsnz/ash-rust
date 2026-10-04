@@ -13,7 +13,7 @@ static DEVICE_ATTRS: &[AttributeDef] = &[
 
 static DEVICE_ACTIONS: &[ActionDef] = &[
     ActionDef::create("create").accept(&["address", "embedding", "weight"]),
-    ActionDef::read("read").primary(),
+    ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
 ];
 
 static DEVICE_DEF: ResourceDef = ResourceDef {

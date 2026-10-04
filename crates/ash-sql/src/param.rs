@@ -67,6 +67,7 @@ pub fn values_to_json_array(items: &[Value]) -> String {
             Value::Null => serde_json::Value::Null,
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Int(i) => serde_json::Value::Number((*i).into()),
+            Value::Float(n) => serde_json::Number::from_f64(*n).map_or(serde_json::Value::Null, serde_json::Value::Number),
             Value::String(s) => serde_json::Value::String(s.clone()),
             Value::Uuid(u) => serde_json::Value::String(u.to_string()),
             Value::Map(m) => serde_json::to_value(m).unwrap_or(serde_json::Value::Null),

@@ -455,11 +455,21 @@ impl SchemaSupport for Postgres {
 }
 
 impl DataLayer for Postgres {
+    async fn in_transaction<T, F, Fut>(&self, work: F) -> Result<T>
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        TransactionSupport::transaction(self, move |tx| work(Some(tx.clone()))).await
+    }
+
     async fn create(
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
@@ -475,12 +485,12 @@ impl DataLayer for Postgres {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
-        let compiled = compiler.compile_update(resource, id, &fields)?;
+        let compiled = compiler.compile_update(resource, id.clone(), &fields)?;
 
         // Postgres RETURNING * executes update and returns the new row
         let opt_row = self.fetch_optional_resource(&compiled, resource).await?;
@@ -494,7 +504,7 @@ impl DataLayer for Postgres {
                         .ok_or(Error::NoPrimaryKey(resource.name))?;
                     // Whether the row is there at all, read in the same tenant.
                     let exists = CompiledQuery {
-                        filter: Some(ash_core::Filter::eq(pk.name, Value::Uuid(id))),
+                        filter: Some(ash_core::Filter::eq(pk.name, id.clone())),
                         tenant: tenant.map(str::to_string),
                         limit: Some(1),
                         ..CompiledQuery::default()
@@ -516,7 +526,7 @@ impl DataLayer for Postgres {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_delete(resource, id)?;
@@ -634,7 +644,7 @@ impl DataLayer for Postgres {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
@@ -652,7 +662,7 @@ impl DataLayer for Postgres {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -675,7 +685,7 @@ impl DataLayer for Postgres {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> Result<Vec<Result<FieldMap>>> {
         let mut results: Vec<Option<Result<FieldMap>>> = (0..rows.len()).map(|_| None).collect();
         let pk = resource
@@ -691,7 +701,7 @@ impl DataLayer for Postgres {
         let mut together = Vec::new();
         for (i, (id, fields)) in rows.iter().enumerate() {
             if !writes(fields) || resource.optimistic_lock_attribute().is_some() {
-                results[i] = Some(self.update(resource, tenant, *id, fields.clone()).await);
+                results[i] = Some(self.update(resource, tenant, id.clone(), fields.clone()).await);
             } else {
                 together.push(i);
             }
@@ -707,19 +717,19 @@ impl DataLayer for Postgres {
         // Postgres binds at most 65,535 parameters to a statement.
         let per_statement = (65_535 / (columns.len() + 1)).max(1);
         for batch in together.chunks(per_statement) {
-            let batch_rows: Vec<(Uuid, &FieldMap)> =
-                batch.iter().map(|&i| (rows[i].0, &rows[i].1)).collect();
+            let batch_rows: Vec<(Value, &FieldMap)> =
+                batch.iter().map(|&i| (rows[i].0.clone(), &rows[i].1)).collect();
             let compiled = QueryCompiler::new(&dialect)
                 .with_tenant(tenant)
                 .compile_bulk_update(resource, &columns, &batch_rows)?;
-            let mut stored: std::collections::HashMap<Uuid, FieldMap> = self
+            let mut stored: std::collections::HashMap<Value, FieldMap> = self
                 .fetch_all_resource(&compiled, resource)
                 .await?
                 .iter()
                 .map(|row| {
                     let fields = row_to_fields(row, resource, &[], &[])?;
                     let id = match fields.get(pk) {
-                        Some(Value::Uuid(id)) => *id,
+                        Some(id) if !id.is_null() => id.clone(),
                         _ => return Err(Error::DataLayer(format!("{} row without its key", resource.name))),
                     };
                     Ok((id, fields))
@@ -735,7 +745,7 @@ impl DataLayer for Postgres {
             .collect())
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -1069,7 +1079,7 @@ fn bind_compiled<'q>(
                     Some(AttrType::Uuid) => query.bind(None::<Uuid>),
                     Some(AttrType::Integer) => query.bind(None::<i64>),
                     Some(AttrType::Boolean) => query.bind(None::<bool>),
-                    Some(AttrType::Map | AttrType::Array) => query.bind(None::<serde_json::Value>),
+                    Some(AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }) => query.bind(None::<serde_json::Value>),
                     _ => query.bind(None::<String>),
                 };
             }
@@ -1078,6 +1088,9 @@ fn bind_compiled<'q>(
             }
             Value::Int(i) => {
                 query = query.bind(*i);
+            }
+            Value::Float(n) => {
+                query = query.bind(*n);
             }
             Value::Uuid(u) => {
                 query = query.bind(*u);
@@ -1276,7 +1289,10 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
-        ash_core::AttrType::Map => {
+        ash_core::AttrType::Map
+        | ash_core::AttrType::Embedded(_)
+        | ash_core::AttrType::TypedMap { .. }
+        | ash_core::AttrType::Union { .. } => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
                 Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
@@ -1287,7 +1303,7 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
                 Value::Null
             }
         }
-        ash_core::AttrType::Array => {
+        ash_core::AttrType::Array { .. } => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
                 Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {
@@ -1379,6 +1395,7 @@ fn map_sqlx_resource(err: sqlx::Error, resource: &ResourceDef) -> Error {
                 return Error::Validation {
                     field: "validation".to_string(),
                     message: db_err.message().to_string(),
+                    vars: Vec::new(),
                 };
             }
             "40P01" => {

@@ -50,7 +50,7 @@ resource! {
 
         actions {
             create create { primary; accept [name, notes]; }
-            read read { primary; }
+            read read { primary; pagination keyset: true, countable: true, required: false; }
         }
 
         policies {
@@ -96,6 +96,7 @@ resource! {
             create create { primary; accept [dock_id, code, closed]; }
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
                 prepare filter(closed == false);
             }
         }
@@ -132,7 +133,9 @@ impl Harbour {
 
     async fn run(&self, request: Request) -> Value {
         let response = self.schema.execute(request).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        // Fields a policy hides are null, and reported so.
+        let forbidden = |e: &async_graphql::ServerError| e.message == "forbidden field";
+        assert!(response.errors.iter().all(forbidden), "{:?}", response.errors);
         response.data.into_json().unwrap()
     }
 
@@ -216,4 +219,28 @@ async fn pages_read_through_the_read_action() {
         .as_(&h.acme, "{ listBerths(first: 10) { count results { code } } }")
         .await;
     assert_eq!(page["listBerths"], json!({ "count": 1, "results": [{ "code": "A" }] }));
+}
+
+// A client's filter can't find records by a field its actor can't read: the field reads
+// as null where it's hidden, as AshGraphql reads it, through relationships too.
+#[tokio::test]
+async fn filters_read_hidden_fields_as_null() {
+    let harbour = Harbour::new().await;
+    let by_notes = r#"{ listDocks(filter: { notes: { eq: "keys under the mat" } }) { count results { name } } }"#;
+    let berths_by_notes =
+        r#"{ listBerths(filter: { dock: { notes: { eq: "keys under the mat" } } }) { results { code } } }"#;
+
+    let deckhand = harbour.acme.with_actor(role("deckhand"));
+    assert_eq!(harbour.as_(&deckhand, by_notes).await, json!({ "listDocks": { "count": 0, "results": [] } }));
+    assert_eq!(harbour.as_(&deckhand, berths_by_notes).await, json!({ "listBerths": { "results": [] } }));
+    // Nil wherever it's hidden.
+    let unnoted = r#"{ listDocks(filter: { notes: { isNil: true } }) { results { name } } }"#;
+    assert_eq!(harbour.as_(&deckhand, unnoted).await, json!({ "listDocks": { "results": [{ "name": "North" }] } }));
+
+    let harbourmaster = harbour.acme.with_actor(role("harbourmaster"));
+    assert_eq!(
+        harbour.as_(&harbourmaster, by_notes).await,
+        json!({ "listDocks": { "count": 1, "results": [{ "name": "North" }] } })
+    );
+    assert_eq!(harbour.as_(&harbourmaster, berths_by_notes).await, json!({ "listBerths": { "results": [{ "code": "A" }] } }));
 }

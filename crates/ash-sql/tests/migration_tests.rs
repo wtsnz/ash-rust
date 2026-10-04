@@ -263,7 +263,7 @@ fn sample_meta() -> ash_core::Value {
 fn map_and_array_defaults_are_sql_literals() {
     static ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
-        AttributeDef::with_default("tags", AttrType::Array, sample_tags),
+        AttributeDef::with_default("tags", AttrType::Array { of: &AttrType::String }, sample_tags),
         AttributeDef::with_default("meta", AttrType::Map, sample_meta),
     ];
     let mut resource = RES_V1;
@@ -467,4 +467,67 @@ fn tables_that_refer_to_each_other_are_created_before_their_keys() {
 
     let sqlite = generate_migration_with_version(&SqliteDialect, "1", "cycle", &operations);
     assert!(!sqlite.up_sql.contains("ALTER TABLE"), "{}", sqlite.up_sql);
+}
+
+/// On a resource with attribute multitenancy an index leads with the tenant attribute,
+/// as AshPostgres scopes custom indexes, unless it spans every tenant.
+#[test]
+fn indexes_lead_with_the_tenant_attribute() {
+    static ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("org", AttrType::String),
+        AttributeDef::required("username", AttrType::String),
+    ];
+    static INDEXES: &[IndexDef] = &[
+        IndexDef::new("by_username", &["username"]),
+        IndexDef::new("by_username_anywhere", &["username"]).all_tenants(),
+        IndexDef::new("by_org_username", &["org", "username"]),
+        IndexDef::new("by_username_org", &["username", "org"]),
+    ];
+    let mut resource = RES_V1;
+    resource.attributes = ATTRS;
+    resource.identities = &[];
+    resource.indexes = INDEXES;
+    resource.multitenancy = Some(ash_core::MultitenancyDef::attribute("org"));
+    let snapshot = TableSnapshot::from_resource(&resource, &PostgresDialect);
+    let columns: Vec<Vec<&str>> =
+        snapshot.indexes.iter().map(|index| index.columns.iter().map(String::as_str).collect()).collect();
+    assert_eq!(columns, [vec!["org", "username"], vec!["username"], vec!["org", "username"], vec!["org", "username"]]);
+    // Installing without migrations creates them alike.
+    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect).compile_create_indexes(&resource).unwrap();
+    assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");
+    assert!(ddl[1].contains(r#"("username")"#), "{ddl:?}");
+}
+
+/// An identity on a resource with attribute multitenancy is unique within the tenant, as
+/// Ash's identities are, unless it spans every tenant: its unique index and an upsert's
+/// conflict target lead with the tenant attribute.
+#[test]
+fn identities_are_unique_within_the_tenant() {
+    static ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("org", AttrType::String),
+        AttributeDef::required("username", AttrType::String),
+    ];
+    static IDENTITIES: &[IdentityDef] = &[
+        IdentityDef::new("unique_username", &["username"]),
+        IdentityDef::new("unique_anywhere", &["username"]).all_tenants(),
+    ];
+    let mut resource = RES_V1;
+    resource.attributes = ATTRS;
+    resource.identities = IDENTITIES;
+    resource.multitenancy = Some(ash_core::MultitenancyDef::attribute("org"));
+    let snapshot = TableSnapshot::from_resource(&resource, &PostgresDialect);
+    let columns: Vec<Vec<&str>> =
+        snapshot.identities.iter().map(|identity| identity.columns.iter().map(String::as_str).collect()).collect();
+    assert_eq!(columns, [vec!["org", "username"], vec!["username"]]);
+
+    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect).compile_create_indexes(&resource).unwrap();
+    assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");
+    let fields = ash_core::FieldMap::from([
+        ("org".to_string(), ash_core::Value::from("a")),
+        ("username".to_string(), ash_core::Value::from("ada")),
+    ]);
+    let upsert = ash_sql::QueryCompiler::new(&PostgresDialect).compile_upsert(&resource, &fields, &IDENTITIES[0], &[]).unwrap();
+    assert!(upsert.sql().contains(r#"ON CONFLICT ("org", "username")"#), "{}", upsert.sql());
 }

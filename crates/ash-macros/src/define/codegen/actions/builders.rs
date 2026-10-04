@@ -76,7 +76,7 @@ fn required_input_names<'a>(
         }
     }
     for arg in &act.arguments {
-        if option_inner(&arg.ty).is_none() {
+        if option_inner(&arg.ty).is_none() && arg.default.is_none() {
             names.push(&arg.name);
         }
     }
@@ -101,14 +101,15 @@ fn typestate_ready_impls(
     resource: &syn::Ident,
     act_pascal: &str,
     required: &[&syn::Ident],
+    d_bound: &TokenStream,
 ) -> (TokenStream, TokenStream, TokenStream, TokenStream) {
     if required.is_empty() {
-        let impl_ready = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
+        let impl_ready = quote! { impl<'a, D: #d_bound> #builder_name<'a, D> };
         let into_future = quote! {
-            impl<'a, D: ::ash_core::DataLayer> ::std::future::IntoFuture for #builder_name<'a, D>
+            impl<'a, D: #d_bound> ::std::future::IntoFuture for #builder_name<'a, D>
         };
         let into_changeset = quote! {
-            impl<'a, D: ::ash_core::DataLayer> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D>
+            impl<'a, D: #d_bound> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D>
         };
         return (quote! {}, impl_ready, into_future, into_changeset);
     }
@@ -136,17 +137,17 @@ fn typestate_ready_impls(
     let ts_tys: Vec<TokenStream> = ts.iter().map(|t| quote! { #t }).collect();
     let tuple = tuple_ty(&ts_tys);
     let impl_ready = quote! {
-        impl<'a, D: ::ash_core::DataLayer, #(#ts),*> #builder_name<'a, D, #tuple>
+        impl<'a, D: #d_bound, #(#ts),*> #builder_name<'a, D, #tuple>
         where
             #(#ts: #traits + ::std::marker::Send + 'static,)*
     };
     let into_future = quote! {
-        impl<'a, D: ::ash_core::DataLayer, #(#ts),*> ::std::future::IntoFuture for #builder_name<'a, D, #tuple>
+        impl<'a, D: #d_bound, #(#ts),*> ::std::future::IntoFuture for #builder_name<'a, D, #tuple>
         where
             #(#ts: #traits + ::std::marker::Send + 'static,)*
     };
     let into_changeset = quote! {
-        impl<'a, D: ::ash_core::DataLayer, #(#ts),*> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D, #tuple>
+        impl<'a, D: #d_bound, #(#ts),*> ::ash_core::IntoChangeset<#resource> for #builder_name<'a, D, #tuple>
         where
             #(#ts: #traits + ::std::marker::Send + 'static,)*
     };
@@ -276,7 +277,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 ::ash_core::query(ctx)
             }
 
-            pub async fn get<D: ::ash_core::DataLayer>(ctx: &::ash_core::Context<D>, id: ::uuid::Uuid) -> ::ash_core::Result<Self> {
+            pub async fn get<D: ::ash_core::DataLayer>(ctx: &::ash_core::Context<D>, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<Self> {
                 ::ash_core::get(ctx, id).await
             }
         });
@@ -353,17 +354,17 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
     {
         let act_name_str = destroy_act.name.to_string();
         resource_methods.push(quote! {
-            pub async fn bulk_destroy<D: ::ash_core::TransactionSupport + 'static>(
+            pub async fn bulk_destroy<D: ::ash_core::TransactionSupport + 'static, I: ::std::clone::Clone + ::std::convert::Into<::ash_core::Value>>(
                 ctx: &::ash_core::Context<D>,
-                ids: &[::uuid::Uuid],
+                ids: &[I],
             ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
                 ::ash_core::bulk_destroy(ctx, #act_name_str, ids, ::ash_core::BulkDestroyOptions::default()).await
             }
 
-            pub async fn bulk_destroy_with_opts<D: ::ash_core::TransactionSupport + 'static>(
+            pub async fn bulk_destroy_with_opts<D: ::ash_core::TransactionSupport + 'static, I: ::std::clone::Clone + ::std::convert::Into<::ash_core::Value>>(
                 ctx: &::ash_core::Context<D>,
                 action: &str,
-                ids: &[::uuid::Uuid],
+                ids: &[I],
                 opts: ::ash_core::BulkDestroyOptions,
             ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
                 ::ash_core::bulk_destroy(ctx, action, ids, opts).await
@@ -507,7 +508,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
                 let (need_traits, impl_ready, into_future_impl, into_changeset_impl) =
-                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names);
+                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names, &quote! { ::ash_core::DataLayer });
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
                 let into_fieldmap_owned = if has_state {
                     quote! {
@@ -820,7 +821,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
                 let (need_traits, impl_ready, into_future_impl, into_changeset_impl) =
-                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names);
+                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names, &quote! { ::ash_core::DataLayer });
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
                 let into_fieldmap_owned = if has_state {
                     quote! {
@@ -922,7 +923,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     #need_traits
 
                     pub enum #target_enum {
-                        Id(::uuid::Uuid),
+                        Id(::ash_core::Value),
                         Existing(#resource),
                     }
 
@@ -941,10 +942,10 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #impl_new {
-                        pub fn for_id(ctx: &'a ::ash_core::Context<D>, id: ::uuid::Uuid) -> Self {
+                        pub fn for_id(ctx: &'a ::ash_core::Context<D>, id: impl ::std::convert::Into<::ash_core::Value>) -> Self {
                             Self {
                                 ctx,
-                                target: #target_enum::Id(id),
+                                target: #target_enum::Id(id.into()),
                                 tenant_override: ::std::option::Option::None,
                                 before_actions: ::std::vec::Vec::new(),
                                 after_actions: ::std::vec::Vec::new(),
@@ -1238,6 +1239,12 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
             ActionKind::Generic => {
                 let input_struct_name = format_ident!("{}{}Input", resource, act_pascal);
+                // A generic action that runs in a transaction needs a data layer that opens one.
+                let d_bound = if act.transaction {
+                    quote! { ::ash_core::TransactionSupport + 'static }
+                } else {
+                    quote! { ::ash_core::DataLayer }
+                };
                 let returns_ty = act.returns.clone().unwrap_or_else(|| syn::parse_quote!(()));
 
                 let mut field_members = Vec::new();
@@ -1266,7 +1273,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
                 let (need_traits, impl_ready, into_future_impl, _) =
-                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names);
+                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names, &d_bound);
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
 
                 let all_inputs: Vec<(&syn::Ident, &syn::Type)> = act
@@ -1312,7 +1319,19 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         });
                     }
 
-                    if option_inner(ty).is_some() {
+                    let default = act.arguments.iter().find(|arg| arg.name == *name).and_then(|arg| arg.default.as_ref());
+                    if let Some(default) = default {
+                        // Its default when not given, as Ash fills an argument in.
+                        if option_inner(ty).is_some() {
+                            input_extracts.push(quote! {
+                                #name: self.#name.unwrap_or_else(|| ::std::option::Option::Some(#default))
+                            });
+                        } else {
+                            input_extracts.push(quote! {
+                                #name: self.#name.unwrap_or_else(|| #default)
+                            });
+                        }
+                    } else if option_inner(ty).is_some() {
                         input_extracts.push(quote! {
                             #name: self.#name.unwrap_or(::std::option::Option::None)
                         });
@@ -1331,11 +1350,35 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     &all_input_names,
                 );
 
-                let run_impl = if let Some(expr) = &act.run_expr {
-                    quote! {
-                        let fut = Self::__run_action(#expr, input);
-                        ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
+                let input_names = &all_input_names;
+                // Runs `runner` with the input, in a transaction if the action takes one,
+                // as Ash's `transaction? true`.
+                let in_transaction = |runner: TokenStream| {
+                    if act.transaction {
+                        quote! {
+                            let #input_struct_name { #(#input_names,)* .. } = input;
+                            ctx.transaction(move |tx| async move {
+                                let input = #input_struct_name { ctx: &tx, #(#input_names,)* };
+                                let fut = Self::__run_action_in(#runner, input);
+                                ::ash_core::run::<#resource, D, #returns_ty, _, _>(&tx, #act_name_str, move || fut).await
+                            })
+                            .await
+                        }
+                    } else {
+                        quote! {
+                            let fut = Self::__run_action(#runner, input);
+                            ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
+                        }
                     }
+                };
+                // A runner given at the call manages any transaction itself: its input is
+                // the builder's, which can't borrow a transaction opened here.
+                let run_with_runner = quote! {
+                    let fut = Self::__run_action(runner, input);
+                    ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
+                };
+                let run_impl = if let Some(expr) = &act.run_expr {
+                    in_transaction(quote! { #expr })
                 } else {
                     quote! {
                         Err(::ash_core::Error::Invalid("generic action has no run closure or runner; provide one via `.run(...)`".into()))
@@ -1392,6 +1435,15 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         {
                             f(input)
                         }
+
+                        #[allow(dead_code)]
+                        fn __run_action_in<'t, F, Fut>(f: F, input: #input_struct_name<'t, D>) -> Fut
+                        where
+                            F: ::std::ops::FnOnce(#input_struct_name<'t, D>) -> Fut,
+                            Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>> + ::std::marker::Send,
+                        {
+                            f(input)
+                        }
                     }
 
                     #(#required_impls)*
@@ -1399,7 +1451,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     #impl_ready {
                         pub async fn run<F, Fut>(self, runner: F) -> ::ash_core::Result<#returns_ty>
                         where
-                            F: ::std::ops::FnOnce(#input_struct_name<'a, D>) -> Fut,
+                            F: ::std::ops::FnOnce(#input_struct_name<'a, D>) -> Fut + ::std::marker::Send,
                             Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>> + ::std::marker::Send,
                         {
                             let ctx = self.ctx;
@@ -1407,8 +1459,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                                 ctx,
                                 #(#input_extracts,)*
                             };
-                            let fut = runner(input);
-                            ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
+                            #run_with_runner
                         }
 
                         pub async fn call(self) -> ::ash_core::Result<#returns_ty> {

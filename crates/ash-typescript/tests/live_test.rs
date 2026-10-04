@@ -16,7 +16,7 @@ static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open").accept(&["title", "priority"]),
     ActionDef::update("reprioritize").accept(&["priority"]),
     ActionDef::destroy("remove"),
-    ActionDef::read("read").primary(),
+    ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
 ];
 
 static TICKET_DEF: ResourceDef = ResourceDef {

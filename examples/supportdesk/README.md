@@ -1,8 +1,8 @@
 # Supportdesk
 
 A multi-tenant support desk, built twice, here on ash-rust and in
-[`examples/elixir/supportdesk`](../elixir/supportdesk) on Ash with AshPostgres and
-AshGraphql, to benchmark real-world Ash features against each other: policies and field
+[`examples/elixir/supportdesk`](../elixir/supportdesk) on Ash with AshPostgres,
+AshGraphql and AshTypescript, to benchmark real-world Ash features against each other: policies and field
 policies under an actor, multitenancy, calculations and aggregates in filters and sorts,
 relationship loading, keyset pages with counts, validations and changes, managed
 relationships, a state machine, atomic updates, optimistic locking, a generic action in a
@@ -62,6 +62,14 @@ Both apps serve the same API on `PORT` (default 4000):
   `count`, `filter`, `sort`), the other resources' `get` and `list`, and each create,
   update and destroy action as a mutation.
 - `GET /graphql/ws`: subscriptions: `ticketCreated`, `ticketUpdated`, `ticketDestroyed`.
+- `POST /rpc/run`: AshTypescript's RPC, the Elixir desk's `typescript_rpc` actions run by
+  name: `list_tickets`, `get_ticket` (by `id`), `open_ticket`, `assign_ticket`,
+  `start_ticket`, `hold_ticket`, `resolve_ticket`, `reopen_ticket`, `close_ticket`,
+  `view_ticket`, `edit_ticket`, `destroy_ticket`, `route_ticket`, `list_comments`,
+  `create_comment`, `list_agents`, `list_tags` and `list_audit_events`. The Elixir desk
+  generates the TypeScript client for them, [`client/ash_rpc.ts`](client/ash_rpc.ts)
+  (`mix ash_typescript.codegen`), which works against either desk. `POST /rpc/validate`
+  validates a request's input without running it.
 - `POST /api/route`, `POST /api/bulk`, `POST /api/edit`: JSON for what AshGraphql serves
   but ash-graphql doesn't yet (generic actions, managed relationship inputs), and for a
   client-held lock version: `route` runs the generic action; `bulk` creates, assigns and
@@ -110,5 +118,59 @@ cargo run --release -p supportdesk --bin parity -- \
 sends both apps the same requests, each as an admin, an agent and a viewer, and compares
 the answers: reads (an inbox and its second page, a dashboard filtered and sorted by
 aggregates and calculations, nested relationships with limits), mutations and their
-failures, the JSON endpoints, and a subscription. Both must have just loaded the fixture.
-Where ash-rust still falls short of Ash, [GAPS.md](GAPS.md) says how.
+failures, RPC actions and their failures (every error compared whole: its type,
+message template, vars, fields, path and details), RPC validation, the JSON endpoints,
+and a subscription. Both
+must have just loaded the fixture. Where ash-rust still falls short of Ash, or Ash's
+packages behave unexpectedly, [GAPS.md](GAPS.md) says how.
+
+```bash
+node client/smoke.ts --rust http://127.0.0.1:4701 --elixir http://127.0.0.1:4702 --fixture /tmp/fixture.json
+```
+
+does the same through the generated TypeScript client (Node 22.18 or later runs it as it
+is).
+
+## Benchmark
+
+```bash
+cargo build --release -p supportdesk --bins
+(cd ../elixir/supportdesk && MIX_ENV=prod mix release --overwrite)
+node bench/bench.ts --fixture /tmp/fixture.json            # about 8 minutes
+node bench/bench.ts --fixture /tmp/fixture.json --quick    # one short rep of each, about 3
+```
+
+[`bench/bench.ts`](bench/bench.ts) drives both desks through the API real clients use:
+RPC through the generated AshTypescript client, GraphQL, and JSON where the desks serve
+nothing else. It needs Node 22.18 or later and `psql`, and nothing to install.
+
+- **Same data.** Each desk loads the fixture once into a template database
+  (`supportdesk_bench_<desk>_tpl`, analyzed), and runs on a fresh copy of it
+  (`CREATE DATABASE … TEMPLATE`), on ports 4711 and 4712.
+- **Same answers first.** Nothing is timed until `parity` and the smoke test pass, each
+  on fresh copies, and each read scenario's first requests answer alike on both desks.
+  A scenario they answer differently isn't timed, and the report says why.
+- **Reads** (`inbox`, `dashboard`, `detail`) run closed loop: 16 clients, each asking
+  again when answered, as admins, agents and viewers of every org, from a seeded
+  generator, so both desks are asked the same things in the same order.
+- **Writes** run open loop at fixed rates, so both desks do the same work and a desk
+  that falls behind is charged for the wait (latency counts from when each request was
+  due): `workflow`, `route`, `counters` (checked after: every acknowledged view
+  counted), `edit races` (checked: exactly one of each pair wins), `bulk`, and `events`
+  (`ticketUpdated` to 20 subscribers, every delivery checked). Each rep runs on a fresh
+  copy.
+- **Fair order.** Reps alternate which desk goes first. Reads run 3 reps per desk, writes
+  2.
+- **What's reported,** in operations (a read is one request; a write scenario's step may
+  be several): throughput, the operations that succeeded and finished within the window;
+  latency, every operation started or due within it, however late it finished (p95 from
+  1,000 samples, p99 from 10,000); failures, with their latency kept apart; the server's
+  CPU time over the window per 1,000 operations and its peak memory; and how busy the
+  driver was. Each run writes `bench/runs/<time>/`: a manifest (revisions, binary
+  hashes, machine, Postgres, options), every window in `results.jsonl`, the desks' logs,
+  and `report.md`, which gives each scenario's medians and ratio and flags a difference
+  within noise (5%, or the spread between reps). There's no overall figure.
+
+Postgres, both desks and the driver share one machine, so the figures compare the desks
+with each other rather than measure capacity. [GAPS.md](GAPS.md) notes where a scenario
+steps around a difference between the desks.

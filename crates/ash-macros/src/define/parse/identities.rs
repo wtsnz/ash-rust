@@ -46,6 +46,7 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
     let mut message = None;
     let mut predicate = None;
     let mut nils_distinct = true;
+    let mut all_tenants = false;
     while input.peek(Token![,]) {
         let _: Token![,] = input.parse()?;
         if input.peek(Token![;]) || input.is_empty() {
@@ -70,11 +71,18 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
                 let lit: syn::LitBool = input.parse()?;
                 nils_distinct = lit.value;
             }
+            "all_tenants" => {
+                all_tenants = true;
+                if input.peek(Token![:]) || input.peek(Token![=]) {
+                    let _ = input.parse::<proc_macro2::TokenTree>()?;
+                    all_tenants = input.parse::<syn::LitBool>()?.value;
+                }
+            }
             other => {
                 return Err(Error::new_spanned(
                     key,
                     format!(
-                        "unknown identity clause `{other}`, expected `where`, `message`, or `nils_distinct`"
+                        "unknown identity clause `{other}`, expected `where`, `message`, `nils_distinct`, or `all_tenants`"
                     ),
                 ));
             }
@@ -87,6 +95,7 @@ fn parse_one_identity(input: ParseStream, errors: &mut Vec<Error>) -> Result<Ide
         message,
         predicate,
         nils_distinct,
+        all_tenants,
     })
 }
 

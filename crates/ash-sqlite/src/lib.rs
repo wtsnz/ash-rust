@@ -11,7 +11,7 @@ use ash_core::{
     TransactionSupport, Value,
 };
 use ash_sql::{
-    CompiledSql, MigrationExecutor, Migrator, SqlParam, SqliteDialect, persistable_resources,
+    CompiledSql, MigrationExecutor, Migrator, QueryCompiler, SqlParam, SqliteDialect, persistable_resources,
 };
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteQueryResult,
@@ -114,6 +114,21 @@ impl Sqlite {
                     .execute(&mut **guard)
                     .await
                     .map_err(|e| map_sqlx_resource(e, resource))
+            }
+        }
+    }
+
+    /// [`Self::fetch_all`], a constraint violation reported against `resource`.
+    async fn fetch_all_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Vec<SqliteRow>> {
+        match &self.source {
+            SqliteSource::Pool(pool) => {
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.fetch_all(pool).await.map_err(|e| map_sqlx_resource(e, resource))
+            }
+            SqliteSource::Tx(conn) => {
+                let mut guard = conn.lock().await;
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.fetch_all(&mut **guard).await.map_err(|e| map_sqlx_resource(e, resource))
             }
         }
     }
@@ -237,6 +252,9 @@ fn bind_compiled<'q>(
             }
             Value::Int(i) => {
                 query = query.bind(*i);
+            }
+            Value::Float(n) => {
+                query = query.bind(*n);
             }
             Value::Uuid(u) => {
                 query = query.bind(u.to_string());
@@ -411,16 +429,34 @@ fn refuse_tenant_schema(resource: &ResourceDef, tenant: Option<&str>) -> Result<
 }
 
 impl DataLayer for Sqlite {
+    async fn in_transaction<T, F, Fut>(&self, work: F) -> Result<T>
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        TransactionSupport::transaction(self, move |tx| work(Some(tx.clone()))).await
+    }
+
     async fn create(
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        _id: Uuid,
-        fields: FieldMap,
+        id: Value,
+        mut fields: FieldMap,
     ) -> Result<FieldMap> {
         refuse_tenant_schema(resource, tenant)?;
         let qb = sql::insert_query(resource, &fields)?;
-        self.execute_query_resource(&qb, resource).await?;
+        let result = self.execute_query_resource(&qb, resource).await?;
+        // An integer key SQLite assigned: the row's rowid, which an INTEGER PRIMARY KEY is.
+        if id.is_null()
+            && let Some(pk) = resource.primary_key()
+            && pk.ty == ash_core::AttrType::Integer
+            && fields.get(pk.name).is_none_or(Value::is_null)
+        {
+            fields.insert(pk.name.to_string(), Value::Int(result.last_insert_rowid()));
+        }
         Ok(fields)
     }
 
@@ -428,11 +464,11 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::update_query(resource, id, &fields)?;
+        let qb = sql::update_query(resource, tenant, id.clone(), &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
             if resource.optimistic_lock_attribute().is_some() {
@@ -445,7 +481,7 @@ impl DataLayer for Sqlite {
                     pk.name
                 );
                 let check_compiled =
-                    CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
+                    CompiledSql::new(check_sql, vec![SqlParam::new(id.clone())]);
                 if self.fetch_all(&check_compiled).await?.is_empty() {
                     return Err(Error::NotFound);
                 } else {
@@ -467,7 +503,7 @@ impl DataLayer for Sqlite {
             resource.table_name(),
             pk.name
         );
-        let fetch_compiled = CompiledSql::new(fetch_sql, vec![SqlParam::new(Value::Uuid(id))]);
+        let fetch_compiled = CompiledSql::new(fetch_sql, vec![SqlParam::new(id)]);
         let mut fetched = self.fetch_all(&fetch_compiled).await?;
         if let Some(row) = fetched.pop() {
             sql::row_to_fields(&row, resource, &[], &[])
@@ -476,9 +512,9 @@ impl DataLayer for Sqlite {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::delete_query(resource, id)?;
+        let qb = sql::delete_query(resource, tenant, id)?;
         let result = self.execute_query(&qb).await?;
         if result.rows_affected() == 0 {
             return Err(Error::NotFound);
@@ -499,6 +535,34 @@ impl DataLayer for Sqlite {
             .collect()
     }
 
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// SQLite can't raise an error from within a statement, as AshSqlite can't
+    /// `expr_error`: an update runs as one statement only when nothing in it must fail.
+    fn can_raise_atomically(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// The update as one statement (see [`ash_sql::QueryCompiler::compile_atomic_update`]),
+    /// which SQLite runs under its single writer, so concurrent updates lose nothing.
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &ash_core::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
+        if !update.conditions.is_empty() {
+            return Err(Error::Invalid(format!("SQLite can't check an update of {}'s conditions in its statement", resource.name)));
+        }
+        let mut compiler = QueryCompiler::new(&SqliteDialect);
+        let compiled = compiler.compile_atomic_update(resource, query, update)?;
+        let rows = self.fetch_all_resource(&compiled, resource).await?;
+        rows.iter().map(|row| sql::row_to_fields(row, resource, &[], &[])).collect()
+    }
+
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
         use sqlx::Row;
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
@@ -515,7 +579,7 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
@@ -526,8 +590,8 @@ impl DataLayer for Sqlite {
 
         let mut where_parts = Vec::new();
         let mut params = Vec::new();
-        for key in identity.keys {
-            if let Some(val) = fields.get(*key) {
+        for key in identity.columns(resource.multitenancy) {
+            if let Some(val) = fields.get(key) {
                 where_parts.push(format!("\"{}\" = ?", key));
                 params.push(SqlParam::new(val.clone()));
             } else {
@@ -562,7 +626,7 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -580,12 +644,12 @@ impl DataLayer for Sqlite {
         .await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
         refuse_tenant_schema(resource, tenant)?;
         if ids.is_empty() {
             return Ok(());
         }
-        let qb = sql::bulk_delete_query(resource, ids)?;
+        let qb = sql::bulk_delete_query(resource, tenant, ids)?;
         self.execute_query_resource(&qb, resource).await?;
         Ok(())
     }

@@ -430,6 +430,7 @@ fn keyset_sort_breaks_ties_as_ash_does() {
             message: None,
             predicate: None,
             nils_distinct: true,
+            all_tenants: false,
         }],
         ..Article::DEF
     };
@@ -439,6 +440,7 @@ fn keyset_sort_breaks_ties_as_ash_does() {
             .map(|(field, descending)| Sort {
                 field: field.to_string(),
                 descending: *descending,
+                ..Default::default()
             })
             .collect()
     };
@@ -459,4 +461,52 @@ fn keyset_sort_breaks_ties_as_ash_does() {
         fields(keyset_sort(&WITH_IDENTITY, sort(&[("title", false)]))),
         fields(sort(&[("title", false)]))
     );
+}
+
+mod declared {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Entry {
+            table "declared_entries";
+
+            attributes {
+                id: Uuid [pk];
+                title: String;
+            }
+
+            actions {
+                read read {
+                    primary;
+                    pagination keyset: true, offset: true, countable: by_default, default_limit: 20, max_page_size: 50, required: false;
+                }
+                read recent {
+                    pagination keyset: true;
+                }
+                read everything {}
+            }
+        }
+    }
+}
+
+// A read declares how it pages, as Ash's `pagination` does, with Ash's defaults: a page
+// of at most 250, required, uncounted.
+#[test]
+fn reads_declare_how_they_page() {
+    use ash_core::{Countable, Pagination};
+    let def = &declared::Entry::DEF;
+    assert_eq!(
+        def.action("read").unwrap().pagination,
+        Some(Pagination {
+            keyset: true,
+            offset: true,
+            countable: Countable::ByDefault,
+            default_limit: Some(20),
+            max_page_size: Some(50),
+            required: false,
+        })
+    );
+    assert_eq!(def.action("recent").unwrap().pagination, Some(Pagination::keyset()));
+    assert_eq!(def.action("everything").unwrap().pagination, None);
 }

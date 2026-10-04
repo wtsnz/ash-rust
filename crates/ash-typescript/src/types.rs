@@ -76,7 +76,26 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
             }
         }
         AttrType::Map => "Record<string, unknown>".to_string(),
-        AttrType::Array => "unknown[]".to_string(),
+        AttrType::Array { of } => format!("Array<{}>", attr_type_to_ts(of)),
+        // Its fields, as GraphQL serves its object.
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } => {
+            let fields: Vec<String> = ty
+                .fields()
+                .unwrap_or_default()
+                .iter()
+                .map(|field| {
+                    let nil = if field.allow_nil { " | null" } else { "" };
+                    format!("{}{}: {}{nil}", to_camel_case(field.name), if field.allow_nil { "?" } else { "" }, attr_type_to_ts(&field.ty))
+                })
+                .collect();
+            format!("{{ {} }}", fields.join("; "))
+        }
+        // One member's object, as GraphQL serves the union.
+        AttrType::Union { name, members } => members
+            .iter()
+            .map(|member| format!("{{ __typename: \"{name}{}\"; value: {} }}", to_pascal_case(member.name), attr_type_to_ts(&member.ty)))
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
 }
 
@@ -85,7 +104,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
 pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<String> {
     match ty {
         AttrType::String | AttrType::CiString => Some("AshTextFilter".to_string()),
-        AttrType::Map | AttrType::Array | AttrType::Vector { .. } | AttrType::Binary => None,
+        AttrType::Map | AttrType::Array { .. } | AttrType::Vector { .. } | AttrType::Binary => None,
         other => Some(format!("AshFilter<{}>", attr_type_to_ts(other))),
     }
 }
@@ -102,6 +121,18 @@ export interface PaginatedResult<T> {
   count?: number | null;
   startKeyset?: string | null;
   endKeyset?: string | null;
+}
+
+/** An offset page of records, as AshGraphql returns a read that pages by offset. */
+export interface OffsetPage<T> {
+  results: T[];
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  pageNumber?: number;
+  lastPage?: number;
+  limit?: number;
 }
 
 /** The operators AshGraphql filters a field by. */
@@ -193,7 +224,7 @@ pub fn input_fields(res: &ResourceDef, action: &ActionDef) -> Vec<(&'static str,
         }
     }
     for arg in action.arguments {
-        fields.push((arg.name, arg.ty, !arg.allow_nil));
+        fields.push((arg.name, arg.ty, !arg.allow_nil && arg.default.is_none()));
     }
     if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
         && let Some(version) = res.optimistic_lock_attribute()

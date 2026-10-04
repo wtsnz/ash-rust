@@ -3,7 +3,7 @@ defmodule Supportdesk.Desk.Agent do
   use Ash.Resource,
     domain: Supportdesk.Desk,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshGraphql.Resource]
+    extensions: [AshGraphql.Resource, AshTypescript.Resource]
 
   postgres do
     table "agents"
@@ -52,6 +52,10 @@ defmodule Supportdesk.Desk.Agent do
     create :seed do
       accept [:id, :org, :name, :email, :role, :active]
     end
+  end
+
+  typescript do
+    type_name "Agent"
   end
 
   graphql do

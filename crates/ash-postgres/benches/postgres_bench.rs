@@ -134,7 +134,7 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
         u.insert("id".into(), Value::Uuid(u_id));
         u.insert("name".into(), Value::String(format!("Staff Engineer #{i}")));
         u.insert("email".into(), Value::String(format!("staff{i}@company.com")));
-        let _ = pg.create(&USER_DEF, None, u_id, u).await;
+        let _ = pg.create(&USER_DEF, None, Value::from(u_id), u).await;
         user_ids.push(u_id);
     }
     let first_user_id = user_ids[0];
@@ -156,7 +156,7 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("user_id".into(), Value::Uuid(user_id));
-        let _ = pg.create(&TICKET_DEF, None, t_id, t).await;
+        let _ = pg.create(&TICKET_DEF, None, Value::from(t_id), t).await;
     }
 
     Some((pg, first_user_id, first_ticket_id))
@@ -181,7 +181,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
             t.insert("status".into(), Value::String("open".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("user_id".into(), Value::Uuid(user_id));
-            let res = pg.create(&TICKET_DEF, None, t_id, t).await.unwrap();
+            let res = pg.create(&TICKET_DEF, None, Value::from(t_id), t).await.unwrap();
             black_box(res);
         });
     });
@@ -205,6 +205,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
         sort: vec![Sort {
             field: "priority".to_string(),
             descending: true,
+            ..Default::default()
         }],
         limit: Some(50),
         ..CompiledQuery::default()
@@ -242,7 +243,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
                 f.insert("status".into(), Value::String("open".into()));
                 f.insert("priority".into(), Value::Int(2));
                 f.insert("user_id".into(), Value::Uuid(user_id));
-                batch.push((id, f));
+                batch.push((Value::Uuid(id), f));
             }
             let res = pg.bulk_create(&TICKET_DEF, None, batch).await.unwrap();
             black_box(res);
@@ -260,7 +261,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
                     u.insert("id".into(), Value::Uuid(u_id));
                     u.insert("name".into(), Value::String("Tx User".into()));
                     u.insert("email".into(), Value::String("tx@company.com".into()));
-                    tx.create(&USER_DEF, None, u_id, u).await?;
+                    tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
 
                     let t_id = Uuid::new_v4();
                     let mut t = FieldMap::new();
@@ -269,7 +270,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
                     t.insert("status".into(), Value::String("open".into()));
                     t.insert("priority".into(), Value::Int(1));
                     t.insert("user_id".into(), Value::Uuid(u_id));
-                    tx.create(&TICKET_DEF, None, t_id, t).await?;
+                    tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
 
                     Ok((u_id, t_id))
                 }

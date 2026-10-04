@@ -9,7 +9,6 @@ pub(crate) use step::Step;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::bulk::{BulkCreateOptions, BulkDestroyOptions};
 use crate::changeset::IntoFieldMap;
@@ -17,7 +16,7 @@ use crate::context::Context;
 use crate::data_layer::{DataLayer, TransactionSupport};
 use crate::error::{Error, Result};
 use crate::resource::Resource;
-use crate::value::FieldMap;
+use crate::value::{FieldMap, Value};
 
 use step::{
     BulkCreateStep, BulkDestroyStep, CreateFromStep, CreateStep, DestroyFromStep, DestroyStep,
@@ -217,7 +216,7 @@ impl<D: DataLayer + 'static> Multi<D> {
         mut self,
         name: impl Into<String>,
         action: &'static str,
-        ids: impl IntoIterator<Item = Uuid>,
+        ids: impl IntoIterator<Item = impl Into<Value>>,
         opts: BulkDestroyOptions,
     ) -> Self
     where
@@ -226,7 +225,7 @@ impl<D: DataLayer + 'static> Multi<D> {
         self.steps.push(Box::new(BulkDestroyStep::<R> {
             name: name.into(),
             action,
-            ids: ids.into_iter().collect(),
+            ids: ids.into_iter().map(Into::into).collect(),
             opts,
             _phantom: PhantomData,
         }));

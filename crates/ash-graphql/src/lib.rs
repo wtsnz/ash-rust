@@ -2,6 +2,9 @@ pub mod builder;
 pub mod dataloader;
 pub mod error;
 pub mod filter;
+mod composite;
+mod generic;
+mod managed;
 pub mod mutation;
 pub mod names;
 pub mod object;
@@ -29,9 +32,12 @@ pub use mutation::{
     mutation_payload_name, register_action_input, register_action_payload,
 };
 pub use object::{build_resource_object, collect_enums_for_resource};
-pub use pagination::{KeysetPage, MAX_PAGE_SIZE, build_keyset_query, keyset_page_type_name, register_keyset_page};
+pub use pagination::{
+    KeysetPage, MAX_PAGE_SIZE, OffsetPage, PageStrategy, build_keyset_query, build_offset_query,
+    keyset_page_type_name, offset_page_type_name, register_pages,
+};
 pub use query::{
-    build_read_action_query, build_resource_queries, get_query_name, list_query_name,
+    build_list_query, build_read_action_query, build_resource_queries, get_query_name, list_query_name,
     list_query_name_for_action,
 };
 pub use sort::{parse_resource_sort, register_resource_sort_inputs};

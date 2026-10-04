@@ -22,6 +22,7 @@ resource! {
                 primary;
                 accept [name];
                 validate present(name);
+                validate string_length(name, min: 2);
             }
 
             update rename {
@@ -47,8 +48,18 @@ fn build_fills_in_what_saving_would() {
 
 #[test]
 fn build_runs_validations() {
-    let err = Account::build_register().name("").build().unwrap_err();
+    let err = Account::build_register().name("A").build().unwrap_err();
     assert!(matches!(err, Error::Validation { .. }), "{err:?}");
+}
+
+// Text is cast as Ash's string type casts it: trimmed, and nil when nothing's left, so
+// blank text for a required attribute is missing.
+#[test]
+fn build_trims_text_and_reads_blank_text_as_nil() {
+    let account = Account::build_register().name("  Ada  ").build().unwrap();
+    assert_eq!(account.name, "Ada");
+    let err = Account::build_register().name("   ").build().unwrap_err();
+    assert!(matches!(err, Error::Missing { ref field } if field == "name"), "{err:?}");
 }
 
 #[test]

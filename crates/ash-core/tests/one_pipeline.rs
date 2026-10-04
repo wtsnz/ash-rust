@@ -15,6 +15,7 @@ fn not_locked(ctx: &ValidationContext<'_>) -> Result<()> {
         Some(Value::Bool(true)) => Err(Error::Validation {
             field: "locked".into(),
             message: "is locked".into(),
+            vars: Vec::new(),
         }),
         _ => Ok(()),
     }
@@ -142,7 +143,7 @@ async fn bulk_destroys_run_the_destroy_action() {
     let open = Note::write(&ctx).owner_id(owner).body("open").reason("filing").await.unwrap();
     let locked = Note::write(&ctx).owner_id(owner).body("locked").reason("filing").locked(true).await.unwrap();
 
-    let result = ash_core::bulk_destroy::<Note, _>(
+    let result = ash_core::bulk_destroy::<Note, _, _>(
         &ctx.with_actor(Actor::new(owner)),
         "remove",
         &[open.id, locked.id],

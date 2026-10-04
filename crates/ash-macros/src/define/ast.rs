@@ -80,6 +80,7 @@ pub struct IdentitySpec {
     pub message: Option<String>,
     pub predicate: Option<String>,
     pub nils_distinct: bool,
+    pub all_tenants: bool,
 }
 
 pub struct IndexSpec {
@@ -88,6 +89,7 @@ pub struct IndexSpec {
     pub predicate: Option<String>,
     pub method: Option<String>,
     pub include: Vec<Ident>,
+    pub all_tenants: bool,
 }
 
 pub struct CheckSpec {
@@ -239,6 +241,8 @@ pub enum PreparationSpec {
     Sort { field: Ident, descending: bool },
     Limit(usize),
     Offset(usize),
+    /// `prepare after_action(f);`: `f` runs on the records the read found.
+    AfterAction(Expr),
 }
 
 pub struct ActionSpec {
@@ -268,6 +272,25 @@ pub struct ActionSpec {
     /// `atomic_upgrade_with <read>;`: the read an atomic update reaches records through.
     pub atomic_upgrade_with: Option<Ident>,
     pub cascade_destroy: Vec<Ident>,
+    /// `pagination keyset: true, countable: true, required: false;`: how a read pages.
+    pub pagination: Option<PaginationSpec>,
+    /// `transaction;`: a generic action that runs in a transaction.
+    pub transaction: bool,
+    /// `metadata name: Type;`: what the action notes on the records it answers.
+    pub metadata: Vec<(Ident, Type)>,
+}
+
+/// A read's `pagination` options, as Ash names them.
+#[derive(Default)]
+pub struct PaginationSpec {
+    pub keyset: bool,
+    pub offset: bool,
+    /// `true`, `false` or `by_default`.
+    pub countable: Option<Ident>,
+    pub default_limit: Option<syn::LitInt>,
+    /// A number, or `nil` for no maximum.
+    pub max_page_size: Option<Option<syn::LitInt>>,
+    pub required: Option<bool>,
 }
 
 pub struct ArgumentSpec {
@@ -275,6 +298,8 @@ pub struct ArgumentSpec {
     pub name: Ident,
     pub ty: Type,
     pub allow_nil: bool,
+    /// `[default: expr]`: its value when input doesn't give it.
+    pub default: Option<syn::Expr>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -337,6 +362,11 @@ pub enum ChangeSpec {
     ManageRelationship {
         relationship: Ident,
         rel_type: Ident,
+    },
+    /// `atomic_update(field, expr)`: the field set to an expression over the record.
+    AtomicUpdate {
+        field: Ident,
+        expr: crate::define::ast::CalculationExprSpec,
     },
     BeforeAction(Expr),
     AfterAction(Expr),

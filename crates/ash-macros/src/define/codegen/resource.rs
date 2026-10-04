@@ -1,7 +1,7 @@
 use super::calculations::calc_expr_to_tokens;
 use super::policies::lit_to_const_value;
 use crate::ast_helpers::{
-    is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake, snake_case,
+    argument_attr_type, is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake, snake_case,
 };
 use crate::define::ast::{AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition};
 use proc_macro2::TokenStream;
@@ -116,11 +116,11 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     let (pk_fn_body, has_pk) = match pk_attr {
         Some(pk) => {
             let pk_id = &pk.ident;
-            (quote! { self.#pk_id }, true)
+            (quote! { ::ash_core::AshType::to_value(&self.#pk_id) }, true)
         }
         None => {
             if def.embedded {
-                (quote! { ::uuid::Uuid::nil() }, false)
+                (quote! { ::ash_core::Value::Null }, false)
             } else {
                 return Err(Error::new_spanned(
                     resource,
@@ -131,13 +131,23 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     };
     let _ = has_pk;
 
+    // A field a field policy may hide that isn't an `Option` is held as `Guarded`: its
+    // value, or forbidden, as Ash holds a hidden field whatever its type.
+    let guarded = |a: &crate::define::ast::AttributeSpec| {
+        option_inner(&a.ty).is_none() && !a.pk && def.field_policies.iter().any(|fp| fp.field == a.ident)
+    };
+
     // 1. Struct fields
     let mut struct_fields = Vec::new();
     for a in &def.attributes {
         let o_attrs = &a.outer_attrs;
         let id = &a.ident;
         let ty = &a.ty;
-        struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+        if guarded(a) {
+            struct_fields.push(quote! { #(#o_attrs)* pub #id: ::ash_core::Guarded<#ty> });
+        } else {
+            struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+        }
     }
     for c in &def.calculations {
         let o_attrs = &c.outer_attrs;
@@ -165,16 +175,26 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = a.ident.to_string();
         let ty = &a.ty;
         if a.pk {
-            attr_defs.push(quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) });
+            // A primary key of its own type, as Ash's are: a UUID made for each new record
+            // (`uuid_primary_key`), an integer the data layer assigns
+            // (`integer_primary_key`), or another type given with the record.
+            attr_defs.push(if is_uuid(ty) {
+                quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) }
+            } else if is_integer(ty) {
+                quote! { ::ash_core::AttributeDef::integer_pk(#name_str) }
+            } else {
+                quote! { ::ash_core::AttributeDef::pk(#name_str, <#ty as ::ash_core::AshType>::ATTR_TYPE) }
+            });
         } else if a.version || def.optimistic_lock.as_ref() == Some(&a.ident) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::version(#name_str) });
         } else if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if let Some(default_expr) = &a.default {
                 let fn_name = format_ident!("__default_{}", name_str);
+                // Stored as the type stores it, a list's items included.
                 helper_default_fns.push(quote! {
                     fn #fn_name() -> ::ash_core::Value {
-                        ::ash_core::Value::from(#default_expr)
+                        ::ash_core::default_value::IntoDefault::<#inner_ty>::into_default(#default_expr)
                     }
                 });
                 attr_defs.push(quote! {
@@ -391,24 +411,14 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 .map(|arg| {
                     let arg_name = arg.name.to_string();
                     let arg_ty = &arg.ty;
-                    let arg_inner = option_inner(arg_ty).unwrap_or(arg_ty);
                     let arg_allow_nil = option_inner(arg_ty).is_some();
-                    let arg_type_tok = if is_string(arg_inner) {
-                        quote! { ::ash_core::AttrType::String }
-                    } else if is_integer(arg_inner) {
-                        quote! { ::ash_core::AttrType::Integer }
-                    } else if is_bool(arg_inner) {
-                        quote! { ::ash_core::AttrType::Boolean }
-                    } else if is_uuid(arg_inner) {
-                        quote! { ::ash_core::AttrType::Uuid }
-                    } else {
-                        quote! { ::ash_core::AttrType::String }
-                    };
+                    let arg_type_tok = argument_attr_type(arg_ty);
                     quote! {
                         ::ash_core::ArgumentDef {
                             name: #arg_name,
                             ty: #arg_type_tok,
                             allow_nil: #arg_allow_nil,
+                            default: ::std::option::Option::None,
                         }
                     }
                 })
@@ -500,6 +510,15 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
+        // A forbidden field is left out: its value isn't the record's to write back.
+        if guarded(a) {
+            to_inserts.push(quote! {
+                if let ::ash_core::Guarded::Value(val) = &self.#id {
+                    map.insert(::std::string::String::from(#name_str), ::ash_core::AshType::to_value(val));
+                }
+            });
+            continue;
+        }
         if a.uses_ash_type_storage() {
             if option_inner(ty).is_some() {
                 to_inserts.push(quote! {
@@ -592,6 +611,19 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = id.to_string();
         let ty = &a.ty;
 
+        // Null where a field policy hid it: forbidden.
+        if guarded(a) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(val) if !val.is_null() => {
+                        ::ash_core::Guarded::Value(<#ty as ::ash_core::AshType>::from_value(val)?)
+                    }
+                    _ => ::ash_core::Guarded::Forbidden,
+                }
+            });
+            continue;
+        }
+
         // A timestamp not yet stored reads as now, in the field's own type.
         if let Some(ts) = &def.timestamps
             && (id == &ts.created_at || id == &ts.updated_at)
@@ -626,9 +658,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::std::option::Option::Some(val) if !val.is_null() => {
                             <#inner_ty as ::ash_core::AshType>::from_value(val)?
                         }
-                        _ => <#inner_ty as ::ash_core::AshType>::from_value(
-                            &::ash_core::Value::from(#default_expr),
-                        )?,
+                        _ => <#inner_ty as ::ash_core::AshType>::from_value(&{
+                            ::ash_core::default_value::IntoDefault::<#inner_ty>::into_default(#default_expr)
+                        })?,
                     }
                 });
             } else if let Some(default_fn) = &a.default_fn {
@@ -694,7 +726,11 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             continue;
         }
 
-        if a.pk || is_uuid(ty) {
+        if a.pk && !is_uuid(ty) {
+            from_inits.push(quote! {
+                #id: <#ty as ::ash_core::AshType>::from_value(&::ash_core::required_pk(fields, #name_str)?)?
+            });
+        } else if a.pk || is_uuid(ty) {
             from_inits.push(quote! { #id: ::ash_core::required_uuid(fields, #name_str)? });
         } else if option_inner(ty).is_some_and(is_uuid) {
             from_inits.push(quote! { #id: ::ash_core::optional_uuid(fields, #name_str)? });
@@ -890,7 +926,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::ash_core::Attr::new(#name_str);
                 });
             }
-        } else if a.pk || is_uuid(ty) || option_inner(ty).is_some_and(is_uuid) {
+        } else if (a.pk && is_uuid(ty)) || (!a.pk && (is_uuid(ty) || option_inner(ty).is_some_and(is_uuid))) {
             field_consts.push(quote! {
                 #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, ::uuid::Uuid> =
@@ -1015,6 +1051,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 None => quote! { ::std::option::Option::None },
             };
             let nils_distinct = ident.nils_distinct;
+            let all_tenants = ident.all_tenants;
             quote! {
                 ::ash_core::IdentityDef {
                     name: #name_str,
@@ -1022,6 +1059,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     message: #msg_tokens,
                     predicate: #predicate_tokens,
                     nils_distinct: #nils_distinct,
+                    all_tenants: #all_tenants,
                 }
             }
         })
@@ -1042,6 +1080,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 None => quote! { ::std::option::Option::None },
             };
             let include_strs: Vec<String> = index.include.iter().map(|k| k.to_string()).collect();
+            let all_tenants = index.all_tenants;
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
@@ -1049,6 +1088,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     predicate: #predicate_tokens,
                     method: #method_tokens,
                     include: &[#(#include_strs),*],
+                    all_tenants: #all_tenants,
                 }
             }
         })
@@ -1237,6 +1277,104 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         )
     };
 
+    // Each generic action with a `run` of its own, run by name: its input from values,
+    // its result as one, as an API serving actions by name runs them.
+    let mut generic_arms = Vec::new();
+    for act in def.actions.iter().filter(|act| act.kind == crate::define::ast::ActionKind::Generic && act.accept.is_empty()) {
+        let Some(run_expr) = &act.run_expr else { continue };
+        let name_str = act.name.to_string();
+        let input_struct = format_ident!("{}{}Input", resource, crate::ast_helpers::pascal_case(&name_str));
+        let returns_ty = act.returns.clone().unwrap_or_else(|| syn::parse_quote!(()));
+        let names: Vec<&syn::Ident> = act.arguments.iter().map(|arg| &arg.name).collect();
+        let extracts = act.arguments.iter().map(|arg| {
+            let name = &arg.name;
+            let key = name.to_string();
+            match (option_inner(&arg.ty), &arg.default) {
+                (Some(inner), default) => {
+                    let missing = match default {
+                        Some(default) => quote! { ::std::option::Option::Some(#default) },
+                        None => quote! { ::std::option::Option::None },
+                    };
+                    quote! {
+                        let #name: ::std::option::Option<#inner> = match __input.get(#key) {
+                            ::std::option::Option::Some(value) if !value.is_null() => ::std::option::Option::Some(<#inner as ::ash_core::AshType>::from_value(value)?),
+                            _ => #missing,
+                        };
+                    }
+                }
+                (None, default) => {
+                    let ty = &arg.ty;
+                    let missing = match default {
+                        Some(default) => quote! { #default },
+                        None => quote! { return ::std::result::Result::Err(::ash_core::Error::Missing { field: #key.into() }) },
+                    };
+                    quote! {
+                        let #name: #ty = match __input.get(#key) {
+                            ::std::option::Option::Some(value) if !value.is_null() => <#ty as ::ash_core::AshType>::from_value(value)?,
+                            _ => #missing,
+                        };
+                    }
+                }
+            }
+        });
+        let call = |ctx: TokenStream| quote! {
+            let input = #input_struct { ctx: #ctx, #(#names,)* };
+            let fut = __call(#run_expr, input);
+            ::ash_core::run::<#resource, D, #returns_ty, _, _>(#ctx, #name_str, move || fut).await
+        };
+        let ran = if act.transaction {
+            let inner = call(quote! { &tx });
+            quote! { ctx.transaction(move |tx| async move { #inner }).await? }
+        } else {
+            let inner = call(quote! { ctx });
+            quote! { { #inner }? }
+        };
+        let value = if act.returns.is_some() {
+            quote! {
+                #[allow(unused_imports)]
+                use ::ash_core::returned::{AsAshValue as _, AsSerializedValue as _, NoValue as _};
+                (&&::ash_core::returned::Returned(__result)).value()
+            }
+        } else {
+            quote! { let _ = __result; ::std::result::Result::Ok(::ash_core::Value::Null) }
+        };
+        generic_arms.push(quote! {
+            #name_str => {
+                fn __call<'t, D2: ::ash_core::DataLayer, F, Fut>(f: F, input: #input_struct<'t, D2>) -> Fut
+                where
+                    F: ::std::ops::FnOnce(#input_struct<'t, D2>) -> Fut,
+                    Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>> + ::std::marker::Send,
+                {
+                    f(input)
+                }
+                #(#extracts)*
+                let __result: #returns_ty = #ran;
+                #value
+            }
+        });
+    }
+    let run_generic = if generic_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn run_generic<'a, D: ::ash_core::TransactionSupport + 'static>(
+                ctx: &'a ::ash_core::Context<D>,
+                action: &'a str,
+                __input: ::ash_core::FieldMap,
+            ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::ash_core::Result<::ash_core::Value>> + ::std::marker::Send + 'a>> {
+                ::std::boxed::Box::pin(async move {
+                    match action {
+                        #(#generic_arms)*
+                        other => {
+                            let action = <Self as ::ash_core::Resource>::DEF.action(other).map(|a| a.name).unwrap_or("unknown");
+                            ::std::result::Result::Err(::ash_core::Error::ManualRequired { action })
+                        }
+                    }
+                })
+            }
+        }
+    };
+
     // `PartialEq` but not `Eq`: a float attribute, or a relationship to a resource with
     // one, can't be `Eq`, and the macro can't see into related resources.
     Ok(quote! {
@@ -1281,7 +1419,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 }
             };
 
-            fn id(&self) -> ::uuid::Uuid {
+            fn pk(&self) -> ::ash_core::Value {
                 #pk_fn_body
             }
 
@@ -1310,6 +1448,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     ))),
                 }
             }
+
+            #run_generic
         }
 
         pub const #def_const_name: ::ash_core::ResourceDef = <#resource as ::ash_core::Resource>::DEF;

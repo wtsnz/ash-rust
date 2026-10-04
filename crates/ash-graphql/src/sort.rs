@@ -17,8 +17,8 @@ pub fn resource_sort_input_name(resource_name: &str) -> String {
     format!("{resource_name}SortInput")
 }
 
-/// The shared `SortOrder` enum. ash-core doesn't place nulls, so the `*_NULLS_*` orders
-/// sort as their direction does.
+/// The shared `SortOrder` enum: a direction, and where nulls go (by default last
+/// ascending and first descending).
 pub fn register_sort_order(builder: SchemaBuilder) -> SchemaBuilder {
     let mut order = Enum::new("SortOrder");
     for item in ["DESC", "DESC_NULLS_FIRST", "DESC_NULLS_LAST", "ASC", "ASC_NULLS_FIRST", "ASC_NULLS_LAST"] {
@@ -62,10 +62,12 @@ pub fn register_resource_sort_inputs(
     )
 }
 
-/// Parses a `[<Resource>SortInput]` into sorts, from the value as given (see
-/// [`parse_resource_filter`](crate::filter::parse_resource_filter)).
+/// Parses a `[<Resource>SortInput]` into sorts as `actor` may run them, a field its field
+/// policies hide sorting as null where it's hidden ([`ash_core::guard_input_sort`]), from
+/// the value as given (see [`parse_resource_filter`](crate::filter::parse_resource_filter)).
 pub fn parse_resource_sort(
     resource: &'static ResourceDef,
+    actor: Option<&ash_core::Actor>,
     value: &GqlValue,
 ) -> Result<Vec<Sort>, async_graphql::Error> {
     let mut sorts = Vec::new();
@@ -80,16 +82,26 @@ pub fn parse_resource_sort(
         let field = sort_fields(resource)
             .find(|field| upper_snake(field) == wanted)
             .ok_or_else(|| async_graphql::Error::new(format!("Unknown sort field `{wanted}`")))?;
-        let descending = match obj.get("order") {
-            Some(order) if !matches!(order, GqlValue::Null) => enum_name(order)?.starts_with("DESC"),
-            _ => false,
+        let order = match obj.get("order") {
+            Some(order) if !matches!(order, GqlValue::Null) => enum_name(order)?,
+            _ => "ASC",
+        };
+        let descending = order.starts_with("DESC");
+        let nulls_first = if order.ends_with("_NULLS_FIRST") {
+            Some(true)
+        } else if order.ends_with("_NULLS_LAST") {
+            Some(false)
+        } else {
+            None
         };
         sorts.push(Sort {
             field: field.to_string(),
             descending,
+            nulls_first,
+            ..Default::default()
         });
     }
-    Ok(sorts)
+    ash_core::guard_input_sort(resource, actor, sorts).map_err(|e| async_graphql::Error::new(e.to_string()))
 }
 
 /// An enum value's name: a literal's, or a variable's string.

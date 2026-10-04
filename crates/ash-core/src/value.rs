@@ -7,11 +7,14 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
     Null,
     Bool(bool),
     Int(i64),
+    /// A number that isn't an integer, as JSON holds it (a float attribute is stored as
+    /// its canonical text).
+    Float(f64),
     Uuid(Uuid),
     String(String),
     Map(FieldMap),
@@ -26,6 +29,14 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            Self::Float(n) => Some(*n),
+            Self::Int(n) => Some(*n as f64),
             _ => None,
         }
     }
@@ -80,6 +91,7 @@ impl Value {
             Self::Null => serde_json::Value::Null,
             Self::Bool(b) => serde_json::Value::Bool(*b),
             Self::Int(i) => serde_json::Value::from(*i),
+            Self::Float(n) => serde_json::Number::from_f64(*n).map_or(serde_json::Value::Null, serde_json::Value::Number),
             Self::Uuid(u) => serde_json::Value::String(u.to_string()),
             Self::String(s) => serde_json::Value::String(s.clone()),
             Self::Map(m) => serde_json::Value::Object(
@@ -90,14 +102,14 @@ impl Value {
     }
 
     /// Reads plain JSON from a JSON column. Integers become [`Value::Int`], other numbers
-    /// their text, and strings that parse as UUIDs [`Value::Uuid`].
+    /// [`Value::Float`], and strings that parse as UUIDs [`Value::Uuid`].
     pub fn from_plain_json(json: serde_json::Value) -> Self {
         match json {
             serde_json::Value::Null => Self::Null,
             serde_json::Value::Bool(b) => Self::Bool(b),
             serde_json::Value::Number(n) => match n.as_i64() {
                 Some(i) => Self::Int(i),
-                None => Self::String(n.to_string()),
+                None => n.as_f64().map_or_else(|| Self::String(n.to_string()), Self::Float),
             },
             serde_json::Value::String(s) => match Uuid::parse_str(&s) {
                 Ok(u) => Self::Uuid(u),
@@ -119,6 +131,7 @@ impl Value {
             Self::Null => "null",
             Self::Bool(_) => "boolean",
             Self::Int(_) => "integer",
+            Self::Float(_) => "float",
             Self::Uuid(_) => "uuid",
             Self::String(_) => "string",
             Self::Map(_) => "map",
@@ -133,6 +146,7 @@ impl fmt::Display for Value {
             Self::Null => write!(f, "nil"),
             Self::Bool(v) => write!(f, "{v}"),
             Self::Int(v) => write!(f, "{v}"),
+            Self::Float(v) => write!(f, "{v}"),
             Self::Uuid(v) => write!(f, "{v}"),
             Self::String(v) => write!(f, "{v}"),
             Self::Map(m) => write!(f, "{}", serde_json::to_string(m).unwrap_or_default()),
@@ -140,6 +154,14 @@ impl fmt::Display for Value {
         }
     }
 }
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Value {}
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -153,7 +175,7 @@ impl Ord for Value {
             match value {
                 Value::Null => 0,
                 Value::Bool(_) => 1,
-                Value::Int(_) => 2,
+                Value::Int(_) | Value::Float(_) => 2,
                 Value::Uuid(_) => 3,
                 Value::String(_) => 4,
                 Value::Map(_) => 5,
@@ -165,10 +187,17 @@ impl Ord for Value {
             (Self::Null, Self::Null) => Ordering::Equal,
             (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
             (Self::Int(a), Self::Int(b)) => a.cmp(b),
+            (Self::Float(a), Self::Float(b)) => a.total_cmp(b),
+            // Numbers by value; an integer and a float of the same value, the integer first.
+            (Self::Int(a), Self::Float(b)) => (*a as f64).total_cmp(b).then(Ordering::Less),
+            (Self::Float(a), Self::Int(b)) => a.total_cmp(&(*b as f64)).then(Ordering::Greater),
             (Self::Uuid(a), Self::Uuid(b)) => a.cmp(b),
             (Self::String(a), Self::String(b)) => a.cmp(b),
             (Self::Array(a), Self::Array(b)) => a.cmp(b),
             (Self::Map(a), Self::Map(b)) => {
+                if a.len() != b.len() {
+                    return a.len().cmp(&b.len());
+                }
                 let mut a_entries: Vec<_> = a.iter().collect();
                 let mut b_entries: Vec<_> = b.iter().collect();
                 a_entries.sort_by_key(|(k, _)| *k);
@@ -187,6 +216,7 @@ impl std::hash::Hash for Value {
             Self::Null => {}
             Self::Bool(b) => b.hash(state),
             Self::Int(n) => n.hash(state),
+            Self::Float(n) => n.to_bits().hash(state),
             Self::Uuid(u) => u.hash(state),
             Self::String(s) => s.hash(state),
             Self::Array(items) => items.hash(state),
@@ -206,9 +236,10 @@ impl From<FieldMap> for Value {
     }
 }
 
-impl From<Vec<FieldMap>> for Value {
-    fn from(value: Vec<FieldMap>) -> Self {
-        Self::Array(value.into_iter().map(Value::Map).collect())
+/// A list holds its items as their type stores them.
+impl<T: crate::AshType> From<Vec<T>> for Value {
+    fn from(value: Vec<T>) -> Self {
+        crate::AshType::to_value(&value)
     }
 }
 
@@ -367,6 +398,29 @@ impl From<ConstValue> for Value {
 
 pub type FieldMap = HashMap<String, Value>;
 
+/// The primary key `key` of a record, which it must hold: any type (a UUID, an integer,
+/// text), as Ash's primary keys are.
+pub fn required_pk(fields: &FieldMap, key: &str) -> Result<Value> {
+    match fields.get(key) {
+        Some(Value::Null) | None => Err(Error::Missing { field: key.to_string() }),
+        Some(value) => Ok(value.clone()),
+    }
+}
+
+/// `value` as a key of type `ty`: text a client gave for a UUID or an integer, cast; a
+/// value already of the type, as it is. `None` where it can't be one.
+pub fn pk_cast(ty: crate::resource::AttrType, value: &Value) -> Option<Value> {
+    use crate::resource::AttrType;
+    match (ty, value) {
+        (_, Value::Null) => None,
+        (AttrType::Uuid, Value::String(text)) => Uuid::parse_str(text).ok().map(Value::Uuid),
+        (AttrType::Integer, Value::String(text)) => text.parse().ok().map(Value::Int),
+        (AttrType::Uuid, Value::Uuid(_)) | (AttrType::Integer, Value::Int(_)) => Some(value.clone()),
+        (AttrType::Uuid | AttrType::Integer, _) => None,
+        (_, value) => Some(value.clone()),
+    }
+}
+
 pub fn required_uuid(fields: &FieldMap, key: &str) -> Result<Uuid> {
     match fields.get(key) {
         Some(Value::Uuid(id)) => Ok(*id),
@@ -416,6 +470,45 @@ pub fn optional_uuid(fields: &FieldMap, key: &str) -> Result<Option<Uuid>> {
             expected: "uuid".into(),
             got: value.type_name().into(),
         }),
+    }
+}
+
+/// Where a record notes its metadata `name`, among its fields.
+fn metadata_key(name: &str) -> String {
+    format!("__metadata__:{name}")
+}
+
+/// Notes `value` as `record`'s metadata `name`, as Ash's `Ash.Resource.put_metadata/3`:
+/// something the action that answers the record says of it, beyond its fields (declared
+/// on the action as [`crate::MetadataDef`]s for an API to show).
+pub fn put_metadata(record: &mut FieldMap, name: &str, value: impl Into<Value>) {
+    record.insert(metadata_key(name), value.into());
+}
+
+/// `record`'s metadata `name`, as Ash's `Ash.Resource.get_metadata/2`.
+pub fn get_metadata<'a>(record: &'a FieldMap, name: &str) -> Option<&'a Value> {
+    record.get(&metadata_key(name))
+}
+
+/// A union's value: its member `name` holding `value`, as Ash holds a union
+/// (`{type, value}`).
+pub fn union_value(name: &str, value: Value) -> Value {
+    let mut held = FieldMap::new();
+    held.insert("type".to_string(), Value::String(name.to_string()));
+    held.insert("value".to_string(), value);
+    Value::Map(held)
+}
+
+impl Value {
+    /// The member a union's value holds, and its value.
+    pub fn union_member(&self) -> Option<(&str, &Value)> {
+        match self {
+            Value::Map(held) => match (held.get("type"), held.get("value")) {
+                (Some(Value::String(name)), Some(value)) => Some((name.as_str(), value)),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }
 

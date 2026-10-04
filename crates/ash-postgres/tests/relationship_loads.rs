@@ -117,7 +117,7 @@ async fn insert<D: DataLayer>(data: &D, resource: &ResourceDef, fields: &[(&str,
     let id = Uuid::new_v4();
     let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(resource, None, id, map).await.unwrap()
+    data.create(resource, None, Value::from(id), map).await.unwrap()
 }
 
 fn texts(rows: &[FieldMap], field: &str) -> Vec<String> {
@@ -156,7 +156,7 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         let shelves = shelves.clone();
         async move { load_related_query(&ctx, &SHELF, relationship, &shelves, &query).await.unwrap() }
     };
-    let by = |field: &str, descending: bool| vec![Sort { field: field.into(), descending }];
+    let by = |field: &str, descending: bool| vec![Sort { field: field.into(), descending, ..Default::default() }];
 
     // The longest two of each shelf's books; the same shelf twice gets them twice.
     let books = load("books", RelatedQuery { sort: by("pages", true), limit: Some(2), ..RelatedQuery::default() }).await;
@@ -231,7 +231,7 @@ async fn per_key_twice<D: DataLayer>(data: &D) {
         insert(data, &BOOK, &fields).await;
     }
     let query = CompiledQuery {
-        sort: vec![Sort { field: "title".into(), descending: false }],
+        sort: vec![Sort { field: "title".into(), descending: false, ..Default::default() }],
         limit: Some(1),
         ..CompiledQuery::default()
     };

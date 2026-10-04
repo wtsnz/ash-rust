@@ -314,6 +314,7 @@ impl AshType for f64 {
         match value {
             Value::String(s) => Float::parse(s).map(|float| float.value()),
             Value::Int(n) => Ok(*n as f64),
+            Value::Float(n) => Ok(*n),
             _ => Err(Error::Invalid("expected float".into())),
         }
     }
@@ -691,6 +692,8 @@ impl AshType for Float {
     fn from_value(value: &Value) -> Result<Self> {
         match value {
             Value::String(s) => Self::parse(s),
+            Value::Float(n) => Self::parse(&n.to_string()),
+            Value::Int(n) => Self::parse(&n.to_string()),
             _ => Err(Error::Invalid("expected float".into())),
         }
     }
@@ -818,6 +821,38 @@ impl<T: AshType> AshType for Option<T> {
             Ok(None)
         } else {
             T::from_value(value).map(Some)
+        }
+    }
+}
+
+/// A map of values, as Ash's `:map`.
+impl AshType for crate::value::FieldMap {
+    const ATTR_TYPE: AttrType = AttrType::Map;
+
+    fn to_value(&self) -> Value {
+        Value::Map(self.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::Map(map) => Ok(map.clone()),
+            other => Err(Error::Invalid(format!("expected a map, got {other}"))),
+        }
+    }
+}
+
+/// A list of one type, as Ash's `{:array, type}`.
+impl<T: AshType> AshType for Vec<T> {
+    const ATTR_TYPE: AttrType = AttrType::Array { of: &T::ATTR_TYPE };
+
+    fn to_value(&self) -> Value {
+        Value::Array(self.iter().map(AshType::to_value).collect())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::Array(items) => items.iter().map(T::from_value).collect(),
+            other => Err(Error::Invalid(format!("expected a list, got {other}"))),
         }
     }
 }

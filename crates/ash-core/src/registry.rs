@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::data_layer::{CompiledQuery, DataLayer, SchemaSupport, TransactionSupport};
 use crate::error::{Error, Result};
@@ -19,7 +18,7 @@ pub trait DynDataLayer: Send + Sync {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>>;
 
@@ -27,7 +26,7 @@ pub trait DynDataLayer: Send + Sync {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>>;
 
@@ -35,7 +34,7 @@ pub trait DynDataLayer: Send + Sync {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
     ) -> BoxFuture<'a, Result<()>>;
 
     fn run_query_dyn<'a>(
@@ -51,6 +50,8 @@ pub trait DynDataLayer: Send + Sync {
     ) -> BoxFuture<'a, Result<usize>>;
 
     fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
+    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool;
 
     fn update_atomic_dyn<'a>(
         &'a self,
@@ -82,7 +83,7 @@ pub trait DynDataLayer: Send + Sync {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
         identity: &'a IdentityDef,
         update_fields: &'a [String],
@@ -92,21 +93,21 @@ pub trait DynDataLayer: Send + Sync {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
     fn bulk_destroy_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        ids: &'a [Uuid],
+        ids: &'a [Value],
     ) -> BoxFuture<'a, Result<()>>;
 
     fn bulk_update_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>>;
 }
 
@@ -115,7 +116,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>> {
         Box::pin(self.create(resource, tenant, id, fields))
@@ -125,7 +126,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> BoxFuture<'a, Result<FieldMap>> {
         Box::pin(self.update(resource, tenant, id, fields))
@@ -135,7 +136,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(self.destroy(resource, tenant, id))
     }
@@ -158,6 +159,10 @@ impl<T: DataLayer> DynDataLayer for T {
 
     fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool {
         self.can_update_atomically(resource)
+    }
+
+    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_raise_atomically(resource)
     }
 
     fn update_atomic_dyn<'a>(
@@ -200,7 +205,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
         identity: &'a IdentityDef,
         update_fields: &'a [String],
@@ -212,7 +217,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
         Box::pin(self.bulk_create(resource, tenant, rows))
     }
@@ -221,7 +226,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        ids: &'a [Uuid],
+        ids: &'a [Value],
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(self.bulk_destroy(resource, tenant, ids))
     }
@@ -230,7 +235,7 @@ impl<T: DataLayer> DynDataLayer for T {
         &'a self,
         resource: &'a ResourceDef,
         tenant: Option<&'a str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>> {
         Box::pin(self.bulk_update(resource, tenant, rows))
     }
@@ -377,7 +382,7 @@ impl DataLayer for StoreRegistry {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let layer = self.get_layer(resource)?;
@@ -388,14 +393,14 @@ impl DataLayer for StoreRegistry {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         let layer = self.get_layer(resource)?;
         layer.update_dyn(resource, tenant, id, fields).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         let layer = self.get_layer(resource)?;
         layer.destroy_dyn(resource, tenant, id).await
     }
@@ -416,6 +421,10 @@ impl DataLayer for StoreRegistry {
 
     fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
         self.get_layer(resource).is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
+    }
+
+    fn can_raise_atomically(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_raise_atomically_dyn(resource))
     }
 
     async fn update_atomic(
@@ -471,7 +480,7 @@ impl DataLayer for StoreRegistry {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
         identity: &IdentityDef,
         update_fields: &[String],
@@ -486,13 +495,13 @@ impl DataLayer for StoreRegistry {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         let layer = self.get_layer(resource)?;
         layer.bulk_create_dyn(resource, tenant, rows).await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
         let layer = self.get_layer(resource)?;
         layer.bulk_destroy_dyn(resource, tenant, ids).await
     }
@@ -501,7 +510,7 @@ impl DataLayer for StoreRegistry {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> Result<Vec<Result<FieldMap>>> {
         let layer = self.get_layer(resource)?;
         layer.bulk_update_dyn(resource, tenant, rows).await

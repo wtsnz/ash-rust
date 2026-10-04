@@ -2,7 +2,6 @@
 //! GraphQL calls, bulk actions and cascades all prepare, persist and finish their writes
 //! here, so they run the same steps in the same order.
 
-use uuid::Uuid;
 
 use crate::action::{
     ActionDef, ActionKind, DynamicAfterActionHook, DynamicAfterTransactionHook, ManagedRelType,
@@ -19,7 +18,7 @@ use crate::pipeline::{
 };
 use crate::policy::authorize_write;
 use crate::resource::ResourceDef;
-use crate::value::{FieldMap, Value, required_uuid};
+use crate::value::{FieldMap, Value, required_pk};
 
 use super::managed::{ManagedRelationshipSpec, extract_managed_relationships};
 use crate::engine::atomic::{AtomicPlan, PlanInput, plan_update, run_atomic_destroy, run_atomic_update};
@@ -134,7 +133,7 @@ impl DynamicChangeset {
         forced: FieldMap,
     ) -> Result<Self> {
         expect_kind(action, ActionKind::Create)?;
-        let (mut fields, arguments) = split_input(action, input)?;
+        let (mut fields, arguments) = split_input(resource, action, input)?;
         fields.extend(forced);
         prepare_create_fields(resource, &mut fields);
         let mut changeset = Self::new(resource, action, fields, arguments, None);
@@ -143,6 +142,81 @@ impl DynamicChangeset {
         changeset.run_validations(ctx)?;
         validate(resource, &mut changeset.fields)?;
         Ok(changeset.with_context(ctx))
+    }
+
+    /// What's wrong with `input` to `action`, as a form validating it before it's
+    /// submitted finds: every validation it fails, every argument or attribute it needs
+    /// and lacks, every value of the wrong type. A create is checked from nothing, an
+    /// update or destroy against `existing`. Nothing is written, nor authorized, and keys
+    /// the action doesn't take are left out, as AshTypescript's `validate_action`
+    /// validates a form.
+    pub fn problems<D>(
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        action: &'static ActionDef,
+        existing: Option<FieldMap>,
+        input: FieldMap,
+    ) -> Vec<Error> {
+        let mut accepted = FieldMap::new();
+        let mut arguments = FieldMap::new();
+        for (name, mut value) in input {
+            if action.accept.contains(&name.as_str()) {
+                if let Some(attribute) = resource.attribute(&name) {
+                    crate::pipeline::cast_text(attribute.ty, &mut value);
+                }
+                accepted.insert(name, value);
+            } else if let Some(arg) = action.arguments.iter().find(|arg| arg.name == name) {
+                crate::pipeline::cast_text(arg.ty, &mut value);
+                arguments.insert(name, value);
+            }
+        }
+        crate::action::apply_argument_defaults(action.arguments, &mut arguments);
+        let mut problems: Vec<Error> = action
+            .arguments
+            .iter()
+            .filter(|arg| !arg.allow_nil && arguments.get(arg.name).is_none_or(Value::is_null))
+            .map(|arg| Error::Missing { field: arg.name.to_string() })
+            .collect();
+        let creating = existing.is_none();
+        let fields = match &existing {
+            Some(existing) => {
+                let mut fields = existing.clone();
+                fields.extend(accepted.clone());
+                prepare_update_fields(resource, existing, &mut fields);
+                fields
+            }
+            None => {
+                let mut fields = accepted.clone();
+                prepare_create_fields(resource, &mut fields);
+                fields
+            }
+        };
+        let mut changeset = Self::new(resource, action, fields, arguments, existing);
+        if let Err(error) = changeset.apply_changes(ctx) {
+            problems.push(error);
+            return problems;
+        }
+        let _ = apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), creating);
+        if let Err(error) = changeset.run_validations(ctx) {
+            problems.extend(error.into_each());
+        }
+        if action.kind != ActionKind::Destroy {
+            for attribute in resource.attributes {
+                match changeset.fields.get(attribute.name) {
+                    None | Some(Value::Null)
+                        if attribute.allow_nil
+                            || attribute.assigned_on_insert()
+                            || !(creating || accepted.contains_key(attribute.name)) => {}
+                    None | Some(Value::Null) => problems.push(Error::Missing { field: attribute.name.to_string() }),
+                    Some(value) => {
+                        if let Err(error) = crate::pipeline::check_type(attribute, value) {
+                            problems.push(error);
+                        }
+                    }
+                }
+            }
+        }
+        problems
     }
 
     /// An update of `existing` through `action`.
@@ -167,7 +241,7 @@ impl DynamicChangeset {
         forced: FieldMap,
     ) -> Result<Self> {
         expect_kind(action, ActionKind::Update)?;
-        let (accepted, arguments) = split_input(action, input)?;
+        let (accepted, arguments) = split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted.clone());
         fields.extend(forced);
@@ -176,7 +250,9 @@ impl DynamicChangeset {
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
         changeset.run_validations(ctx)?;
-        validate(resource, &mut changeset.fields)?;
+        // An update writes only what it changes, over the stored row, so an attribute the
+        // record in hand lacks (one a field policy hid from its reader) stays as stored.
+        crate::pipeline::validate_given(resource, &mut changeset.fields)?;
         // Field policies govern what's read, not what's written, as in Ash: writes are the
         // action's policies' to authorize. A field the actor may not read is not written
         // back, though: a typed record read by that actor holds a redacted null there, not
@@ -199,9 +275,23 @@ impl DynamicChangeset {
         action: &'static ActionDef,
         existing: FieldMap,
     ) -> Result<Self> {
+        Self::for_destroy_with(ctx, resource, action, existing, FieldMap::new())
+    }
+
+    /// [`for_destroy`](Self::for_destroy) with `input`: the action's arguments, and the
+    /// attributes it accepts, which a soft destroy writes.
+    pub fn for_destroy_with<D>(
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        action: &'static ActionDef,
+        existing: FieldMap,
+        input: FieldMap,
+    ) -> Result<Self> {
         expect_kind(action, ActionKind::Destroy)?;
-        let fields = existing.clone();
-        let mut changeset = Self::new(resource, action, fields, FieldMap::new(), Some(existing));
+        let (accepted, arguments) = crate::pipeline::split_input(resource, action, input)?;
+        let mut fields = existing.clone();
+        fields.extend(accepted);
+        let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
         changeset.apply_changes(ctx)?;
         changeset.run_validations(ctx)?;
         Ok(changeset.with_context(ctx))
@@ -226,7 +316,7 @@ impl DynamicChangeset {
         input: FieldMap,
     ) -> Result<FieldMap> {
         expect_kind(action, ActionKind::Create)?;
-        let (mut fields, arguments) = split_input(action, input)?;
+        let (mut fields, arguments) = split_input(resource, action, input)?;
         prepare_create_fields(resource, &mut fields);
         crate::pipeline::apply_changes(&mut fields, action, None, &arguments)?;
         validate(resource, &mut fields)?;
@@ -243,7 +333,7 @@ impl DynamicChangeset {
         input: FieldMap,
     ) -> Result<FieldMap> {
         expect_kind(action, ActionKind::Update)?;
-        let (accepted, arguments) = split_input(action, input)?;
+        let (accepted, arguments) = split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted);
         prepare_update_fields(resource, &existing, &mut fields);
@@ -353,25 +443,42 @@ impl DynamicChangeset {
 
     /// [`commit`](Self::commit) inside a destroy `cascade`, which decides whether it
     /// notifies.
-    pub(crate) async fn commit_within<D: DataLayer>(
+    ///
+    /// Boxed as `Send`: a managed relationship commits actions of its own, and the cycle
+    /// would otherwise hide whether the future is.
+    pub(crate) fn commit_within<'a, D: DataLayer>(
         mut self,
-        ctx: &Context<D>,
-        cascade: &Cascade,
-    ) -> Result<FieldMap> {
-        let after_transactions = std::mem::take(&mut self.after_transactions);
-        let result = async {
-            if let Some(plan) = self.atomic_plan(ctx)? {
-                return self.persist_atomically(ctx, plan, cascade).await;
+        ctx: &'a Context<D>,
+        cascade: &'a Cascade,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<FieldMap>> + Send + 'a>> {
+        Box::pin(async move {
+            let after_transactions = std::mem::take(&mut self.after_transactions);
+            let beyond = self.writes_beyond_record();
+            let work = move |ctx: Context<D>| async move {
+                if let Some(plan) = self.atomic_plan(&ctx)? {
+                    return self.persist_atomically(&ctx, plan, cascade).await;
+                }
+                let id = self.prepare(&ctx).await?;
+                let stored = self.persist(&ctx, id.clone(), cascade).await?;
+                self.finish(&ctx, id, stored, cascade.notify).await
+            };
+            // An action writing more than its own row writes in one transaction, as Ash runs
+            // an action in one: a managed relationship that fails takes the record and every
+            // related write before it with it. A lone statement is atomic as it is.
+            let result = if beyond { ctx.atomically(work).await } else { work(ctx.clone()).await };
+            for hook in after_transactions {
+                hook(result.as_ref());
             }
-            let id = self.prepare(ctx).await?;
-            let stored = self.persist(ctx, id, cascade).await?;
-            self.finish(ctx, id, stored, cascade.notify).await
-        }
-        .await;
-        for hook in after_transactions {
-            hook(result.as_ref());
-        }
-        result
+            result
+        })
+    }
+
+    /// Whether the action may write rows besides its own: related records it manages, or
+    /// those a destroy cascades to.
+    fn writes_beyond_record(&self) -> bool {
+        !self.managed_relationships.is_empty()
+            || (self.action.kind == ActionKind::Destroy
+                && self.resource.relationships.iter().any(|rel| rel.kind != crate::resource::RelKind::BelongsTo))
     }
 
     /// The update of the record in hand as one statement, as Ash upgrades an update of a
@@ -397,7 +504,7 @@ impl DynamicChangeset {
         } else if !self.managed_relationships.is_empty() {
             Err("it manages relationships".to_string())
         } else {
-            let id = required_uuid(existing, pk_name(self.resource)?)?;
+            let id = required_pk(existing, pk_name(self.resource)?)?;
             let expected_version = self
                 .resource
                 .optimistic_lock_attribute()
@@ -412,6 +519,7 @@ impl DynamicChangeset {
                     arguments: &self.arguments,
                     expected_version,
                     collect_hooks: false,
+                    can_raise: ctx.data.can_raise_atomically(self.resource),
                 },
             )?
         };
@@ -431,17 +539,20 @@ impl DynamicChangeset {
     /// after, as one run record by record does.
     async fn persist_atomically<D: DataLayer>(&mut self, ctx: &Context<D>, plan: AtomicPlan, cascade: &Cascade) -> Result<FieldMap> {
         let existing = self.existing.as_ref().ok_or(Error::NotFound)?;
-        let id = required_uuid(existing, pk_name(self.resource)?)?;
+        let id = required_pk(existing, pk_name(self.resource)?)?;
         let destroy = self.action.kind == ActionKind::Destroy;
-        let stored = if destroy && !cascade.enter(self.resource, id) {
+        let stored = if destroy && !cascade.enter(self.resource, id.clone()) {
             // Already being destroyed further up a cascade.
             existing.clone()
         } else {
-            let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update)
-                .await?
-                .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
+            let guards = plan.guards.filter();
+            let stored = match run_atomic_update(ctx, self.resource, self.action, id.clone(), &plan.update, guards.as_ref(), None).await? {
+                Some(stored) => stored,
+                None if guards.is_some() => return Err(plan.guards.unchanged(ctx, self.resource, id).await),
+                None => return Err(Error::StaleRecord { resource: self.resource.name, id }),
+            };
             if destroy {
-                crate::engine::cascade_destroy_related(ctx, self.resource, self.action, id, &stored, cascade).await?;
+                crate::engine::cascade_destroy_related(ctx, self.resource, self.action, id.clone(), &stored, cascade).await?;
             }
             stored
         };
@@ -451,22 +562,25 @@ impl DynamicChangeset {
 
     /// An update or destroy of record `id`, by id, as one statement: no read first. A
     /// hard destroy deletes it, returning what it held; a soft destroy updates it and
-    /// archives its children after. No row means no such record the context may see:
-    /// [`Error::NotFound`].
+    /// archives its children after, within `scope` when given. No row means no such
+    /// record the context may see: [`Error::NotFound`].
     pub(crate) async fn commit_atomic_by_id<D: DataLayer>(
         ctx: &Context<D>,
         resource: &'static ResourceDef,
         action: &'static ActionDef,
-        id: Uuid,
+        id: Value,
         arguments: FieldMap,
-        plan: AtomicPlan,
+        mut plan: AtomicPlan,
+        scope: Option<crate::filter::Filter>,
     ) -> Result<FieldMap> {
         let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
-        changeset.after_actions = plan.after_actions;
+        changeset.after_actions = std::mem::take(&mut plan.after_actions);
+        let guards = plan.guards.filter();
+        let guarding = plan.guards.clone();
         let result = async {
             let stored = match action.kind {
                 ActionKind::Destroy if !action.soft => {
-                    let destroyed = run_atomic_destroy(ctx, resource, action, id, &plan.update.conditions)
+                    let destroyed = run_atomic_destroy(ctx, resource, action, id.clone(), &plan.update.conditions, scope.as_ref())
                         .await?
                         .ok_or(Error::NotFound)?;
                     // The record a destroy's notification carries, as one read first does.
@@ -475,12 +589,18 @@ impl DynamicChangeset {
                 }
                 ActionKind::Destroy => {
                     let cascade = Cascade::new(true);
-                    cascade.enter(resource, id);
-                    let stored = run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?;
-                    crate::engine::cascade_destroy_related(ctx, resource, action, id, &stored, &cascade).await?;
+                    cascade.enter(resource, id.clone());
+                    let stored = match run_atomic_update(ctx, resource, action, id.clone(), &plan.update, guards.as_ref(), scope.as_ref()).await? {
+                        Some(stored) => stored,
+                        None => return Err(guarding.unchanged(ctx, resource, id).await),
+                    };
+                    crate::engine::cascade_destroy_related(ctx, resource, action, id.clone(), &stored, &cascade).await?;
                     stored
                 }
-                _ => run_atomic_update(ctx, resource, action, id, &plan.update).await?.ok_or(Error::NotFound)?,
+                _ => match run_atomic_update(ctx, resource, action, id.clone(), &plan.update, guards.as_ref(), scope.as_ref()).await? {
+                    Some(stored) => stored,
+                    None => return Err(guarding.unchanged(ctx, resource, id).await),
+                },
             };
             changeset.finish(ctx, id, stored, true).await
         }
@@ -499,7 +619,7 @@ impl DynamicChangeset {
     /// Everything before persistence: before-action hooks, validations again, the
     /// write policy, managed `belongs_to` records, and the tenant. Returns the record's
     /// primary key.
-    pub(crate) async fn prepare<D: DataLayer>(&mut self, ctx: &Context<D>) -> Result<Uuid> {
+    pub(crate) async fn prepare<D: DataLayer>(&mut self, ctx: &Context<D>) -> Result<Value> {
         for hook in std::mem::take(&mut self.before_actions) {
             hook(self)?;
         }
@@ -517,7 +637,12 @@ impl DynamicChangeset {
             ctx.tenant(),
             self.action.kind == ActionKind::Create,
         )?;
-        required_uuid(&self.fields, pk_name(self.resource)?)
+        // A new record's key may be the data layer's to assign.
+        if self.action.kind == ActionKind::Create {
+            crate::pipeline::new_pk(self.resource, &self.fields)
+        } else {
+            required_pk(&self.fields, pk_name(self.resource)?)
+        }
     }
 
     /// Checks each managed record against its own create or update action before
@@ -557,7 +682,7 @@ impl DynamicChangeset {
                 continue;
             };
             // The related row, so every key column can be copied from it.
-            let related: FieldMap = if let Ok(cid) = required_uuid(&child_fields, dest_pk) {
+            let related: FieldMap = if let Ok(cid) = required_pk(&child_fields, dest_pk) {
                 if rel.destination_columns() == [dest_pk] {
                     child_fields
                 } else {
@@ -580,7 +705,7 @@ impl DynamicChangeset {
                     .await?
             } else {
                 generate_pk(dest_def, &mut child_fields);
-                let cid = required_uuid(&child_fields, dest_pk)?;
+                let cid = required_pk(&child_fields, dest_pk)?;
                 ctx.data.create(dest_def, ctx.tenant.as_deref(), cid, child_fields).await?
             };
             for (source, destination) in rel.key_pairs() {
@@ -615,7 +740,7 @@ impl DynamicChangeset {
     pub(crate) async fn persist<D: DataLayer>(
         &mut self,
         ctx: &Context<D>,
-        id: Uuid,
+        id: Value,
         cascade: &Cascade,
     ) -> Result<FieldMap> {
         let fields = std::mem::take(&mut self.fields);
@@ -659,13 +784,15 @@ impl DynamicChangeset {
     pub(crate) async fn finish<D: DataLayer>(
         &mut self,
         ctx: &Context<D>,
-        id: Uuid,
+        id: Value,
         mut stored: FieldMap,
         notify: bool,
     ) -> Result<FieldMap> {
+        // A key the data layer assigned, as the record it stored holds it.
+        let id = if id.is_null() { required_pk(&stored, pk_name(self.resource)?)? } else { id };
         let managed = std::mem::take(&mut self.managed_relationships);
         if let Err(err) =
-            crate::engine::handle_managed_relationships(ctx, self.resource, id, &stored, managed)
+            crate::engine::handle_managed_relationships(ctx, self.resource, id.clone(), &stored, managed)
                 .await
         {
             if self.action.kind == ActionKind::Create {
@@ -674,11 +801,13 @@ impl DynamicChangeset {
             return Err(err);
         }
 
-        crate::policy::redact_fields(self.resource, ctx.actor.as_ref(), &mut stored)?;
         for hook in std::mem::take(&mut self.after_actions) {
             hook(&mut stored)?;
         }
 
+        // The notification carries the record as committed, as Ash's does: each
+        // subscriber reads it through its own field policies. Only what the writer gets
+        // back is redacted for the writer.
         if notify {
             let mut metadata = ctx.metadata.clone();
             metadata.extend(self.metadata.clone());
@@ -696,6 +825,7 @@ impl DynamicChangeset {
             .with_tenant(self.tenant.clone().or_else(|| ctx.tenant.clone()));
             crate::notifier::dispatch_notification(ctx, self.resource, notification).await?;
         }
+        crate::policy::redact_fields(self.resource, ctx.actor.as_ref(), &mut stored)?;
         Ok(stored)
     }
 }

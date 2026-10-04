@@ -17,6 +17,18 @@ export interface PaginatedResult<T> {
   endKeyset?: string | null;
 }
 
+/** An offset page of records, as AshGraphql returns a read that pages by offset. */
+export interface OffsetPage<T> {
+  results: T[];
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  pageNumber?: number;
+  lastPage?: number;
+  limit?: number;
+}
+
 /** The operators AshGraphql filters a field by. */
 export interface AshFilter<T> {
   isNil?: boolean;
@@ -287,11 +299,21 @@ export class AshTransport {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message: string; path?: (string | number)[] }>;
+      errors?: Array<{
+        message: string;
+        path?: (string | number)[];
+        code?: string;
+        extensions?: { code?: string };
+      }>;
     };
 
-    if (json.errors && json.errors.length > 0) {
-      const userErrors: AshUserError[] = json.errors.map((e) => ({
+    // A field a policy hides comes back null with a `forbidden_field` error: the null
+    // stands for it, so it fails nothing.
+    const errors = (json.errors ?? []).filter(
+      (e) => (e.extensions?.code ?? e.code) !== "forbidden_field",
+    );
+    if (errors.length > 0) {
+      const userErrors: AshUserError[] = errors.map((e) => ({
         message: e.message,
         path: e.path,
       }));
@@ -384,8 +406,8 @@ export class TicketQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Ticket[]> {
     const records: Ticket[] = [];
@@ -515,8 +537,8 @@ export class RepresentativeQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Representative[]> {
     const records: Representative[] = [];

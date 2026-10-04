@@ -79,7 +79,7 @@ async fn test_pubsub_topic_and_wildcard_subscriptions() {
         .expect("timed out")
         .expect("received notification");
     assert_eq!(notif_all.action, "create");
-    assert_eq!(notif_all.id, order.id);
+    assert_eq!(notif_all.id, ash_core::Value::from(order.id));
     assert_eq!(notif_all.action_kind, ActionKind::Create);
 
     // sub_create receives create
@@ -87,7 +87,7 @@ async fn test_pubsub_topic_and_wildcard_subscriptions() {
         .await
         .expect("timed out")
         .expect("received notification");
-    assert_eq!(notif_create.id, order.id);
+    assert_eq!(notif_create.id, ash_core::Value::from(order.id));
 
     // Now update order
     let _ = order.complete(&ctx).await.expect("complete order");
@@ -158,7 +158,7 @@ async fn test_pubsub_custom_topic_formatting() {
         .await
         .expect("timed out")
         .expect("received notification");
-    assert_eq!(notif.id, order.id);
+    assert_eq!(notif.id, ash_core::Value::from(order.id));
 }
 
 /// Every subscriber to a topic receives the same notification, not a copy of it, so
