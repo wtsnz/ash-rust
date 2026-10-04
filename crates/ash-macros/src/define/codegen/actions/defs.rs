@@ -314,6 +314,13 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
             let read = read.to_string();
             builder_chain = quote! { #builder_chain.atomic_upgrade_with(#read) };
         }
+        if act.transaction {
+            builder_chain = quote! { #builder_chain.transaction(true) };
+        }
+        if let Some(ret) = &act.returns {
+            let ty = crate::ast_helpers::returns_attr_type(ret);
+            builder_chain = quote! { #builder_chain.returns(#ty) };
+        }
         if let Some(spec) = &act.pagination {
             let (keyset, offset) = (spec.keyset, spec.offset);
             let countable = match spec.countable.as_ref().map(|ident| ident.to_string()) {

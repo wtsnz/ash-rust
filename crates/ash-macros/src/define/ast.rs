@@ -270,6 +270,8 @@ pub struct ActionSpec {
     pub cascade_destroy: Vec<Ident>,
     /// `pagination keyset: true, countable: true, required: false;`: how a read pages.
     pub pagination: Option<PaginationSpec>,
+    /// `transaction;`: a generic action that runs in a transaction.
+    pub transaction: bool,
 }
 
 /// A read's `pagination` options, as Ash names them.

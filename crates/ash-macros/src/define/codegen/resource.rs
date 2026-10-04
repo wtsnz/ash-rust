@@ -1227,6 +1227,104 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         )
     };
 
+    // Each generic action with a `run` of its own, run by name: its input from values,
+    // its result as one, as an API serving actions by name runs them.
+    let mut generic_arms = Vec::new();
+    for act in def.actions.iter().filter(|act| act.kind == crate::define::ast::ActionKind::Generic && act.accept.is_empty()) {
+        let Some(run_expr) = &act.run_expr else { continue };
+        let name_str = act.name.to_string();
+        let input_struct = format_ident!("{}{}Input", resource, crate::ast_helpers::pascal_case(&name_str));
+        let returns_ty = act.returns.clone().unwrap_or_else(|| syn::parse_quote!(()));
+        let names: Vec<&syn::Ident> = act.arguments.iter().map(|arg| &arg.name).collect();
+        let extracts = act.arguments.iter().map(|arg| {
+            let name = &arg.name;
+            let key = name.to_string();
+            match (option_inner(&arg.ty), &arg.default) {
+                (Some(inner), default) => {
+                    let missing = match default {
+                        Some(default) => quote! { ::std::option::Option::Some(#default) },
+                        None => quote! { ::std::option::Option::None },
+                    };
+                    quote! {
+                        let #name: ::std::option::Option<#inner> = match __input.get(#key) {
+                            ::std::option::Option::Some(value) if !value.is_null() => ::std::option::Option::Some(<#inner as ::ash_core::AshType>::from_value(value)?),
+                            _ => #missing,
+                        };
+                    }
+                }
+                (None, default) => {
+                    let ty = &arg.ty;
+                    let missing = match default {
+                        Some(default) => quote! { #default },
+                        None => quote! { return ::std::result::Result::Err(::ash_core::Error::Missing { field: #key.into() }) },
+                    };
+                    quote! {
+                        let #name: #ty = match __input.get(#key) {
+                            ::std::option::Option::Some(value) if !value.is_null() => <#ty as ::ash_core::AshType>::from_value(value)?,
+                            _ => #missing,
+                        };
+                    }
+                }
+            }
+        });
+        let call = |ctx: TokenStream| quote! {
+            let input = #input_struct { ctx: #ctx, #(#names,)* };
+            let fut = __call(#run_expr, input);
+            ::ash_core::run::<#resource, D, #returns_ty, _, _>(#ctx, #name_str, move || fut).await
+        };
+        let ran = if act.transaction {
+            let inner = call(quote! { &tx });
+            quote! { ctx.transaction(move |tx| async move { #inner }).await? }
+        } else {
+            let inner = call(quote! { ctx });
+            quote! { { #inner }? }
+        };
+        let value = if act.returns.is_some() {
+            quote! {
+                #[allow(unused_imports)]
+                use ::ash_core::returned::{AsAshValue as _, AsSerializedValue as _, NoValue as _};
+                (&&::ash_core::returned::Returned(__result)).value()
+            }
+        } else {
+            quote! { let _ = __result; ::std::result::Result::Ok(::ash_core::Value::Null) }
+        };
+        generic_arms.push(quote! {
+            #name_str => {
+                fn __call<'t, D2: ::ash_core::DataLayer, F, Fut>(f: F, input: #input_struct<'t, D2>) -> Fut
+                where
+                    F: ::std::ops::FnOnce(#input_struct<'t, D2>) -> Fut,
+                    Fut: ::std::future::Future<Output = ::ash_core::Result<#returns_ty>> + ::std::marker::Send,
+                {
+                    f(input)
+                }
+                #(#extracts)*
+                let __result: #returns_ty = #ran;
+                #value
+            }
+        });
+    }
+    let run_generic = if generic_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn run_generic<'a, D: ::ash_core::TransactionSupport + 'static>(
+                ctx: &'a ::ash_core::Context<D>,
+                action: &'a str,
+                __input: ::ash_core::FieldMap,
+            ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::ash_core::Result<::ash_core::Value>> + ::std::marker::Send + 'a>> {
+                ::std::boxed::Box::pin(async move {
+                    match action {
+                        #(#generic_arms)*
+                        other => {
+                            let action = <Self as ::ash_core::Resource>::DEF.action(other).map(|a| a.name).unwrap_or("unknown");
+                            ::std::result::Result::Err(::ash_core::Error::ManualRequired { action })
+                        }
+                    }
+                })
+            }
+        }
+    };
+
     // `PartialEq` but not `Eq`: a float attribute, or a relationship to a resource with
     // one, can't be `Eq`, and the macro can't see into related resources.
     Ok(quote! {
@@ -1300,6 +1398,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     ))),
                 }
             }
+
+            #run_generic
         }
 
         pub const #def_const_name: ::ash_core::ResourceDef = <#resource as ::ash_core::Resource>::DEF;

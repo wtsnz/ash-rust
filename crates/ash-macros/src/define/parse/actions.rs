@@ -89,6 +89,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut require_atomic = true;
     let mut atomic_upgrade_with = None;
     let mut pagination = None;
+    let mut transaction = false;
     let mut cascade_destroy = Vec::new();
     let mut run_expr = None;
     let mut accept_kw = None;
@@ -396,6 +397,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     atomic_upgrade_with = Some(body.parse::<Ident>()?);
                     require_semi(&body, errors, "`atomic_upgrade_with`");
                 }
+                "transaction" => {
+                    if kind != ActionKind::Generic {
+                        errors.push(Error::new_spanned(&item_ident, "`transaction` only applies to generic actions"));
+                    }
+                    transaction = true;
+                    require_semi(&body, errors, "`transaction`");
+                }
                 "pagination" => {
                     if kind != ActionKind::Read {
                         errors.push(Error::new_spanned(&item_ident, "`pagination` only applies to read actions"));
@@ -479,6 +487,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         "require_atomic",
                         "atomic_upgrade_with",
                         "pagination",
+                        "transaction",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &item_ident,
@@ -517,6 +526,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         require_atomic,
         atomic_upgrade_with,
         pagination,
+        transaction,
         cascade_destroy,
     })
 }

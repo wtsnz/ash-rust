@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use ash_core::{
-    Actor, BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap, Filter, Resource,
+    Actor, BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap, Resource,
     TransactionSupport, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -162,9 +162,7 @@ async fn route<D: TransactionSupport + 'static>(
     Ok(Json(json!({ "id": id })))
 }
 
-/// Runs the `route` generic action: in one transaction, opens a ticket with its comments,
-/// assigns it to the active agent or admin with the fewest open tickets, and records it.
-/// The JSON endpoint and the RPC action both run it.
+/// Runs the `route` generic action, for the JSON endpoint.
 pub async fn route_ticket<D: TransactionSupport + 'static>(
     ctx: &Context<D>,
     subject: String,
@@ -179,37 +177,7 @@ pub async fn route_ticket<D: TransactionSupport + 'static>(
         .priority(priority)
         .requester_email(requester_email)
         .comments(comments)
-        .run(|input| async move {
-            let (subject, body, priority, email, comments) =
-                (input.subject, input.body, input.priority, input.requester_email, input.comments);
-            input
-                .ctx
-                .transaction(move |tx| async move {
-                    let ticket = Ticket::open(&tx)
-                        .subject(subject)
-                        .body(body)
-                        .priority(priority)
-                        .requester_email(email)
-                        .comments(comments)
-                        .await?;
-                    // The active agent or admin with the fewest open tickets.
-                    let staff = Filter::in_list("role", vec![Value::from("agent"), Value::from("admin")]);
-                    let agent = Agent::query(&tx)
-                        .filter(Filter::And(vec![Filter::eq("active", true), staff]))
-                        .load_aggregate(Agent::open_assigned)
-                        .sort(Agent::open_assigned)
-                        .sort(Agent::name)
-                        .first()
-                        .await?;
-                    let ticket = match agent {
-                        Some(agent) => ticket.assign_on(&tx).assignee_id(Some(agent.id)).await?,
-                        None => ticket,
-                    };
-                    AuditEvent::record(&tx).ticket_id(ticket.id).kind("routed".to_string()).await?;
-                    Ok(ticket.id)
-                })
-                .await
-        })
+        .call()
         .await
 }
 
@@ -230,28 +198,7 @@ pub fn rpc<D: TransactionSupport + 'static>() -> ash_typescript::rpc::Rpc<D> {
         .action::<Ticket>("view_ticket", "view")
         .action::<Ticket>("edit_ticket", "edit")
         .action::<Ticket>("destroy_ticket", "destroy")
-        .generic::<Ticket, _, _>("route_ticket", "route", |ctx, input| async move {
-            let text = |name: &str| match input.get(name) {
-                Some(Value::String(s)) => Ok(s.clone()),
-                _ => Err(Error::Missing { field: name.into() }),
-            };
-            let priority = match input.get("priority") {
-                Some(Value::Int(n)) => *n,
-                _ => return Err(Error::Missing { field: "priority".into() }),
-            };
-            let comments = match input.get("comments") {
-                Some(Value::Array(items)) => items
-                    .iter()
-                    .filter_map(|item| match item {
-                        Value::Map(fields) => Some(fields.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let id = route_ticket(&ctx, text("subject")?, text("body")?, priority, text("requester_email")?, comments).await?;
-            Ok(Value::Uuid(id))
-        })
+        .action::<Ticket>("route_ticket", "route")
         .action::<Comment>("list_comments", "read")
         .action::<Comment>("create_comment", "create")
         .action::<Agent>("list_agents", "read")

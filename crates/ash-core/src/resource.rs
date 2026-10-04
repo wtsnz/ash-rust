@@ -751,6 +751,21 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
             Self::DEF.name
         )))
     }
+
+    /// Runs the generic action `action` with `input`, its arguments by name, as its own
+    /// `run` does: authorized by its policies, in a transaction if it takes one, its result
+    /// as a value. An API serving the action by name runs it so. An action with no `run`
+    /// of its own: [`Error::ManualRequired`].
+    fn run_generic<'a, D: crate::data_layer::TransactionSupport + 'static>(
+        _ctx: &'a Context<D>,
+        action: &'a str,
+        _input: FieldMap,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::value::Value>> + Send + 'a>> {
+        Box::pin(async move {
+            let action = Self::DEF.action(action).map(|a| a.name).unwrap_or("unknown");
+            Err(Error::ManualRequired { action })
+        })
+    }
 }
 
 /// Ergonomic record lifecycle extensions for instances of [`Resource`].

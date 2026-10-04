@@ -297,6 +297,10 @@ pub struct ActionDef {
     pub atomic_upgrade_with: Option<&'static str>,
     /// For a read: how it pages, as Ash's `pagination`. `None`: it doesn't.
     pub pagination: Option<Pagination>,
+    /// For a generic action: what it returns, as Ash's `returns`; `None` when nothing.
+    pub returns: Option<AttrType>,
+    /// For a generic action: whether it runs in a transaction, as Ash's `transaction?`.
+    pub transaction: bool,
 }
 
 /// How a read action pages, as Ash's `pagination` declares it.
@@ -389,6 +393,8 @@ impl ActionDef {
             require_atomic: true,
             atomic_upgrade_with: None,
             pagination: None,
+            returns: None,
+            transaction: false,
         }
     }
 
@@ -408,6 +414,8 @@ impl ActionDef {
             require_atomic: true,
             atomic_upgrade_with: None,
             pagination: None,
+            returns: None,
+            transaction: false,
         }
     }
 
@@ -427,6 +435,8 @@ impl ActionDef {
             require_atomic: true,
             atomic_upgrade_with: None,
             pagination: None,
+            returns: None,
+            transaction: false,
         }
     }
 
@@ -446,6 +456,8 @@ impl ActionDef {
             require_atomic: true,
             atomic_upgrade_with: None,
             pagination: None,
+            returns: None,
+            transaction: false,
         }
     }
 
@@ -465,6 +477,8 @@ impl ActionDef {
             require_atomic: true,
             atomic_upgrade_with: None,
             pagination: None,
+            returns: None,
+            transaction: false,
         }
     }
 
@@ -510,6 +524,18 @@ impl ActionDef {
     /// [`atomic_upgrade_with`](Self::atomic_upgrade_with).
     pub const fn atomic_upgrade_with(mut self, read: &'static str) -> Self {
         self.atomic_upgrade_with = Some(read);
+        self
+    }
+
+    /// What a generic action returns, as Ash's `returns`.
+    pub const fn returns(mut self, ty: AttrType) -> Self {
+        self.returns = Some(ty);
+        self
+    }
+
+    /// Whether a generic action runs in a transaction, as Ash's `transaction?`.
+    pub const fn transaction(mut self, transaction: bool) -> Self {
+        self.transaction = transaction;
         self
     }
 

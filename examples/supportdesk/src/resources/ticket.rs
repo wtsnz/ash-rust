@@ -1,8 +1,9 @@
-use ash_core::FieldMap;
+use ash_core::{FieldMap, Filter, Value};
 use ash_state_machine::state_machine;
 use uuid::Uuid;
 
 use super::agent::Agent;
+use super::audit_event::AuditEvent;
 use super::comment::Comment;
 use super::tag::Tag;
 use super::ticket_tag::TicketTag;
@@ -148,16 +149,41 @@ resource! {
                 validate numericality(priority, min: 1, max: 4);
             }
 
-            /// Opens a ticket with its comments, assigns it to the active agent with the
-            /// fewest open tickets, and records it, in one transaction. The server
-            /// supplies the work (`.run(...)`), on a data layer that can transact.
+            /// Opens a ticket with its comments, assigns it to the active agent or admin
+            /// with the fewest open tickets (then by name), and records it, in one
+            /// transaction.
             generic route {
+                transaction;
                 argument subject: String;
                 argument body: String;
                 argument priority: i64;
                 argument requester_email: String;
                 argument comments: Vec<FieldMap> [default: Vec::new()];
                 returns Uuid;
+                run |input| async move {
+                    let ctx = input.ctx;
+                    let ticket = Ticket::open(ctx)
+                        .subject(input.subject)
+                        .body(input.body)
+                        .priority(input.priority)
+                        .requester_email(input.requester_email)
+                        .comments(input.comments)
+                        .await?;
+                    let staff = Filter::in_list("role", vec![Value::from("agent"), Value::from("admin")]);
+                    let agent = Agent::query(ctx)
+                        .filter(Filter::And(vec![Filter::eq("active", true), staff]))
+                        .load_aggregate(Agent::open_assigned)
+                        .sort(Agent::open_assigned)
+                        .sort(Agent::name)
+                        .first()
+                        .await?;
+                    let ticket = match agent {
+                        Some(agent) => ticket.assign_on(ctx).assignee_id(Some(agent.id)).await?,
+                        None => ticket,
+                    };
+                    AuditEvent::record(ctx).ticket_id(ticket.id).kind("routed".to_string()).await?;
+                    Ok(ticket.id)
+                };
             }
 
             destroy destroy {

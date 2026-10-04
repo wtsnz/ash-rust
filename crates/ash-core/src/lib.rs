@@ -26,6 +26,8 @@ mod policy;
 mod registry;
 mod rel;
 mod resource;
+#[doc(hidden)]
+pub mod returned;
 pub mod store;
 mod types;
 mod value;

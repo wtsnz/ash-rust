@@ -217,7 +217,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         Self::default()
     }
 
-    /// `rpc_action :name, :action`: a read, create, update or destroy action of `R`.
+    /// `rpc_action :name, :action`: an action of `R`, a generic one run as its own `run`
+    /// runs it.
     pub fn action<R: Resource>(self, name: &str, action: &str) -> Self {
         self.action_with::<R>(name, action, |options| options)
     }
@@ -226,13 +227,19 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     pub fn action_with<R: Resource>(mut self, name: &str, action: &str, options: impl FnOnce(ActionOptions) -> ActionOptions) -> Self {
         let resource = &R::DEF;
         let action = action_def(resource, action);
-        assert!(action.kind != ActionKind::Generic, "`{name}` is a generic action: expose it with `generic`");
         let options = options(ActionOptions::default());
         let read = options.read_action.map(|read| action_def(resource, read));
         for field in &options.get_by {
             assert!(resource.attribute(field).is_some(), "`{name}` gets by `{field}`, which isn't an attribute of {}", resource.name);
         }
-        self.actions.insert(name.into(), RpcAction { resource, action, read, options, runner: None });
+        // A generic action runs as its own `run` does (`Resource::run_generic`).
+        let runner: Option<GenericRunner<D>> = (action.kind == ActionKind::Generic).then(|| {
+            let name = action.name;
+            Arc::new(move |ctx: Context<D>, input: FieldMap| -> BoxFuture<'static, ash_core::Result<Value>> {
+                Box::pin(async move { R::run_generic(&ctx, name, input).await })
+            }) as GenericRunner<D>
+        });
+        self.actions.insert(name.into(), RpcAction { resource, action, read, options, runner });
         self
     }
 
@@ -241,10 +248,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         self.action_with::<R>(name, action, |options| options.get_by(fields))
     }
 
-    /// `rpc_action :name, :generic_action`: a generic action of `R`, which `run` performs,
-    /// authorized by its policies first as Ash runs one. A generic action's work is given
-    /// here, where the data layer is known, since one written in the resource's DSL can't
-    /// open a transaction.
+    /// `rpc_action :name, :generic_action`, run by `run` in place of the action's own:
+    /// authorized by its policies first as Ash runs one.
     pub fn generic<R: Resource, F, Fut>(mut self, name: &str, action: &str, run: F) -> Self
     where
         F: Fn(Context<D>, FieldMap) -> Fut + Send + Sync + 'static,
@@ -563,7 +568,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             ActionKind::Generic => {
                 let runner = rpc.runner.as_ref().ok_or_else(|| Failure::action_not_found(name))?;
                 let value = runner(ctx, input).await.map_err(|e| self.failure_of(action, e))?;
-                Ok(to_json(None, &value))
+                // An action returning nothing answers an empty object, as AshTypescript's
+                // (`:ok`) does.
+                Ok(if action.returns.is_none() { json!({}) } else { to_json(action.returns, &value) })
             }
         }
     }

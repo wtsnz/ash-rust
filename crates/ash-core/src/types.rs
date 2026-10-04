@@ -822,6 +822,38 @@ impl<T: AshType> AshType for Option<T> {
     }
 }
 
+/// A map of values, as Ash's `:map`.
+impl AshType for crate::value::FieldMap {
+    const ATTR_TYPE: AttrType = AttrType::Map;
+
+    fn to_value(&self) -> Value {
+        Value::Map(self.clone())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::Map(map) => Ok(map.clone()),
+            other => Err(Error::Invalid(format!("expected a map, got {other}"))),
+        }
+    }
+}
+
+/// A list of one type, as Ash's `{:array, type}`.
+impl<T: AshType> AshType for Vec<T> {
+    const ATTR_TYPE: AttrType = AttrType::Array;
+
+    fn to_value(&self) -> Value {
+        Value::Array(self.iter().map(AshType::to_value).collect())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::Array(items) => items.iter().map(T::from_value).collect(),
+            other => Err(Error::Invalid(format!("expected a list, got {other}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod network_and_vector_tests {
     use super::{Inet, Vector};
