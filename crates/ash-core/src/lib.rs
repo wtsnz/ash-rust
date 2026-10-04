@@ -17,6 +17,7 @@ mod error;
 mod expr;
 mod extension;
 mod filter;
+mod guarded;
 pub mod input;
 mod keys;
 mod multi;
@@ -62,6 +63,7 @@ pub use engine::{
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
+pub use guarded::Guarded;
 pub use filter::{Filter, all_of, any_of, in_list, like_matches, text_matches};
 pub use keys::{
     Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation, TextValue,

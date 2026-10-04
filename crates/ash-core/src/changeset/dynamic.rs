@@ -248,7 +248,9 @@ impl DynamicChangeset {
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
         changeset.run_validations(ctx)?;
-        validate(resource, &mut changeset.fields)?;
+        // An update writes only what it changes, over the stored row, so an attribute the
+        // record in hand lacks (one a field policy hid from its reader) stays as stored.
+        crate::pipeline::validate_given(resource, &mut changeset.fields)?;
         // Field policies govern what's read, not what's written, as in Ash: writes are the
         // action's policies' to authorize. A field the actor may not read is not written
         // back, though: a typed record read by that actor holds a redacted null there, not

@@ -131,13 +131,23 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     };
     let _ = has_pk;
 
+    // A field a field policy may hide that isn't an `Option` is held as `Guarded`: its
+    // value, or forbidden, as Ash holds a hidden field whatever its type.
+    let guarded = |a: &crate::define::ast::AttributeSpec| {
+        option_inner(&a.ty).is_none() && !a.pk && def.field_policies.iter().any(|fp| fp.field == a.ident)
+    };
+
     // 1. Struct fields
     let mut struct_fields = Vec::new();
     for a in &def.attributes {
         let o_attrs = &a.outer_attrs;
         let id = &a.ident;
         let ty = &a.ty;
-        struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+        if guarded(a) {
+            struct_fields.push(quote! { #(#o_attrs)* pub #id: ::ash_core::Guarded<#ty> });
+        } else {
+            struct_fields.push(quote! { #(#o_attrs)* pub #id: #ty });
+        }
     }
     for c in &def.calculations {
         let o_attrs = &c.outer_attrs;
@@ -490,6 +500,15 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
+        // A forbidden field is left out: its value isn't the record's to write back.
+        if guarded(a) {
+            to_inserts.push(quote! {
+                if let ::ash_core::Guarded::Value(val) = &self.#id {
+                    map.insert(::std::string::String::from(#name_str), ::ash_core::AshType::to_value(val));
+                }
+            });
+            continue;
+        }
         if a.uses_ash_type_storage() {
             if option_inner(ty).is_some() {
                 to_inserts.push(quote! {
@@ -581,6 +600,19 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let id = &a.ident;
         let name_str = id.to_string();
         let ty = &a.ty;
+
+        // Null where a field policy hid it: forbidden.
+        if guarded(a) {
+            from_inits.push(quote! {
+                #id: match fields.get(#name_str) {
+                    ::std::option::Option::Some(val) if !val.is_null() => {
+                        ::ash_core::Guarded::Value(<#ty as ::ash_core::AshType>::from_value(val)?)
+                    }
+                    _ => ::ash_core::Guarded::Forbidden,
+                }
+            });
+            continue;
+        }
 
         // A timestamp not yet stored reads as now, in the field's own type.
         if let Some(ts) = &def.timestamps
