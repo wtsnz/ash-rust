@@ -1,5 +1,6 @@
 use ash_core::{
-    BulkDestroyOptions, CompiledQuery, Context, DataLayer, Filter, Resource, ResourceExt, Value,
+    BulkDestroyOptions, CompiledQuery, Context, DataLayer, Filter, Resource, ResourceExt,
+    TransactionSupport, Value,
     bulk_destroy, destroy_existing, resource,
 };
 use ash_memory::Memory;
@@ -153,7 +154,7 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
     assert_eq!(stored[0].1, archived_at_first, "already archived notes are skipped");
 }
 
-async fn bulk_scenario<D: DataLayer>(ctx: Context<D>) {
+async fn bulk_scenario<D: TransactionSupport + 'static>(ctx: Context<D>) {
     let folder = Folder::create(&ctx).name("Bulk").await.unwrap();
     let mut ids = Vec::new();
     for body in ["a", "b"] {

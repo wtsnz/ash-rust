@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::bulk::{BulkCreateOptions, BulkDestroyOptions};
 use crate::changeset::Changeset;
 use crate::context::Context;
-use crate::data_layer::DataLayer;
+use crate::data_layer::{DataLayer, TransactionSupport};
 use crate::error::{Error, Result};
 use crate::resource::Resource;
 use crate::value::FieldMap;
@@ -295,7 +295,7 @@ pub(crate) struct BulkCreateStep<R: Resource> {
     pub(crate) _phantom: PhantomData<R>,
 }
 
-impl<D: DataLayer, R: Resource> Step<D> for BulkCreateStep<R> {
+impl<D: TransactionSupport + 'static, R: Resource> Step<D> for BulkCreateStep<R> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -322,7 +322,7 @@ pub(crate) struct BulkDestroyStep<R: Resource> {
     pub(crate) _phantom: PhantomData<R>,
 }
 
-impl<D: DataLayer, R: Resource> Step<D> for BulkDestroyStep<R> {
+impl<D: TransactionSupport + 'static, R: Resource> Step<D> for BulkDestroyStep<R> {
     fn name(&self) -> &str {
         &self.name
     }

@@ -331,4 +331,28 @@ pub trait TransactionSupport: DataLayer + Clone {
         F: FnOnce(&Self) -> Fut + Send,
         Fut: Future<Output = Result<T>> + Send,
         T: Send;
+
+    /// Whether bulk actions write their batches in transactions here, as Ash asks
+    /// `data_layer_can?(resource, :transact)` before it opens one for a batch. A data layer
+    /// whose transactions are costly or only nominal says no, and bulk actions run
+    /// without them.
+    fn can_transact(&self) -> bool {
+        true
+    }
+}
+
+/// Nothing is stored, so a transaction just runs its work; bulk actions don't open one.
+impl TransactionSupport for NoDataLayer {
+    async fn transaction<F, Fut, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Self) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        f(self).await
+    }
+
+    fn can_transact(&self) -> bool {
+        false
+    }
 }

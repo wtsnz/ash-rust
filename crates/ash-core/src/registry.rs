@@ -526,4 +526,10 @@ impl TransactionSupport for StoreRegistry {
     {
         f(self).await
     }
+
+    /// Its stores each keep their own transactions, which this doesn't open, so a bulk
+    /// action's batches run as they are.
+    fn can_transact(&self) -> bool {
+        false
+    }
 }

@@ -985,7 +985,7 @@ resource! {
 
 `ash-rust` provides native, optimized bulk data operations directly mirroring Ash Elixir's bulk actions:
 - `Resource::bulk_create(&ctx, inputs)`: Validates, sets defaults, checks policies, and inserts records in batched chunks.
-- `Resource::bulk_update(&ctx, "action", updates)`: Updates many records, each with its own input, through one update action. Each runs the action's changes, validations, policies and hooks as a single update would, and writes only the attributes it changes. The batch is written together: on Postgres, rows that change the same columns go in one `UPDATE … FROM (VALUES …)`. Each row is notified as an update. Ash's `bulk_update` applies one input to every record; this takes one per record, for streams like telemetry where every record reports its own values.
+- `Resource::bulk_update(&ctx, "action", updates)`: Updates many records, each with its own input, through one update action. Each runs the action's changes, validations, policies and hooks as a single update would, and writes only the attributes it changes. The batch is written together: on Postgres, in one `UPDATE … FROM (VALUES …)` however its rows differ, each row writing only its own columns and leaving the rest as stored. Each row is notified as an update. Ash's `bulk_update` applies one input to every record; this takes one per record, for streams like telemetry where every record reports its own values.
 - `Resource::bulk_destroy(&ctx, ids)`: Verifies authorizations, applies cascading relationship deletes, and removes records using optimized multi-id batch deletes (`WHERE id IN (...)`).
 - `Query::bulk_destroy(&ctx, "destroy", opts)`: Bulk destroys all records matching any complex query filter.
 - `Query::chunked(batch_size, |chunk| ...)`: Streams query results in chunks without exhausting memory.
@@ -998,6 +998,7 @@ resource! {
 - `stop_on_error(bool)`: Whether to halt on the first validation/persistence error or collect errors in `BulkResult.errors`.
 - `notify(bool)`: Emits lifecycle action notifications to registered notifiers for each record.
 - `upsert(identity, update_fields)`: Runs atomic upsert operations on conflict with the specified identity constraint (creates only).
+- `transaction(BulkTransaction)`: Ash's `transaction` option. `Batch` (the default, as in Ash) writes each batch in a transaction: its notifications go out once it commits, and a row that fails after its batch is written rolls the batch back and fails every row in it, as Ash rolls back on error. `All` makes the whole action one transaction, its after-transaction hooks running inside it as Ash's do; `Off` writes each row alone, so a failed row fails by itself. A row that fails before its batch is written (a validation, a policy) fails alone either way, unless the action is `All`. A data layer that can't transact (`TransactionSupport::can_transact`) runs without one, as Ash checks `data_layer_can?(resource, :transact)`: ash-memory can't, as Ash's ETS layer can't. Bulk actions need a data layer with `TransactionSupport`, which Postgres, SQLite and memory all have.
 
 ### Example Usage
 ```rust

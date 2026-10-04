@@ -421,7 +421,10 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self,
         action: &'static str,
         opts: crate::bulk::BulkDestroyOptions,
-    ) -> Result<crate::bulk::BulkResult<R>> {
+    ) -> Result<crate::bulk::BulkResult<R>>
+    where
+        D: crate::data_layer::TransactionSupport + 'static,
+    {
         let records = self.clone().load().await?;
         let ids: Vec<Uuid> = records.iter().map(Resource::id).collect();
         crate::bulk::bulk_destroy::<R, D>(self.ctx, action, &ids, opts).await

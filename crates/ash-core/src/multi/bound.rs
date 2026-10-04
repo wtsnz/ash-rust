@@ -97,6 +97,7 @@ impl<D: DataLayer + 'static> BoundMulti<D> {
         opts: BulkCreateOptions,
     ) -> Self
     where
+        D: TransactionSupport,
         I: IntoIterator<Item = F> + Send + 'static,
         F: IntoFieldMap,
     {
@@ -111,7 +112,10 @@ impl<D: DataLayer + 'static> BoundMulti<D> {
         action: &'static str,
         ids: impl IntoIterator<Item = Uuid>,
         opts: BulkDestroyOptions,
-    ) -> Self {
+    ) -> Self
+    where
+        D: TransactionSupport,
+    {
         self.multi = self.multi.bulk_destroy::<R>(name, action, ids, opts);
         self
     }
