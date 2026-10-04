@@ -24,6 +24,26 @@ pub fn derive_ash_enum(input: TokenStream) -> TokenStream {
     }
 }
 
+/// A struct as a map of declared fields, as Ash's `:map` with `fields` constraints.
+#[proc_macro_derive(AshTypedMap, attributes(ash))]
+pub fn derive_ash_typed_map(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match derive::composite::expand_typed_map(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
+}
+
+/// An enum of one-value variants as a union of typed members, as Ash's `Ash.Type.Union`.
+#[proc_macro_derive(AshUnion, attributes(ash))]
+pub fn derive_ash_union(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match derive::composite::expand_union(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
+}
+
 #[proc_macro]
 pub fn domain(input: TokenStream) -> TokenStream {
     domain::expand_dsl(input.into()).into()

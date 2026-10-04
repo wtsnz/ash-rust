@@ -126,6 +126,19 @@ impl Failure {
             .details(&[("suggestion", json!("Provide at least one field name in the fields array"))])
     }
 
+    /// An unknown field of a typed map or member of a union, which AshTypescript names
+    /// by its kind.
+    pub(crate) fn unknown_field_of(path: &[String], field: &str, kind: &str) -> Self {
+        let full = field_path(path, field);
+        Self::new("unknown_field", "Unknown field", "Unknown field %{field} for resource %{resource}")
+            .vars(&[("field", json!(full)), ("resource", json!(kind))])
+            .on_field(path, field)
+            .details(&[(
+                "suggestion",
+                json!("Check the field name spelling and ensure it's a public attribute, calculation, or relationship"),
+            )])
+    }
+
     pub(crate) fn unknown_field(path: &[String], field: &str, resource: &ResourceDef) -> Self {
         let full = field_path(path, field);
         Self::new("unknown_field", "Unknown field", "Unknown field %{field} for resource %{resource}")

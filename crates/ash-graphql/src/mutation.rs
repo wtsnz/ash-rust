@@ -42,6 +42,11 @@ pub fn mutation_payload_name(action_name: &str, resource_name: &str) -> String {
     format!("{}{}Result", pascal(action_name), resource_name)
 }
 
+/// `open` on `Ticket` → `OpenTicketMetadata`: the metadata a mutation's action notes.
+pub fn mutation_metadata_name(action_name: &str, resource_name: &str) -> String {
+    format!("{}{}Metadata", pascal(action_name), resource_name)
+}
+
 /// What a mutation's input holds: the attributes the action accepts and its arguments,
 /// each with whether it's required. A create requires an accepted attribute that can't be
 /// nil and has no default; an update requires none.
@@ -69,18 +74,47 @@ fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str
     fields
 }
 
-/// Registers `<Mutation>Result { result, errors }`. A destroy's result is the record it
-/// destroyed.
+/// Registers `<Mutation>Result { result, errors }`, and where the action notes metadata,
+/// its `metadata` (`<Mutation>Metadata`), as AshGraphql adds it. A destroy's result is
+/// the record it destroyed.
 pub fn register_action_payload(
-    builder: SchemaBuilder,
+    mut builder: SchemaBuilder,
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
     fn payload<'a>(ctx: &ResolverContext<'a>) -> Option<&'a MutationPayload> {
         ctx.parent_value.downcast_ref::<MutationPayload>()
     }
+    let mut result = Object::new(mutation_payload_name(action.name, resource.name));
+    if !action.metadata.is_empty() {
+        let name = mutation_metadata_name(action.name, resource.name);
+        let mut metadata = Object::new(&name);
+        for def in action.metadata {
+            let (field, ty) = (def.name, def.ty);
+            metadata = metadata.field(Field::new(
+                camel(field),
+                attr_type_to_type_ref(resource.name, field, ty, def.allow_nil),
+                move |ctx| {
+                    FieldFuture::new(async move {
+                        let record = ctx.parent_value.downcast_ref::<FieldMap>();
+                        Ok(record
+                            .and_then(|record| ash_core::get_metadata(record, field))
+                            .filter(|value| !value.is_null())
+                            .map(|value| FieldValue::value(crate::types::ash_value_to_graphql_value_typed(value, ty))))
+                    })
+                },
+            ));
+        }
+        builder = builder.register(metadata);
+        // What the written record notes, read from it.
+        result = result.field(Field::new("metadata", TypeRef::named(name), |ctx| {
+            FieldFuture::new(async move {
+                Ok(payload(&ctx).and_then(|p| p.result.as_ref()).map(|record| FieldValue::borrowed_any(record)))
+            })
+        }));
+    }
     builder.register(
-        Object::new(mutation_payload_name(action.name, resource.name))
+        result
             .field(Field::new("result", TypeRef::named(resource.name), |ctx| {
                 FieldFuture::new(async move {
                     Ok(payload(&ctx)

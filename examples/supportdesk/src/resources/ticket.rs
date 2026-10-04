@@ -112,15 +112,24 @@ resource! {
                 pagination keyset: true, countable: true, required: false;
             }
 
+            // Each ticket it finds notes the start of its id, as metadata.
+            read noted {
+                pagination keyset: true, countable: true, required: false;
+                metadata short_id: String;
+                prepare after_action(note_short_ids);
+            }
+
             create open {
                 primary;
                 accept [subject, body, priority, confidential, requester_email];
                 argument comments: Vec<FieldMap> [default: Vec::new()];
+                metadata comments_given: i64;
                 validate present(requester_email);
                 validate string_length(subject, min: 3, max: 200);
                 validate numericality(priority, min: 1, max: 4);
                 change relate_actor(author_id);
                 change manage_relationship(comments, create);
+                change func(note_comments_given);
             }
 
             update assign {
@@ -195,4 +204,25 @@ resource! {
             }
         }
     }
+}
+
+/// Each ticket a read finds notes the start of its id, as its `short_id` metadata.
+fn note_short_ids(_arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Result<()> {
+    for record in records {
+        if let Some(id) = record.get("id").and_then(Value::as_uuid) {
+            ash_core::put_metadata(record, "short_id", id.to_string()[..8].to_string());
+        }
+    }
+    Ok(())
+}
+
+/// An opened ticket notes how many comments it was opened with, as its
+/// `comments_given` metadata.
+fn note_comments_given(ctx: &mut ash_core::ChangeContext<'_>) -> ash_core::Result<()> {
+    let given = ctx.arguments.get("comments").and_then(Value::as_array).map_or(0, <[Value]>::len) as i64;
+    ctx.after_action(move |record| {
+        ash_core::put_metadata(record, "comments_given", given);
+        Ok(())
+    });
+    Ok(())
 }

@@ -5,6 +5,7 @@ defmodule Supportdesk.Desk do
   typescript_rpc do
     resource Supportdesk.Desk.Ticket do
       rpc_action :list_tickets, :read
+      rpc_action :list_noted_tickets, :noted
       rpc_action :get_ticket, :read, get_by: [:id]
       rpc_action :open_ticket, :open
       rpc_action :assign_ticket, :assign

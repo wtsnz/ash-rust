@@ -22,10 +22,13 @@ pub(crate) async fn run_read<D: DataLayer>(
 ) -> async_graphql::Result<Vec<FieldMap>> {
     let query = scope_read(resource, action, ctx.actor.as_ref(), arguments, query)
         .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-    ctx.data
+    let mut records = ctx
+        .data
         .run_query(resource, &query)
         .await
-        .map_err(|e| async_graphql::Error::new(e.to_string()))
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    crate::pagination::after_read(action, arguments, &mut records)?;
+    Ok(records)
 }
 
 /// `Ticket` → `listTickets`.
@@ -129,7 +132,7 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
         move |ctx| {
             FieldFuture::new(async move {
                 let ash = request_context::<D>(&ctx)?;
-                let scoped = scoped_read(&ctx, &ash, resource, action)?;
+                let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
                 let fields = selected(ctx.ctx.field(), None);
                 let load = Load::of(resource, &fields, scoped.sort.iter().map(|s| s.field.as_str()));
                 let query = load.onto(scoped);
@@ -138,6 +141,7 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
                     .run_query(resource, &query)
                     .await
                     .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                crate::pagination::after_read(action, &arguments, &mut records)?;
                 for record in &mut records {
                     redact_record(resource, ash.actor.as_ref(), record);
                 }

@@ -90,6 +90,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
     let mut atomic_upgrade_with = None;
     let mut pagination = None;
     let mut transaction = false;
+    let mut metadata = Vec::new();
     let mut cascade_destroy = Vec::new();
     let mut run_expr = None;
     let mut accept_kw = None;
@@ -397,6 +398,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     atomic_upgrade_with = Some(body.parse::<Ident>()?);
                     require_semi(&body, errors, "`atomic_upgrade_with`");
                 }
+                "metadata" => {
+                    let name: Ident = body.parse()?;
+                    let _: Token![:] = body.parse()?;
+                    let ty: Type = body.parse()?;
+                    metadata.push((name, ty));
+                    require_semi(&body, errors, "`metadata`");
+                }
                 "transaction" => {
                     if kind != ActionKind::Generic {
                         errors.push(Error::new_spanned(&item_ident, "`transaction` only applies to generic actions"));
@@ -488,6 +496,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                         "atomic_upgrade_with",
                         "pagination",
                         "transaction",
+                        "metadata",
                     ];
                     return Err(crate::ast_helpers::unknown_ident_error(
                         &item_ident,
@@ -527,6 +536,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
         atomic_upgrade_with,
         pagination,
         transaction,
+        metadata,
         cascade_destroy,
     })
 }
@@ -1005,8 +1015,9 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 let val: usize = lit.base10_parse()?;
                 Ok(PreparationSpec::Offset(val))
             }
+            "after_action" => Ok(PreparationSpec::AfterAction(content.parse()?)),
             _ => {
-                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset"];
+                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset", "after_action"];
                 Err(crate::ast_helpers::unknown_ident_error(
                     &func_name,
                     PREPARATION_NAMES,
@@ -1046,7 +1057,7 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 Ok(PreparationSpec::Offset(val))
             }
             _ => {
-                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset"];
+                const PREPARATION_NAMES: &[&str] = &["filter", "sort", "limit", "offset", "after_action"];
                 Err(crate::ast_helpers::unknown_ident_error(
                     &func_name,
                     PREPARATION_NAMES,

@@ -290,6 +290,11 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                             ::ash_core::PreparationDef::Offset(#offset)
                         });
                     }
+                    PreparationSpec::AfterAction(run) => {
+                        prep_tokens.push(quote! {
+                            ::ash_core::PreparationDef::AfterAction(#run)
+                        });
+                    }
                 }
             }
             builder_chain = quote! {
@@ -316,6 +321,15 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
         }
         if act.transaction {
             builder_chain = quote! { #builder_chain.transaction(true) };
+        }
+        if !act.metadata.is_empty() {
+            let defs = act.metadata.iter().map(|(name, ty)| {
+                let name = name.to_string();
+                let attr_ty = crate::ast_helpers::argument_attr_type(ty);
+                let allow_nil = crate::ast_helpers::option_inner(ty).is_some();
+                quote! { ::ash_core::MetadataDef { name: #name, ty: #attr_ty, allow_nil: #allow_nil } }
+            });
+            builder_chain = quote! { #builder_chain.metadata(&[#(#defs),*]) };
         }
         if let Some(ret) = &act.returns {
             let ty = crate::ast_helpers::returns_attr_type(ret);

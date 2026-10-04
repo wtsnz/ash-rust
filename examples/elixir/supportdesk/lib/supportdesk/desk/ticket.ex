@@ -136,10 +136,27 @@ defmodule Supportdesk.Desk.Ticket do
       pagination keyset?: true, countable: true, required?: false
     end
 
+    # Each ticket it finds notes the start of its id, as metadata.
+    read :noted do
+      pagination keyset?: true, countable: true, required?: false
+      metadata :short_id, :string, allow_nil?: false
+
+      prepare after_action(fn _query, records, _context ->
+                {:ok,
+                 Enum.map(records, &Ash.Resource.put_metadata(&1, :short_id, String.slice(&1.id, 0, 8)))}
+              end)
+    end
+
     create :open do
       primary? true
       accept [:subject, :body, :priority, :confidential, :requester_email]
       argument :comments, {:array, :map}, default: []
+      metadata :comments_given, :integer, allow_nil?: false
+
+      change after_action(fn changeset, record, _context ->
+               given = length(Ash.Changeset.get_argument(changeset, :comments) || [])
+               {:ok, Ash.Resource.put_metadata(record, :comments_given, given)}
+             end)
       validate present(:requester_email)
       validate string_length(:subject, min: 3, max: 200)
       validate numericality(:priority, greater_than_or_equal_to: 1, less_than_or_equal_to: 4)

@@ -17,5 +17,5 @@ pub(crate) use managed::{Cascade, cascade_destroy_related, persist_destroy};
 pub use managed::{handle_cascading_deletes, handle_managed_relationships};
 pub use pagination::{KeysetCursor, Page, build_keyset_filter, keyset_sort, keyset_values};
 pub use query::{Query, query};
-pub use read::{record_visible, scope_read};
+pub use read::{after_read, record_visible, scope_read};
 pub use relations::{RelatedQuery, load_related, load_related_query};

@@ -228,7 +228,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 tenant: None,
             },
         )?;
-        let rows = this.ctx.data.run_query(&R::DEF, &query).await?;
+        let mut rows = this.ctx.data.run_query(&R::DEF, &query).await?;
+        super::read::after_read(action, &this.arguments, &mut rows)?;
 
         let mut records = Vec::with_capacity(rows.len());
         for mut row in rows {

@@ -487,9 +487,79 @@ pub enum AttrType {
     CiString,
     Inet,
     Vector { dimensions: u32 },
+    /// An embedded resource, as an attribute holding one has it: its fields, as a map.
+    Embedded(EmbeddedType),
+    /// A map of declared fields, as Ash's `:map` with `fields` constraints (or a typed
+    /// struct): `#[derive(AshTypedMap)]` on a struct.
+    TypedMap(&'static [MapField]),
+    /// One of several typed members, as Ash's `Ash.Type.Union`, held as `{type, value}`:
+    /// `#[derive(AshUnion)]` on an enum.
+    Union(&'static [UnionMember]),
+}
+
+/// The embedded resource an [`AttrType::Embedded`] attribute holds.
+#[derive(Clone, Copy)]
+pub struct EmbeddedType(pub &'static ResourceDef);
+
+impl EmbeddedType {
+    pub const fn resource(self) -> &'static ResourceDef {
+        self.0
+    }
+}
+
+impl PartialEq for EmbeddedType {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.name == other.0.name
+    }
+}
+
+impl Eq for EmbeddedType {}
+
+impl std::fmt::Debug for EmbeddedType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Embedded").field(&self.0.name).finish()
+    }
+}
+
+/// A field of an [`AttrType::TypedMap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapField {
+    pub name: &'static str,
+    pub ty: AttrType,
+    pub allow_nil: bool,
+}
+
+/// A member of an [`AttrType::Union`]: its name, and the type its value is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnionMember {
+    pub name: &'static str,
+    pub ty: AttrType,
 }
 
 impl AttrType {
+    /// The fields a value of this type holds, where it holds declared ones: an embedded
+    /// resource's attributes, or a typed map's fields.
+    pub fn fields(self) -> Option<Vec<MapField>> {
+        match self {
+            Self::Embedded(embedded) => Some(
+                embedded
+                    .resource()
+                    .attributes
+                    .iter()
+                    .map(|attr| MapField { name: attr.name, ty: attr.ty, allow_nil: attr.allow_nil })
+                    .collect(),
+            ),
+            Self::TypedMap(fields) => Some(fields.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Whether a value of this type is held as a map: a map, an embedded resource, a
+    /// typed map or a union.
+    pub const fn is_map_like(self) -> bool {
+        matches!(self, Self::Map | Self::Embedded(_) | Self::TypedMap(_) | Self::Union(_))
+    }
+
     /// A UTC datetime to the second, as Ash's `:utc_datetime`.
     pub const UTC_DATETIME: Self = Self::UtcDatetime {
         precision: crate::types::TimePrecision::Second,
@@ -521,6 +591,8 @@ impl AttrType {
             Self::CiString => "ci_string",
             Self::Inet => "inet",
             Self::Vector { .. } => "vector",
+            Self::Embedded(_) | Self::TypedMap(_) => "map",
+            Self::Union(_) => "union",
         }
     }
 }
@@ -819,7 +891,7 @@ pub trait ResourceExt: Resource {
 impl<R: Resource> ResourceExt for R {}
 
 impl<T: Resource> crate::types::AshType for T {
-    const ATTR_TYPE: AttrType = AttrType::Map;
+    const ATTR_TYPE: AttrType = AttrType::Embedded(EmbeddedType(&T::DEF));
 
     fn to_value(&self) -> crate::value::Value {
         crate::value::Value::Map(self.to_fields())

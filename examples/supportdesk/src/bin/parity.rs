@@ -97,7 +97,7 @@ fn comparable(response: &Value, forbidden: &mut usize) -> Value {
 /// its errors.
 fn rpc_comparable(response: &Value) -> Value {
     if response["success"] == true {
-        json!({ "data": strip_cursors(&response["data"]) })
+        json!({ "data": strip_cursors(&response["data"]), "metadata": response["metadata"] })
     } else {
         let types: Vec<Value> = response["errors"].as_array().into_iter().flatten().map(|e| e["type"].clone()).collect();
         json!({ "errors": types })
@@ -343,6 +343,8 @@ async fn main() -> ExitCode {
     let nested_comments = json!({ "comments": { "fields": ["body", "internal"], "sort": "insertedAt,id", "filter": { "internal": { "eq": false } } } });
     for (name, who, body) in [
         ("list, filtered and sorted", &agent, json!({ "action": "list_tickets", "fields": ["id", "subject", "requesterEmail", "commentCount", "weight", { "assignee": ["name"] }], "sort": "-insertedAt,id", "filter": { "priority": { "greaterThanOrEqual": 4 } } })),
+        ("list, with metadata", &agent, json!({ "action": "list_noted_tickets", "fields": ["id"], "sort": "-insertedAt,id", "page": { "limit": 3 }, "metadataFields": ["shortId"] })),
+        ("get, with metadata asked for twice and unknown", &admin, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id"], "metadataFields": ["shortId", "short_id", "nope"] })),
         ("a keyset page, counted", &viewer, json!({ "action": "list_tickets", "fields": ["id", "subject"], "sort": "-insertedAt,id", "page": { "limit": 3, "count": true } })),
         ("an offset page", &agent, json!({ "action": "list_tickets", "fields": ["id"], "sort": "-insertedAt,id", "page": { "limit": 2, "offset": 4 } })),
         ("get, with relationships", &admin, json!({ "action": "get_ticket", "getBy": { "id": open }, "fields": ["id", "status", "requesterEmail", "weight", nested_comments, { "tags": { "fields": ["name"], "sort": "name" } }] })),
@@ -361,6 +363,7 @@ async fn main() -> ExitCode {
         ("close an open ticket", &agent, json!({ "action": "close_ticket", "identity": open, "fields": ["status"] })),
         ("open, invalid", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello there", "body": "b", "priority": 9, "requesterEmail": "a@b.c" }, "fields": ["id"] })),
         ("open, with comments", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello there", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": [{ "body": "first" }] }, "fields": ["subject", "status", "requesterEmail", "commentCount", { "comments": ["body"] }, { "author": ["name"] }] })),
+        ("open, its metadata only", &agent, json!({ "action": "open_ticket", "input": { "subject": "Hello again", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": [{ "body": "one" }, { "body": "two" }] }, "metadataFields": ["commentsGiven"] })),
         ("create a comment", &agent, json!({ "action": "create_comment", "input": { "ticketId": open, "body": "via rpc" }, "fields": ["body", "internal", "authorId"] })),
         ("route", &agent, json!({ "action": "route_ticket", "input": { "subject": "Printer on fire", "body": "Smoke", "priority": 3, "requesterEmail": "pat@example.com" } })),
         ("an unknown action", &agent, json!({ "action": "nope", "fields": ["id"] })),
@@ -498,7 +501,7 @@ async fn main() -> ExitCode {
         let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
         report.check(name, &r, &e);
     }
-    let open_m = "mutation O($input: OpenTicketInput!) { openTicket(input: $input) { result { subject commentCount comments(sort: [{ field: BODY }]) { body internal } } errors { code fields } } }";
+    let open_m = "mutation O($input: OpenTicketInput!) { openTicket(input: $input) { result { subject commentCount comments(sort: [{ field: BODY }]) { body internal } } metadata { commentsGiven } errors { code fields } } }";
     for (name, comments) in [
         ("openTicket, its comments managed", json!([{ "body": "Called it in" }, { "body": "Escalate", "internal": true }])),
         ("openTicket, a managed comment invalid", json!([{ "internal": true }])),

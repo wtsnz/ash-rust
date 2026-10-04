@@ -39,12 +39,12 @@ pub use atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdat
 pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
-    DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, PersistKind,
+    DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, MetadataDef, PersistKind,
     Countable, Pagination, PreparationDef, Validation, ValidationContext, apply_argument_defaults,
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
-pub use ash_macros::{AshEnum, Resource, define, domain, resource};
+pub use ash_macros::{AshEnum, AshTypedMap, AshUnion, Resource, define, domain, resource};
 pub use bulk::{
     BulkCreateOptions, BulkDestroyOptions, BulkResult, BulkTransaction, BulkUpdateOptions,
     bulk_create, bulk_destroy, bulk_update,
@@ -60,7 +60,7 @@ pub use data_layer::{
 pub use engine::{
     KeysetCursor, Page, Query, build_keyset_filter, keyset_values, create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via, destroy_existing,
     RelatedQuery, get, handle_managed_relationships, insert, load_related, load_related_query, manual_create, query, record_visible,
-    keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_expecting, update_dynamic_via, update_existing, update_existing_dynamic,
+    after_read, keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_expecting, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
@@ -81,7 +81,7 @@ pub use policy::{
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
-    AttrType, AttributeDef, CheckDef, DataLayerKind, Domain, DomainDef, IdentityDef, IndexDef,
+    AttrType, AttributeDef, CheckDef, DataLayerKind, Domain, DomainDef, EmbeddedType, IdentityDef, IndexDef, MapField, UnionMember,
     StatementDef,
     MultitenancyDef, MultitenancyStrategy, OnDelete, OnUpdate, RelKind, RelationshipDef, Resource,
     ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
@@ -96,8 +96,8 @@ pub use types::{
     parse_vector,
 };
 pub use value::{
-    ConstValue, FieldMap, IntoOption, Value, optional_int, optional_uuid, required_string,
-    required_uuid,
+    ConstValue, FieldMap, IntoOption, Value, get_metadata, optional_int, optional_uuid, put_metadata,
+    required_string, required_uuid, union_value,
 };
 
 /// Typestate marker: a required action input has not been set yet.

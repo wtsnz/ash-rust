@@ -14,7 +14,8 @@ pub fn graphql_type_name(ty: AttrType) -> &'static str {
         AttrType::UtcDatetime { .. } => "DateTime",
         AttrType::Date => "Date",
         AttrType::Decimal => "Decimal",
-        AttrType::Map => "Json",
+        // Served as JSON, as ash-graphql serves a map.
+        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => "Json",
         AttrType::Atom { name: Some(name), .. } => name,
         AttrType::Atom { name: None, .. }
         | AttrType::String
@@ -281,6 +282,8 @@ pub fn parse_input_value(value: &GqlValue, ty: AttrType) -> Result<AshValue, asy
         }
         // A map is JSON, its keys as the client sent them.
         AttrType::Map => Ok(graphql_value_to_ash_value(value)),
+        // Cast as the type casts its JSON: each field, or the member given.
+        AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => ash_core::input::value_input(ty, &value.clone().into_json()?).map_err(|e| async_graphql::Error::new(e.to_string())),
         // A list, each item as its type takes it.
         AttrType::Array { of } => match value {
             GqlValue::List(items) => items

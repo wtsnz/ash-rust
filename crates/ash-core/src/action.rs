@@ -228,7 +228,13 @@ pub enum PreparationDef {
     },
     Limit(usize),
     Offset(usize),
+    /// Runs on the records the read found, with the read's arguments, as Ash's
+    /// `prepare after_action(...)`: to note metadata on them, say.
+    AfterAction(AfterReadFn),
 }
+
+/// What a read's `after_action` preparation runs on the records it found.
+pub type AfterReadFn = fn(&crate::value::FieldMap, &mut [crate::value::FieldMap]) -> Result<()>;
 
 impl std::fmt::Debug for PreparationDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -242,6 +248,7 @@ impl std::fmt::Debug for PreparationDef {
                 .finish(),
             Self::Limit(n) => f.debug_tuple("Limit").field(n).finish(),
             Self::Offset(n) => f.debug_tuple("Offset").field(n).finish(),
+            Self::AfterAction(_) => f.write_str("PreparationDef::AfterAction(..)"),
         }
     }
 }
@@ -301,6 +308,27 @@ pub struct ActionDef {
     pub returns: Option<AttrType>,
     /// For a generic action: whether it runs in a transaction, as Ash's `transaction?`.
     pub transaction: bool,
+    /// What the action may note on the records it answers, beyond their fields, as Ash's
+    /// action `metadata` (see [`crate::put_metadata`]).
+    pub metadata: &'static [MetadataDef],
+}
+
+/// Something an action notes on a record it answers, as Ash's `metadata :name, :type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetadataDef {
+    pub name: &'static str,
+    pub ty: AttrType,
+    pub allow_nil: bool,
+}
+
+impl MetadataDef {
+    pub const fn new(name: &'static str, ty: AttrType) -> Self {
+        Self { name, ty, allow_nil: true }
+    }
+
+    pub const fn required(name: &'static str, ty: AttrType) -> Self {
+        Self { name, ty, allow_nil: false }
+    }
 }
 
 /// How a read action pages, as Ash's `pagination` declares it.
@@ -395,6 +423,7 @@ impl ActionDef {
             pagination: None,
             returns: None,
             transaction: false,
+            metadata: &[],
         }
     }
 
@@ -416,6 +445,7 @@ impl ActionDef {
             pagination: None,
             returns: None,
             transaction: false,
+            metadata: &[],
         }
     }
 
@@ -437,6 +467,7 @@ impl ActionDef {
             pagination: None,
             returns: None,
             transaction: false,
+            metadata: &[],
         }
     }
 
@@ -458,6 +489,7 @@ impl ActionDef {
             pagination: None,
             returns: None,
             transaction: false,
+            metadata: &[],
         }
     }
 
@@ -479,6 +511,7 @@ impl ActionDef {
             pagination: None,
             returns: None,
             transaction: false,
+            metadata: &[],
         }
     }
 
@@ -540,6 +573,11 @@ impl ActionDef {
     }
 
     /// How a read pages, as Ash's `pagination`.
+    pub const fn metadata(mut self, metadata: &'static [MetadataDef]) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     pub const fn pagination(mut self, pagination: Pagination) -> Self {
         self.pagination = Some(pagination);
         self

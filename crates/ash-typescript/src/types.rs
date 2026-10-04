@@ -77,6 +77,25 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         }
         AttrType::Map => "Record<string, unknown>".to_string(),
         AttrType::Array { of } => format!("Array<{}>", attr_type_to_ts(of)),
+        // Its fields, as the JSON GraphQL serves holds them.
+        AttrType::Embedded(_) | AttrType::TypedMap(_) => {
+            let fields: Vec<String> = ty
+                .fields()
+                .unwrap_or_default()
+                .iter()
+                .map(|field| {
+                    let nil = if field.allow_nil { " | null" } else { "" };
+                    format!("{}{}: {}{nil}", field.name, if field.allow_nil { "?" } else { "" }, attr_type_to_ts(&field.ty))
+                })
+                .collect();
+            format!("{{ {} }}", fields.join("; "))
+        }
+        // One member, held as `{ type, value }`.
+        AttrType::Union(members) => members
+            .iter()
+            .map(|member| format!("{{ type: \"{}\"; value: {} }}", member.name, attr_type_to_ts(&member.ty)))
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
 }
 

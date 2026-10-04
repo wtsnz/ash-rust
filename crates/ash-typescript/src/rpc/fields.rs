@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use ash_core::input::{filter_input, sort_input, value_input};
-use ash_core::{Actor, FieldMap, RelKind, RelatedQuery, ResourceDef};
+use ash_core::{Actor, AttrType, FieldMap, RelKind, RelatedQuery, ResourceDef};
 use serde_json::{Map, Value as Json};
 
 use super::error::Failure;
@@ -29,6 +29,85 @@ pub(crate) struct Selection {
     /// The arguments a calculation that takes them is loaded with.
     pub calculation_args: HashMap<String, FieldMap>,
     pub relationships: Vec<(String, Nested)>,
+    /// What's selected within an attribute holding an embedded resource, a typed map or a
+    /// union, by attribute.
+    pub values: HashMap<String, ValueSelection>,
+}
+
+/// What a request selects within a value holding declared fields or a union's members,
+/// as AshTypescript selects within an embedded resource, typed map or union.
+#[derive(Clone, Debug)]
+pub(crate) enum ValueSelection {
+    /// An embedded resource's or typed map's fields, each with what's selected within it.
+    Fields(Vec<(&'static str, Option<ValueSelection>)>),
+    /// A union's members, each with what's selected within it.
+    Members(Vec<(&'static str, Option<ValueSelection>)>),
+}
+
+/// The category AshTypescript names a type that needs its fields selected by: an
+/// embedded resource, a union or a typed map, in a list or not.
+pub(crate) fn selection_category(ty: AttrType) -> Option<&'static str> {
+    match ty {
+        AttrType::Array { of } => selection_category(*of),
+        AttrType::Embedded(_) => Some("embedded_resource"),
+        AttrType::Union(_) => Some("union_attribute"),
+        AttrType::TypedMap(_) => Some("field_constrained_type"),
+        _ => None,
+    }
+}
+
+impl ValueSelection {
+    /// What `spec` selects within a value of type `ty`, at `path`.
+    pub(crate) fn parse(ty: AttrType, spec: &Json, path: &[String], name: &str) -> Result<Self, Failure> {
+        let category = selection_category(ty).unwrap_or("attribute");
+        let Json::Array(items) = spec else {
+            return Err(Failure::unsupported_field_combination(path, name, category, spec));
+        };
+        if items.is_empty() {
+            return Err(Failure::requires_field_selection(path, name, category));
+        }
+        check_duplicates(items, path)?;
+        let here = child(path, name);
+        let ty = match ty {
+            AttrType::Array { of } => *of,
+            ty => ty,
+        };
+        // What each name names: a declared field, or a union's member.
+        let (union, entries): (bool, Vec<(&'static str, AttrType)>) = match ty {
+            AttrType::Union(members) => (true, members.iter().map(|member| (member.name, member.ty)).collect()),
+            ty => (false, ty.fields().unwrap_or_default().into_iter().map(|field| (field.name, field.ty)).collect()),
+        };
+        let unknown = |given: &str| match ty {
+            AttrType::Embedded(embedded) => Failure::unknown_field(&here, given, embedded.resource()),
+            _ => Failure::unknown_field_of(&here, given, if union { "union" } else { "map" }),
+        };
+        let mut selected = Vec::new();
+        for item in items {
+            match item {
+                Json::String(given) => {
+                    let given = snake(given);
+                    let (entry, entry_ty) = *entries.iter().find(|(entry, _)| *entry == given).ok_or_else(|| unknown(&given))?;
+                    if selection_category(entry_ty).is_some() {
+                        let category = if union { "complex_type" } else { selection_category(entry_ty).unwrap() };
+                        return Err(Failure::requires_field_selection(&here, entry, category));
+                    }
+                    selected.push((entry, None));
+                }
+                Json::Object(map) => {
+                    for (given, spec) in map {
+                        let given = snake(given);
+                        let (entry, entry_ty) = *entries.iter().find(|(entry, _)| *entry == given).ok_or_else(|| unknown(&given))?;
+                        if selection_category(entry_ty).is_none() {
+                            return Err(Failure::field_does_not_support_nesting(&here, entry));
+                        }
+                        selected.push((entry, Some(Self::parse(entry_ty, spec, &here, entry)?)));
+                    }
+                }
+                other => return Err(Failure::invalid_field_format(&here, other)),
+            }
+        }
+        Ok(if union { Self::Members(selected) } else { Self::Fields(selected) })
+    }
 }
 
 /// A relationship's selection, how its rows are read, and whether they come as a page.
@@ -162,6 +241,10 @@ impl Selection {
                 Err(Failure::calculation_requires_args(path, name))
             }
             Some("attribute") => {
+                // A value of declared fields or members needs them selected.
+                if let Some(category) = resource.attribute(name).and_then(|attr| selection_category(attr.ty)) {
+                    return Err(Failure::requires_field_selection(path, name, category));
+                }
                 self.fields.push(name.to_string());
                 Ok(())
             }
@@ -196,6 +279,14 @@ impl Selection {
             }
             Some("aggregate") => Err(Failure::invalid_field_selection(path, name, ":aggregate")),
             Some("calculation") if spec.is_object() => Err(Failure::invalid_calculation_args(path, name)),
+            // Within an embedded resource, typed map or union.
+            Some("attribute") if resource.attribute(name).is_some_and(|attr| selection_category(attr.ty).is_some()) => {
+                let ty = resource.attribute(name).unwrap().ty;
+                let selection = ValueSelection::parse(ty, spec, path, name)?;
+                self.fields.push(name.to_string());
+                self.values.insert(name.to_string(), selection);
+                Ok(())
+            }
             Some("calculation" | "attribute") => Err(Failure::field_does_not_support_nesting(path, name)),
             _ => {
                 let Json::Array(items) = spec else {

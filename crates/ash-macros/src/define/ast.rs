@@ -239,6 +239,8 @@ pub enum PreparationSpec {
     Sort { field: Ident, descending: bool },
     Limit(usize),
     Offset(usize),
+    /// `prepare after_action(f);`: `f` runs on the records the read found.
+    AfterAction(Expr),
 }
 
 pub struct ActionSpec {
@@ -272,6 +274,8 @@ pub struct ActionSpec {
     pub pagination: Option<PaginationSpec>,
     /// `transaction;`: a generic action that runs in a transaction.
     pub transaction: bool,
+    /// `metadata name: Type;`: what the action notes on the records it answers.
+    pub metadata: Vec<(Ident, Type)>,
 }
 
 /// A read's `pagination` options, as Ash names them.

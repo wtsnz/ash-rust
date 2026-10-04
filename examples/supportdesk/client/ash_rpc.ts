@@ -641,6 +641,77 @@ export async function holdTicket<Fields extends HoldTicketFields | undefined = u
 }
 
 
+export type ListNotedTicketsFields = UnifiedFieldSelection<TicketResourceSchema>[];
+
+export type ListNotedTicketsMetadata = {
+  shortId: string;
+};
+
+
+export type InferListNotedTicketsResult<
+  Fields extends ListNotedTicketsFields | undefined,
+  MetadataFields extends ReadonlyArray<keyof ListNotedTicketsMetadata> = [],
+  Page extends ListNotedTicketsConfig["page"] = undefined
+> = ConditionalPaginatedResult<Page, Array<InferResult<TicketResourceSchema, Fields> & Pick<ListNotedTicketsMetadata, MetadataFields[number]>>, {
+  results: Array<InferResult<TicketResourceSchema, Fields> & Pick<ListNotedTicketsMetadata, MetadataFields[number]>>;
+  hasMore: boolean;
+  limit: number;
+  after: string | null;
+  before: string | null;
+  previousPage: string | null;
+  nextPage: string | null;
+  count?: number | null;
+  type: "keyset";
+}>;
+
+export type ListNotedTicketsConfig = {
+  tenant?: string;
+  fields: ListNotedTicketsFields;
+  filter?: TicketFilterInput;
+  sort?: SortString<TicketSortField> | SortString<TicketSortField>[];
+  page?: {
+    limit?: number;
+    after?: string;
+    before?: string;
+    offset?: never;
+    count?: never;
+  };
+  metadataFields?: ReadonlyArray<keyof ListNotedTicketsMetadata>;
+  headers?: Record<string, string>;
+  fetchOptions?: RequestInit;
+  customFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+};
+
+export type ListNotedTicketsResult<Fields extends ListNotedTicketsFields, MetadataFields extends ReadonlyArray<keyof ListNotedTicketsMetadata> = [], Page extends ListNotedTicketsConfig["page"] = undefined> = | { success: true; data: InferListNotedTicketsResult<Fields, MetadataFields, Page>; }
+| { success: false; errors: AshRpcError[]; }
+
+;
+
+/**
+ * Read Ticket records
+ *
+ * @ashActionType :read
+ */
+export async function listNotedTickets<Fields extends ListNotedTicketsFields, Config extends ListNotedTicketsConfig = ListNotedTicketsConfig>(
+  config: Config & { fields: Fields }
+): Promise<ListNotedTicketsResult<Fields, Config["metadataFields"] extends ReadonlyArray<any> ? Config["metadataFields"] : [], Config["page"]>> {
+  const payload = {
+    action: "list_noted_tickets",
+    ...(config.tenant !== undefined && { tenant: config.tenant }),
+    ...(config.fields !== undefined && { fields: config.fields }),
+    ...(config.metadataFields && { metadataFields: config.metadataFields }),
+    ...(config.filter && { filter: config.filter }),
+    ...(config.sort && { sort: Array.isArray(config.sort) ? config.sort.join(",") : config.sort }),
+    ...(config.page && { page: config.page })
+  };
+
+  return executeActionRpcRequest<ListNotedTicketsResult<Fields, Config["metadataFields"] extends ReadonlyArray<any> ? Config["metadataFields"] : [], Config["page"]>>(
+    payload,
+    config
+  );
+}
+
+
 export type OpenTicketInput = {
   subject: string;
   body: string;
@@ -652,11 +723,16 @@ export type OpenTicketInput = {
 
 export type OpenTicketFields = UnifiedFieldSelection<TicketResourceSchema>[];
 
+export type OpenTicketMetadata = {
+  commentsGiven: number;
+};
+
 export type InferOpenTicketResult<
   Fields extends OpenTicketFields | undefined,
+  MetadataFields extends ReadonlyArray<keyof OpenTicketMetadata> = []
 > = InferResult<TicketResourceSchema, Fields>;
 
-export type OpenTicketResult<Fields extends OpenTicketFields | undefined = undefined> = | { success: true; data: InferOpenTicketResult<Fields>; }
+export type OpenTicketResult<Fields extends OpenTicketFields | undefined = undefined, MetadataFields extends ReadonlyArray<keyof OpenTicketMetadata> = []> = | { success: true; data: InferOpenTicketResult<Fields>; metadata: Pick<OpenTicketMetadata, MetadataFields[number]>; }
 | { success: false; errors: AshRpcError[]; }
 
 ;
@@ -666,24 +742,26 @@ export type OpenTicketResult<Fields extends OpenTicketFields | undefined = undef
  *
  * @ashActionType :create
  */
-export async function openTicket<Fields extends OpenTicketFields | undefined = undefined>(
+export async function openTicket<Fields extends OpenTicketFields | undefined = undefined, MetadataFields extends ReadonlyArray<keyof OpenTicketMetadata> = []>(
   config: {
   tenant?: string;
   input: OpenTicketInput;
   fields?: Fields;
+  metadataFields?: MetadataFields;
   headers?: Record<string, string>;
   fetchOptions?: RequestInit;
   customFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 }
-): Promise<OpenTicketResult<Fields extends undefined ? [] : Fields>> {
+): Promise<OpenTicketResult<Fields extends undefined ? [] : Fields, MetadataFields>> {
   const payload = {
     action: "open_ticket",
     ...(config.tenant !== undefined && { tenant: config.tenant }),
     input: config.input,
-    ...(config.fields !== undefined && { fields: config.fields })
+    ...(config.fields !== undefined && { fields: config.fields }),
+    ...(config.metadataFields && { metadataFields: config.metadataFields })
   };
 
-  return executeActionRpcRequest<OpenTicketResult<Fields extends undefined ? [] : Fields>>(
+  return executeActionRpcRequest<OpenTicketResult<Fields extends undefined ? [] : Fields, MetadataFields>>(
     payload,
     config
   );

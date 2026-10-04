@@ -760,7 +760,8 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     }
                 }
                 crate::define::ast::PreparationSpec::Limit(_)
-                | crate::define::ast::PreparationSpec::Offset(_) => {}
+                | crate::define::ast::PreparationSpec::Offset(_)
+                | crate::define::ast::PreparationSpec::AfterAction(_) => {}
             }
         }
 
@@ -935,7 +936,11 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
             || action
                 .validations
                 .iter()
-                .any(|val| matches!(val, ValidationSpec::Custom(_) | ValidationSpec::Func(_)));
+                .any(|val| matches!(val, ValidationSpec::Custom(_) | ValidationSpec::Func(_)))
+            || action
+                .preparations
+                .iter()
+                .any(|prep| matches!(prep, crate::define::ast::PreparationSpec::AfterAction(_)));
         if action.run_expr.is_some() || has_opaque_consumer {
             continue;
         }

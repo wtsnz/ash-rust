@@ -188,6 +188,7 @@ pub fn rpc<D: TransactionSupport + 'static>() -> ash_typescript::rpc::Rpc<D> {
     use crate::{Comment, Tag};
     ash_typescript::rpc::Rpc::new()
         .action::<Ticket>("list_tickets", "read")
+        .action::<Ticket>("list_noted_tickets", "noted")
         .get_by::<Ticket>("get_ticket", "read", &["id"])
         .action::<Ticket>("open_ticket", "open")
         .action::<Ticket>("assign_ticket", "assign")

@@ -163,7 +163,7 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::Map | AttrType::Array { .. } => match optional_text(row, col)? {
+        AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => match optional_text(row, col)? {
             None => Ok(Value::Null),
             Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(json) => Ok(Value::from_plain_json(json)),
@@ -214,7 +214,7 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
                 Uuid::parse_str(&text).map_err(|err| Error::DataLayer(err.to_string()))?,
             )),
         },
-        AttrType::Map | AttrType::Array { .. } => Ok(Value::Null),
+        AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => Ok(Value::Null),
     }
 }
 

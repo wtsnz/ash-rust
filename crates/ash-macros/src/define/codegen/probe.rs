@@ -257,7 +257,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         let _: ::ash_core::Filter = #filter_tokens;
                     });
                 }
-                PreparationSpec::Limit(_) | PreparationSpec::Offset(_) => {}
+                PreparationSpec::Limit(_) | PreparationSpec::Offset(_) | PreparationSpec::AfterAction(_) => {}
             }
         }
 

@@ -43,6 +43,7 @@ pub fn scope_read(
             PreparationDef::Offset(offset) => {
                 query.offset.get_or_insert(offset);
             }
+            PreparationDef::AfterAction(_) => {}
         }
     }
     // The query's sort, then the action's on fields it doesn't sort by, as Ash appends
@@ -69,6 +70,17 @@ pub fn scope_read(
     query.tenant = tenant;
     query.actor = actor.cloned();
     Ok(query)
+}
+
+/// Runs `action`'s `after_action` preparations on the records a read through it found,
+/// as Ash runs a read's after-action hooks: every read through the action calls it.
+pub fn after_read(action: &ActionDef, arguments: &FieldMap, records: &mut [FieldMap]) -> Result<()> {
+    for preparation in action.preparations {
+        if let PreparationDef::AfterAction(run) = preparation {
+            run(arguments, records)?;
+        }
+    }
+    Ok(())
 }
 
 /// Whether `actor` in `tenant` would see `record` through the resource's default read.

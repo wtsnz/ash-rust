@@ -242,7 +242,7 @@ pub(crate) fn scoped_read<D: DataLayer>(
     ash: &ash_core::Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-) -> async_graphql::Result<CompiledQuery> {
+) -> async_graphql::Result<(FieldMap, CompiledQuery)> {
     let arguments = read_arguments(ctx, action)?;
     let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
         Some(filter) => Some(parse_resource_filter(resource, ash.actor.as_ref(), filter.as_value())?),
@@ -252,7 +252,7 @@ pub(crate) fn scoped_read<D: DataLayer>(
         Some(sort) => parse_resource_sort(resource, ash.actor.as_ref(), sort.as_value())?,
         None => Vec::new(),
     };
-    scope_read(
+    let query = scope_read(
         resource,
         action,
         ash.actor.as_ref(),
@@ -265,7 +265,13 @@ pub(crate) fn scoped_read<D: DataLayer>(
             ..CompiledQuery::default()
         },
     )
-    .map_err(|e| async_graphql::Error::new(e.to_string()))
+    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    Ok((arguments, query))
+}
+
+/// The records a read through `action` found, after its `after_action` preparations.
+pub(crate) fn after_read(action: &ActionDef, arguments: &FieldMap, records: &mut [FieldMap]) -> async_graphql::Result<()> {
+    ash_core::after_read(action, arguments, records).map_err(|e| async_graphql::Error::new(e.to_string()))
 }
 
 /// The number a page argument gives, if any.
@@ -314,7 +320,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             let limit = page_limit(first, last, after.is_some(), before.is_some(), &pagination)?;
             let backward = last.is_some() || (before.is_some() && after.is_none());
 
-            let scoped = scoped_read(&ctx, &ash, resource, action)?;
+            let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
 
             // A page sorts stably, so every record has its own keyset.
             let sort = keyset_sort(resource, scoped.sort.clone());
@@ -365,6 +371,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             if backward {
                 records.reverse();
             }
+            after_read(action, &arguments, &mut records)?;
             for record in &mut records {
                 redact_record(resource, ash.actor.as_ref(), record);
             }
@@ -436,7 +443,7 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
                 None => pagination.default_limit.or(pagination.max_page_size),
             };
             let offset = number_arg(&ctx, "offset")?.unwrap_or(0).max(0) as usize;
-            let scoped = scoped_read(&ctx, &ash, resource, action)?;
+            let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
             let count = if ctx.look_ahead().field("count").exists() {
                 Some(count_records(&ash, resource, &scoped).await?)
             } else {
@@ -455,6 +462,7 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
             if let Some(limit) = limit {
                 records.truncate(limit);
             }
+            after_read(action, &arguments, &mut records)?;
             for record in &mut records {
                 redact_record(resource, ash.actor.as_ref(), record);
             }

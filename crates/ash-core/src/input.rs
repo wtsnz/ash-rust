@@ -21,6 +21,23 @@ use crate::filter::Filter;
 use crate::resource::{AttrType, ResourceDef};
 use crate::value::{FieldMap, Value};
 
+/// `zip_code` → `zipCode`, as a client names a field.
+fn camel(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut upper = false;
+    for ch in name.chars() {
+        if ch == '_' {
+            upper = true;
+        } else if upper {
+            out.push(ch.to_ascii_uppercase());
+            upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
@@ -53,6 +70,30 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         },
         (AttrType::Float | AttrType::Decimal, Json::Number(n)) => Value::String(n.to_string()),
         (AttrType::Map, json @ Json::Object(_)) => Value::from_plain_json(json.clone()),
+        // Declared fields, each cast to its type, named as declared or in camelCase.
+        (AttrType::Embedded(_) | AttrType::TypedMap(_), Json::Object(given)) => {
+            let mut map = FieldMap::new();
+            for field in ty.fields().unwrap_or_default() {
+                if let Some(value) = given.get(field.name).or_else(|| given.get(&camel(field.name))) {
+                    map.insert(field.name.to_string(), value_input(field.ty, value)?);
+                }
+            }
+            Value::Map(map)
+        }
+        // A union's member: `{member: value}` as a client gives it, or `{type, value}` as
+        // it's held.
+        (AttrType::Union(members), Json::Object(given)) => {
+            let (name, value) = match (given.get("type"), given.get("value")) {
+                (Some(Json::String(name)), Some(value)) if given.len() == 2 => (name.as_str(), value),
+                _ if given.len() == 1 => given.iter().next().map(|(name, value)| (name.as_str(), value)).ok_or_else(mismatch)?,
+                _ => return Err(invalid(format!("a union takes one member, got {json}"))),
+            };
+            let member = members
+                .iter()
+                .find(|member| member.name == name || camel(member.name) == name)
+                .ok_or_else(|| invalid(format!("`{name}` isn't a member of the union")))?;
+            crate::value::union_value(member.name, value_input(member.ty, value)?)
+        }
         // Each item cast to the list's type.
         (AttrType::Array { of }, Json::Array(items)) => {
             Value::Array(items.iter().map(|item| value_input(*of, item)).collect::<Result<_>>()?)

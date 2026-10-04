@@ -450,6 +450,45 @@ pub fn optional_uuid(fields: &FieldMap, key: &str) -> Result<Option<Uuid>> {
     }
 }
 
+/// Where a record notes its metadata `name`, among its fields.
+fn metadata_key(name: &str) -> String {
+    format!("__metadata__:{name}")
+}
+
+/// Notes `value` as `record`'s metadata `name`, as Ash's `Ash.Resource.put_metadata/3`:
+/// something the action that answers the record says of it, beyond its fields (declared
+/// on the action as [`crate::MetadataDef`]s for an API to show).
+pub fn put_metadata(record: &mut FieldMap, name: &str, value: impl Into<Value>) {
+    record.insert(metadata_key(name), value.into());
+}
+
+/// `record`'s metadata `name`, as Ash's `Ash.Resource.get_metadata/2`.
+pub fn get_metadata<'a>(record: &'a FieldMap, name: &str) -> Option<&'a Value> {
+    record.get(&metadata_key(name))
+}
+
+/// A union's value: its member `name` holding `value`, as Ash holds a union
+/// (`{type, value}`).
+pub fn union_value(name: &str, value: Value) -> Value {
+    let mut held = FieldMap::new();
+    held.insert("type".to_string(), Value::String(name.to_string()));
+    held.insert("value".to_string(), value);
+    Value::Map(held)
+}
+
+impl Value {
+    /// The member a union's value holds, and its value.
+    pub fn union_member(&self) -> Option<(&str, &Value)> {
+        match self {
+            Value::Map(held) => match (held.get("type"), held.get("value")) {
+                (Some(Value::String(name)), Some(value)) => Some((name.as_str(), value)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

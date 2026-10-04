@@ -45,13 +45,13 @@ use std::sync::Arc;
 use ash_core::input::{action_input, field_type, filter_input, sort_input, value_input};
 use ash_core::{
     ActionDef, ActionKind, AttrType, CompiledQuery, Context, Countable, DataLayer, Error, FieldMap, Filter,
-    KeysetCursor, PreparationDef, RelKind, RelatedQuery, Resource, ResourceDef, Sort, TransactionSupport, Value,
+    KeysetCursor, MetadataDef, PreparationDef, RelKind, RelatedQuery, Resource, ResourceDef, Sort, TransactionSupport, Value,
 };
 use serde_json::{Map, Value as Json, json};
 
 pub use error::Failure;
 pub use fields::LoadRestrictions;
-use fields::{NestedPage, Rules, Selection, sort_text};
+use fields::{NestedPage, Rules, Selection, ValueSelection, sort_text};
 use names::{snake, snake_input, snake_keys, snake_sort};
 
 use crate::types::to_camel_case;
@@ -97,6 +97,10 @@ pub struct ActionOptions {
     enable_filter: bool,
     enable_sort: bool,
     loads: LoadRestrictions,
+    /// The action metadata a client may ask for: `None` for all of it.
+    show_metadata: Option<Vec<&'static str>>,
+    /// The names clients know metadata fields by, where not their camelCase.
+    metadata_field_names: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for ActionOptions {
@@ -110,6 +114,8 @@ impl Default for ActionOptions {
             enable_filter: true,
             enable_sort: true,
             loads: LoadRestrictions::None,
+            show_metadata: None,
+            metadata_field_names: Vec::new(),
         }
     }
 }
@@ -172,6 +178,36 @@ impl ActionOptions {
         self.loads = LoadRestrictions::Deny(load_paths(paths));
         self
     }
+
+    /// `show_metadata`: the action metadata a client may ask for (by default, all of
+    /// it; none, given none).
+    pub fn show_metadata(mut self, fields: &[&'static str]) -> Self {
+        self.show_metadata = Some(fields.to_vec());
+        self
+    }
+
+    /// `metadata_field_names`: the names clients know metadata fields by.
+    pub fn metadata_field_names(mut self, names: &[(&'static str, &'static str)]) -> Self {
+        self.metadata_field_names = names.to_vec();
+        self
+    }
+}
+
+/// A metadata field a request shows, and the name the client knows it by.
+struct Shown {
+    def: &'static MetadataDef,
+    name: String,
+}
+
+/// `record`'s metadata as the request shows it.
+fn metadata_json(record: &FieldMap, shown: &[Shown]) -> Map<String, Json> {
+    shown
+        .iter()
+        .map(|field| {
+            let value = ash_core::get_metadata(record, field.def.name).map_or(Json::Null, |value| to_json(Some(field.def.ty), value));
+            (field.name.clone(), value)
+        })
+        .collect()
 }
 
 fn load_paths(paths: &[&str]) -> Vec<Vec<String>> {
@@ -231,6 +267,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let read = options.read_action.map(|read| action_def(resource, read));
         for field in &options.get_by {
             assert!(resource.attribute(field).is_some(), "`{name}` gets by `{field}`, which isn't an attribute of {}", resource.name);
+        }
+        for field in options.show_metadata.iter().flatten().chain(options.metadata_field_names.iter().map(|(field, _)| field)) {
+            assert!(action.metadata.iter().any(|def| def.name == *field), "`{name}` shows metadata `{field}`, which `{}` doesn't declare", action.name);
         }
         // A generic action runs as its own `run` does (`Resource::run_generic`).
         let runner: Option<GenericRunner<D>> = (action.kind == ActionKind::Generic).then(|| {
@@ -304,7 +343,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// AshTypescript does.
     pub async fn run(&self, ctx: &Context<D>, request: &Json) -> Json {
         match self.answer(ctx, request).await {
-            Ok(data) => json!({ "success": true, "data": data }),
+            Ok(Answer { data, metadata: None }) => json!({ "success": true, "data": data }),
+            // A write's metadata beside its data, as AshTypescript answers it.
+            Ok(Answer { data, metadata: Some(metadata) }) => json!({ "success": true, "data": data, "metadata": metadata }),
             Err(failures) => json!({ "success": false, "errors": self.report(failures, request) }),
         }
     }
@@ -447,7 +488,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         rows.into_iter().next().ok_or_else(|| Failure::new("not_found", "Not found", format!("record with id: {:?} not found", id.to_string())))
     }
 
-    async fn answer(&self, ctx: &Context<D>, request: &Json) -> Result<Json, Vec<Failure>> {
+    async fn answer(&self, ctx: &Context<D>, request: &Json) -> Result<Answer, Vec<Failure>> {
         self.answer_one(ctx, request).await.map_err(|failure| vec![failure])
     }
 
@@ -509,28 +550,33 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             None => None,
             Some(page) => Some(PageRequest::parse(page)?),
         };
-        Ok(Parsed { rpc, ctx, get, selection, input: snake_input(&raw_input), get_by, page })
+        let shown = shown_metadata(rpc, request.get("metadataFields"));
+        Ok(Parsed { rpc, ctx, get, selection, input: snake_input(&raw_input), get_by, page, shown })
     }
 
-    async fn answer_one(&self, ctx: &Context<D>, request: &Json) -> Result<Json, Failure> {
-        let Parsed { rpc, ctx, get, selection, input: raw_input, get_by, page } = self.parse(ctx, request, false)?;
+    async fn answer_one(&self, ctx: &Context<D>, request: &Json) -> Result<Answer, Failure> {
+        let Parsed { rpc, ctx, get, selection, input: raw_input, get_by, page, shown } = self.parse(ctx, request, false)?;
         let (resource, action, options) = (rpc.resource, rpc.action, &rpc.options);
         let name = request["action"].as_str().unwrap_or_default();
         let input = action_input(resource, action, &raw_input).map_err(|e| self.failure_of(action, e))?;
+        // What a write notes on its record, as the request shows it.
+        let metadata = |stored: &FieldMap| (!shown.is_empty()).then(|| metadata_json(stored, &shown));
 
         match action.kind {
             ActionKind::Read if get => {
-                let found = self.get(&ctx, rpc, &selection, input, get_by).await?;
+                let found = self.get(&ctx, rpc, &selection, input, get_by, &shown).await?;
                 Ok(match found {
                     Some(record) => record,
                     None if options.not_found_error.unwrap_or(self.not_found_error) => return Err(self.failure(Error::NotFound)),
                     None => Json::Null,
-                })
+                }
+                .into())
             }
-            ActionKind::Read => self.list(&ctx, rpc, &selection, input, request, page).await,
+            ActionKind::Read => self.list(&ctx, rpc, &selection, input, request, page, &shown).await.map(Answer::from),
             ActionKind::Create => {
                 let stored = ash_core::create_dynamic(&ctx, resource, action, input).await.map_err(|e| self.failure_of(action, e))?;
-                self.written(&ctx, resource, stored, &selection).await
+                let metadata = metadata(&stored);
+                Ok(Answer { data: self.written(&ctx, resource, stored, &selection).await?, metadata })
             }
             ActionKind::Update => {
                 let id = self.identity(&ctx, rpc, request.get("identity")).await?;
@@ -541,7 +587,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                         Error::NotFound => self.failure(e),
                         e => self.failure_of(action, e).in_bulk(),
                     })?;
-                self.written(&ctx, resource, stored, &selection).await
+                let metadata = metadata(&stored);
+                Ok(Answer { data: self.written(&ctx, resource, stored, &selection).await?, metadata })
             }
             ActionKind::Destroy => {
                 // Nothing to destroy: a bulk destroy of no records, which succeeds, its
@@ -550,18 +597,19 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     selection.fields.iter().chain(selection.relationships.iter().map(|(name, _)| name)).map(|name| (to_camel_case(name), Json::Null)).collect(),
                 );
                 let id = match self.identity(&ctx, rpc, request.get("identity")).await {
-                    Err(failure) if failure.kind == "not_found" => return Ok(nothing()),
+                    Err(failure) if failure.kind == "not_found" => return Ok(nothing().into()),
                     found => found?,
                 };
                 // What it selects of the record, read before it goes.
                 let loaded = self.loads_of(&ctx, resource, id, &selection).await?;
                 match ash_core::destroy_dynamic_via(&ctx, resource, rpc.read, action, id, input, None).await {
-                    Err(Error::NotFound) => Ok(nothing()),
+                    Err(Error::NotFound) => Ok(nothing().into()),
                     Err(e) => Err(self.failure_of(action, e)),
                     Ok(mut stored) => {
+                        let metadata = metadata(&stored);
                         stored.extend(loaded);
                         let rows = self.render(&ctx, resource, vec![stored], &selection).await?;
-                        Ok(rows.into_iter().next().unwrap_or(Json::Null))
+                        Ok(Answer { data: rows.into_iter().next().unwrap_or(Json::Null), metadata })
                     }
                 }
             }
@@ -570,7 +618,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 let value = runner(ctx, input).await.map_err(|e| self.failure_of(action, e))?;
                 // An action returning nothing answers an empty object, as AshTypescript's
                 // (`:ok`) does.
-                Ok(if action.returns.is_none() { json!({}) } else { to_json(action.returns, &value) })
+                Ok(if action.returns.is_none() { json!({}) } else { to_json(action.returns, &value) }.into())
             }
         }
     }
@@ -650,20 +698,21 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     /// The one record a get finds, as selected.
-    async fn get(&self, ctx: &Context<D>, rpc: &RpcAction<D>, selection: &Selection, input: FieldMap, get_by: Vec<Filter>) -> Result<Option<Json>, Failure> {
+    async fn get(&self, ctx: &Context<D>, rpc: &RpcAction<D>, selection: &Selection, input: FieldMap, get_by: Vec<Filter>, shown: &[Shown]) -> Result<Option<Json>, Failure> {
         let resource = rpc.resource;
         let base = CompiledQuery { filter: Some(Filter::and(get_by)), sort: prepared_sort(rpc.action), tenant: ctx.tenant.clone(), ..CompiledQuery::default() };
         let scoped = ash_core::scope_read(resource, rpc.action, ctx.actor.as_ref(), &input, base).map_err(|e| self.failure(e))?;
         let rows = read_rows(ctx, resource, selection, CompiledQuery { limit: Some(2), ..scoped }).await.map_err(|e| self.failure(e))?;
         match rows.len() {
             0 => Ok(None),
-            1 => Ok(self.render(ctx, resource, rows, selection).await?.into_iter().next()),
+            1 => Ok(self.render_read(ctx, rpc, &input, rows, selection, shown).await?.into_iter().next()),
             n => Err(self.failure(Error::TooMany(n))),
         }
     }
 
     /// A list read: its records, or a page of them, as its action's pagination decides.
-    async fn list(&self, ctx: &Context<D>, rpc: &RpcAction<D>, selection: &Selection, input: FieldMap, request: &Json, page: Option<PageRequest>) -> Result<Json, Failure> {
+    #[allow(clippy::too_many_arguments)]
+    async fn list(&self, ctx: &Context<D>, rpc: &RpcAction<D>, selection: &Selection, input: FieldMap, request: &Json, page: Option<PageRequest>, shown: &[Shown]) -> Result<Json, Failure> {
         let (resource, action) = (rpc.resource, rpc.action);
         let actor = ctx.actor.as_ref();
         let mut filters = Vec::new();
@@ -683,7 +732,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
 
         let Some(pagination) = action.pagination else {
             let rows = read_rows(ctx, resource, selection, scoped).await.map_err(|e| self.failure(e))?;
-            return Ok(Json::Array(self.render(ctx, resource, rows, selection).await?));
+            return Ok(Json::Array(self.render_read(ctx, rpc, &input, rows, selection, shown).await?));
         };
         // As Ash pages a read: the default limit where none is given, and where the read
         // must page, a page of it even unasked.
@@ -704,7 +753,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 return Err(Failure::new("invalid_page", "Invalid pagination", "Limit is required"));
             }
             let rows = read_rows(ctx, resource, selection, scoped).await.map_err(|e| self.failure(e))?;
-            return Ok(Json::Array(self.render(ctx, resource, rows, selection).await?));
+            return Ok(Json::Array(self.render_read(ctx, rpc, &input, rows, selection, shown).await?));
         };
         // The smallest of the page's size, the read's own limit and its largest page, as
         // Ash takes it.
@@ -723,12 +772,12 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 .map_err(|e| self.failure(e))?;
             let has_more = rows.len() > limit;
             rows.truncate(limit);
-            let results = self.render(ctx, resource, rows, selection).await?;
+            let results = self.render_read(ctx, rpc, &input, rows, selection, shown).await?;
             return Ok(json!({
                 "results": results, "hasMore": has_more, "limit": limit, "offset": offset, "count": count, "type": "offset",
             }));
         }
-        let page = self.keyset_page(ctx, resource, selection, scoped, limit, &page).await?;
+        let page = self.keyset_page(ctx, rpc, &input, selection, scoped, limit, &page, shown).await?;
         Ok(json!({
             "results": page.results, "hasMore": page.has_more, "limit": limit, "after": page.after, "before": page.before,
             "nextPage": page.next, "previousPage": page.previous, "count": count, "type": "keyset",
@@ -737,15 +786,19 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
 
     /// A keyset page of what `scoped` reads: after (or before) its cursor, in a stable
     /// sort.
+    #[allow(clippy::too_many_arguments)]
     async fn keyset_page(
         &self,
         ctx: &Context<D>,
-        resource: &'static ResourceDef,
+        rpc: &RpcAction<D>,
+        input: &FieldMap,
         selection: &Selection,
         scoped: CompiledQuery,
         limit: usize,
         page: &PageRequest,
+        shown: &[Shown],
     ) -> Result<KeysetPage, Failure> {
+        let resource = rpc.resource;
         let sort = ash_core::keyset_sort(resource, scoped.sort.clone());
         let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
         // Ash reads before a keyset when given both.
@@ -779,7 +832,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             })
         };
         let (previous, next) = (cursor(rows.first()), cursor(rows.last()));
-        let results = self.render(ctx, resource, rows, selection).await?;
+        let results = self.render_read(ctx, rpc, input, rows, selection, shown).await?;
         Ok(KeysetPage { results, has_more, after: page.after.clone(), before: page.before.clone(), next, previous })
     }
 
@@ -811,6 +864,29 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         Ok(rows.into_iter().next().unwrap_or(Json::Null))
     }
 
+    /// The records a read through `rpc`'s action found, after its `after_action`
+    /// preparations, as the client selected them, with the metadata the request shows
+    /// on each, as AshTypescript merges a read's metadata into its records.
+    async fn render_read(
+        &self,
+        ctx: &Context<D>,
+        rpc: &RpcAction<D>,
+        input: &FieldMap,
+        mut rows: Vec<FieldMap>,
+        selection: &Selection,
+        shown: &[Shown],
+    ) -> Result<Vec<Json>, Failure> {
+        ash_core::after_read(rpc.action, input, &mut rows).map_err(|e| self.failure(e))?;
+        let metadata: Vec<Map<String, Json>> = rows.iter().map(|row| metadata_json(row, shown)).collect();
+        let mut rendered = self.render(ctx, rpc.resource, rows, selection).await?;
+        for (record, metadata) in rendered.iter_mut().zip(metadata) {
+            if let Json::Object(record) = record {
+                record.extend(metadata);
+            }
+        }
+        Ok(rendered)
+    }
+
     /// `rows` as the client selected them, their relationships loaded in turn.
     fn render<'a>(&'a self, ctx: &'a Context<D>, resource: &'static ResourceDef, rows: Vec<FieldMap>, selection: &'a Selection) -> BoxFuture<'a, Result<Vec<Json>, Failure>> {
         Box::pin(async move {
@@ -820,7 +896,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     selection
                         .fields
                         .iter()
-                        .map(|name| (to_camel_case(name), row.get(name).map_or(Json::Null, |value| to_json(field_type(resource, name), value))))
+                        .map(|name| {
+                            let value = row.get(name).map_or(Json::Null, |value| match selection.values.get(name) {
+                                Some(within) => select_value(field_type(resource, name), value, within),
+                                None => to_json(field_type(resource, name), value),
+                            });
+                            (to_camel_case(name), value)
+                        })
                         .collect()
                 })
                 .collect();
@@ -941,6 +1023,55 @@ struct Parsed<'a, D> {
     input: Json,
     get_by: Vec<Filter>,
     page: Option<PageRequest>,
+    /// The action metadata the request shows.
+    shown: Vec<Shown>,
+}
+
+/// What a request answers: its data, and for a write, the metadata it shows.
+struct Answer {
+    data: Json,
+    metadata: Option<Map<String, Json>>,
+}
+
+impl From<Json> for Answer {
+    fn from(data: Json) -> Self {
+        Self { data, metadata: None }
+    }
+}
+
+/// The action metadata a request shows, as AshTypescript picks it: what its
+/// `metadataFields` names (by the client's name for it, or its own) of what the action
+/// exposes, or given none, all it exposes for a write and none for a read.
+fn shown_metadata<D>(rpc: &RpcAction<D>, requested: Option<&Json>) -> Vec<Shown> {
+    let options = &rpc.options;
+    let exposed: Vec<&'static MetadataDef> = rpc
+        .action
+        .metadata
+        .iter()
+        .filter(|def| options.show_metadata.as_ref().is_none_or(|shown| shown.contains(&def.name)))
+        .collect();
+    let name_of = |def: &MetadataDef| {
+        options
+            .metadata_field_names
+            .iter()
+            .find(|(field, _)| *field == def.name)
+            .map_or_else(|| to_camel_case(def.name), |(_, name)| name.to_string())
+    };
+    let requested: Vec<&str> = requested.and_then(Json::as_array).map(|items| items.iter().filter_map(Json::as_str).collect()).unwrap_or_default();
+    let mut picked: Vec<&'static MetadataDef> = Vec::new();
+    if requested.is_empty() {
+        if matches!(rpc.action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+            picked = exposed;
+        }
+    } else {
+        for given in requested {
+            let found = exposed.iter().copied().find(|def| name_of(def) == given || def.name == snake(given));
+            if let Some(def) = found.filter(|def| !picked.iter().any(|seen| seen.name == def.name)) {
+                picked.push(def);
+            }
+        }
+    }
+    picked.into_iter().map(|def| Shown { def, name: name_of(def) }).collect()
 }
 
 struct KeysetPage {
@@ -1045,6 +1176,24 @@ async fn read_rows<D: DataLayer>(ctx: &Context<D>, resource: &'static ResourceDe
 fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
     match (ty, value) {
         (_, Value::Null) => Json::Null,
+        // Each item as its type renders.
+        (Some(AttrType::Array { of }), Value::Array(items)) => Json::Array(items.iter().map(|item| to_json(Some(*of), item)).collect()),
+        // Declared fields, named as a client names them.
+        (Some(ty @ (AttrType::Embedded(_) | AttrType::TypedMap(_))), Value::Map(map)) => Json::Object(
+            ty.fields()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|field| map.get(field.name).map(|value| (to_camel_case(field.name), to_json(Some(field.ty), value))))
+                .collect(),
+        ),
+        // The member it holds, as AshTypescript renders a union: `{member: value}`.
+        (Some(AttrType::Union(members)), value) => match value.union_member() {
+            Some((name, held)) => {
+                let ty = members.iter().find(|member| member.name == name).map(|member| member.ty);
+                json!({ to_camel_case(name): to_json(ty, held) })
+            }
+            None => value.to_plain_json(),
+        },
         (Some(AttrType::Float), Value::String(text)) => text.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or_else(|| Json::String(text.clone()), Json::Number),
         (_, Value::Bool(b)) => Json::Bool(*b),
         (_, Value::Int(i)) => Json::from(*i),
@@ -1052,6 +1201,52 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
         (_, Value::String(s)) => Json::String(s.clone()),
         (_, Value::Uuid(u)) => Json::String(u.to_string()),
         (_, Value::Map(_) | Value::Array(_)) => value.to_plain_json(),
+    }
+}
+
+/// `value` of type `ty` with only what `within` selects of it, as AshTypescript renders a
+/// selection within an embedded resource, typed map or union: a union whose member isn't
+/// selected is null.
+fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) -> Json {
+    match (ty, value) {
+        (_, Value::Null) => Json::Null,
+        (Some(AttrType::Array { of }), Value::Array(items)) => {
+            Json::Array(items.iter().map(|item| select_value(Some(*of), item, within)).collect())
+        }
+        (Some(ty), Value::Map(map)) if !matches!(ty, AttrType::Union(_)) => {
+            let ValueSelection::Fields(selected) = within else {
+                return to_json(Some(ty), value);
+            };
+            let fields = ty.fields().unwrap_or_default();
+            Json::Object(
+                selected
+                    .iter()
+                    .map(|(name, nested)| {
+                        let field_ty = fields.iter().find(|field| field.name == *name).map(|field| field.ty);
+                        let value = map.get(*name).map_or(Json::Null, |value| match nested {
+                            Some(nested) => select_value(field_ty, value, nested),
+                            None => to_json(field_ty, value),
+                        });
+                        (to_camel_case(name), value)
+                    })
+                    .collect(),
+            )
+        }
+        (Some(AttrType::Union(members)), value) => {
+            let (ValueSelection::Members(selected), Some((name, held))) = (within, value.union_member()) else {
+                return Json::Null;
+            };
+            let Some((_, nested)) = selected.iter().find(|(member, _)| *member == name) else {
+                return Json::Null;
+            };
+            let member_ty = members.iter().find(|member| member.name == name).map(|member| member.ty);
+            let held = match nested {
+                Some(nested) => select_value(member_ty, held, nested),
+                None => to_json(member_ty, held),
+            };
+            json!({ to_camel_case(name): held })
+        }
+        (ty, value) => to_json(ty, value),
     }
 }
 
