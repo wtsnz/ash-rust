@@ -258,7 +258,9 @@ async fn run(data: &Counting, query: &str, actor: Option<Actor>) -> Json {
         ctx = ctx.with_actor(actor);
     }
     let res = schema.execute(Request::new(query).data(ctx)).await;
-    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    // Fields a policy hides are null, and reported so.
+    let forbidden = |e: &async_graphql::ServerError| e.message == "forbidden field";
+    assert!(res.errors.iter().all(forbidden), "{:?}", res.errors);
     res.data.into_json().unwrap()
 }
 

@@ -191,11 +191,15 @@ pub(crate) async fn load_selected<D: DataLayer>(
     };
     let mut loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;
     for row in &mut loaded {
-        ash_core::redact_fields(resource, ash.actor.as_ref(), row).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+        crate::redact::redact_record(resource, ash.actor.as_ref(), row);
     }
     for record in records.iter_mut() {
         if let Some(row) = loaded.iter().find(|row| row.get(pk) == record.get(pk)) {
             for name in &loaded_names {
+                let marker = crate::redact::forbidden_marker(name);
+                if let Some(value) = row.get(&marker) {
+                    record.insert(marker, value.clone());
+                }
                 if let Some(value) = row.get(name) {
                     record.insert(name.clone(), value.clone());
                 }

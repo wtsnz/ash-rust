@@ -1,5 +1,4 @@
 use ash_core::eval as eval_expr;
-use ash_core::redact_fields;
 use ash_core::{AttrType, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value};
 
 use async_graphql::Value as GqlValue;
@@ -10,7 +9,7 @@ use crate::dataloader::{AshBatchLoader, RelatedKey};
 use crate::filter::resource_filter_input_name;
 use crate::names::camel;
 use crate::preload::{preloaded_key, related_query};
-use crate::redact::{redact_record, relationship_source};
+use crate::redact::{is_forbidden, redact_record, relationship_source, report_forbidden};
 use crate::request::{request_actor, request_context};
 use crate::sort::resource_sort_input_name;
 use crate::types::{
@@ -40,19 +39,9 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
                     let actor = request_actor::<D>(&ctx);
 
-                    if has_field_policy {
-                        let mut check_map = map.clone();
-                        let _ = redact_fields(resource, actor, &mut check_map);
-                        if let Some(val) = check_map.get(attr_name) {
-                            if val.is_null() {
-                                return Ok(None);
-                            }
-                            return Ok(Some(FieldValue::value(ash_value_to_graphql_value_typed(
-                                val, attr_ty,
-                            ))));
-                        } else {
-                            return Ok(None);
-                        }
+                    if has_field_policy && is_forbidden(resource, actor, map, attr_name) {
+                        report_forbidden(&ctx);
+                        return Ok(None);
                     }
 
                     if let Some(val) = map.get(attr_name) {
@@ -77,10 +66,15 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let calc_ty = calc.ty;
         let type_ref = attr_type_to_type_ref(resource.name, calc.name, calc.ty, true);
         let expr = calc.expr;
+        let has_field_policy = resource.field_policies.iter().any(|fp| fp.field == calc.name);
 
         let field = Field::new(camel(calc_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
+                    if has_field_policy && is_forbidden(resource, request_actor::<D>(&ctx), map, calc_name) {
+                        report_forbidden(&ctx);
+                        return Ok(None);
+                    }
                     // Loaded with the record, nil included: computed from the record as
                     // stored, which the record here may not wholly hold.
                     match map.get(calc_name) {
@@ -114,15 +108,20 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
     for agg in resource.aggregates {
         let agg_name = agg.name;
         // Unless a field policy may hide it, as one may an attribute.
+        let has_field_policy = resource.field_policies.iter().any(|fp| fp.field == agg.name);
         let always = matches!(
             agg.kind,
             ash_core::AggregateKind::Count | ash_core::AggregateKind::Exists
-        ) && !resource.field_policies.iter().any(|fp| fp.field == agg.name);
+        ) && !has_field_policy;
         let type_ref = attr_type_to_type_ref(resource.name, agg.name, agg.ty, !always);
 
         let field = Field::new(camel(agg_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
+                    if has_field_policy && is_forbidden(resource, request_actor::<D>(&ctx), map, agg_name) {
+                        report_forbidden(&ctx);
+                        return Ok(None);
+                    }
                     match map.get(agg_name) {
                         Some(val) if !val.is_null() => {
                             return Ok(Some(FieldValue::value(ash_value_to_graphql_value(val))));

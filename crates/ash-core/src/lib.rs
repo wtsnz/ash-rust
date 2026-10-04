@@ -76,7 +76,7 @@ pub use pipeline::visible_scope;
 pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen,
     authorize_write, check_to_filter, compile_read_filter, field_policy_fields, guard_input_filter,
-    guard_input_sort, redact_fields,
+    guard_input_sort, hidden_fields, redact_fields,
 };
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;

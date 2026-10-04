@@ -316,16 +316,22 @@ pub fn redact_fields(
 ) -> Result<()> {
     // Every policy checks the record as it was read, then the fields they hide go: one
     // hidden first mustn't read as nil to a policy checking it after.
-    let mut hidden = Vec::new();
-    for fp in resource.field_policies {
-        if !eval_policy_effects(fp.checks, actor, Some(fields))? {
-            hidden.push(fp.field);
-        }
-    }
-    for field in hidden {
+    for field in hidden_fields(resource, actor, fields)? {
         fields.insert(field.to_string(), crate::value::Value::Null);
     }
     Ok(())
+}
+
+/// The fields of `record` that `actor` may not see under `resource`'s field policies,
+/// each policy checking the record as given.
+pub fn hidden_fields(resource: &ResourceDef, actor: Option<&Actor>, record: &FieldMap) -> Result<Vec<&'static str>> {
+    let mut hidden = Vec::new();
+    for fp in resource.field_policies {
+        if !eval_policy_effects(fp.checks, actor, Some(record))? {
+            hidden.push(fp.field);
+        }
+    }
+    Ok(hidden)
 }
 
 /// Where `actor` may read `field` of `resource` under its field policies, as a filter on

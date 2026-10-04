@@ -1262,11 +1262,21 @@ export class AshTransport {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message: string; path?: (string | number)[] }>;
+      errors?: Array<{
+        message: string;
+        path?: (string | number)[];
+        code?: string;
+        extensions?: { code?: string };
+      }>;
     };
 
-    if (json.errors && json.errors.length > 0) {
-      const userErrors: AshUserError[] = json.errors.map((e) => ({
+    // A field a policy hides comes back null with a `forbidden_field` error: the null
+    // stands for it, so it fails nothing.
+    const errors = (json.errors ?? []).filter(
+      (e) => (e.extensions?.code ?? e.code) !== "forbidden_field",
+    );
+    if (errors.length > 0) {
+      const userErrors: AshUserError[] = errors.map((e) => ({
         message: e.message,
         path: e.path,
       }));

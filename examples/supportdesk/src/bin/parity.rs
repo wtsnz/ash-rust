@@ -7,9 +7,8 @@
 //! ```
 //!
 //! Both must have loaded the same fixture. Writes change both desks the same way, so the
-//! comparisons that follow them still hold. AshGraphql reports each redacted field as a
-//! `forbidden_field` error as well as a null, which ash-graphql doesn't (see GAPS.md):
-//! those errors are counted, and left out of the comparison.
+//! comparisons that follow them still hold. Both report each redacted field as a
+//! `forbidden_field` error as well as a null: those errors are compared, and counted.
 //!
 //! The same goes for AshTypescript's RPC (`POST /rpc/run`): the data each action answers,
 //! and the types of the errors it fails with.
@@ -72,20 +71,25 @@ impl Desk {
     }
 }
 
-/// What's compared of a GraphQL response: its data, and its errors' codes but for
-/// `forbidden_field`, which only AshGraphql reports.
+/// What's compared of a GraphQL response: its data, and its errors' paths, in path
+/// order, with the code of each `forbidden_field` error (top level in Absinthe's errors,
+/// in `extensions` in async-graphql's), which are counted.
 fn comparable(response: &Value, forbidden: &mut usize) -> Value {
-    let errors: Vec<Value> = response["errors"]
+    let mut errors: Vec<Value> = response["errors"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|error| {
-            let redacted = error["code"] == "forbidden_field";
+        .map(|error| {
+            let redacted = error["code"] == "forbidden_field" || error["extensions"]["code"] == "forbidden_field";
             *forbidden += usize::from(redacted);
-            !redacted
+            if redacted {
+                json!({ "path": error["path"], "code": "forbidden_field" })
+            } else {
+                json!({ "path": error["path"] })
+            }
         })
-        .map(|error| json!({ "path": error["path"] }))
         .collect();
+    errors.sort_by_key(|error| error["path"].to_string());
     json!({ "data": strip_cursors(&response["data"]), "errors": errors })
 }
 
@@ -482,10 +486,10 @@ async fn main() -> ExitCode {
     report.check("ticketUpdated, heard by the assignee", &heard[0], &heard[1]);
 
     println!(
-        "\n{} matched, {} differed; AshGraphql also reported {} redacted fields as forbidden_field errors",
+        "\n{} matched, {} differed; {} redacted fields reported as forbidden_field errors, by both desks",
         report.passed,
         report.failed.len(),
-        report.forbidden
+        report.forbidden / 2
     );
     if report.failed.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }

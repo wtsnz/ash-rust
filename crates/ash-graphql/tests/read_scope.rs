@@ -133,7 +133,9 @@ impl Harbour {
 
     async fn run(&self, request: Request) -> Value {
         let response = self.schema.execute(request).await;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        // Fields a policy hides are null, and reported so.
+        let forbidden = |e: &async_graphql::ServerError| e.message == "forbidden field";
+        assert!(response.errors.iter().all(forbidden), "{:?}", response.errors);
         response.data.into_json().unwrap()
     }
 
