@@ -90,7 +90,7 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
     let mut generated = false;
     let mut default = None;
     let mut default_fn = None;
-    let atom = None;
+    let mut atom = None;
     let mut is_enum = false;
 
     if input.peek(Token![=]) {
@@ -125,6 +125,16 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
                 }
                 let p: syn::Path = flags_content.parse()?;
                 default_fn = Some(p);
+            } else if flag_ident == "one_of" {
+                // `[one_of: ["a", "b"]]`: text that's one of these, as Ash's atom
+                // `one_of` constraint (a state machine's states, say).
+                if flags_content.peek(Token![:]) {
+                    let _: Token![:] = flags_content.parse()?;
+                }
+                let list;
+                syn::bracketed!(list in flags_content);
+                let values = syn::punctuated::Punctuated::<syn::LitStr, Token![,]>::parse_terminated(&list)?;
+                atom = Some(values.iter().map(syn::LitStr::value).collect());
             } else if flag_ident == "atom" {
                 errors.push(Error::new_spanned(
                     &flag_ident,
@@ -147,6 +157,7 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
                     "default_fn",
                     "enum",
                     "ash_enum",
+                    "one_of",
                 ];
                 return Err(crate::ast_helpers::unknown_ident_error(
                     &flag_ident,

@@ -73,7 +73,7 @@ export interface Cab {
   halted: boolean;
   tripId?: string | null;
   lastSeenAt?: string | null;
-  status: string;
+  status: "available" | "dispatched" | "on_trip" | "returning" | "charging" | "maintenance";
   createdAt: string;
   updatedAt: string;
   depot?: Depot | null;
@@ -191,7 +191,7 @@ export interface CabFilterInput {
   halted?: AshFilter<boolean>;
   tripId?: AshFilter<string>;
   lastSeenAt?: AshFilter<string>;
-  status?: AshTextFilter;
+  status?: AshFilter<"available" | "dispatched" | "on_trip" | "returning" | "charging" | "maintenance">;
   createdAt?: AshFilter<string>;
   updatedAt?: AshFilter<string>;
   tripsCompleted?: AshFilter<number>;
@@ -348,7 +348,7 @@ export interface Trip {
   cancelledAt?: string | null;
   cancelReason?: string | null;
   rating?: number | null;
-  status: string;
+  status: "requested" | "assigned" | "arrived" | "riding" | "completed" | "cancelled";
   createdAt: string;
   updatedAt: string;
   rider?: Rider | null;
@@ -446,7 +446,7 @@ export interface TripFilterInput {
   cancelledAt?: AshFilter<string>;
   cancelReason?: AshTextFilter;
   rating?: AshFilter<number>;
-  status?: AshTextFilter;
+  status?: AshFilter<"requested" | "assigned" | "arrived" | "riding" | "completed" | "cancelled">;
   createdAt?: AshFilter<string>;
   updatedAt?: AshFilter<string>;
   routeLabel?: AshTextFilter;
@@ -621,7 +621,7 @@ export interface FleetAlert {
   acknowledgedAt?: string | null;
   resolvedAt?: string | null;
   handledBy?: string | null;
-  status: string;
+  status: "open" | "acknowledged" | "resolved";
   cab?: Cab | null;
   trip?: Trip | null;
 }
@@ -671,7 +671,7 @@ export interface FleetAlertFilterInput {
   acknowledgedAt?: AshFilter<string>;
   resolvedAt?: AshFilter<string>;
   handledBy?: AshTextFilter;
-  status?: AshTextFilter;
+  status?: AshFilter<"open" | "acknowledged" | "resolved">;
   cab?: CabFilterInput;
   trip?: TripFilterInput;
   and?: FleetAlertFilterInput[];
@@ -782,7 +782,7 @@ export const CabSchema = z.object({
   halted: z.boolean(),
   tripId: z.string().uuid().nullable().optional(),
   lastSeenAt: z.string().nullable().optional(),
-  status: z.string(),
+  status: z.enum(["available", "dispatched", "on_trip", "returning", "charging", "maintenance"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -948,7 +948,7 @@ export const TripSchema = z.object({
   cancelledAt: z.string().nullable().optional(),
   cancelReason: z.string().nullable().optional(),
   rating: z.number().int().nullable().optional(),
-  status: z.string(),
+  status: z.enum(["requested", "assigned", "arrived", "riding", "completed", "cancelled"]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1104,7 +1104,7 @@ export const FleetAlertSchema = z.object({
   acknowledgedAt: z.string().nullable().optional(),
   resolvedAt: z.string().nullable().optional(),
   handledBy: z.string().nullable().optional(),
-  status: z.string(),
+  status: z.enum(["open", "acknowledged", "resolved"]),
 });
 
 export const RaiseFleetAlertInputSchema = z.object({
@@ -2147,7 +2147,7 @@ export class CabQueryBuilder {
   public live(listener: (items: Cab[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new CabClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", callSign: "text", nickname: "text", vin: "text", software: "text", depotId: "uuid", lng: "number", lat: "number", headingDeg: "number", speedKph: "number", batteryPct: "number", rangeKm: "number", odometerKm: "number", cabinTempC: "number", halted: "boolean", tripId: "uuid", lastSeenAt: "datetime", status: "text", createdAt: "datetime", updatedAt: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", callSign: "text", nickname: "text", vin: "text", software: "text", depotId: "uuid", lng: "number", lat: "number", headingDeg: "number", speedKph: "number", batteryPct: "number", rangeKm: "number", odometerKm: "number", cabinTempC: "number", halted: "boolean", tripId: "uuid", lastSeenAt: "datetime", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Cab>(
       {
         key: (record) => String(record.id),
@@ -2615,7 +2615,7 @@ export class TripQueryBuilder {
   public live(listener: (items: Trip[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new TripClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", riderId: "uuid", zoneId: "uuid", cabId: "uuid", pickupName: "text", pickupLng: "number", pickupLat: "number", dropoffName: "text", dropoffLng: "number", dropoffLat: "number", ridePolyline: "text", approachPolyline: "text", distanceM: "number", durationS: "number", surge: "number", fareCents: "number", requestedAt: "datetime", assignedAt: "datetime", pickupEtaAt: "datetime", arrivedAt: "datetime", pickedUpAt: "datetime", dropoffEtaAt: "datetime", completedAt: "datetime", cancelledAt: "datetime", cancelReason: "text", rating: "number", status: "text", createdAt: "datetime", updatedAt: "datetime" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", code: "text", riderId: "uuid", zoneId: "uuid", cabId: "uuid", pickupName: "text", pickupLng: "number", pickupLat: "number", dropoffName: "text", dropoffLng: "number", dropoffLat: "number", ridePolyline: "text", approachPolyline: "text", distanceM: "number", durationS: "number", surge: "number", fareCents: "number", requestedAt: "datetime", assignedAt: "datetime", pickupEtaAt: "datetime", arrivedAt: "datetime", pickedUpAt: "datetime", dropoffEtaAt: "datetime", completedAt: "datetime", cancelledAt: "datetime", cancelReason: "text", rating: "number", createdAt: "datetime", updatedAt: "datetime" };
     return ashLiveQuery<Trip>(
       {
         key: (record) => String(record.id),
@@ -3083,7 +3083,7 @@ export class FleetAlertQueryBuilder {
   public live(listener: (items: FleetAlert[]) => void, options?: AshLiveOptions): AshLiveQuery {
     const client = new FleetAlertClient(this.transport, this.subscriptions);
     const include = this._include;
-    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cabId: "uuid", tripId: "uuid", message: "text", lng: "number", lat: "number", raisedAt: "datetime", acknowledgedAt: "datetime", resolvedAt: "datetime", handledBy: "text", status: "text" };
+    const KINDS: Record<string, AshFieldKind> = { id: "uuid", cabId: "uuid", tripId: "uuid", message: "text", lng: "number", lat: "number", raisedAt: "datetime", acknowledgedAt: "datetime", resolvedAt: "datetime", handledBy: "text" };
     return ashLiveQuery<FleetAlert>(
       {
         key: (record) => String(record.id),

@@ -122,7 +122,7 @@ resource! {
             create open {
                 primary;
                 accept [subject, body, priority, confidential, requester_email];
-                argument comments: Vec<FieldMap> [default: Vec::new()];
+                argument comments: Option<Vec<FieldMap>>;
                 metadata comments_given: i64;
                 validate present(requester_email);
                 validate string_length(subject, min: 3, max: 200);
@@ -167,7 +167,7 @@ resource! {
                 argument body: String;
                 argument priority: i64;
                 argument requester_email: String;
-                argument comments: Vec<FieldMap> [default: Vec::new()];
+                argument comments: Option<Vec<FieldMap>>;
                 returns Uuid;
                 run |input| async move {
                     let ctx = input.ctx;

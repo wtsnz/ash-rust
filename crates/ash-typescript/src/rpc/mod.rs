@@ -35,6 +35,7 @@
 
 mod error;
 pub mod fields;
+mod codegen;
 mod names;
 
 use std::collections::HashMap;
@@ -49,6 +50,7 @@ use ash_core::{
 };
 use serde_json::{Map, Value as Json, json};
 
+pub use codegen::{Client, ClientConfig, Endpoint, Hooks};
 pub use error::Failure;
 pub use fields::LoadRestrictions;
 use fields::{NestedPage, Rules, Selection, ValueSelection, sort_text};
@@ -233,11 +235,14 @@ pub struct Rpc<D> {
     error_handler: Option<ErrorHandler>,
     show_raised_errors: bool,
     names: Names,
+    /// The actions' names, in the order they were declared.
+    declared: Vec<String>,
+    typed_queries: Vec<codegen::TypedQuery>,
 }
 
 impl<D> Default for Rpc<D> {
     fn default() -> Self {
-        Self { actions: HashMap::new(), not_found_error: true, on_error: None, error_handler: None, show_raised_errors: false, names: Names::default() }
+        Self { actions: HashMap::new(), not_found_error: true, on_error: None, error_handler: None, show_raised_errors: false, names: Names::default(), declared: Vec::new(), typed_queries: Vec::new() }
     }
 }
 
@@ -252,6 +257,30 @@ fn action_def(resource: &'static ResourceDef, action: &str) -> &'static ActionDe
 impl<D: TransactionSupport + 'static> Rpc<D> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// `typed_query :name, :read, fields: [...]`: a read of `R` with its fields chosen up
+    /// front, generated into the client as a result type and a fields constant
+    /// (`fields` as a request selects them, with snake_case names).
+    pub fn typed_query<R: Resource>(mut self, name: &str, action: &str, fields: Json) -> Self {
+        let action = action_def(&R::DEF, action);
+        assert!(action.kind == ActionKind::Read, "typed query `{name}` reads, and `{}` isn't a read", action.name);
+        self.typed_queries.push(codegen::TypedQuery {
+            name: name.to_string(),
+            resource: &R::DEF,
+            action,
+            fields,
+            result_type_name: None,
+            fields_const_name: None,
+            description: None,
+        });
+        self
+    }
+
+    fn declare(&mut self, name: &str) {
+        if !self.declared.iter().any(|declared| declared == name) {
+            self.declared.push(name.to_string());
+        }
     }
 
     /// `field_names`: the names clients know `R`'s fields by, where not their own in
@@ -305,6 +334,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 Box::pin(async move { R::run_generic(&ctx, name, input).await })
             }) as GenericRunner<D>
         });
+        self.declare(name);
         self.actions.insert(name.into(), RpcAction { resource, action, read, options, runner });
         self
     }
@@ -331,6 +361,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 ash_core::run::<R, D, Value, _, _>(&ctx, def.name, move || run(inner, input)).await
             })
         });
+        self.declare(name);
         self.actions.insert(
             name.into(),
             RpcAction { resource: &R::DEF, action: def, read: None, options: ActionOptions::default(), runner: Some(runner) },
