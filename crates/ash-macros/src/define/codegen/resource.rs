@@ -398,6 +398,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                             name: #arg_name,
                             ty: #arg_type_tok,
                             allow_nil: #arg_allow_nil,
+                            default: ::std::option::Option::None,
                         }
                     }
                 })

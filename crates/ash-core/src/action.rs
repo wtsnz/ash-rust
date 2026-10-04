@@ -150,6 +150,8 @@ pub struct ArgumentDef {
     pub name: &'static str,
     pub ty: AttrType,
     pub allow_nil: bool,
+    /// Its value when input doesn't give it, as Ash's argument `default`.
+    pub default: Option<fn() -> crate::value::Value>,
 }
 
 impl ArgumentDef {
@@ -158,6 +160,7 @@ impl ArgumentDef {
             name,
             ty,
             allow_nil: false,
+            default: None,
         }
     }
 
@@ -166,6 +169,24 @@ impl ArgumentDef {
             name,
             ty,
             allow_nil: true,
+            default: None,
+        }
+    }
+
+    /// This argument, `default` when input doesn't give it.
+    pub const fn with_default(mut self, default: fn() -> crate::value::Value) -> Self {
+        self.default = Some(default);
+        self
+    }
+}
+
+/// `arguments` with each default an argument `input` doesn't give, as Ash fills them in.
+pub fn apply_argument_defaults(arguments: &[ArgumentDef], input: &mut crate::value::FieldMap) {
+    for arg in arguments {
+        if let Some(default) = arg.default
+            && !input.contains_key(arg.name)
+        {
+            input.insert(arg.name.to_string(), default());
         }
     }
 }

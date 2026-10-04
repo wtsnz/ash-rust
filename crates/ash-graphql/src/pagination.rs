@@ -119,7 +119,7 @@ pub(crate) fn read_field_arguments(
             TypeRef::named(resource_filter_input_name(resource.name)),
         ));
     for arg in action.arguments {
-        let type_ref = attr_type_to_type_ref(resource.name, arg.name, arg.ty, arg.allow_nil);
+        let type_ref = attr_type_to_type_ref(resource.name, arg.name, arg.ty, arg.allow_nil || arg.default.is_some());
         field = field.argument(InputValue::new(camel(arg.name), type_ref));
     }
     field

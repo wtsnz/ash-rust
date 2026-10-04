@@ -290,6 +290,8 @@ pub struct ArgumentSpec {
     pub name: Ident,
     pub ty: Type,
     pub allow_nil: bool,
+    /// `[default: expr]`: its value when input doesn't give it.
+    pub default: Option<syn::Expr>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

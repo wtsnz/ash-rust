@@ -58,7 +58,7 @@ fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str
         }
     }
     for arg in action.arguments {
-        fields.push((arg.name, arg.ty, !arg.allow_nil));
+        fields.push((arg.name, arg.ty, !arg.allow_nil && arg.default.is_none()));
     }
     if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
         && let Some(version) = resource.optimistic_lock_attribute()

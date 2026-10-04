@@ -35,7 +35,7 @@ pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
     DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, PersistKind,
-    Countable, Pagination, PreparationDef, Validation, ValidationContext,
+    Countable, Pagination, PreparationDef, Validation, ValidationContext, apply_argument_defaults,
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};

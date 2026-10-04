@@ -132,11 +132,13 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                     let _: Token![:] = body.parse()?;
                     let a_ty: Type = body.parse()?;
                     let allow_nil = option_inner(&a_ty).is_some();
+                    let default = parse_argument_default(&body)?;
                     arguments.push(ArgumentSpec {
                         outer_attrs: item_attrs,
                         name: a_name,
                         ty: a_ty,
                         allow_nil,
+                        default,
                     });
                     require_semi(&body, errors, "argument");
                 }
@@ -160,6 +162,7 @@ fn parse_one_action(input: ParseStream, errors: &mut Vec<Error>) -> Result<Actio
                             name: a_name,
                             ty: a_ty,
                             allow_nil,
+                            default: None,
                         });
                         if args_input.peek(Token![,]) {
                             let _: Token![,] = args_input.parse()?;
@@ -1092,4 +1095,19 @@ fn parse_pagination(input: syn::parse::ParseStream) -> Result<crate::define::ast
         return Err(input.error("pagination needs `keyset: true` or `offset: true`"));
     }
     Ok(spec)
+}
+
+/// An argument's `[default: expr]`, if it has one.
+fn parse_argument_default(input: ParseStream) -> Result<Option<Expr>> {
+    if !input.peek(syn::token::Bracket) {
+        return Ok(None);
+    }
+    let content;
+    syn::bracketed!(content in input);
+    let key: Ident = content.parse()?;
+    if key != "default" {
+        return Err(Error::new_spanned(key, "expected `default: <expr>`"));
+    }
+    let _: Token![:] = content.parse()?;
+    Ok(Some(content.parse()?))
 }

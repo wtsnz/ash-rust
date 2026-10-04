@@ -76,7 +76,7 @@ fn required_input_names<'a>(
         }
     }
     for arg in &act.arguments {
-        if option_inner(&arg.ty).is_none() {
+        if option_inner(&arg.ty).is_none() && arg.default.is_none() {
             names.push(&arg.name);
         }
     }
@@ -1312,7 +1312,19 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         });
                     }
 
-                    if option_inner(ty).is_some() {
+                    let default = act.arguments.iter().find(|arg| arg.name == *name).and_then(|arg| arg.default.as_ref());
+                    if let Some(default) = default {
+                        // Its default when not given, as Ash fills an argument in.
+                        if option_inner(ty).is_some() {
+                            input_extracts.push(quote! {
+                                #name: self.#name.unwrap_or_else(|| ::std::option::Option::Some(#default))
+                            });
+                        } else {
+                            input_extracts.push(quote! {
+                                #name: self.#name.unwrap_or_else(|| #default)
+                            });
+                        }
+                    } else if option_inner(ty).is_some() {
                         input_extracts.push(quote! {
                             #name: self.#name.unwrap_or(::std::option::Option::None)
                         });

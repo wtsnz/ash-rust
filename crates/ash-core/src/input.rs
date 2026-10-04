@@ -216,6 +216,14 @@ pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, j
         })?;
         input.insert(name.clone(), value);
     }
+    let mut arguments = FieldMap::new();
+    for arg in action.arguments {
+        if let Some(value) = input.remove(arg.name) {
+            arguments.insert(arg.name.to_string(), value);
+        }
+    }
+    crate::action::apply_argument_defaults(action.arguments, &mut arguments);
+    input.extend(arguments);
     // An argument that may not be nil must be given, as Ash requires it.
     if let Some(arg) = action.arguments.iter().find(|arg| !arg.allow_nil && input.get(arg.name).is_none_or(Value::is_null)) {
         return Err(Error::Missing { field: arg.name.to_string() });

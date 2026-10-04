@@ -151,3 +151,54 @@ async fn test_list_argument_reaches_the_action() {
     let shipment = Shipment::pack(&ctx).weight(3).items(vec![item]).rate(1.5).fragile(true).await;
     assert!(shipment.is_ok(), "{shipment:?}");
 }
+
+mod defaults {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    resource! {
+        Memo {
+            table "memos";
+
+            attributes {
+                id: Uuid [pk];
+                body: String;
+                label: String;
+            }
+
+            actions {
+                create write {
+                    primary;
+                    accept [body];
+                    argument label: String [default: "general".to_string()];
+                    change set_from_arg(label, label);
+                }
+
+                generic echo {
+                    argument word: String [default: "hello".to_string()];
+                    returns String;
+                    run |input| async move { Ok(input.word) };
+                }
+            }
+        }
+    }
+}
+use defaults::Memo;
+
+// An argument the input doesn't give takes its default, as Ash's do, in a typed action,
+// a dynamic one, and a generic one.
+#[tokio::test]
+async fn arguments_take_their_defaults() {
+    let ctx = Context::new(Memory::new());
+    let typed = Memo::write(&ctx).body("hi").await.unwrap();
+    assert_eq!(typed.label, "general");
+    let given = Memo::write(&ctx).body("hi").label("work").await.unwrap();
+    assert_eq!(given.label, "work");
+
+    let mut input = FieldMap::new();
+    input.insert("body".into(), Value::String("hi".into()));
+    let dynamic = ash_core::create_dynamic(&ctx, &Memo::DEF, Memo::DEF.action("write").unwrap(), input).await.unwrap();
+    assert_eq!(dynamic.get("label"), Some(&Value::String("general".into())));
+
+    assert_eq!(Memo::echo(&ctx).call().await.unwrap(), "hello");
+}

@@ -110,11 +110,19 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                     let name_str = arg.name.to_string();
                     let allow_nil = arg.allow_nil;
                     let ty_tokens = argument_attr_type(&arg.ty);
+                    let default = match &arg.default {
+                        Some(expr) => {
+                            let ty = crate::ast_helpers::option_inner(&arg.ty).unwrap_or(&arg.ty);
+                            quote! { ::std::option::Option::Some(|| { let value: #ty = #expr; ::ash_core::Value::from(value) }) }
+                        }
+                        None => quote! { ::std::option::Option::None },
+                    };
                     quote! {
                         ::ash_core::ArgumentDef {
                             name: #name_str,
                             ty: #ty_tokens,
                             allow_nil: #allow_nil,
+                            default: #default,
                         }
                     }
                 })

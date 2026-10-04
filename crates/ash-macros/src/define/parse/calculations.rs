@@ -46,6 +46,7 @@ fn parse_one_calculation(input: ParseStream, errors: &mut Vec<Error>) -> Result<
                 name: arg_ident,
                 ty: arg_ty,
                 allow_nil: false,
+                default: None,
             });
             if args_content.peek(Token![,]) {
                 let _: Token![,] = args_content.parse()?;

@@ -74,6 +74,7 @@ pub fn split_input(resource: &ResourceDef, action: &ActionDef, input: FieldMap) 
             });
         }
     }
+    crate::action::apply_argument_defaults(action.arguments, &mut arguments);
     for arg in action.arguments {
         if !arg.allow_nil && arguments.get(arg.name).is_none_or(Value::is_null) {
             return Err(Error::Missing {

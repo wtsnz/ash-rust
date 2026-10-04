@@ -171,6 +171,7 @@ impl DynamicChangeset {
                 arguments.insert(name, value);
             }
         }
+        crate::action::apply_argument_defaults(action.arguments, &mut arguments);
         let mut problems: Vec<Error> = action
             .arguments
             .iter()

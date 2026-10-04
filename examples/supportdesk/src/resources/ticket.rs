@@ -115,8 +115,7 @@ resource! {
             create open {
                 primary;
                 accept [subject, body, priority, confidential, requester_email];
-                // Optional, where Ash's defaults to `[]`: ash-rust's arguments take no default.
-                argument comments: Option<Vec<FieldMap>>;
+                argument comments: Vec<FieldMap> [default: Vec::new()];
                 validate present(requester_email);
                 validate string_length(subject, min: 3, max: 200);
                 validate numericality(priority, min: 1, max: 4);
@@ -158,7 +157,7 @@ resource! {
                 argument body: String;
                 argument priority: i64;
                 argument requester_email: String;
-                argument comments: Option<Vec<FieldMap>>;
+                argument comments: Vec<FieldMap> [default: Vec::new()];
                 returns Uuid;
             }
 
