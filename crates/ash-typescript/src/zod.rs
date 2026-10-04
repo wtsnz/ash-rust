@@ -31,7 +31,7 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
             }
         }
         AttrType::Map => "z.record(z.string(), z.unknown())".to_string(),
-        AttrType::Array => "z.array(z.unknown())".to_string(),
+        AttrType::Array { of } => format!("z.array({})", generate_attr_zod(of, false)),
     };
 
     if allow_nil {
@@ -138,7 +138,7 @@ fn build_field_zod_schema(action: &ActionDef, field_name: &str, ty: &AttrType, r
                 }
             }
             AttrType::Map => "z.record(z.string(), z.unknown())".to_string(),
-            AttrType::Array => "z.array(z.unknown())".to_string(),
+            AttrType::Array { of } => format!("z.array({})", generate_attr_zod(of, false)),
         }
     };
 

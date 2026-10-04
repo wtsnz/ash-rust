@@ -29,6 +29,8 @@ mod rel;
 mod resource;
 #[doc(hidden)]
 pub mod returned;
+#[doc(hidden)]
+pub mod default_value;
 pub mod store;
 mod types;
 mod value;

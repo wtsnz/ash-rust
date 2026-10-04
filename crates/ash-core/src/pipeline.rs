@@ -461,7 +461,7 @@ pub(crate) fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> 
         | (AttrType::Integer, Value::Int(_))
         | (AttrType::Boolean, Value::Bool(_))
         | (AttrType::Map, Value::Map(_))
-        | (AttrType::Array, Value::Array(_)) => true,
+        | (AttrType::Array { .. }, Value::Array(_)) => true,
         (AttrType::UtcDatetime { precision }, Value::String(got)) => match precision.normalize(got) {
             Ok(_) => true,
             Err(_) => {

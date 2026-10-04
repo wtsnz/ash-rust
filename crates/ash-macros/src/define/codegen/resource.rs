@@ -182,9 +182,10 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if let Some(default_expr) = &a.default {
                 let fn_name = format_ident!("__default_{}", name_str);
+                // Stored as the type stores it, a list's items included.
                 helper_default_fns.push(quote! {
                     fn #fn_name() -> ::ash_core::Value {
-                        ::ash_core::Value::from(#default_expr)
+                        ::ash_core::default_value::IntoDefault::<#inner_ty>::into_default(#default_expr)
                     }
                 });
                 attr_defs.push(quote! {
@@ -648,9 +649,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::std::option::Option::Some(val) if !val.is_null() => {
                             <#inner_ty as ::ash_core::AshType>::from_value(val)?
                         }
-                        _ => <#inner_ty as ::ash_core::AshType>::from_value(
-                            &::ash_core::Value::from(#default_expr),
-                        )?,
+                        _ => <#inner_ty as ::ash_core::AshType>::from_value(&{
+                            ::ash_core::default_value::IntoDefault::<#inner_ty>::into_default(#default_expr)
+                        })?,
                     }
                 });
             } else if let Some(default_fn) = &a.default_fn {

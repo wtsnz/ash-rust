@@ -76,7 +76,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
             }
         }
         AttrType::Map => "Record<string, unknown>".to_string(),
-        AttrType::Array => "unknown[]".to_string(),
+        AttrType::Array { of } => format!("Array<{}>", attr_type_to_ts(of)),
     }
 }
 
@@ -85,7 +85,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
 pub fn attr_type_to_filter_type(ty: &AttrType) -> Option<String> {
     match ty {
         AttrType::String | AttrType::CiString => Some("AshTextFilter".to_string()),
-        AttrType::Map | AttrType::Array | AttrType::Vector { .. } | AttrType::Binary => None,
+        AttrType::Map | AttrType::Array { .. } | AttrType::Vector { .. } | AttrType::Binary => None,
         other => Some(format!("AshFilter<{}>", attr_type_to_ts(other))),
     }
 }

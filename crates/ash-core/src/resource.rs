@@ -469,7 +469,10 @@ pub enum AttrType {
         name: Option<&'static str>,
     },
     Map,
-    Array,
+    /// A list of values of one type, as Ash's `{:array, type}`.
+    Array {
+        of: &'static AttrType,
+    },
     UtcDatetime { precision: crate::types::TimePrecision },
     Decimal,
     Float,
@@ -498,7 +501,7 @@ impl AttrType {
             Self::Boolean => "boolean",
             Self::Atom { .. } => "atom",
             Self::Map => "map",
-            Self::Array => "array",
+            Self::Array { .. } => "array",
             Self::UtcDatetime {
                 precision: crate::types::TimePrecision::Second,
             } => "utc_datetime",

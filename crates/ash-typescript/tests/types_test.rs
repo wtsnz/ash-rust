@@ -214,7 +214,7 @@ fn test_filter_input_skips_json_attributes() {
     static EVENT_ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
         AttributeDef::optional("metadata", AttrType::Map),
-        AttributeDef::optional("tags", AttrType::Array),
+        AttributeDef::optional("tags", AttrType::Array { of: &AttrType::String }),
     ];
     static EVENT_DEF: ResourceDef = ResourceDef {
         name: "Event",

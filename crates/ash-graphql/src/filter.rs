@@ -26,7 +26,7 @@ fn is_text(ty: AttrType) -> bool {
 
 /// Whether a field of this type can be filtered at all.
 fn filterable(ty: AttrType) -> bool {
-    !matches!(ty, AttrType::Map | AttrType::Array | AttrType::Vector { .. } | AttrType::Binary)
+    !matches!(ty, AttrType::Map | AttrType::Array { .. } | AttrType::Vector { .. } | AttrType::Binary)
 }
 
 /// The operators every filterable field takes, and those text fields add.

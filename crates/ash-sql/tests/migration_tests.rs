@@ -263,7 +263,7 @@ fn sample_meta() -> ash_core::Value {
 fn map_and_array_defaults_are_sql_literals() {
     static ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
-        AttributeDef::with_default("tags", AttrType::Array, sample_tags),
+        AttributeDef::with_default("tags", AttrType::Array { of: &AttrType::String }, sample_tags),
         AttributeDef::with_default("meta", AttrType::Map, sample_meta),
     ];
     let mut resource = RES_V1;

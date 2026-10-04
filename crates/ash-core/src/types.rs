@@ -843,7 +843,7 @@ impl AshType for crate::value::FieldMap {
 
 /// A list of one type, as Ash's `{:array, type}`.
 impl<T: AshType> AshType for Vec<T> {
-    const ATTR_TYPE: AttrType = AttrType::Array;
+    const ATTR_TYPE: AttrType = AttrType::Array { of: &T::ATTR_TYPE };
 
     fn to_value(&self) -> Value {
         Value::Array(self.iter().map(AshType::to_value).collect())

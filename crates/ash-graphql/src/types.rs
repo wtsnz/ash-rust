@@ -21,8 +21,9 @@ pub fn graphql_type_name(ty: AttrType) -> &'static str {
         | AttrType::CiString
         | AttrType::Binary
         | AttrType::Inet
-        | AttrType::Array
         | AttrType::Vector { .. } => TypeRef::STRING,
+        // A list within a list has no GraphQL type of its own here.
+        AttrType::Array { .. } => "Json",
     }
 }
 
@@ -37,11 +38,13 @@ pub fn attr_type_to_type_ref(
     allow_nil: bool,
 ) -> TypeRef {
     match ty {
-        AttrType::Array => {
+        // A list of its items' type, as AshGraphql serves `{:array, type}`.
+        AttrType::Array { of } => {
+            let item = graphql_type_name(*of);
             if allow_nil {
-                TypeRef::named_nn_list(TypeRef::STRING)
+                TypeRef::named_nn_list(item)
             } else {
-                TypeRef::named_nn_list_nn(TypeRef::STRING)
+                TypeRef::named_nn_list_nn(item)
             }
         }
         AttrType::Vector { .. } => {

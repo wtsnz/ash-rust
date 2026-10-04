@@ -104,8 +104,9 @@ pub fn argument_attr_type(ty: &Type) -> TokenStream {
         quote! { ::ash_core::AttrType::Integer }
     } else if is_bool(inner) {
         quote! { ::ash_core::AttrType::Boolean }
-    } else if vec_inner(inner).is_some() {
-        quote! { ::ash_core::AttrType::Array }
+    } else if let Some(item) = vec_inner(inner) {
+        let item = argument_attr_type(item);
+        quote! { ::ash_core::AttrType::Array { of: &#item } }
     } else if last_ident(inner).is_some_and(|i| matches!(i.to_string().as_str(), "FieldMap" | "HashMap" | "BTreeMap" | "Map")) {
         quote! { ::ash_core::AttrType::Map }
     } else {

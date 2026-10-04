@@ -516,6 +516,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let op = self.compile_operand_scoped(resource, field, scope_alias)?;
                 Ok(format!("{op} IS NULL"))
             }
+            Filter::Has(field, val) => {
+                let op = self.compile_operand_scoped(resource, field, scope_alias)?;
+                let p = self.push_param(self.dialect.has_param(val.clone()));
+                Ok(self.dialect.render_has(&op, &p))
+            }
             Filter::Contains(field, needle) => {
                 self.compile_text_match(resource, field, TextMatch::Contains, needle, scope_alias)
             }

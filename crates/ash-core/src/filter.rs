@@ -26,6 +26,8 @@ pub enum Filter {
     Like(String, String),
     /// [`Like`](Self::Like), ignoring case. Ash's `ilike/2`.
     ILike(String, String),
+    /// A list holds the value, as Ash's `has/2`.
+    Has(String, Value),
     And(Vec<Filter>),
     Or(Vec<Filter>),
     Not(Box<Filter>),
@@ -41,6 +43,11 @@ impl Filter {
             relationship: relationship.into(),
             filter: Box::new(filter),
         }
+    }
+
+    /// The list `field` holds `value`, as Ash's `has/2`.
+    pub fn has(field: impl Into<String>, value: impl Into<Value>) -> Self {
+        Self::Has(field.into(), value.into())
     }
 
     pub fn eq(field: impl Into<String>, value: impl Into<Value>) -> Self {
@@ -110,7 +117,8 @@ impl Filter {
             | Self::StartsWith(field, _)
             | Self::EndsWith(field, _)
             | Self::Like(field, _)
-            | Self::ILike(field, _) => out.push(field),
+            | Self::ILike(field, _)
+            | Self::Has(field, _) => out.push(field),
             Self::And(parts) | Self::Or(parts) => {
                 for part in parts {
                     part.collect_fields(out);
@@ -207,6 +215,10 @@ impl Filter {
             Self::ILike(field, pattern) => {
                 present(field).map(|got| text_matches(Some(got), pattern, true, like_matches))
             }
+            Self::Has(field, value) => present(field).map(|got| match got {
+                Value::Array(items) => items.contains(value),
+                _ => false,
+            }),
             Self::And(parts) => all_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Not(inner) => inner.eval(resource, fields).map(|matched| !matched),

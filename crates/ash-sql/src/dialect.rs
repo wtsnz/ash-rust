@@ -185,6 +185,17 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Render a text filter on `op`. `pattern` is the placeholder bound to [`Self::text_pattern`].
     fn render_text_match(&self, op: &str, pattern: &str, case_insensitive: bool) -> String;
 
+    /// The parameter a `has` filter binds for `value`: a JSON list holding it, which a
+    /// JSON list column contains (Postgres's `@>`).
+    fn has_param(&self, value: ash_core::Value) -> ash_core::Value {
+        ash_core::Value::Array(vec![value])
+    }
+
+    /// A list column `op` holding the value bound as `param` ([`Self::has_param`]).
+    fn render_has(&self, op: &str, param: &str) -> String {
+        format!("({op} @> {param})")
+    }
+
     /// Where an `ORDER BY` term puts nulls, as Ash orders them: last ascending, first
     /// descending. Postgres does so already; a dialect that doesn't says so here.
     fn null_order(&self, _descending: bool) -> &'static str {
@@ -210,6 +221,15 @@ pub enum AggregateStrategy {
 pub struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
+    // A list is JSON text: one of its items equals the value.
+    fn has_param(&self, value: ash_core::Value) -> ash_core::Value {
+        value
+    }
+
+    fn render_has(&self, op: &str, param: &str) -> String {
+        format!("EXISTS (SELECT 1 FROM json_each({op}) WHERE json_each.value = {param})")
+    }
+
     // SQLite sorts nulls first ascending.
     fn null_order(&self, descending: bool) -> &'static str {
         if descending { " NULLS FIRST" } else { " NULLS LAST" }
@@ -243,7 +263,7 @@ impl SqlDialect for SqliteDialect {
             | AttrType::Vector { .. }
             | AttrType::Atom { .. }
             | AttrType::Map
-            | AttrType::Array => "TEXT".to_string(),
+            | AttrType::Array { .. } => "TEXT".to_string(),
         }
     }
 
@@ -361,7 +381,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Binary => "BYTEA".to_string(),
             AttrType::Inet => "INET".to_string(),
             AttrType::Vector { dimensions } => format!("VECTOR({dimensions})"),
-            AttrType::Map | AttrType::Array => "JSONB".to_string(),
+            AttrType::Map | AttrType::Array { .. } => "JSONB".to_string(),
         }
     }
 

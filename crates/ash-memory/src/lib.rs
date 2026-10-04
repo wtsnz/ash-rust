@@ -635,6 +635,10 @@ fn eval_filter(
             in_list(present(field), values, |got, value| same_value(ty, got, value))
         }
         Filter::IsNil(field) => Some(present(field).is_none()),
+        Filter::Has(field, value) => present(field).map(|got| match got {
+            Value::Array(items) => items.contains(value),
+            _ => false,
+        }),
         Filter::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
         Filter::StartsWith(field, needle) => {
             text(field, needle, |text, needle| text.starts_with(needle))

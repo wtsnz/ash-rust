@@ -52,7 +52,11 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
             _ => return Err(mismatch()),
         },
         (AttrType::Float | AttrType::Decimal, Json::Number(n)) => Value::String(n.to_string()),
-        (AttrType::Map, json @ Json::Object(_)) | (AttrType::Array, json @ Json::Array(_)) => Value::from_plain_json(json.clone()),
+        (AttrType::Map, json @ Json::Object(_)) => Value::from_plain_json(json.clone()),
+        // Each item cast to the list's type.
+        (AttrType::Array { of }, Json::Array(items)) => {
+            Value::Array(items.iter().map(|item| value_input(*of, item)).collect::<Result<_>>()?)
+        }
         (AttrType::Atom { one_of, .. }, Json::String(text)) => Value::String(
             one_of
                 .iter()
@@ -150,6 +154,11 @@ fn field_filter(resource: &ResourceDef, field: &str, ty: AttrType, ops: &Json) -
             "is_not_distinct_from" => match value_input(ty, value)? {
                 Value::Null => Filter::is_nil(field),
                 v => Filter::eq(field, v),
+            },
+            // The list holds the value, cast to the list's item type.
+            "has" => match ty {
+                AttrType::Array { of } => Filter::has(field, value_input(*of, value)?),
+                _ => return Err(invalid(format!("`has` on `{field}` takes a list field"))),
             },
             "contains" => Filter::contains(field, text(value)?),
             "string_starts_with" => Filter::starts_with(field, text(value)?),

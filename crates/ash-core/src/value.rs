@@ -236,9 +236,10 @@ impl From<FieldMap> for Value {
     }
 }
 
-impl From<Vec<FieldMap>> for Value {
-    fn from(value: Vec<FieldMap>) -> Self {
-        Self::Array(value.into_iter().map(Value::Map).collect())
+/// A list holds its items as their type stores them.
+impl<T: crate::AshType> From<Vec<T>> for Value {
+    fn from(value: Vec<T>) -> Self {
+        crate::AshType::to_value(&value)
     }
 }
 

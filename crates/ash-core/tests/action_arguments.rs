@@ -133,7 +133,7 @@ use shipments::Shipment;
 fn test_arguments_take_their_declared_types() {
     let pack = Shipment::DEF.action("pack").unwrap();
     let ty = |name: &str| pack.arguments.iter().find(|arg| arg.name == name).map(|arg| (arg.ty, arg.allow_nil));
-    assert_eq!(ty("items"), Some((AttrType::Array, false)));
+    assert_eq!(ty("items"), Some((AttrType::Array { of: &AttrType::Map }, false)));
     assert_eq!(ty("options"), Some((AttrType::Map, true)));
     assert_eq!(ty("rate"), Some((AttrType::Float, false)));
     assert_eq!(ty("fragile"), Some((AttrType::Boolean, false)));
