@@ -195,17 +195,18 @@ async fn an_actor_given_alongside_the_context_acts_for_it() {
 #[tokio::test]
 async fn mutations_run_as_the_actor_given_alongside_the_context() {
     let h = Harbour::new().await;
-    // Only the harbourmaster may write a dock's notes.
+    // Only the harbourmaster may read a dock's notes; anyone may write them, since field
+    // policies govern reads, as in Ash. The mutation's result is read as the actor.
     let mutation = r#"mutation { createDock(input: { name: "South", notes: "mind the gap" }) {
-        errors { message } result { name }
+        errors { message } result { name notes }
     } }"#;
     let created = h
         .run(Request::new(mutation).data(h.acme.clone()).data(role("harbourmaster")))
         .await;
-    assert_eq!(created["createDock"]["result"]["name"], "South", "{created}");
-    let refused = h.run(Request::new(mutation).data(h.acme.clone()).data(role("clerk"))).await;
-    assert!(refused["createDock"]["result"].is_null(), "{refused}");
-    assert_eq!(refused["createDock"]["errors"].as_array().map(Vec::len), Some(1), "{refused}");
+    assert_eq!(created["createDock"]["result"]["notes"], "mind the gap", "{created}");
+    let clerk = h.run(Request::new(mutation).data(h.acme.clone()).data(role("clerk"))).await;
+    assert_eq!(clerk["createDock"]["result"]["name"], "South", "{clerk}");
+    assert!(clerk["createDock"]["result"]["notes"].is_null(), "redacted for the clerk: {clerk}");
 }
 
 #[tokio::test]

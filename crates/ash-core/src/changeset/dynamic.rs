@@ -17,7 +17,7 @@ use crate::pipeline::{
     expect_persist, generate_pk, pk_name, prepare_create_fields, prepare_update_fields,
     run_validations, run_validations_with_context, split_input, validate,
 };
-use crate::policy::{authorize_field_writes, authorize_write};
+use crate::policy::authorize_write;
 use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value, required_uuid};
 
@@ -45,8 +45,6 @@ pub struct DynamicChangeset {
     after_actions: Vec<DynamicAfterActionHook>,
     after_transactions: Vec<DynamicAfterTransactionHook>,
     managed_relationships: Vec<ManagedRelationshipSpec>,
-    /// The attributes the input writes, for the field policies on writes.
-    written: Vec<String>,
 }
 
 impl DynamicChangeset {
@@ -70,7 +68,6 @@ impl DynamicChangeset {
             after_actions: Vec::new(),
             after_transactions: Vec::new(),
             managed_relationships: Vec::new(),
-            written: Vec::new(),
         }
     }
 
@@ -145,7 +142,6 @@ impl DynamicChangeset {
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), true)?;
         changeset.run_validations(ctx)?;
         validate(resource, &mut changeset.fields)?;
-        authorize_field_writes(resource, ctx.actor.as_ref(), None, &changeset.fields)?;
         Ok(changeset.with_context(ctx))
     }
 
@@ -177,15 +173,15 @@ impl DynamicChangeset {
         fields.extend(forced);
         prepare_update_fields(resource, &existing, &mut fields);
         let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
-        changeset.written = accepted.keys().cloned().collect();
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
         changeset.run_validations(ctx)?;
         validate(resource, &mut changeset.fields)?;
+        // Field policies govern what's read, not what's written, as in Ash: writes are the
+        // action's policies' to authorize. A field the actor may not read is not written
+        // back, though: a typed record read by that actor holds a redacted null there, not
+        // the stored value.
         let existing = changeset.existing.as_ref();
-        authorize_field_writes(resource, ctx.actor.as_ref(), existing, &accepted)?;
-        // A field the actor may not read is not written back: a typed record read by
-        // that actor holds a redacted null there, not the stored value.
         for fp in resource.field_policies {
             if !accepted.contains_key(fp.field)
                 && !crate::policy::eval_policy_effects(fp.checks, ctx.actor.as_ref(), existing)?
@@ -413,7 +409,6 @@ impl DynamicChangeset {
                     actor: ctx.actor.as_ref(),
                     tenant: ctx.tenant(),
                     sets: self.changes(self.fields.clone()),
-                    written: self.written.clone(),
                     arguments: &self.arguments,
                     expected_version,
                     collect_hooks: false,
