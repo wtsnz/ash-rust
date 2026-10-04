@@ -130,3 +130,44 @@ node client/smoke.ts --rust http://127.0.0.1:4701 --elixir http://127.0.0.1:4702
 
 does the same through the generated TypeScript client (Node 22.18 or later runs it as it
 is).
+
+## Benchmark
+
+```bash
+cargo build --release -p supportdesk --bins
+(cd ../elixir/supportdesk && MIX_ENV=prod mix release --overwrite)
+node bench/bench.ts --fixture /tmp/fixture.json            # about 8 minutes
+node bench/bench.ts --fixture /tmp/fixture.json --quick    # one short rep of each, about 3
+```
+
+[`bench/bench.ts`](bench/bench.ts) drives both desks through the API real clients use:
+RPC through the generated AshTypescript client, GraphQL, and JSON where the desks serve
+nothing else. It needs Node 22.18 or later and `psql`, and nothing to install.
+
+- **Same data.** Each desk loads the fixture once into a template database
+  (`supportdesk_bench_<desk>_tpl`, analyzed), and runs on a fresh copy of it
+  (`CREATE DATABASE … TEMPLATE`), on ports 4711 and 4712.
+- **Same answers first.** Nothing is timed until `parity` and the smoke test pass, each
+  on fresh copies, and each read scenario's first requests answer alike on both desks.
+  A scenario they answer differently isn't timed, and the report says why.
+- **Reads** (`inbox`, `dashboard`, `detail`) run closed loop: 16 clients, each asking
+  again when answered, as admins, agents and viewers of every org, from a seeded
+  generator, so both desks are asked the same things in the same order.
+- **Writes** run open loop at fixed rates, so both desks do the same work and a desk
+  that falls behind is charged for the wait (latency counts from when each request was
+  due): `workflow`, `route`, `counters` (checked after: every acknowledged view
+  counted), `edit races` (checked: exactly one of each pair wins), `bulk`, and `events`
+  (`ticketUpdated` to 20 subscribers, every delivery checked). Each rep runs on a fresh
+  copy.
+- **Fair order.** Reps alternate which desk goes first. Reads run 3 reps per desk, writes
+  2.
+- **What's reported:** throughput and latency (p95 from 1,000 samples, p99 from 10,000),
+  errors, the server's CPU time per 1,000 requests and its peak memory, and how busy the
+  driver was. Each run writes `bench/runs/<time>/`: a manifest (revisions, binary
+  hashes, machine, Postgres, options), every window in `results.jsonl`, the desks' logs,
+  and `report.md`, which gives each scenario's medians and ratio and flags a difference
+  within noise (5%, or the spread between reps). There's no overall figure.
+
+Postgres, both desks and the driver share one machine, so the figures compare the desks
+with each other rather than measure capacity. [GAPS.md](GAPS.md) notes where a scenario
+steps around a difference between the desks.

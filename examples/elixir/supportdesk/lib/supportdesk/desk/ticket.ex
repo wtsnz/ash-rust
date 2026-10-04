@@ -14,6 +14,11 @@ defmodule Supportdesk.Desk.Ticket do
   postgres do
     table "tickets"
     repo Supportdesk.Repo
+
+    # Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+    custom_indexes do
+      index [:assignee_id]
+    end
   end
 
   multitenancy do

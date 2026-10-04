@@ -28,6 +28,11 @@ resource! {
             internal: bool [default: false];
         }
 
+        indexes {
+            // Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+            index by_ticket: [ticket_id];
+        }
+
         relationships {
             belongs_to ticket: Ticket [fk: ticket_id];
             belongs_to author: Agent [fk: author_id];

@@ -8,6 +8,11 @@ defmodule Supportdesk.Desk.AuditEvent do
   postgres do
     table "audit_events"
     repo Supportdesk.Repo
+
+    # Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+    custom_indexes do
+      index [:ticket_id]
+    end
   end
 
   multitenancy do

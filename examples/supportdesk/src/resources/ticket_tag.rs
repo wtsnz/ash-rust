@@ -18,6 +18,11 @@ resource! {
             tag_id: Uuid;
         }
 
+        indexes {
+            // Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+            index by_ticket: [ticket_id];
+        }
+
         actions {
             read read {
                 primary;

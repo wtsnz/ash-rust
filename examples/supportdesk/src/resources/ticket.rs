@@ -53,6 +53,11 @@ resource! {
             transition close, from: ["resolved"], to: "closed";
         }
 
+        indexes {
+            // Foreign keys, indexed as a real app indexes them (AshPostgres creates none).
+            index by_assignee: [assignee_id];
+        }
+
         relationships {
             belongs_to assignee: Agent [fk: assignee_id];
             belongs_to author: Agent [fk: author_id];

@@ -270,6 +270,9 @@ async fn main() -> ExitCode {
     let open = ticket("an open ticket with comments", &|t| t["status"] == "open" && t["confidential"] == false && commented(t));
     let secret = ticket("a confidential new ticket", &|t| t["status"] == "new" && t["confidential"] == true);
     let plain = ticket("a new ticket", &|t| t["status"] == "new" && t["confidential"] == false);
+    // When the fixture's last ticket was opened: reads ordered by id or by assignee hold
+    // to the fixture's tickets, as those parity opens get random ids on each desk.
+    let seeded = tickets.iter().filter_map(|t| t["inserted_at"].as_str()).max().expect("tickets").to_string();
     // A requester's email, which field policies hide from all but an admin and the assignee.
     let email = tickets.iter().find(|t| t["confidential"] == false && t["requester_email"].is_string()).expect("an email")
         ["requester_email"]
@@ -444,11 +447,11 @@ async fn main() -> ExitCode {
         (&agent, json!({ "action": "list_tickets", "fields": ["id", { "weight": { "args": {} } }] })),
         (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": ["nope"] }] })),
         (&agent, json!({ "action": "list_tickets", "fields": ["id", 5] })),
-        (&agent, json!({ "action": "list_tickets", "fields": ["id", "priority", { "scaledPriority": { "args": { "factor": 3 } } }], "sort": "id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "priority", { "scaledPriority": { "args": { "factor": 3 } } }], "sort": "id", "page": { "limit": 3 } })),
         (&agent, json!({ "action": "list_tickets", "fields": ["id", "scaledPriority"] })),
-        (&agent, json!({ "action": "list_tickets", "fields": ["id", { "comments": { "fields": ["id"], "sort": ["-insertedAt", "id"], "page": { "limit": 2, "count": true } } }], "sort": "id", "page": { "limit": 2 } })),
-        (&agent, json!({ "action": "list_tickets", "fields": ["id", "assigneeId"], "sort": "++assigneeId,id", "page": { "limit": 3 } })),
-        (&agent, json!({ "action": "list_tickets", "fields": ["id", "assigneeId"], "sort": "--assigneeId,id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", { "comments": { "fields": ["id"], "sort": ["-insertedAt", "id"], "page": { "limit": 2, "count": true } } }], "sort": "id", "page": { "limit": 2 } })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "assigneeId"], "sort": "++assigneeId,id", "page": { "limit": 3 } })),
+        (&agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "assigneeId"], "sort": "--assigneeId,id", "page": { "limit": 3 } })),
         (&agent, json!({ "action": "list_tickets", "fields": ["id"], "page": { "limit": 2, "after": "garbage" } })),
         (&agent, json!({ "action": "open_ticket", "input": { "subject": "x", "body": "b", "priority": 9, "requesterEmail": "a@b.c" }, "fields": ["id"] })),
         (&agent, json!({ "action": "open_ticket", "input": { "subject": "Hello", "body": "b", "priority": "high", "requesterEmail": "a@b.c" }, "fields": ["id"] })),
