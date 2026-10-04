@@ -26,8 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(path) = std::env::var("FIXTURE") {
         let started = Instant::now();
         let tables: Vec<String> = resources.iter().map(|r| format!("\"{}\"", r.table)).collect();
-        let pool = db.pool().expect("a pool, outside any transaction");
-        sqlx::query(&format!("TRUNCATE {} CASCADE", tables.join(", "))).execute(pool).await?;
+        db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", "))).await?;
         let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         supportdesk::fixture::load(&ctx, &fixture).await?;
         seeded_ms = started.elapsed().as_millis() as u64;

@@ -1504,7 +1504,7 @@ async fn test_postgres_reads_a_page_and_its_count_together() {
         ..CompiledQuery::default()
     };
     let page = CompiledQuery {
-        sort: vec![Sort { field: "speed_kph".into(), descending: true }],
+        sort: vec![Sort { field: "speed_kph".into(), descending: true, ..Default::default() }],
         limit: Some(2),
         ..count.clone()
     };
