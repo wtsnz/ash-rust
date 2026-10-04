@@ -129,6 +129,12 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Whether the dialect supports `RETURNING *` on INSERT/UPDATE.
     fn supports_returning(&self) -> bool;
 
+    /// What a multi-row `VALUES` list gives a key the database assigns, for a row with
+    /// none: its default, as Ecto writes `DEFAULT` for a missing column.
+    fn assigned_key_value(&self) -> &'static str {
+        "DEFAULT"
+    }
+
     /// How a read loads aggregates, as ash_sql's `aggregate_strategy`: each relationship's
     /// aggregates in one subquery, laterally joined to each record where the database
     /// can, else grouped by the relationship's key and joined on it.
@@ -316,6 +322,12 @@ impl SqlDialect for SqliteDialect {
 
     fn supports_returning(&self) -> bool {
         false
+    }
+
+    /// SQLite takes no `DEFAULT` in `VALUES`; a NULL `INTEGER PRIMARY KEY` is assigned
+    /// the next rowid.
+    fn assigned_key_value(&self) -> &'static str {
+        "NULL"
     }
 
     /// SQLite has no lateral joins, so aggregates group, as AshSqlite's do.

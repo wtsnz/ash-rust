@@ -87,9 +87,30 @@ pub mod country {
     }
 }
 
+pub mod tally {
+    use super::*;
+
+    resource! {
+        /// Nothing but a key the data layer assigns.
+        Tally {
+            table "int_key_tallies";
+
+            attributes {
+                id: i64 [pk];
+            }
+
+            actions {
+                create create { primary; }
+                read read { primary; }
+            }
+        }
+    }
+}
+
 use country::Country;
 use line::Line;
 use order::Order;
+use tally::Tally;
 
 async fn integer_keys<D: ash_core::TransactionSupport + Clone + 'static>(ctx: &Context<D>) {
     let run = Uuid::new_v4();
@@ -159,6 +180,9 @@ async fn scenario<D: ash_core::TransactionSupport + Clone + 'static>(data: D) {
     let ctx = Context::new(data);
     integer_keys(&ctx).await;
     text_keys(&ctx).await;
+    // A record of nothing but its assigned key.
+    let (first, second) = (Tally::create(&ctx).await.unwrap(), Tally::create(&ctx).await.unwrap());
+    assert!(second.id > first.id, "{first:?} {second:?}");
 }
 
 #[tokio::test]
@@ -169,7 +193,7 @@ async fn non_uuid_keys_in_memory() {
 #[tokio::test]
 async fn non_uuid_keys_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install(&[&Order::DEF, &Line::DEF, &Country::DEF]).await.unwrap();
+    sqlite.install(&[&Order::DEF, &Line::DEF, &Country::DEF, &Tally::DEF]).await.unwrap();
     scenario(sqlite).await;
 }
 
@@ -181,6 +205,6 @@ async fn non_uuid_keys_in_postgres() {
         eprintln!("PostgreSQL not reachable; skipping test");
         return;
     };
-    pg.install(&[&Order::DEF, &Line::DEF, &Country::DEF]).await.unwrap();
+    pg.install(&[&Order::DEF, &Line::DEF, &Country::DEF, &Tally::DEF]).await.unwrap();
     scenario(pg).await;
 }

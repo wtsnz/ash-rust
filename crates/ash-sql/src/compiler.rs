@@ -1718,11 +1718,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
         }
 
-        let mut sql = format!(
-            "INSERT INTO {table} ({}) VALUES ({})",
-            col_names.join(", "),
-            placeholders.join(", ")
-        );
+        // Nothing given, as for a record of only a key the database assigns: every
+        // column its default.
+        let mut sql = if col_names.is_empty() {
+            format!("INSERT INTO {table} DEFAULT VALUES")
+        } else {
+            format!("INSERT INTO {table} ({}) VALUES ({})", col_names.join(", "), placeholders.join(", "))
+        };
 
         if self.dialect.supports_returning() {
             sql.push_str(" RETURNING *");
@@ -1765,6 +1767,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 } else {
                     fields.get(attr.name).cloned().unwrap_or(Value::Null)
                 };
+                // A row whose key the database assigns, among rows given theirs.
+                if attr.assigned_on_insert() && val.is_null() {
+                    placeholders.push(self.dialect.assigned_key_value().to_string());
+                    continue;
+                }
                 placeholders.push(self.bind_typed(attr.ty, val));
             }
             row_placeholders.push(format!("({})", placeholders.join(", ")));

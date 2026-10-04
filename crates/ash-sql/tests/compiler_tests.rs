@@ -676,3 +676,29 @@ fn a_related_calculation_reads_its_own_table() {
     let alias = sql.split("\"items\" AS ").nth(1).and_then(|rest| rest.split_whitespace().next()).expect("an alias");
     assert!(sql.contains(&format!("upper({alias}.\"name\")")), "{sql}");
 }
+
+static ORDER_ATTRS: &[AttributeDef] = &[AttributeDef::integer_pk("id"), AttributeDef::optional("label", AttrType::String)];
+
+/// A key the database assigns: left out of a single insert, every column defaulted when
+/// nothing else is given, and in a batch mixing rows with and without one, the default
+/// for each row without.
+#[test]
+fn test_inserts_leave_assigned_keys_to_the_database() {
+    let mut orders = TICKET_DEF;
+    orders.table = "orders";
+    orders.attributes = ORDER_ATTRS;
+    orders.identities = &[];
+    orders.calculations = &[];
+
+    let compiled = QueryCompiler::new(&PostgresDialect).compile_insert(&orders, &Default::default()).unwrap();
+    assert_eq!(compiled.sql(), r#"INSERT INTO "orders" DEFAULT VALUES RETURNING *"#);
+    let compiled = QueryCompiler::new(&SqliteDialect).compile_insert(&orders, &Default::default()).unwrap();
+    assert_eq!(compiled.sql(), r#"INSERT INTO "orders" DEFAULT VALUES"#);
+
+    let label = |text: &str| ash_core::FieldMap::from([("label".to_string(), Value::from(text))]);
+    let rows = [(Value::Int(50), label("given")), (Value::Null, label("assigned"))];
+    let compiled = QueryCompiler::new(&PostgresDialect).compile_bulk_insert(&orders, &rows).unwrap();
+    assert!(compiled.sql().contains("VALUES ($1, $2), (DEFAULT, $3)"), "{}", compiled.sql());
+    let compiled = QueryCompiler::new(&SqliteDialect).compile_bulk_insert(&orders, &rows).unwrap();
+    assert!(compiled.sql().contains("VALUES (?, ?), (NULL, ?)"), "{}", compiled.sql());
+}
