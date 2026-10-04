@@ -500,6 +500,7 @@ impl DynamicChangeset {
                     arguments: &self.arguments,
                     expected_version,
                     collect_hooks: false,
+                    can_raise: ctx.data.can_raise_atomically(self.resource),
                 },
             )?
         };
@@ -525,9 +526,12 @@ impl DynamicChangeset {
             // Already being destroyed further up a cascade.
             existing.clone()
         } else {
-            let stored = run_atomic_update(ctx, self.resource, self.action, id, &plan.update, None)
-                .await?
-                .ok_or(Error::StaleRecord { resource: self.resource.name, id })?;
+            let guards = plan.guards.filter();
+            let stored = match run_atomic_update(ctx, self.resource, self.action, id, &plan.update, guards.as_ref(), None).await? {
+                Some(stored) => stored,
+                None if guards.is_some() => return Err(plan.guards.unchanged(ctx, self.resource, id).await),
+                None => return Err(Error::StaleRecord { resource: self.resource.name, id }),
+            };
             if destroy {
                 crate::engine::cascade_destroy_related(ctx, self.resource, self.action, id, &stored, cascade).await?;
             }
@@ -547,11 +551,13 @@ impl DynamicChangeset {
         action: &'static ActionDef,
         id: Uuid,
         arguments: FieldMap,
-        plan: AtomicPlan,
+        mut plan: AtomicPlan,
         scope: Option<crate::filter::Filter>,
     ) -> Result<FieldMap> {
         let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
-        changeset.after_actions = plan.after_actions;
+        changeset.after_actions = std::mem::take(&mut plan.after_actions);
+        let guards = plan.guards.filter();
+        let guarding = plan.guards.clone();
         let result = async {
             let stored = match action.kind {
                 ActionKind::Destroy if !action.soft => {
@@ -565,11 +571,17 @@ impl DynamicChangeset {
                 ActionKind::Destroy => {
                     let cascade = Cascade::new(true);
                     cascade.enter(resource, id);
-                    let stored = run_atomic_update(ctx, resource, action, id, &plan.update, scope.as_ref()).await?.ok_or(Error::NotFound)?;
+                    let stored = match run_atomic_update(ctx, resource, action, id, &plan.update, guards.as_ref(), scope.as_ref()).await? {
+                        Some(stored) => stored,
+                        None => return Err(guarding.unchanged(ctx, resource, id).await),
+                    };
                     crate::engine::cascade_destroy_related(ctx, resource, action, id, &stored, &cascade).await?;
                     stored
                 }
-                _ => run_atomic_update(ctx, resource, action, id, &plan.update, scope.as_ref()).await?.ok_or(Error::NotFound)?,
+                _ => match run_atomic_update(ctx, resource, action, id, &plan.update, guards.as_ref(), scope.as_ref()).await? {
+                    Some(stored) => stored,
+                    None => return Err(guarding.unchanged(ctx, resource, id).await),
+                },
             };
             changeset.finish(ctx, id, stored, true).await
         }

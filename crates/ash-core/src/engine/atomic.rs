@@ -22,6 +22,8 @@ use crate::value::{FieldMap, Value};
 /// An update planned as one statement, with the hooks that run after it.
 pub(crate) struct AtomicPlan {
     pub update: AtomicUpdate,
+    /// What a data layer that can't raise in its statement checks as filters instead.
+    pub guards: Guards,
     pub after_actions: Vec<DynamicAfterActionHook>,
     pub after_transactions: Vec<DynamicAfterTransactionHook>,
 }
@@ -29,15 +31,70 @@ pub(crate) struct AtomicPlan {
 /// Runs `update` on record `id` as `ctx` sees it, as one statement: through the read
 /// `action` upgrades with (the primary read by default), in the context's tenant, and
 /// within `scope` when given. `None` when there's no such record.
+/// What an atomic update checks as filters where the data layer can't raise in its
+/// statement, as Ash filters an update by its lock version (`optimistic_lock`) and
+/// authorizes one by filter (`authorize_with: :filter`): an update that changes nothing
+/// failed one of them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Guards {
+    /// The lock version attribute and the version the record must still have.
+    pub version: Option<(&'static str, i64)>,
+    /// The records the write policies let the actor change.
+    pub policy: Option<Filter>,
+}
+
+impl Guards {
+    pub(crate) fn filter(&self) -> Option<Filter> {
+        let version = self.version.map(|(field, expected)| Filter::eq(field, Value::Int(expected)));
+        match (version, self.policy.clone()) {
+            (Some(version), Some(policy)) => Some(Filter::and([version, policy])),
+            (version, policy) => version.or(policy),
+        }
+    }
+
+    /// Why an update of record `id` these guards filtered changed nothing: it's gone, its
+    /// version moved on, or the policies don't let the actor change it.
+    pub(crate) async fn unchanged<D: crate::data_layer::DataLayer>(
+        &self,
+        ctx: &crate::context::Context<D>,
+        resource: &'static ResourceDef,
+        id: Uuid,
+    ) -> Error {
+        let Ok(pk) = pk_name(resource) else {
+            return Error::NotFound;
+        };
+        let Ok((filter, tenant)) =
+            crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())
+        else {
+            return Error::NotFound;
+        };
+        let query = crate::data_layer::CompiledQuery { filter, tenant, limit: Some(1), ..Default::default() };
+        let stored = match ctx.data.run_query(resource, &query).await {
+            Ok(rows) => rows.into_iter().next(),
+            Err(err) => return err,
+        };
+        match (stored, self.version) {
+            (None, _) => Error::NotFound,
+            (Some(row), Some((field, expected))) if row.get(field).and_then(Value::as_int) != Some(expected) => {
+                Error::StaleRecord { resource: resource.name, id }
+            }
+            (Some(_), _) if self.policy.is_some() => Error::Forbidden,
+            (Some(_), _) => Error::NotFound,
+        }
+    }
+}
+
 pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
     ctx: &crate::context::Context<D>,
     resource: &'static ResourceDef,
     action: &ActionDef,
     id: Uuid,
     update: &AtomicUpdate,
+    guards: Option<&Filter>,
     scope: Option<&Filter>,
 ) -> Result<Option<FieldMap>> {
-    let query = atomic_query(ctx, resource, action, id, scope)?;
+    let mut query = atomic_query(ctx, resource, action, id, scope)?;
+    query.filter = crate::pipeline::and_filters(query.filter, guards.cloned());
     Ok(ctx.data.update_atomic(resource, &query, update).await?.into_iter().next())
 }
 
@@ -122,6 +179,9 @@ pub(crate) struct PlanInput<'a> {
     /// Whether the action's after-action and after-transaction changes are this plan's
     /// to run: not when a changeset already holds them.
     pub collect_hooks: bool,
+    /// Whether the data layer raises a condition's error within its statement, as Ash's
+    /// data layers that can `expr_error`. One that can't runs no plan with conditions.
+    pub can_raise: bool,
 }
 
 /// Plans `action` on `resource` as one statement: an update, or a soft destroy, which
@@ -150,7 +210,8 @@ pub(crate) fn plan_update(
             return Ok(Err("its relationships act on related records when it's deleted".into()));
         }
     }
-    let PlanInput { actor, tenant, mut sets, arguments, expected_version, collect_hooks } = input;
+    let PlanInput { actor, tenant, mut sets, arguments, expected_version, collect_hooks, can_raise } = input;
+    let mut guards = Guards::default();
     let lock = resource.optimistic_lock_attribute();
     let updated_at = resource.timestamps.map(|(_, updated_at)| updated_at);
     // The lock version and `updated_at` are the plan's to set, from the stored record.
@@ -233,10 +294,14 @@ pub(crate) fn plan_update(
     // sets, as Ash validates a changeset's input before authorizing it.
     let allowed = write_filter(resource, action, actor)?;
     if !matches!(allowed, Filter::True | Filter::False) {
-        update.conditions.push(AtomicCondition::failing_with(
-            AtomicExpr::not_true(AtomicExpr::Filter(allowed.clone())),
-            || Error::Forbidden,
-        ));
+        if can_raise {
+            update.conditions.push(AtomicCondition::failing_with(
+                AtomicExpr::not_true(AtomicExpr::Filter(allowed.clone())),
+                || Error::Forbidden,
+            ));
+        } else {
+            guards.policy = Some(allowed.clone());
+        }
     }
 
     let mut failed = Vec::new();
@@ -281,17 +346,27 @@ pub(crate) fn plan_update(
     }
 
     if let (Some(version), Some((id, expected))) = (lock, expected_version) {
-        let resource_name = resource.name;
-        update.conditions.push(AtomicCondition::failing_with(
-            AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
-            move || Error::StaleRecord { resource: resource_name, id },
-        ));
+        if can_raise {
+            let resource_name = resource.name;
+            update.conditions.push(AtomicCondition::failing_with(
+                AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
+                move || Error::StaleRecord { resource: resource_name, id },
+            ));
+        } else {
+            guards.version = Some((version, expected));
+        }
+    }
+
+    // A data layer that can't raise in its statement can't check what fails there, as
+    // Ash's validations aren't atomic on a data layer without `expr_error`.
+    if !can_raise && !update.conditions.is_empty() {
+        return Ok(Err("its validations or policies check the stored record, which the data layer can't raise errors from in its statement".into()));
     }
 
     if hard_destroy {
         // Nothing to set: the conditions decide whether it deletes.
         update.set.clear();
-        return Ok(Ok(AtomicPlan { update, after_actions, after_transactions }));
+        return Ok(Ok(AtomicPlan { update, guards, after_actions, after_transactions }));
     }
 
     if let Some(version) = lock {
@@ -326,7 +401,7 @@ pub(crate) fn plan_update(
         update.set(pk, AtomicExpr::field(pk));
     }
 
-    Ok(Ok(AtomicPlan { update, after_actions, after_transactions }))
+    Ok(Ok(AtomicPlan { update, guards, after_actions, after_transactions }))
 }
 
 /// When a built-in validation of a value the statement computes fails, as Ash's

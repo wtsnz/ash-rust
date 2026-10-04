@@ -32,7 +32,7 @@ Each entry is a gap, what the desk does about it for now, and its status.
 | 25 | RPC can't select fields within an embedded resource, typed map or union: they come back whole. | — | fixed: an embedded resource attribute knows its resource (`AttrType::Embedded`), and ash-rust gains typed maps (`#[derive(AshTypedMap)]`, `AttrType::TypedMap`, as Ash's `:map` with `fields`) and unions (`#[derive(AshUnion)]`, `AttrType::Union`, held as `{type, value}`). RPC selects within each as AshTypescript does: what they hold must be selected, comes back alone in camelCase, a union as `{member: value}` (null when its member isn't selected), with AshTypescript's errors |
 | 26 | A float inside a map comes back as text: `Value` has no float. | — | fixed: `Value::Float` |
 | 27 | Primary keys are UUIDs only. | — | open |
-| 28 | ash-rust's SQLite runs no update as one statement: it reads the record first, so concurrent updates of it can lose one another's changes. AshSqlite runs atomic updates. | — | open |
+| 28 | ash-rust's SQLite runs no update as one statement: it reads the record first, so concurrent updates of it can lose one another's changes. AshSqlite runs atomic updates. | — | fixed: SQLite updates atomically, as AshSqlite does (`update_query` without `expr_error`): one statement where nothing must raise from the stored record, the lock version and write policies checked as filters (as Ash's `optimistic_lock` and `authorize_with: :filter`), otherwise not atomically, which `require_atomic` refuses |
 
 ## What the twin found in Ash's packages
 

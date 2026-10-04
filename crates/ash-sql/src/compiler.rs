@@ -1604,7 +1604,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if !update.conditions.is_empty() {
             sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
         }
-        sql.push_str(" RETURNING __ash_t.*");
+        sql.push_str(" RETURNING ");
+        sql.push_str(self.dialect.returning_updated());
         if let Some(err) = self.invalid_param.take() {
             return Err(err);
         }
@@ -1694,7 +1695,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let p = self.push_param(Value::Int(limit as i64));
             subquery.push_str(&format!(" LIMIT {p}"));
         }
-        subquery.push_str(" FOR UPDATE");
+        subquery.push_str(self.dialect.lock_clause());
         Ok(subquery)
     }
 

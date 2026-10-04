@@ -171,6 +171,17 @@ pub trait SqlDialect: Send + Sync + 'static {
         None
     }
 
+    /// How an atomic statement's subquery locks the records it selects: Postgres's
+    /// `FOR UPDATE`. SQLite, whose single writer serializes updates, has none.
+    fn lock_clause(&self) -> &'static str {
+        " FOR UPDATE"
+    }
+
+    /// What an atomic update returns of the table it updates, aliased `__ash_t`.
+    fn returning_updated(&self) -> &'static str {
+        "__ash_t.*"
+    }
+
     /// Functions the data layer's statements call, created with the tables: on
     /// Postgres, the `ash_raise_error` an atomic update raises its errors through.
     fn database_functions(&self) -> &'static [&'static str] {
@@ -221,6 +232,15 @@ pub enum AggregateStrategy {
 pub struct SqliteDialect;
 
 impl SqlDialect for SqliteDialect {
+    fn lock_clause(&self) -> &'static str {
+        ""
+    }
+
+    // SQLite's RETURNING names only the updated table's columns, unqualified.
+    fn returning_updated(&self) -> &'static str {
+        "*"
+    }
+
     // A list is JSON text: one of its items equals the value.
     fn has_param(&self, value: ash_core::Value) -> ash_core::Value {
         value

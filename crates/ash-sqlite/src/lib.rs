@@ -11,7 +11,7 @@ use ash_core::{
     TransactionSupport, Value,
 };
 use ash_sql::{
-    CompiledSql, MigrationExecutor, Migrator, SqlParam, SqliteDialect, persistable_resources,
+    CompiledSql, MigrationExecutor, Migrator, QueryCompiler, SqlParam, SqliteDialect, persistable_resources,
 };
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteQueryResult,
@@ -114,6 +114,21 @@ impl Sqlite {
                     .execute(&mut **guard)
                     .await
                     .map_err(|e| map_sqlx_resource(e, resource))
+            }
+        }
+    }
+
+    /// [`Self::fetch_all`], a constraint violation reported against `resource`.
+    async fn fetch_all_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Vec<SqliteRow>> {
+        match &self.source {
+            SqliteSource::Pool(pool) => {
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.fetch_all(pool).await.map_err(|e| map_sqlx_resource(e, resource))
+            }
+            SqliteSource::Tx(conn) => {
+                let mut guard = conn.lock().await;
+                let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
+                query.fetch_all(&mut **guard).await.map_err(|e| map_sqlx_resource(e, resource))
             }
         }
     }
@@ -500,6 +515,34 @@ impl DataLayer for Sqlite {
         rows.iter()
             .map(|row| sql::read_row(row, resource, query, &query.calculations, &query.aggregates))
             .collect()
+    }
+
+    fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    /// SQLite can't raise an error from within a statement, as AshSqlite can't
+    /// `expr_error`: an update runs as one statement only when nothing in it must fail.
+    fn can_raise_atomically(&self, _resource: &ResourceDef) -> bool {
+        false
+    }
+
+    /// The update as one statement (see [`ash_sql::QueryCompiler::compile_atomic_update`]),
+    /// which SQLite runs under its single writer, so concurrent updates lose nothing.
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &ash_core::AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
+        if !update.conditions.is_empty() {
+            return Err(Error::Invalid(format!("SQLite can't check an update of {}'s conditions in its statement", resource.name)));
+        }
+        let mut compiler = QueryCompiler::new(&SqliteDialect);
+        let compiled = compiler.compile_atomic_update(resource, query, update)?;
+        let rows = self.fetch_all_resource(&compiled, resource).await?;
+        rows.iter().map(|row| sql::row_to_fields(row, resource, &[], &[])).collect()
     }
 
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {

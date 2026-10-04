@@ -56,8 +56,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert_eq!(capped.views, 10);
 
     // From the record as stored, so concurrent updates each count, where the data layer
-    // runs the update as one statement. (One that reads the record first, as ash-rust's
-    // SQLite does, can't promise that.)
+    // runs the update as one statement (one that reads the record first can't promise it).
     if !ctx.data.can_update_atomically(&Tally::DEF) {
         return;
     }

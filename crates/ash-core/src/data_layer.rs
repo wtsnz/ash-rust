@@ -137,6 +137,13 @@ pub trait DataLayer: Send + Sync {
         false
     }
 
+    /// Whether this data layer raises a condition's error within an atomic statement, as
+    /// Ash's data layers that can `expr_error`. One that updates atomically but can't (as
+    /// AshSqlite) runs an update atomically only when nothing in it must raise.
+    fn can_raise_atomically(&self, resource: &ResourceDef) -> bool {
+        self.can_update_atomically(resource)
+    }
+
     /// Updates the records `query` selects as `update` says, in one statement: checks
     /// each record against the update's conditions, in order, failing with the first
     /// that holds, then sets the update's values, every one computed from the record as

@@ -52,6 +52,8 @@ pub trait DynDataLayer: Send + Sync {
 
     fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool;
 
+    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+
     fn update_atomic_dyn<'a>(
         &'a self,
         resource: &'a ResourceDef,
@@ -158,6 +160,10 @@ impl<T: DataLayer> DynDataLayer for T {
 
     fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool {
         self.can_update_atomically(resource)
+    }
+
+    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_raise_atomically(resource)
     }
 
     fn update_atomic_dyn<'a>(
@@ -416,6 +422,10 @@ impl DataLayer for StoreRegistry {
 
     fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
         self.get_layer(resource).is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
+    }
+
+    fn can_raise_atomically(&self, resource: &ResourceDef) -> bool {
+        self.get_layer(resource).is_ok_and(|layer| layer.can_raise_atomically_dyn(resource))
     }
 
     async fn update_atomic(

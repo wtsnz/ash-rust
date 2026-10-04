@@ -179,6 +179,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
                     arguments: &arguments,
                     expected_version: expected_version.map(|version| (id, version)),
                     collect_hooks: true,
+                    can_raise: ctx.data.can_raise_atomically(resource),
                 },
             )?;
             Ok((plan, arguments))
@@ -323,6 +324,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
                     arguments: &arguments,
                     expected_version: expected_version.map(|version| (id, version)),
                     collect_hooks: true,
+                    can_raise: ctx.data.can_raise_atomically(resource),
                 },
             )?;
             Ok((plan, arguments))
