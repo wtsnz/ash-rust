@@ -644,7 +644,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             ActionKind::Update => {
                 let id = self.identity(&ctx, rpc, request.get("identity")).await?;
                 // Not found before it runs, or failing as it runs, for its one record.
-                let stored = ash_core::update_dynamic_via(&ctx, resource, rpc.read, action, id, input, None)
+                let stored = ash_core::update_dynamic_via(&ctx, resource, rpc.read, action, id, input)
                     .await
                     .map_err(|e| match e {
                         Error::NotFound => self.failure(e),
@@ -665,7 +665,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 };
                 // What it selects of the record, read before it goes.
                 let loaded = self.loads_of(&ctx, resource, id.clone(), &selection).await?;
-                match ash_core::destroy_dynamic_via(&ctx, resource, rpc.read, action, id, input, None).await {
+                match ash_core::destroy_dynamic_via(&ctx, resource, rpc.read, action, id, input).await {
                     Err(Error::NotFound) => Ok(nothing().into()),
                     Err(e) => Err(self.failure_of(action, e)),
                     Ok(mut stored) => {

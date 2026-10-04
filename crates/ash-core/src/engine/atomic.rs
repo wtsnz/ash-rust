@@ -211,7 +211,12 @@ pub(crate) fn plan_update(
     }
     let PlanInput { actor, tenant, mut sets, arguments, expected_version, collect_hooks, can_raise } = input;
     let mut guards = Guards::default();
-    let lock = resource.optimistic_lock_attribute();
+    let lock = action.optimistic_lock();
+    // The lock checks the version the record had when it was read: an update by id
+    // hasn't read it, so reads it first, as Ash's optimistic lock can't run over a query.
+    if lock.is_some() && expected_version.is_none() {
+        return Ok(Err("its optimistic lock checks the version the record was read at".into()));
+    }
     let updated_at = resource.timestamps.map(|(_, updated_at)| updated_at);
     // The lock version and `updated_at` are the plan's to set, from the stored record.
     sets.retain(|name, _| Some(name.as_str()) != lock && Some(name.as_str()) != updated_at);
@@ -226,6 +231,8 @@ pub(crate) fn plan_update(
 
     for change in action.changes {
         match change {
+            // The lock version moves below, after the conditions.
+            Change::OptimisticLock { .. } => {}
             Change::SetAttribute { field, value } => update.set(*field, AtomicExpr::value(Value::from(*value))),
             Change::SetAttributeFn { field, value } => update.set(*field, AtomicExpr::Value(value())),
             Change::SetNewAttribute { field, value } => {

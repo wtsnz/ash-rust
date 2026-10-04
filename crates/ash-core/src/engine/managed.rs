@@ -150,15 +150,16 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
     if !cascade.enter(resource, id.clone()) {
         return Ok(existing_fields.clone());
     }
+    let guard = super::lock::lock_guard(action, existing_fields);
     if action.soft {
-        let changes = soft_destroy_changes(resource, existing_fields, fields);
-        let stored = ctx.data.update(resource, ctx.tenant.as_deref(), id.clone(), changes).await?;
+        let changes = soft_destroy_changes(resource, action, existing_fields, fields);
+        let stored = super::lock::update_guarded(ctx, resource, id.clone(), changes, guard).await?;
         cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
         return Ok(stored);
     }
     cascade_destroy_related(ctx, resource, action, id.clone(), existing_fields, cascade).await?;
     cascade_deletes(ctx, resource, id.clone(), existing_fields, cascade).await?;
-    ctx.data.destroy(resource, ctx.tenant.as_deref(), id).await?;
+    super::lock::destroy_guarded(ctx, resource, id, guard).await?;
     Ok(existing_fields.clone())
 }
 
@@ -167,6 +168,7 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
 /// fields the actor was not allowed to read.
 fn soft_destroy_changes(
     resource: &ResourceDef,
+    action: &ActionDef,
     existing_fields: &FieldMap,
     fields: FieldMap,
 ) -> FieldMap {
@@ -174,7 +176,7 @@ fn soft_destroy_changes(
         .into_iter()
         .filter(|(name, value)| existing_fields.get(name) != Some(value))
         .collect();
-    crate::pipeline::prepare_update_fields(resource, existing_fields, &mut changes);
+    crate::pipeline::prepare_update_fields(resource, action, existing_fields, &mut changes);
     changes
 }
 

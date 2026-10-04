@@ -35,7 +35,7 @@ is the org's slug, and reads, writes and identities are scoped to it.
 | `assign` | update | accepts `assignee_id` |
 | `start`, `hold`, `resolve`, `reopen`, `close` | update | the status machine: `new` → `open` → `pending`/`resolved` → `closed`, `resolved` → `open`; `reopen` also adds one to `reopen_count`, atomically |
 | `view` | update | adds one to `view_count`, atomically |
-| `edit` | update | accepts `subject`, `priority`, under the `version` optimistic lock |
+| `edit` | update | accepts `subject`, `priority`, under the `version` optimistic lock (as is every update) |
 | `route` | generic | in one transaction: opens a ticket with its comments, assigns it to the active agent or admin with the fewest open tickets (then by name), and records an `AuditEvent`; returns the ticket's id |
 | `destroy` | destroy | primary |
 

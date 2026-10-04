@@ -39,7 +39,7 @@ resource! {
             reservation_id: Option<Uuid>;
             departed_at: Option<UtcDateTime>;
             arrived_at: Option<UtcDateTime>;
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         checks {
@@ -92,26 +92,29 @@ resource! {
             }
 
             update hold_berth {
+                change optimistic_lock(version);
                 accept [reservation_id];
             }
 
             // Each transition checks the stored status. SQLite can't raise that from within
             // an update statement, as AshSqlite can't, so there these read the voyage first;
             // elsewhere they still run as one statement.
-            update clear_customs { require_atomic false; }
+            update clear_customs { change optimistic_lock(version); require_atomic false; }
 
             update launch {
+                change optimistic_lock(version);
                 accept [departed_at];
                 require_atomic false;
             }
 
             update arrive {
+                change optimistic_lock(version);
                 accept [arrived_at];
                 require_atomic false;
             }
 
-            update complete { require_atomic false; }
-            update scrub { require_atomic false; }
+            update complete { change optimistic_lock(version); require_atomic false; }
+            update scrub { change optimistic_lock(version); require_atomic false; }
 
             destroy discard {
                 primary;

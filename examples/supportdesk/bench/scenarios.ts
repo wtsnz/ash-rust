@@ -272,7 +272,7 @@ export const scenarios: Scenario[] = [
     name: "route",
     tier: "write",
     rate: 20,
-    what: "the route generic action: in one transaction, open a ticket, assign it to the least-loaded agent, and record an audit event. (Without comments: AshGraphql takes a map argument as `JsonString`, ash-graphql as `Json`; see GAPS.md)",
+    what: "the route generic action: in one transaction, open a ticket with a comment, assign it to the least-loaded agent, and record an audit event. (Over GraphQL the comment goes as JSON text, as AshGraphql takes a map; ash-graphql takes that or an object)",
     ops: {
       rpc: async (base, r, w) => {
         const routed: any = await routeTicket({
@@ -282,6 +282,7 @@ export const scenarios: Scenario[] = [
             body: "Since Monday",
             priority: 1 + Math.floor(r.next() * 4),
             requesterEmail: "sam@example.com",
+            comments: [{ body: "Tried a reset" }],
           },
         });
         return { ok: routed.success, body: routed.success ? "routed" : routed.errors };
@@ -292,6 +293,7 @@ export const scenarios: Scenario[] = [
           body: "Since Monday",
           priority: 1 + Math.floor(r.next() * 4),
           requesterEmail: "sam@example.com",
+          comments: [JSON.stringify({ body: "Tried a reset" })],
         };
         const body = await graphql(base, writer(w, r), "mutation R($input: RouteTicketInput!) { routeTicket(input: $input) }", { input });
         return { ok: !gqlFailed(body), body: body.errors ?? "routed" };
@@ -302,7 +304,7 @@ export const scenarios: Scenario[] = [
     name: "counters",
     tier: "write",
     rate: 100,
-    what: "view one of ten hot tickets: an atomic increment under contention (checked after: every acknowledged view counted). The Elixir desk's `optimistic_lock` makes Ash read each ticket first and update it at the version read, so a view can lose a race (`not_found`); ash-rust updates in one statement (see GAPS.md)",
+    what: "view one of ten hot tickets: an atomic increment under contention, under the ticket's optimistic lock (checked after: every acknowledged view counted). Each view reads the ticket and writes at the version it read, so one can lose a race, as not found, on either desk",
     ops: {
       rpc: async (base, r, w) => {
         const id = hot(w)[Math.floor(r.next() * 10)];

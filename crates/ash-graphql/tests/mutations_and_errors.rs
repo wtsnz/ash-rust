@@ -21,10 +21,13 @@ static TICKET_ATTRS: &[AttributeDef] = &[
         primary_key: false,
         allow_nil: false,
         generated: false,
-        version: true,
-        default_fn: None,
+        default_fn: Some(first_version),
     },
 ];
+
+fn first_version() -> ash_core::Value {
+    ash_core::Value::Int(1)
+}
 
 static CLOSE_ARGS: &[ArgumentDef] = &[ArgumentDef::optional("reason", AttrType::String)];
 
@@ -32,7 +35,8 @@ static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("create").accept(&["title"]),
     ActionDef::update("close")
         .accept(&["status"])
-        .arguments(CLOSE_ARGS),
+        .arguments(CLOSE_ARGS)
+        .changes(&[ash_core::Change::OptimisticLock { field: "version" }]),
     ActionDef::destroy("destroy"),
 ];
 
@@ -116,8 +120,7 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
         mutation {{
             closeTicket(id: "{ticket_id}", input: {{
                 status: CLOSED,
-                reason: "All tests passing",
-                version: 1
+                reason: "All tests passing"
             }}) {{
                 errors {{
                     code
@@ -141,39 +144,17 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     assert_eq!(update_payload["result"]["status"], "CLOSED");
     assert_eq!(update_payload["result"]["version"], 2);
 
-    // 4. Stale record failure: sending version: 1 when version is now 2
-    let stale_update = format!(
-        r#"
-        mutation {{
-            closeTicket(id: "{ticket_id}", input: {{
-                status: OPEN,
-                version: 1
-            }}) {{
-                errors {{
-                    code
-                    fields
-                }}
-                result {{
-                    id
-                }}
-            }}
-        }}
-    "#
-    );
-    let res = schema.execute(Request::new(stale_update).data(ctx.clone())).await;
-    assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
-    let val = res.data.into_json().unwrap();
-    let stale_payload = &val["closeTicket"];
-    assert!(stale_payload["result"].is_null());
-    let errors = stale_payload["errors"].as_array().unwrap();
-    assert_eq!(errors[0]["code"], "stale_record");
-    assert_eq!(errors[0]["fields"], serde_json::json!(["version"]));
+    // 4. The lock checks the version the record was read at, as AshGraphql's does: a
+    // client sends no version of its own.
+    let sdl = schema.sdl();
+    let input = sdl.split("input CloseTicketInput {").nth(1).and_then(|rest| rest.split('}').next()).unwrap();
+    assert!(!input.contains("version"), "{input}");
 
     // 5. Destroy ticket mutation
     let destroy_mutation = format!(
         r#"
         mutation {{
-            destroyTicket(id: "{ticket_id}", input: {{ version: 2 }}) {{
+            destroyTicket(id: "{ticket_id}") {{
                 errors {{
                     code
                 }}

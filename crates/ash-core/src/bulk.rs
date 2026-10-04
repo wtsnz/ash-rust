@@ -367,6 +367,9 @@ async fn finish_rows<D: DataLayer>(
             Err(err) => Err(err),
         };
         match outcome {
+            // A record changed since it was read is left out, as Ash's bulk actions leave
+            // a stale record out; it doesn't undo the batch.
+            Err(Error::StaleRecord { .. }) => outcomes.push(outcome),
             Err(err) if transactional => return Err(err),
             outcome => outcomes.push(outcome),
         }
@@ -409,6 +412,7 @@ fn settle<R: Resource>(
                 }
                 result.count += 1;
             }
+            Err(Error::StaleRecord { .. }) => {}
             Err(err) => result.fail(err, scope.stop_on_error)?,
         }
     }
@@ -624,7 +628,20 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         Err(err) => existing.push(Err(err)),
                     }
                 }
-                ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?;
+                match action_def.optimistic_lock() {
+                    // Each record as it was read, under the action's lock.
+                    Some(_) => {
+                        for row in existing.iter_mut() {
+                            let Ok(fields) = row else { continue };
+                            let id = crate::pipeline::pk_name(&R::DEF).and_then(|pk| crate::value::required_pk(fields, pk))?;
+                            let guard = crate::engine::lock_guard(action_def, fields);
+                            if let Err(err) = crate::engine::destroy_guarded(&ctx, &R::DEF, id, guard).await {
+                                *row = Err(err);
+                            }
+                        }
+                    }
+                    None => ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?,
+                }
                 finish_rows(&ctx, batch, existing, notify, scope.transactional()).await
             })
             .await;
@@ -695,14 +712,28 @@ where
         while rows.peek().is_some() {
             let (mut batch, hooks) = split(rows.by_ref().take(chunk_size).collect());
             let outcomes = in_batch(&ctx, scope, move |ctx| async move {
-                let writes = batch
+                let writes: Vec<(Value, FieldMap)> = batch
                     .iter_mut()
                     .map(|(id, changeset)| {
                         let fields = changeset.take_fields();
                         (id.clone(), changeset.changes(fields))
                     })
                     .collect();
-                let stored = ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?;
+                let stored = match action_def.optimistic_lock() {
+                    // Each record as it was read, under the action's lock.
+                    Some(_) => {
+                        let guards: Vec<_> = batch
+                            .iter()
+                            .map(|(_, changeset)| changeset.existing().and_then(|existing| crate::engine::lock_guard(action_def, existing)))
+                            .collect();
+                        let mut stored = Vec::with_capacity(writes.len());
+                        for ((id, changes), guard) in writes.into_iter().zip(guards) {
+                            stored.push(crate::engine::update_guarded(&ctx, &R::DEF, id, changes, guard).await);
+                        }
+                        stored
+                    }
+                    None => ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?,
+                };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await
             })
             .await;

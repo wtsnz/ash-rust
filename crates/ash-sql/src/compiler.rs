@@ -1840,15 +1840,6 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         );
         sql.push_str(&self.tenant_condition(resource, None)?);
 
-        if let Some(v_attr) = resource.optimistic_lock_attribute()
-            && let Some(Value::Int(new_v)) = fields.get(v_attr)
-        {
-            let expected_v = new_v - 1;
-            let v_col = ident(self.dialect, v_attr)?;
-            let v_param = self.push_param(Value::Int(expected_v));
-            sql.push_str(&format!(" AND {v_col} = {v_param}"));
-        }
-
         if self.dialect.supports_returning() {
             sql.push_str(" RETURNING *");
         }

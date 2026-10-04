@@ -471,28 +471,7 @@ impl DataLayer for Sqlite {
         let qb = sql::update_query(resource, tenant, id.clone(), &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
-            if resource.optimistic_lock_attribute().is_some() {
-                let pk = resource
-                    .primary_key()
-                    .ok_or(Error::NoPrimaryKey(resource.name))?;
-                let check_sql = format!(
-                    "SELECT 1 FROM \"{}\" WHERE \"{}\" = ?",
-                    resource.table_name(),
-                    pk.name
-                );
-                let check_compiled =
-                    CompiledSql::new(check_sql, vec![SqlParam::new(id.clone())]);
-                if self.fetch_all(&check_compiled).await?.is_empty() {
-                    return Err(Error::NotFound);
-                } else {
-                    return Err(Error::StaleRecord {
-                        resource: resource.name,
-                        id,
-                    });
-                }
-            } else {
-                return Err(Error::NotFound);
-            }
+            return Err(Error::NotFound);
         }
 
         let pk = resource

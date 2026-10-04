@@ -425,6 +425,14 @@ impl Pagination {
 }
 
 impl ActionDef {
+    /// The attribute the action's optimistic lock checks, if it has one.
+    pub fn optimistic_lock(&self) -> Option<&'static str> {
+        self.changes.iter().find_map(|change| match change {
+            Change::OptimisticLock { field } => Some(*field),
+            _ => None,
+        })
+    }
+
     pub const fn create(name: &'static str) -> Self {
         Self {
             name,
@@ -671,6 +679,12 @@ pub enum Change {
         field: &'static str,
         expr: &'static crate::expr::Expr,
     },
+    /// Ash's `optimistic_lock(:field)`: the action writes only if `field` still holds the
+    /// value it had when the record was read, else [`crate::Error::StaleRecord`], and
+    /// adds one to it.
+    OptimisticLock {
+        field: &'static str,
+    },
     BeforeAction(BeforeActionFn),
     AfterAction(AfterActionFn),
     AfterTransaction(AfterTransactionFn),
@@ -740,6 +754,7 @@ impl std::fmt::Debug for Change {
             Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
             Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
             Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),
+            Self::OptimisticLock { field } => f.debug_struct("OptimisticLock").field("field", field).finish(),
             Self::Custom(_) => write!(f, "Custom(<dyn CustomChange>)"),
             Self::Func(_) => write!(f, "Func(<fn>)"),
         }

@@ -33,7 +33,7 @@ resource! {
             freight_credits: i64;
             insured_value: Decimal;
             deliver_by: Date;
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         identities {
@@ -95,11 +95,11 @@ resource! {
             // Each transition checks the stored status. SQLite can't raise that from within
             // an update statement, as AshSqlite can't, so there these read the record first;
             // elsewhere they still run as one statement.
-            update load { require_atomic false; }
-            update dispatch { require_atomic false; }
-            update deliver { require_atomic false; }
-            update close { require_atomic false; }
-            update cancel { require_atomic false; }
+            update load { change optimistic_lock(version); require_atomic false; }
+            update dispatch { change optimistic_lock(version); require_atomic false; }
+            update deliver { change optimistic_lock(version); require_atomic false; }
+            update close { change optimistic_lock(version); require_atomic false; }
+            update cancel { change optimistic_lock(version); require_atomic false; }
         }
 
         policies {

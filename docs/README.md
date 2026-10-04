@@ -32,7 +32,7 @@
 4. **[Advanced Capabilities](features.md)**
    - **Ash.Multi & Atomic Transactions**: Multi-step pipelines with rollback
    - **State Machines**: Declarative lifecycles with `#[state_machine]`
-   - **Optimistic Locking**: Concurrency control via `[version]`
+   - **Optimistic Locking**: Concurrency control via `change optimistic_lock(version);` on an action
    - **Pagination**: Offset and keyset cursor-based pagination with `Page<T>`
    - **Authorization & Policies**: Actor checks, field-level policies, and data redaction
 
@@ -84,7 +84,7 @@ resource! {
             id: Uuid [pk];
             title: String;
             views: i64;
-            version: i64 [version]; // Optimistic concurrency control
+            version: i64 [default: 1]; // Optimistic concurrency control
         }
 
         actions {
@@ -100,6 +100,8 @@ resource! {
 
             update increment_views {
                 argument by: i64;
+                // Writes only at the version the post was read at
+                change optimistic_lock(version);
                 // Increments view count safely
                 change custom(&MyIncrementChange);
             }

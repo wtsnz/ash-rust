@@ -386,10 +386,25 @@ async fn test_postgres_self_referential_aggregate() {
     let _ = pg.execute_sql("DROP TABLE IF EXISTS nodes;").await;
 }
 
+fn first_version() -> Value {
+    Value::Int(1)
+}
+
 static DOCUMENT_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("title", AttrType::String),
-    AttributeDef::version("version"),
+    AttributeDef {
+        default_fn: Some(first_version),
+        ..AttributeDef::required("version", AttrType::Integer)
+    },
+];
+
+static DOCUMENT_ACTIONS: &[ash_core::ActionDef] = &[
+    ash_core::ActionDef::create("create").accept(&["title"]),
+    ash_core::ActionDef::read("read").primary(),
+    ash_core::ActionDef::update("retitle")
+        .accept(&["title"])
+        .changes(&[ash_core::Change::OptimisticLock { field: "version" }]),
 ];
 
 static DOCUMENT_DEF: ResourceDef = ResourceDef {
@@ -397,7 +412,7 @@ static DOCUMENT_DEF: ResourceDef = ResourceDef {
     table: "documents",
     attributes: DOCUMENT_ATTRS,
     relationships: &[],
-    actions: &[],
+    actions: DOCUMENT_ACTIONS,
     policies: &[],
     field_policies: &[],
     calculations: &[],
@@ -416,41 +431,42 @@ static DOCUMENT_DEF: ResourceDef = ResourceDef {
     multitenancy: None,
 };
 
+/// An action's optimistic lock in Postgres: the write lands only at the version it read.
 #[tokio::test]
 async fn test_postgres_optimistic_locking_stale_record() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
     let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
-    pg.execute_sql("CREATE TABLE documents (id UUID PRIMARY KEY, title TEXT NOT NULL, version BIGINT NOT NULL);")
+    pg.install(&[&DOCUMENT_DEF]).await.unwrap();
+    let ctx = ash_core::Context::new(pg.clone());
+    let action = |name: &str| DOCUMENT_DEF.action(name).unwrap();
+    let title = |text: &str| ash_core::FieldMap::from([("title".to_string(), Value::from(text))]);
+
+    let created = ash_core::create_dynamic(&ctx, &DOCUMENT_DEF, action("create"), title("Version 1")).await.unwrap();
+    assert_eq!(created.get("version"), Some(&Value::Int(1)));
+
+    // From the record as read: written, and the version moves on.
+    let retitled = ash_core::update_existing_dynamic(&ctx, &DOCUMENT_DEF, action("retitle"), created.clone(), title("Version 2"))
         .await
         .unwrap();
+    assert_eq!(retitled.get("version"), Some(&Value::Int(2)));
 
-    let id = Uuid::new_v4();
-    let mut fields = ash_core::FieldMap::new();
-    fields.insert("id".into(), Value::Uuid(id));
-    fields.insert("title".into(), Value::String("Version 1".into()));
-    fields.insert("version".into(), Value::Int(1));
-    pg.create(&DOCUMENT_DEF, None, Value::from(id), fields).await.unwrap();
+    // From the record as it was before that: stale.
+    let err = ash_core::update_existing_dynamic(&ctx, &DOCUMENT_DEF, action("retitle"), created, title("Version 3"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ash_core::Error::StaleRecord { .. }), "{err:?}");
 
-    // Successful update: version moves from 1 to 2
-    let mut update_fields = ash_core::FieldMap::new();
-    update_fields.insert("title".into(), Value::String("Version 2".into()));
-    update_fields.insert("version".into(), Value::Int(2));
-    let res = pg.update(&DOCUMENT_DEF, None, Value::from(id), update_fields.clone()).await.unwrap();
-    assert_eq!(res.get("version"), Some(&Value::Int(2)));
-
-    // Second update with version = 2 (expected 1): fails because current DB version is 2!
-    let err = pg.update(&DOCUMENT_DEF, None, Value::from(id), update_fields).await.unwrap_err();
-    assert!(matches!(err, ash_core::Error::StaleRecord { .. }));
-
-    // Non-existent ID: returns NotFound
-    let missing_id = Uuid::new_v4();
-    let mut missing_fields = ash_core::FieldMap::new();
-    missing_fields.insert("title".into(), Value::String("Ghost".into()));
-    missing_fields.insert("version".into(), Value::Int(2));
-    let err_missing = pg.update(&DOCUMENT_DEF, None, Value::from(missing_id), missing_fields).await.unwrap_err();
-    assert!(matches!(err_missing, ash_core::Error::NotFound));
+    // By id, read first; one that isn't there isn't found.
+    let by_id = ash_core::update_dynamic(&ctx, &DOCUMENT_DEF, action("retitle"), retitled.get("id").cloned().unwrap(), title("Version 3"))
+        .await
+        .unwrap();
+    assert_eq!(by_id.get("version"), Some(&Value::Int(3)));
+    let missing = ash_core::update_dynamic(&ctx, &DOCUMENT_DEF, action("retitle"), Uuid::new_v4(), title("Ghost"))
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, ash_core::Error::NotFound), "{missing:?}");
 
     let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
 }

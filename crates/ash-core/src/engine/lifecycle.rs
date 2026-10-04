@@ -127,24 +127,24 @@ async fn destroy_dynamic_input<D: DataLayer>(
         .await
 }
 
-/// A destroy through `action` of the record `id` as the context reads it, which must
-/// still have lock version `expected_version` if given, else [`Error::StaleRecord`]. As
-/// AshGraphql's destroy runs a bulk destroy over the record's query, it runs as one
-/// statement when the data layer can and the action allows, with no read first: a hard
-/// destroy as a delete, its validations, policies and the version checked in it; a soft
-/// destroy as an update (failing when it must be atomic and can't be). Otherwise it reads
-/// the record and destroys that. Either way the read action's policies decide which
-/// records it finds, as [`update_dynamic_expecting`]'s do. Returns the record as it was
-/// deleted, or as a soft destroy stored it.
+/// A destroy through `action` of the record `id` as the context reads it. As AshGraphql's
+/// destroy runs a bulk destroy over the record's query, it runs as one statement when the
+/// data layer can and the action allows, with no read first: a hard destroy as a delete,
+/// its validations and policies checked in it; a soft destroy as an update (failing when
+/// it must be atomic and can't be). Otherwise, and always for an action with an
+/// optimistic lock, which checks the version it read, it reads the record and destroys
+/// that: one that changed in between isn't found, as Ash's bulk destroy drops it. Either
+/// way the read action's policies decide which records it finds, as
+/// [`update_dynamic_via`]'s do. Returns the record as it was deleted, or as a soft
+/// destroy stored it.
 pub async fn destroy_dynamic_by_id<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
     id: impl Into<Value>,
-    expected_version: Option<i64>,
 ) -> Result<FieldMap> {
     let id: Value = id.into();
-    destroy_dynamic_via(ctx, resource, None, action, id, FieldMap::new(), expected_version).await
+    destroy_dynamic_via(ctx, resource, None, action, id, FieldMap::new()).await
 }
 
 /// [`destroy_dynamic_by_id`] through the read `read` (by default the one `action`
@@ -158,7 +158,6 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
     action: &'static ActionDef,
     id: impl Into<Value>,
     input: FieldMap,
-    expected_version: Option<i64>,
 ) -> Result<FieldMap> {
     let id: Value = id.into();
     expect_kind(action, ActionKind::Destroy)?;
@@ -167,11 +166,8 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
         None => super::atomic::finding_read(resource, action)?,
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
-    let atomic = if action.soft {
-        ctx.data.can_update_atomically(resource)
-    } else {
-        ctx.data.can_destroy_atomically(resource)
-    };
+    let can = if action.soft { ctx.data.can_update_atomically(resource) } else { ctx.data.can_destroy_atomically(resource) };
+    let atomic = action.optimistic_lock().is_none() && can;
     if atomic {
         let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
             let plan = super::atomic::plan_update(
@@ -182,7 +178,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
                     tenant: ctx.tenant(),
                     sets: accepted,
                     arguments: &arguments,
-                    expected_version: expected_version.map(|version| (id.clone(), version)),
+                    expected_version: None,
                     collect_hooks: true,
                     can_raise: ctx.data.can_raise_atomically(resource),
                 },
@@ -205,13 +201,20 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
         }
     }
     let existing = read_visible(ctx, resource, id.clone(), scope).await?;
-    if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
-        && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
-    {
-        return Err(Error::StaleRecord { resource: resource.name, id });
-    }
     let cascade = super::managed::Cascade::new(true);
-    destroy_dynamic_input(ctx, resource, action, id, &existing, input, &cascade).await
+    destroy_dynamic_input(ctx, resource, action, id, &existing, input, &cascade)
+        .await
+        .map_err(changed_is_gone)
+}
+
+/// A write by id that found its record changed by the time it wrote, as an optimistic
+/// lock finds it: the record it meant isn't there, as Ash's bulk update and destroy drop
+/// a stale record and AshGraphql and AshTypescript answer it as not found.
+fn changed_is_gone(error: Error) -> Error {
+    match error {
+        Error::StaleRecord { .. } => Error::NotFound,
+        other => other,
+    }
 }
 
 /// A plan for an update or destroy by id, unless its policies forbid it whatever the
@@ -270,7 +273,13 @@ pub async fn create_dynamic<D: DataLayer>(
 }
 
 /// Runs an update through `action` of the record `id` as the context reads it, as a
-/// typed update would.
+/// typed update would. As in Ash, it runs as one statement when the data layer can and
+/// the action allows: the update by id, with its validations and policies checked in it,
+/// and no read first. Otherwise, and always for an action with an optimistic lock, which
+/// checks the version it read, it reads the record and updates that: one that changed in
+/// between isn't found, as Ash's bulk update drops it. Either way it finds the record as
+/// AshGraphql and AshTypescript do, through the read action, whose policies the actor
+/// must pass: one it can't read is [`Error::NotFound`].
 pub async fn update_dynamic<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
@@ -279,29 +288,10 @@ pub async fn update_dynamic<D: DataLayer>(
     input: FieldMap,
 ) -> Result<FieldMap> {
     let id: Value = id.into();
-    update_dynamic_expecting(ctx, resource, action, id, input, None).await
+    update_dynamic_via(ctx, resource, None, action, id, input).await
 }
 
-/// [`update_dynamic`] of a record that must still have lock version `expected_version`,
-/// else [`Error::StaleRecord`]. As in Ash, it runs as one statement when the data layer
-/// can and the action allows: the update by id, with its validations, policies and the
-/// version checked in it, and no read first. Otherwise it reads the record, as the
-/// context sees it, and updates that. Either way it finds the record as AshGraphql and
-/// AshTypescript do, through the read action, whose policies the actor must pass: one it
-/// can't read is [`Error::NotFound`].
-pub async fn update_dynamic_expecting<D: DataLayer>(
-    ctx: &Context<D>,
-    resource: &'static ResourceDef,
-    action: &'static ActionDef,
-    id: impl Into<Value>,
-    input: FieldMap,
-    expected_version: Option<i64>,
-) -> Result<FieldMap> {
-    let id: Value = id.into();
-    update_dynamic_via(ctx, resource, None, action, id, input, expected_version).await
-}
-
-/// [`update_dynamic_expecting`] through the read `read` (by default the one `action`
+/// [`update_dynamic`] through the read `read` (by default the one `action`
 /// upgrades with, else the primary read), which decides which records it finds, as an
 /// RPC action's `read_action` does.
 pub async fn update_dynamic_via<D: DataLayer>(
@@ -311,7 +301,6 @@ pub async fn update_dynamic_via<D: DataLayer>(
     action: &'static ActionDef,
     id: impl Into<Value>,
     input: FieldMap,
-    expected_version: Option<i64>,
 ) -> Result<FieldMap> {
     let id: Value = id.into();
     expect_kind(action, ActionKind::Update)?;
@@ -320,7 +309,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
         None => super::atomic::finding_read(resource, action)?,
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
-    if ctx.data.can_update_atomically(resource) {
+    if action.optimistic_lock().is_none() && ctx.data.can_update_atomically(resource) {
         let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
             let plan = super::atomic::plan_update(
                 resource,
@@ -330,7 +319,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
                     tenant: ctx.tenant(),
                     sets: accepted,
                     arguments: &arguments,
-                    expected_version: expected_version.map(|version| (id.clone(), version)),
+                    expected_version: None,
                     collect_hooks: true,
                     can_raise: ctx.data.can_raise_atomically(resource),
                 },
@@ -352,12 +341,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
         }
     }
     let existing = read_visible(ctx, resource, id.clone(), scope).await?;
-    if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
-        && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
-    {
-        return Err(Error::StaleRecord { resource: resource.name, id });
-    }
-    update_existing_dynamic(ctx, resource, action, existing, input).await
+    update_existing_dynamic(ctx, resource, action, existing, input).await.map_err(changed_is_gone)
 }
 
 /// [`update_dynamic`] of a record already read, as `ctx` sees it: no second read.
