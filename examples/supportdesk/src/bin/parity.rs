@@ -374,8 +374,8 @@ async fn main() -> ExitCode {
         ("a relationship without fields", &agent, json!({ "action": "list_tickets", "fields": ["id", "assignee"] })),
         ("filter by a hidden field", &viewer, json!({ "action": "list_tickets", "fields": ["id"], "filter": { "requesterEmail": { "eq": email } } })),
         // The agent sees the emails of the tickets assigned to it: those first, the rest as null.
-        ("sort by a field hidden on some", &agent, json!({ "action": "list_tickets", "fields": ["id", "requesterEmail"], "sort": "requesterEmail,id", "page": { "limit": 5 } })),
-        ("sort by a field hidden on some, descending", &agent, json!({ "action": "list_tickets", "fields": ["id", "requesterEmail"], "sort": "-requesterEmail,id", "page": { "limit": 5 } })),
+        ("sort by a field hidden on some", &agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "requesterEmail"], "sort": "requesterEmail,id", "page": { "limit": 5 } })),
+        ("sort by a field hidden on some, descending", &agent, json!({ "action": "list_tickets", "filter": { "insertedAt": { "lessThanOrEqual": seeded } }, "fields": ["id", "requesterEmail"], "sort": "-requesterEmail,id", "page": { "limit": 5 } })),
     ] {
         let r = desks[0].post("/rpc/run", who, body.clone()).await.1;
         let e = desks[1].post("/rpc/run", who, body).await.1;
