@@ -82,6 +82,7 @@ resource! {
 
             read read {
                 primary;
+                pagination keyset: true, offset: true, countable: true, required: false;
             }
 
             /// The heartbeat: where the cab is and how it's doing.

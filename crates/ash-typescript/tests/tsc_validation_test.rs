@@ -13,8 +13,10 @@ static USER_DEST: ResourceDef = ResourceDef {
         AttributeDef::required("email", AttrType::String),
     ],
     relationships: &[],
+    // A read that doesn't page: the client reads a plain list.
     actions: &[
         ActionDef::create("create").accept(&["name", "email"]),
+        ActionDef::read("read").primary(),
     ],
     policies: &[],
     field_policies: &[],
@@ -32,6 +34,15 @@ static USER_DEST: ResourceDef = ResourceDef {
     store_type_id: || std::any::TypeId::of::<()>(),
     store_name: "memory",
     multitenancy: None,
+};
+
+// A read that pages by offset only: the client reads offset pages.
+static LOG_DEF: ResourceDef = ResourceDef {
+    name: "Log",
+    table: "logs",
+    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("line", AttrType::String)],
+    actions: &[ActionDef::read("read").primary().pagination(ash_core::Pagination::offset())],
+    ..USER_DEST
 };
 
 static TICKET_ATTRS: &[AttributeDef] = &[
@@ -78,7 +89,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
 
 static DOMAIN: DomainDef = DomainDef {
     name: "Helpdesk",
-    resources: &[&TICKET_DEF, &USER_DEST],
+    resources: &[&TICKET_DEF, &USER_DEST, &LOG_DEF],
 };
 
 #[test]
@@ -95,6 +106,10 @@ fn test_typescript_syntax_validity_with_tsc() {
         .add_domain(&DOMAIN);
 
     let ts_code = generator.generate_consolidated().unwrap();
+    // Each list query read as it pages.
+    assert!(ts_code.contains("Promise<PaginatedResult<Ticket>>"));
+    assert!(ts_code.contains("Promise<OffsetPage<Log>>"));
+    assert!(ts_code.contains("listUsers(filter: $filter, sort: $sort) {"));
 
     let temp_dir = std::env::temp_dir().join(format!("ash_ts_test_{}", Uuid::new_v4().simple()));
     fs::create_dir_all(&temp_dir).unwrap();

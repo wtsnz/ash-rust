@@ -350,7 +350,13 @@ impl ResourceDef {
     /// resource that declares no read action, an implicit `read` without preparations,
     /// through which its read policies still apply.
     pub fn default_read(&self) -> &ActionDef {
-        static IMPLICIT_READ: ActionDef = ActionDef::read("read");
+        // As Ash's default read (`defaults [:read]`): paging by keyset or offset, when asked.
+        static IMPLICIT_READ: ActionDef = ActionDef::read("read").pagination(
+            crate::action::Pagination::keyset()
+                .and_offset()
+                .countable(crate::action::Countable::Yes)
+                .required(false),
+        );
         self.primary_read().unwrap_or(&IMPLICIT_READ)
     }
 

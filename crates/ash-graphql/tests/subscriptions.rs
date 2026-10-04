@@ -697,7 +697,7 @@ static BOARD_DEF: ResourceDef = ResourceDef {
     attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
     relationships: &[ash_core::RelationshipDef::has_many("cards", || &CARD_DEF, "board_id")],
     actions: &[
-        ActionDef::read("read").primary(),
+        ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
         ActionDef::create("create").accept(&["name"]),
         ActionDef::update("rename").accept(&["name"]),
     ],
@@ -719,7 +719,7 @@ static CARD_DEF: ResourceDef = ResourceDef {
         AttributeDef::required("board_id", AttrType::Uuid),
     ],
     relationships: &[ash_core::RelationshipDef::belongs_to("board", || &BOARD_DEF, "board_id")],
-    actions: &[ActionDef::read("read").primary(), ActionDef::create("create").accept(&["title", "board_id"])],
+    actions: &[ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)), ActionDef::create("create").accept(&["title", "board_id"])],
     ..TICKET_DEF
 };
 

@@ -31,6 +31,7 @@ mod ticket {
 
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
             }
         }
 

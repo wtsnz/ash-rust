@@ -131,7 +131,7 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
         // One of the author's posts, though they've written several.
         rel("one_post", RelKind::HasOne, || &POST_DEF, "id", "author_id"),
     ],
-    actions: &[ActionDef::read("read").primary()],
+    actions: &[ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false))],
     policies: &[],
     field_policies: &[],
     calculations: &[],
@@ -183,7 +183,7 @@ static POST_DEF: ResourceDef = ResourceDef {
         rel("comments", RelKind::HasMany, || &COMMENT_DEF, "id", "post_id"),
     ],
     actions: &[
-        ActionDef::read("read").primary(),
+        ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
         ActionDef::create("create").accept(&["title", "author_id"]),
         ActionDef::update("retitle").accept(&["title"]),
         ActionDef::destroy("destroy"),

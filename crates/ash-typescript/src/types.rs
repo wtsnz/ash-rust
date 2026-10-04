@@ -104,6 +104,18 @@ export interface PaginatedResult<T> {
   endKeyset?: string | null;
 }
 
+/** An offset page of records, as AshGraphql returns a read that pages by offset. */
+export interface OffsetPage<T> {
+  results: T[];
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  pageNumber?: number;
+  lastPage?: number;
+  limit?: number;
+}
+
 /** The operators AshGraphql filters a field by. */
 export interface AshFilter<T> {
   isNil?: boolean;

@@ -237,6 +237,7 @@ pub fn generate_from_snapshots(
                 &format!("{{ {sort_names} }}"),
                 "private readonly transport: AshTransport",
                 "",
+                crate::client::Paging::Keyset,
             ));
 
             // Client class

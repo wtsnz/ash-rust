@@ -48,6 +48,7 @@ resource! {
 
             read read {
                 primary;
+                pagination keyset: true, offset: true, countable: true, required: false;
             }
 
             /// The dispatcher's view of demand: how many wait, and the surge it calls for.

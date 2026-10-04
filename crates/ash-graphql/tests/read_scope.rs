@@ -50,7 +50,7 @@ resource! {
 
         actions {
             create create { primary; accept [name, notes]; }
-            read read { primary; }
+            read read { primary; pagination keyset: true, countable: true, required: false; }
         }
 
         policies {
@@ -96,6 +96,7 @@ resource! {
             create create { primary; accept [dock_id, code, closed]; }
             read read {
                 primary;
+                pagination keyset: true, countable: true, required: false;
                 prepare filter(closed == false);
             }
         }

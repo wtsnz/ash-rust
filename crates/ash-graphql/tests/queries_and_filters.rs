@@ -23,6 +23,7 @@ static TICKET_ATTRS: &[AttributeDef] = &[
 
 static TICKET_READ_ACTION: ActionDef = ActionDef::read("read")
     .primary()
+    .pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false))
     .arguments(&[ArgumentDef::optional("priority", AttrType::Integer)]);
 
 static TICKET_BY_STATUS_ACTION: ActionDef = ActionDef::read("by_status")

@@ -8,7 +8,7 @@ use crate::mutation::{
     build_action_mutation, register_action_input, register_action_payload,
 };
 use crate::object::{build_resource_object, collect_enums_for_resource};
-use crate::pagination::register_keyset_page;
+use crate::pagination::{PageStrategy, register_pages};
 use crate::query::{build_read_action_query, build_resource_queries};
 use crate::sort::{register_resource_sort_inputs, register_sort_order};
 use crate::subscription::{build_resource_subscriptions, register_subscription_results};
@@ -77,12 +77,16 @@ impl AshGraphQLBuilder {
     ) -> Result<Schema, SchemaError> {
         // Absinthe's root type names, as AshGraphql's schemas have them.
         let mut query = Object::new(ROOT_QUERY);
+        // The pages each resource's queries return.
+        let mut pages: Vec<(&str, PageStrategy)> = Vec::new();
         for res in &self.resources {
             let (get_field, list_field) = build_resource_queries::<D>(res);
             query = query.field(get_field).field(list_field);
+            pages.extend(PageStrategy::of(res.default_read()).map(|s| (res.name, s)));
             for action in res.actions {
                 if action.kind == ActionKind::Read && !action.primary && action.name != "read" {
                     query = query.field(build_read_action_query::<D>(action, res));
+                    pages.extend(PageStrategy::of(action).map(|s| (res.name, s)));
                 }
             }
         }
@@ -151,7 +155,9 @@ impl AshGraphQLBuilder {
         let mut enums = Vec::new();
         for res in &all_resources {
             builder = builder.register(build_resource_object::<D>(res));
-            builder = register_keyset_page(builder, res);
+            let strategies: Vec<PageStrategy> =
+                pages.iter().filter(|(name, _)| *name == res.name).map(|(_, s)| *s).collect();
+            builder = register_pages(builder, res, &strategies);
             builder = register_resource_filter_inputs(builder, res);
             builder = register_resource_sort_inputs(builder, res);
             if has_subscriptions {

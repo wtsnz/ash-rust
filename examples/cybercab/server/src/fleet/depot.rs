@@ -38,6 +38,7 @@ resource! {
 
             read read {
                 primary;
+                pagination keyset: true, offset: true, countable: true, required: false;
             }
         }
     }

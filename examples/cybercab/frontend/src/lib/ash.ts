@@ -19,6 +19,18 @@ export interface PaginatedResult<T> {
   endKeyset?: string | null;
 }
 
+/** An offset page of records, as AshGraphql returns a read that pages by offset. */
+export interface OffsetPage<T> {
+  results: T[];
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  pageNumber?: number;
+  lastPage?: number;
+  limit?: number;
+}
+
 /** The operators AshGraphql filters a field by. */
 export interface AshFilter<T> {
   isNil?: boolean;
@@ -2052,8 +2064,8 @@ export class CabQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Cab[]> {
     const records: Cab[] = [];
@@ -2208,8 +2220,8 @@ export class DepotQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Depot[]> {
     const records: Depot[] = [];
@@ -2364,8 +2376,8 @@ export class RiderQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Rider[]> {
     const records: Rider[] = [];
@@ -2520,8 +2532,8 @@ export class TripQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<Trip[]> {
     const records: Trip[] = [];
@@ -2676,8 +2688,8 @@ export class ServiceZoneQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<ServiceZone[]> {
     const records: ServiceZone[] = [];
@@ -2832,8 +2844,8 @@ export class TelemetrySampleQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<TelemetrySample[]> {
     const records: TelemetrySample[] = [];
@@ -2988,8 +3000,8 @@ export class FleetAlertQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<FleetAlert[]> {
     const records: FleetAlert[] = [];
@@ -3144,8 +3156,8 @@ export class PulseSampleQueryBuilder {
   }
 
   /**
-   * Every matching record, or the first `limit` of them. The server pages every read, as
-   * AshGraphql's do, so this reads page after page, each following the last's end keyset.
+   * Every matching record, or the first `limit` of them. The read pages, so this reads
+   * page after page, each following the last's end keyset.
    */
   public async all(): Promise<PulseSample[]> {
     const records: PulseSample[] = [];
