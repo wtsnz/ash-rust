@@ -60,6 +60,7 @@
     {
       "name": "idx_stowage_slot",
       "columns": [
+        "line",
         "voyage_id",
         "bay",
         "stack",
@@ -72,6 +73,7 @@
     {
       "name": "idx_stowage_once_per_voyage",
       "columns": [
+        "line",
         "voyage_id",
         "container_id"
       ],

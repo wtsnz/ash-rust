@@ -82,6 +82,7 @@
     {
       "name": "idx_berth_reservations_active_by_berth",
       "columns": [
+        "line",
         "port_id",
         "berth_code"
       ],
@@ -91,6 +92,7 @@
     {
       "name": "idx_berth_reservations_by_ship",
       "columns": [
+        "line",
         "ship_id"
       ],
       "predicate": null,

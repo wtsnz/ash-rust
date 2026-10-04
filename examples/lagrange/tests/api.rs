@@ -112,21 +112,21 @@ async fn http_api<D: FleetDb>(h: Harness<D>) {
         Some(&grace),
         &format!(
             r#"mutation {{ bookContract(input: {{
-                external_ref: "GQL-1", shipper_email: "grace@helios-freight.example",
-                origin_port_id: "{}", destination_port_id: "{}",
-                freight_credits: 7000, insured_value: "125.50", deliver_by: "2187-09-01"
-            }}) {{ success errors {{ message }} result {{ id line status insured_value }} }} }}"#,
+                externalRef: "GQL-1", shipperEmail: "grace@helios-freight.example",
+                originPortId: "{}", destinationPortId: "{}",
+                freightCredits: 7000, insuredValue: "125.50", deliverBy: "2187-09-01"
+            }}) {{ errors {{ message }} result {{ id line status insuredValue }} }} }}"#,
             h.sol.port("KSC").id,
             h.sol.port("OLY").id
         ),
     )
     .await;
     let result = &booked["bookContract"];
-    assert_eq!(result["success"], true, "{booked}");
+    assert_eq!(result["errors"], json!([]), "{booked}");
     assert_eq!(result["result"]["line"], lagrange::seed::HELIOS);
     assert_eq!(result["result"]["status"], "booked");
     // Red Dust doesn't see it.
-    let theirs = graphql(&router, Some(&mae), "{ listContracts { external_ref } }").await;
+    let theirs = graphql(&router, Some(&mae), "{ listContracts { externalRef } }").await;
     assert!(theirs["listContracts"].as_array().unwrap().is_empty());
 }
 on_every_backend!(http_api);
@@ -141,7 +141,7 @@ async fn live_voyage_updates<D: FleetDb>(h: Harness<D>) {
             .registry_context()
             .with_actor(h.ctx(name).actor.clone().unwrap())
             .with_tenant(h.ctx(name).tenant().unwrap().to_string());
-        let mut stream = schema.execute_stream(async_graphql::Request::new("subscription { voyageUpdated { id status } }").data(ctx));
+        let mut stream = schema.execute_stream(async_graphql::Request::new("subscription { voyageUpdated { updated { id status } } }").data(ctx));
         tokio::spawn(async move { stream.next().await.map(|response| response.data.into_json().unwrap()) })
     };
     let helios = listen("Ada");
@@ -158,8 +158,8 @@ async fn live_voyage_updates<D: FleetDb>(h: Harness<D>) {
         .expect("the line's dispatcher hears about it")
         .unwrap()
         .unwrap();
-    assert_eq!(heard["voyageUpdated"]["status"], "cleared", "{heard}");
-    assert_eq!(heard["voyageUpdated"]["id"], voyage.id.to_string());
+    assert_eq!(heard["voyageUpdated"]["updated"]["status"], "cleared", "{heard}");
+    assert_eq!(heard["voyageUpdated"]["updated"]["id"], voyage.id.to_string());
 
     let leaked = tokio::time::timeout(std::time::Duration::from_millis(300), red_dust).await;
     assert!(leaked.is_err(), "another line must not hear about it: {leaked:?}");

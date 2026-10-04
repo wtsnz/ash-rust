@@ -63,7 +63,7 @@ async fn sqlite_history_renames_without_losing_rows() {
     assert_eq!(db.migrate(v1.path()).await.unwrap().len(), 1);
     sqlx::raw_sql(SEED_V1).execute(db.pool().unwrap()).await.unwrap();
 
-    assert_eq!(db.migrate(lagrange::migrations_dir()).await.unwrap().len(), 2);
+    assert_eq!(db.migrate(lagrange::migrations_dir()).await.unwrap().len(), 3);
     let code: String = sqlx::query_scalar("SELECT berth_code FROM berth_reservations")
         .fetch_one(db.pool().unwrap())
         .await
@@ -100,7 +100,7 @@ async fn postgres_history_renames_without_losing_rows() {
     let v1 = first_migration("postgres");
     assert_eq!(db.migrate(v1.path()).await.unwrap().len(), 1);
     sqlx::raw_sql(SEED_V1).execute(db.pool().unwrap()).await.unwrap();
-    assert_eq!(db.migrate(lagrange::migrations_dir()).await.unwrap().len(), 2);
+    assert_eq!(db.migrate(lagrange::migrations_dir()).await.unwrap().len(), 3);
     // Timestamps are `timestamptz`, so an offset is kept as the same instant.
     let commissioned: bool =
         sqlx::query_scalar("SELECT created_at = '2187-01-01T08:00:00Z'::timestamptz FROM ships")

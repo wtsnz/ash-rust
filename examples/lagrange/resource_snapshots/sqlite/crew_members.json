@@ -67,6 +67,7 @@
     {
       "name": "idx_crew_members_unique_email",
       "columns": [
+        "line",
         "email"
       ],
       "unique": true,

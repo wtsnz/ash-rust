@@ -14,10 +14,7 @@ use crate::{
 };
 
 fn refused(field: &str, message: impl Into<String>) -> Error {
-    Error::Validation {
-        field: field.to_string(),
-        message: message.into(),
-    }
+    Error::validation(field, message, Vec::new())
 }
 
 /// Holds `berth_code` at `port_id` for a ship's docking window.

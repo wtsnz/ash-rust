@@ -8,86 +8,66 @@ import { z } from "zod";
 // Common Ash TypeScript Types
 export type SortOrder = "asc" | "desc";
 
-export interface PageInfo {
-  hasNextPage: boolean;
-  hasPreviousPage: boolean;
-  startCursor?: string | null;
-  endCursor?: string | null;
-}
-
+/** A keyset page of records, as AshGraphql returns a paginated read. */
 export interface PaginatedResult<T> {
   results: T[];
-  totalCount?: number;
-  pageInfo?: PageInfo;
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  startKeyset?: string | null;
+  endKeyset?: string | null;
 }
 
-export interface UuidFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
+/** An offset page of records, as AshGraphql returns a read that pages by offset. */
+export interface OffsetPage<T> {
+  results: T[];
+  /** Records matching the query across all pages. */
+  count?: number | null;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  pageNumber?: number;
+  lastPage?: number;
+  limit?: number;
 }
 
-export interface StringFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
+/** The operators AshGraphql filters a field by. */
+export interface AshFilter<T> {
   isNil?: boolean;
+  eq?: T | null;
+  notEq?: T | null;
+  in?: (T | null)[];
+  lessThan?: T;
+  greaterThan?: T;
+  lessThanOrEqual?: T;
+  greaterThanOrEqual?: T;
+  isDistinctFrom?: T | null;
+  isNotDistinctFrom?: T | null;
 }
 
-export interface TextFilter {
-  eq?: string;
-  ne?: string;
-  in?: string[];
-  isNil?: boolean;
+/** A text field's filter: AshFilter's operators and AshGraphql's text operators. */
+export interface AshTextFilter extends AshFilter<string> {
   contains?: string;
-  startsWith?: string;
-  endsWith?: string;
-}
-
-export interface FloatFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  isNil?: boolean;
-}
-
-export interface IntFilter {
-  eq?: number;
-  ne?: number;
-  gt?: number;
-  gte?: number;
-  lt?: number;
-  lte?: number;
-  in?: number[];
-  isNil?: boolean;
-}
-
-export interface BooleanFilter {
-  eq?: boolean;
-  ne?: boolean;
-  isNil?: boolean;
+  stringStartsWith?: string;
+  stringEndsWith?: string;
+  like?: string;
+  ilike?: string;
 }
 
 // --- Section 2: Resource Types & Action Inputs ---
 export interface Planet {
   id: string;
   name: string;
-  surface_gravity: number;
+  surfaceGravity: number;
   position: number[];
   atmosphere: "VACUUM" | "THIN" | "BREATHABLE" | "TOXIC";
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
   ports?: Port[];
-  port_count?: number | null;
+  portCount?: number | null;
 }
 
 export interface ChartPlanetInput {
   name: string;
-  surface_gravity: number;
+  surfaceGravity: number;
   position: number[];
   atmosphere: "VACUUM" | "THIN" | "BREATHABLE" | "TOXIC";
 }
@@ -95,41 +75,34 @@ export interface ChartPlanetInput {
 export type PlanetChartInput = ChartPlanetInput;
 
 export interface SurveyPlanetInput {
-  id?: string;
-  surface_gravity?: number | null;
+  surfaceGravity?: number | null;
   position?: number[] | null;
 }
 
 export type PlanetSurveyInput = SurveyPlanetInput;
 
 export interface RoutePlanetInput {
-  from_planet: string;
-  to_planet: string;
+  fromPlanet: string;
+  toPlanet: string;
 }
 
 export type PlanetRouteInput = RoutePlanetInput;
 
-export interface PlanetAtmosphereFilter {
-  eq?: "VACUUM" | "THIN" | "BREATHABLE" | "TOXIC";
-  ne?: "VACUUM" | "THIN" | "BREATHABLE" | "TOXIC";
-  in?: ("VACUUM" | "THIN" | "BREATHABLE" | "TOXIC")[];
-  isNil?: boolean;
-}
-
 export interface PlanetFilterInput {
-  id?: UuidFilter;
-  name?: TextFilter;
-  surface_gravity?: FloatFilter;
-  atmosphere?: PlanetAtmosphereFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  name?: AshTextFilter;
+  surfaceGravity?: AshFilter<number>;
+  atmosphere?: AshFilter<"VACUUM" | "THIN" | "BREATHABLE" | "TOXIC">;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  portCount?: AshFilter<number>;
   ports?: PortFilterInput;
   and?: PlanetFilterInput[];
   or?: PlanetFilterInput[];
-  not?: PlanetFilterInput;
+  not?: PlanetFilterInput[];
 }
 
-export type PlanetSortField = "id" | "name" | "surface_gravity" | "position" | "atmosphere" | "created_at" | "updated_at";
+export type PlanetSortField = "id" | "name" | "surfaceGravity" | "position" | "atmosphere" | "createdAt" | "updatedAt" | "portCount";
 
 export interface PlanetSortInput {
   field: PlanetSortField;
@@ -143,21 +116,21 @@ export interface PlanetInclude {
 
 export interface Port {
   id: string;
-  planet_id: string;
+  planetId: string;
   code: string;
   name: string;
   kind: "GROUND" | "LOW_ORBIT" | "GEOSTATIONARY" | "LAGRANGE";
   relay: string;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
   planet?: Planet | null;
   berths?: Berth[];
   label?: string | null;
-  berth_count?: number | null;
+  berthCount?: number | null;
 }
 
 export interface OpenPortInput {
-  planet_id: string;
+  planetId: string;
   code: string;
   name: string;
   kind: "GROUND" | "LOW_ORBIT" | "GEOSTATIONARY" | "LAGRANGE";
@@ -167,43 +140,36 @@ export interface OpenPortInput {
 export type PortOpenInput = OpenPortInput;
 
 export interface RenamePortInput {
-  id?: string;
   name?: string | null;
 }
 
 export type PortRenameInput = RenamePortInput;
 
 export interface MoveRelayPortInput {
-  id?: string;
   relay?: string | null;
 }
 
 export type PortMoveRelayInput = MoveRelayPortInput;
 
-export interface PortKindFilter {
-  eq?: "GROUND" | "LOW_ORBIT" | "GEOSTATIONARY" | "LAGRANGE";
-  ne?: "GROUND" | "LOW_ORBIT" | "GEOSTATIONARY" | "LAGRANGE";
-  in?: ("GROUND" | "LOW_ORBIT" | "GEOSTATIONARY" | "LAGRANGE")[];
-  isNil?: boolean;
-}
-
 export interface PortFilterInput {
-  id?: UuidFilter;
-  planet_id?: UuidFilter;
-  code?: TextFilter;
-  name?: TextFilter;
-  kind?: PortKindFilter;
-  relay?: StringFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  planetId?: AshFilter<string>;
+  code?: AshTextFilter;
+  name?: AshTextFilter;
+  kind?: AshFilter<"GROUND" | "LOW_ORBIT" | "GEOSTATIONARY" | "LAGRANGE">;
+  relay?: AshFilter<string>;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  berthCount?: AshFilter<number>;
+  label?: AshTextFilter;
   planet?: PlanetFilterInput;
   berths?: BerthFilterInput;
   and?: PortFilterInput[];
   or?: PortFilterInput[];
-  not?: PortFilterInput;
+  not?: PortFilterInput[];
 }
 
-export type PortSortField = "id" | "planet_id" | "code" | "name" | "kind" | "relay" | "created_at" | "updated_at";
+export type PortSortField = "id" | "planetId" | "code" | "name" | "kind" | "relay" | "createdAt" | "updatedAt" | "berthCount" | "label";
 
 export interface PortSortInput {
   field: PortSortField;
@@ -218,60 +184,54 @@ export interface PortInclude {
 
 export interface Berth {
   id: string;
-  port_id: string;
+  portId: string;
   code: string;
   clamp: "STANDARD" | "HEAVY_LIFT" | "CRYOGENIC";
-  max_mass_tonnes: number;
+  maxMassTonnes: number;
   version: number;
   port?: Port | null;
   reservations?: BerthReservation[];
-  active_reservations?: number | null;
+  activeReservations?: number | null;
 }
 
 export interface BuildBerthInput {
-  port_id: string;
+  portId: string;
   code: string;
   clamp: "STANDARD" | "HEAVY_LIFT" | "CRYOGENIC";
-  max_mass_tonnes: number;
+  maxMassTonnes: number;
 }
 
 export type BerthBuildInput = BuildBerthInput;
 
 export interface RecodeBerthInput {
-  id?: string;
   code?: string | null;
+  version?: number | null;
 }
 
 export type BerthRecodeInput = RecodeBerthInput;
 
 export interface ClaimBerthInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type BerthClaimInput = ClaimBerthInput;
 
-export interface BerthClampFilter {
-  eq?: "STANDARD" | "HEAVY_LIFT" | "CRYOGENIC";
-  ne?: "STANDARD" | "HEAVY_LIFT" | "CRYOGENIC";
-  in?: ("STANDARD" | "HEAVY_LIFT" | "CRYOGENIC")[];
-  isNil?: boolean;
-}
-
 export interface BerthFilterInput {
-  id?: UuidFilter;
-  port_id?: UuidFilter;
-  code?: TextFilter;
-  clamp?: BerthClampFilter;
-  max_mass_tonnes?: IntFilter;
-  version?: IntFilter;
+  id?: AshFilter<string>;
+  portId?: AshFilter<string>;
+  code?: AshTextFilter;
+  clamp?: AshFilter<"STANDARD" | "HEAVY_LIFT" | "CRYOGENIC">;
+  maxMassTonnes?: AshFilter<number>;
+  version?: AshFilter<number>;
+  activeReservations?: AshFilter<number>;
   port?: PortFilterInput;
   reservations?: BerthReservationFilterInput;
   and?: BerthFilterInput[];
   or?: BerthFilterInput[];
-  not?: BerthFilterInput;
+  not?: BerthFilterInput[];
 }
 
-export type BerthSortField = "id" | "port_id" | "code" | "clamp" | "max_mass_tonnes" | "version";
+export type BerthSortField = "id" | "portId" | "code" | "clamp" | "maxMassTonnes" | "version" | "activeReservations";
 
 export interface BerthSortInput {
   field: BerthSortField;
@@ -287,66 +247,57 @@ export interface BerthInclude {
 export interface BerthReservation {
   id: string;
   line: string;
-  port_id: string;
-  berth_code: string;
-  ship_id: string;
-  starts_at: string;
-  ends_at: string;
+  portId: string;
+  berthCode: string;
+  shipId: string;
+  startsAt: string;
+  endsAt: string;
   status: "ACTIVE" | "RELEASED";
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
   berth?: Berth | null;
   ship?: Ship | null;
 }
 
 export interface ReserveBerthReservationInput {
-  port_id: string;
-  berth_code: string;
-  ship_id: string;
-  starts_at: string;
-  ends_at: string;
+  portId: string;
+  berthCode: string;
+  shipId: string;
+  startsAt: string;
+  endsAt: string;
 }
 
 export type BerthReservationReserveInput = ReserveBerthReservationInput;
 
 export interface ReleaseBerthReservationInput {
-  id?: string;
 }
 
 export type BerthReservationReleaseInput = ReleaseBerthReservationInput;
 
 export interface CancelBerthReservationInput {
-  id: string;
 }
 
 export type BerthReservationCancelInput = CancelBerthReservationInput;
 
-export interface BerthReservationStatusFilter {
-  eq?: "ACTIVE" | "RELEASED";
-  ne?: "ACTIVE" | "RELEASED";
-  in?: ("ACTIVE" | "RELEASED")[];
-  isNil?: boolean;
-}
-
 export interface BerthReservationFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  port_id?: UuidFilter;
-  berth_code?: TextFilter;
-  ship_id?: UuidFilter;
-  starts_at?: StringFilter;
-  ends_at?: StringFilter;
-  status?: BerthReservationStatusFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  portId?: AshFilter<string>;
+  berthCode?: AshTextFilter;
+  shipId?: AshFilter<string>;
+  startsAt?: AshFilter<string>;
+  endsAt?: AshFilter<string>;
+  status?: AshFilter<"ACTIVE" | "RELEASED">;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
   berth?: BerthFilterInput;
   ship?: ShipFilterInput;
   and?: BerthReservationFilterInput[];
   or?: BerthReservationFilterInput[];
-  not?: BerthReservationFilterInput;
+  not?: BerthReservationFilterInput[];
 }
 
-export type BerthReservationSortField = "id" | "line" | "port_id" | "berth_code" | "ship_id" | "starts_at" | "ends_at" | "status" | "created_at" | "updated_at";
+export type BerthReservationSortField = "id" | "line" | "portId" | "berthCode" | "shipId" | "startsAt" | "endsAt" | "status" | "createdAt" | "updatedAt";
 
 export interface BerthReservationSortInput {
   field: BerthReservationSortField;
@@ -363,32 +314,32 @@ export interface ShippingLine {
   id: string;
   slug: string;
   name: string;
-  dispatch_email: string;
-  created_at: string;
-  updated_at: string;
+  dispatchEmail: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RegisterShippingLineInput {
   slug: string;
   name: string;
-  dispatch_email: string;
+  dispatchEmail: string;
 }
 
 export type ShippingLineRegisterInput = RegisterShippingLineInput;
 
 export interface ShippingLineFilterInput {
-  id?: UuidFilter;
-  slug?: TextFilter;
-  name?: TextFilter;
-  dispatch_email?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  slug?: AshTextFilter;
+  name?: AshTextFilter;
+  dispatchEmail?: AshTextFilter;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
   and?: ShippingLineFilterInput[];
   or?: ShippingLineFilterInput[];
-  not?: ShippingLineFilterInput;
+  not?: ShippingLineFilterInput[];
 }
 
-export type ShippingLineSortField = "id" | "slug" | "name" | "dispatch_email" | "created_at" | "updated_at";
+export type ShippingLineSortField = "id" | "slug" | "name" | "dispatchEmail" | "createdAt" | "updatedAt";
 
 export interface ShippingLineSortInput {
   field: ShippingLineSortField;
@@ -405,9 +356,9 @@ export interface CrewMember {
   email: string;
   name: string;
   role: "DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY";
-  hashed_password?: string | null;
-  created_at: string;
-  updated_at: string;
+  hashedPassword?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RegisterWithPasswordCrewMemberInput {
@@ -420,34 +371,26 @@ export interface RegisterWithPasswordCrewMemberInput {
 export type CrewMemberRegisterWithPasswordInput = RegisterWithPasswordCrewMemberInput;
 
 export interface ReassignCrewMemberInput {
-  id?: string;
   role?: "DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY" | null;
 }
 
 export type CrewMemberReassignInput = ReassignCrewMemberInput;
 
-export interface CrewMemberRoleFilter {
-  eq?: "DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY";
-  ne?: "DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY";
-  in?: ("DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY")[];
-  isNil?: boolean;
-}
-
 export interface CrewMemberFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  email?: TextFilter;
-  name?: TextFilter;
-  role?: CrewMemberRoleFilter;
-  hashed_password?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  email?: AshTextFilter;
+  name?: AshTextFilter;
+  role?: AshFilter<"DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY">;
+  hashedPassword?: AshTextFilter;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
   and?: CrewMemberFilterInput[];
   or?: CrewMemberFilterInput[];
-  not?: CrewMemberFilterInput;
+  not?: CrewMemberFilterInput[];
 }
 
-export type CrewMemberSortField = "id" | "line" | "email" | "name" | "role" | "hashed_password" | "created_at" | "updated_at";
+export type CrewMemberSortField = "id" | "line" | "email" | "name" | "role" | "hashedPassword" | "createdAt" | "updatedAt";
 
 export interface CrewMemberSortInput {
   field: CrewMemberSortField;
@@ -461,39 +404,39 @@ export interface CrewMemberInclude {
 export interface Transponder {
   id: string;
   line: string;
-  ship_id: string;
+  shipId: string;
   label: string;
   kind: string;
-  api_key_hash?: string | null;
-  created_at: string;
-  updated_at: string;
+  apiKeyHash?: string | null;
+  createdAt: string;
+  updatedAt: string;
   ship?: Ship | null;
 }
 
 export interface InstallTransponderInput {
-  ship_id: string;
+  shipId: string;
   label: string;
-  api_key_hash?: string | null;
+  apiKeyHash?: string | null;
 }
 
 export type TransponderInstallInput = InstallTransponderInput;
 
 export interface TransponderFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  ship_id?: UuidFilter;
-  label?: TextFilter;
-  kind?: TextFilter;
-  api_key_hash?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  shipId?: AshFilter<string>;
+  label?: AshTextFilter;
+  kind?: AshTextFilter;
+  apiKeyHash?: AshTextFilter;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
   ship?: ShipFilterInput;
   and?: TransponderFilterInput[];
   or?: TransponderFilterInput[];
-  not?: TransponderFilterInput;
+  not?: TransponderFilterInput[];
 }
 
-export type TransponderSortField = "id" | "line" | "ship_id" | "label" | "kind" | "api_key_hash" | "created_at" | "updated_at";
+export type TransponderSortField = "id" | "line" | "shipId" | "label" | "kind" | "apiKeyHash" | "createdAt" | "updatedAt";
 
 export interface TransponderSortInput {
   field: TransponderSortField;
@@ -511,101 +454,96 @@ export interface Ship {
   registry: string;
   name: string;
   class: "SHUTTLE" | "HAULER" | "TANKER" | "FREIGHTER";
-  dry_mass_tonnes: number;
-  slot_capacity: number;
-  captain_id?: string | null;
+  dryMassTonnes: number;
+  slotCapacity: number;
+  captainId?: string | null;
   version: number;
-  archived_at?: string | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
+  archivedAt?: string | null;
+  status: "docked" | "in_transit" | "maintenance";
+  createdAt: string;
+  updatedAt: string;
   captain?: CrewMember | null;
   voyages?: Voyage[];
   reservations?: BerthReservation[];
   transponder?: Transponder | null;
-  voyage_count?: number | null;
-  flights_completed?: number | null;
+  voyageCount?: number | null;
+  flightsCompleted?: number | null;
 }
 
 export interface CommissionShipInput {
   registry: string;
   name: string;
   class: "SHUTTLE" | "HAULER" | "TANKER" | "FREIGHTER";
-  dry_mass_tonnes: number;
-  slot_capacity: number;
-  captain_id?: string | null;
+  dryMassTonnes: number;
+  slotCapacity: number;
+  captainId?: string | null;
 }
 
 export type ShipCommissionInput = CommissionShipInput;
 
 export interface AssignCaptainShipInput {
-  id?: string;
-  captain_id?: string | null;
+  captainId?: string | null;
+  version?: number | null;
 }
 
 export type ShipAssignCaptainInput = AssignCaptainShipInput;
 
 export interface DepartShipInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ShipDepartInput = DepartShipInput;
 
 export interface ArriveShipInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ShipArriveInput = ArriveShipInput;
 
 export interface BeginMaintenanceShipInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ShipBeginMaintenanceInput = BeginMaintenanceShipInput;
 
 export interface EndMaintenanceShipInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ShipEndMaintenanceInput = EndMaintenanceShipInput;
 
 export interface DecommissionShipInput {
-  id: string;
+  version?: number | null;
 }
 
 export type ShipDecommissionInput = DecommissionShipInput;
 
-export interface ShipClassFilter {
-  eq?: "SHUTTLE" | "HAULER" | "TANKER" | "FREIGHTER";
-  ne?: "SHUTTLE" | "HAULER" | "TANKER" | "FREIGHTER";
-  in?: ("SHUTTLE" | "HAULER" | "TANKER" | "FREIGHTER")[];
-  isNil?: boolean;
-}
-
 export interface ShipFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  registry?: TextFilter;
-  name?: TextFilter;
-  class?: ShipClassFilter;
-  dry_mass_tonnes?: IntFilter;
-  slot_capacity?: IntFilter;
-  captain_id?: UuidFilter;
-  version?: IntFilter;
-  archived_at?: StringFilter;
-  status?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  registry?: AshTextFilter;
+  name?: AshTextFilter;
+  class?: AshFilter<"SHUTTLE" | "HAULER" | "TANKER" | "FREIGHTER">;
+  dryMassTonnes?: AshFilter<number>;
+  slotCapacity?: AshFilter<number>;
+  captainId?: AshFilter<string>;
+  version?: AshFilter<number>;
+  archivedAt?: AshFilter<string>;
+  status?: AshFilter<"docked" | "in_transit" | "maintenance">;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  voyageCount?: AshFilter<number>;
+  flightsCompleted?: AshFilter<number>;
   captain?: CrewMemberFilterInput;
   voyages?: VoyageFilterInput;
   reservations?: BerthReservationFilterInput;
   transponder?: TransponderFilterInput;
   and?: ShipFilterInput[];
   or?: ShipFilterInput[];
-  not?: ShipFilterInput;
+  not?: ShipFilterInput[];
 }
 
-export type ShipSortField = "id" | "line" | "registry" | "name" | "class" | "dry_mass_tonnes" | "slot_capacity" | "captain_id" | "version" | "archived_at" | "status" | "created_at" | "updated_at";
+export type ShipSortField = "id" | "line" | "registry" | "name" | "class" | "dryMassTonnes" | "slotCapacity" | "captainId" | "version" | "archivedAt" | "status" | "createdAt" | "updatedAt" | "voyageCount" | "flightsCompleted";
 
 export interface ShipSortInput {
   field: ShipSortField;
@@ -623,90 +561,93 @@ export interface ShipInclude {
 export interface Contract {
   id: string;
   line: string;
-  external_ref: string;
-  shipper_email: string;
-  origin_port_id: string;
-  destination_port_id: string;
-  freight_credits: number;
-  insured_value: string;
-  deliver_by: string;
+  externalRef: string;
+  shipperEmail: string;
+  originPortId: string;
+  destinationPortId: string;
+  freightCredits: number;
+  insuredValue: string;
+  deliverBy: string;
   version: number;
-  status: string;
-  created_at: string;
-  updated_at: string;
+  status: "booked" | "loaded" | "in_transit" | "delivered" | "closed" | "cancelled";
+  createdAt: string;
+  updatedAt: string;
   origin?: Port | null;
   destination?: Port | null;
   containers?: Container[];
-  rush_quote?: number | null;
-  container_count?: number | null;
-  booked_mass?: number | null;
+  rushQuote?: number | null;
+  containerCount?: number | null;
+  bookedMass?: number | null;
 }
 
 export interface BookContractInput {
-  external_ref: string;
-  shipper_email: string;
-  origin_port_id: string;
-  destination_port_id: string;
-  freight_credits: number;
-  insured_value: string;
-  deliver_by: string;
+  externalRef: string;
+  shipperEmail: string;
+  originPortId: string;
+  destinationPortId: string;
+  freightCredits: number;
+  insuredValue: string;
+  deliverBy: string;
 }
 
 export type ContractBookInput = BookContractInput;
 
 export interface LoadContractInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ContractLoadInput = LoadContractInput;
 
 export interface DispatchContractInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ContractDispatchInput = DispatchContractInput;
 
 export interface DeliverContractInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ContractDeliverInput = DeliverContractInput;
 
 export interface CloseContractInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ContractCloseInput = CloseContractInput;
 
 export interface CancelContractInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type ContractCancelInput = CancelContractInput;
 
 export interface ContractFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  external_ref?: TextFilter;
-  shipper_email?: TextFilter;
-  origin_port_id?: UuidFilter;
-  destination_port_id?: UuidFilter;
-  freight_credits?: IntFilter;
-  insured_value?: StringFilter;
-  deliver_by?: StringFilter;
-  version?: IntFilter;
-  status?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  externalRef?: AshTextFilter;
+  shipperEmail?: AshTextFilter;
+  originPortId?: AshFilter<string>;
+  destinationPortId?: AshFilter<string>;
+  freightCredits?: AshFilter<number>;
+  insuredValue?: AshFilter<string>;
+  deliverBy?: AshFilter<string>;
+  version?: AshFilter<number>;
+  status?: AshFilter<"booked" | "loaded" | "in_transit" | "delivered" | "closed" | "cancelled">;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  containerCount?: AshFilter<number>;
+  bookedMass?: AshFilter<number>;
+  rushQuote?: AshFilter<number>;
   origin?: PortFilterInput;
   destination?: PortFilterInput;
   containers?: ContainerFilterInput;
   and?: ContractFilterInput[];
   or?: ContractFilterInput[];
-  not?: ContractFilterInput;
+  not?: ContractFilterInput[];
 }
 
-export type ContractSortField = "id" | "line" | "external_ref" | "shipper_email" | "origin_port_id" | "destination_port_id" | "freight_credits" | "insured_value" | "deliver_by" | "version" | "status" | "created_at" | "updated_at";
+export type ContractSortField = "id" | "line" | "externalRef" | "shipperEmail" | "originPortId" | "destinationPortId" | "freightCredits" | "insuredValue" | "deliverBy" | "version" | "status" | "createdAt" | "updatedAt" | "containerCount" | "bookedMass";
 
 export interface ContractSortInput {
   field: ContractSortField;
@@ -724,74 +665,67 @@ export interface Container {
   id: string;
   line: string;
   code: string;
-  contract_id: string;
-  mass_tonnes: number;
+  contractId: string;
+  massTonnes: number;
   hazmat?: "FLAMMABLE" | "CORROSIVE" | "RADIOACTIVE" | "CRYOGENIC" | null;
   hazardous: boolean;
   reefer: boolean;
-  manifest?: Record<string, unknown> | null;
+  manifest?: { shipper: string; description: string; pieces: number; declaredValue: string } | null;
   seal?: string | null;
   sealed: boolean;
   version: number;
-  archived_at?: string | null;
-  created_at: string;
-  updated_at: string;
+  archivedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
   contract?: Contract | null;
 }
 
 export interface PackContainerInput {
   code: string;
-  contract_id: string;
-  mass_tonnes: number;
+  contractId: string;
+  massTonnes: number;
   hazmat?: "FLAMMABLE" | "CORROSIVE" | "RADIOACTIVE" | "CRYOGENIC" | null;
-  reefer: boolean;
-  manifest?: Record<string, unknown> | null;
+  reefer?: boolean | null;
+  manifest?: { shipper: string; description: string; pieces: number; declaredValue: string } | null;
 }
 
 export type ContainerPackInput = PackContainerInput;
 
 export interface SealContainerInput {
-  id?: string;
   seal?: string | null;
+  version?: number | null;
 }
 
 export type ContainerSealInput = SealContainerInput;
 
 export interface ScrapContainerInput {
-  id: string;
+  version?: number | null;
 }
 
 export type ContainerScrapInput = ScrapContainerInput;
 
-export interface ContainerHazmatFilter {
-  eq?: "FLAMMABLE" | "CORROSIVE" | "RADIOACTIVE" | "CRYOGENIC";
-  ne?: "FLAMMABLE" | "CORROSIVE" | "RADIOACTIVE" | "CRYOGENIC";
-  in?: ("FLAMMABLE" | "CORROSIVE" | "RADIOACTIVE" | "CRYOGENIC")[];
-  isNil?: boolean;
-}
-
 export interface ContainerFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  code?: TextFilter;
-  contract_id?: UuidFilter;
-  mass_tonnes?: IntFilter;
-  hazmat?: ContainerHazmatFilter;
-  hazardous?: BooleanFilter;
-  reefer?: BooleanFilter;
-  seal?: StringFilter;
-  sealed?: BooleanFilter;
-  version?: IntFilter;
-  archived_at?: StringFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  code?: AshTextFilter;
+  contractId?: AshFilter<string>;
+  massTonnes?: AshFilter<number>;
+  hazmat?: AshFilter<"FLAMMABLE" | "CORROSIVE" | "RADIOACTIVE" | "CRYOGENIC">;
+  hazardous?: AshFilter<boolean>;
+  reefer?: AshFilter<boolean>;
+  manifest?: AshFilter<{ shipper: string; description: string; pieces: number; declaredValue: string }>;
+  sealed?: AshFilter<boolean>;
+  version?: AshFilter<number>;
+  archivedAt?: AshFilter<string>;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
   contract?: ContractFilterInput;
   and?: ContainerFilterInput[];
   or?: ContainerFilterInput[];
-  not?: ContainerFilterInput;
+  not?: ContainerFilterInput[];
 }
 
-export type ContainerSortField = "id" | "line" | "code" | "contract_id" | "mass_tonnes" | "hazmat" | "hazardous" | "reefer" | "manifest" | "seal" | "sealed" | "version" | "archived_at" | "created_at" | "updated_at";
+export type ContainerSortField = "id" | "line" | "code" | "contractId" | "massTonnes" | "hazmat" | "hazardous" | "reefer" | "manifest" | "seal" | "sealed" | "version" | "archivedAt" | "createdAt" | "updatedAt";
 
 export interface ContainerSortInput {
   field: ContainerSortField;
@@ -806,104 +740,107 @@ export interface ContainerInclude {
 export interface Voyage {
   id: string;
   line: string;
-  ship_id: string;
-  captain_id: string;
-  origin_port_id: string;
-  destination_port_id: string;
-  launch_window: string;
-  distance_au: number;
-  transit_hours: number;
-  reservation_id?: string | null;
-  departed_at?: string | null;
-  arrived_at?: string | null;
+  shipId: string;
+  captainId: string;
+  originPortId: string;
+  destinationPortId: string;
+  launchWindow: string;
+  distanceAu: number;
+  transitHours: number;
+  reservationId?: string | null;
+  departedAt?: string | null;
+  arrivedAt?: string | null;
   version: number;
-  status: string;
-  created_at: string;
-  updated_at: string;
+  status: "planned" | "cleared" | "in_transit" | "arrived" | "completed" | "scrubbed";
+  createdAt: string;
+  updatedAt: string;
   ship?: Ship | null;
   origin?: Port | null;
   destination?: Port | null;
   stowage?: Stowage[];
   containers?: Container[];
-  container_count?: number | null;
-  loaded_mass?: number | null;
-  carries_hazmat?: boolean | null;
+  containerCount?: number | null;
+  loadedMass?: number | null;
+  carriesHazmat?: boolean | null;
 }
 
 export interface PlanVoyageInput {
-  ship_id: string;
-  captain_id: string;
-  origin_port_id: string;
-  destination_port_id: string;
-  launch_window: string;
-  distance_au: number;
-  transit_hours: number;
+  shipId: string;
+  captainId: string;
+  originPortId: string;
+  destinationPortId: string;
+  launchWindow: string;
+  distanceAu: number;
+  transitHours: number;
 }
 
 export type VoyagePlanInput = PlanVoyageInput;
 
 export interface HoldBerthVoyageInput {
-  id?: string;
-  reservation_id?: string | null;
+  reservationId?: string | null;
+  version?: number | null;
 }
 
 export type VoyageHoldBerthInput = HoldBerthVoyageInput;
 
 export interface ClearCustomsVoyageInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type VoyageClearCustomsInput = ClearCustomsVoyageInput;
 
 export interface LaunchVoyageInput {
-  id?: string;
-  departed_at?: string | null;
+  departedAt?: string | null;
+  version?: number | null;
 }
 
 export type VoyageLaunchInput = LaunchVoyageInput;
 
 export interface ArriveVoyageInput {
-  id?: string;
-  arrived_at?: string | null;
+  arrivedAt?: string | null;
+  version?: number | null;
 }
 
 export type VoyageArriveInput = ArriveVoyageInput;
 
 export interface CompleteVoyageInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type VoyageCompleteInput = CompleteVoyageInput;
 
 export interface ScrubVoyageInput {
-  id?: string;
+  version?: number | null;
 }
 
 export type VoyageScrubInput = ScrubVoyageInput;
 
 export interface DiscardVoyageInput {
-  id: string;
+  version?: number | null;
 }
 
 export type VoyageDiscardInput = DiscardVoyageInput;
 
 export interface VoyageFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  ship_id?: UuidFilter;
-  captain_id?: UuidFilter;
-  origin_port_id?: UuidFilter;
-  destination_port_id?: UuidFilter;
-  launch_window?: StringFilter;
-  distance_au?: FloatFilter;
-  transit_hours?: IntFilter;
-  reservation_id?: UuidFilter;
-  departed_at?: StringFilter;
-  arrived_at?: StringFilter;
-  version?: IntFilter;
-  status?: TextFilter;
-  created_at?: StringFilter;
-  updated_at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  shipId?: AshFilter<string>;
+  captainId?: AshFilter<string>;
+  originPortId?: AshFilter<string>;
+  destinationPortId?: AshFilter<string>;
+  launchWindow?: AshFilter<string>;
+  distanceAu?: AshFilter<number>;
+  transitHours?: AshFilter<number>;
+  reservationId?: AshFilter<string>;
+  departedAt?: AshFilter<string>;
+  arrivedAt?: AshFilter<string>;
+  version?: AshFilter<number>;
+  status?: AshFilter<"planned" | "cleared" | "in_transit" | "arrived" | "completed" | "scrubbed">;
+  createdAt?: AshFilter<string>;
+  updatedAt?: AshFilter<string>;
+  containerCount?: AshFilter<number>;
+  loadedMass?: AshFilter<number>;
+  carriesHazmat?: AshFilter<boolean>;
   ship?: ShipFilterInput;
   origin?: PortFilterInput;
   destination?: PortFilterInput;
@@ -911,10 +848,10 @@ export interface VoyageFilterInput {
   containers?: ContainerFilterInput;
   and?: VoyageFilterInput[];
   or?: VoyageFilterInput[];
-  not?: VoyageFilterInput;
+  not?: VoyageFilterInput[];
 }
 
-export type VoyageSortField = "id" | "line" | "ship_id" | "captain_id" | "origin_port_id" | "destination_port_id" | "launch_window" | "distance_au" | "transit_hours" | "reservation_id" | "departed_at" | "arrived_at" | "version" | "status" | "created_at" | "updated_at";
+export type VoyageSortField = "id" | "line" | "shipId" | "captainId" | "originPortId" | "destinationPortId" | "launchWindow" | "distanceAu" | "transitHours" | "reservationId" | "departedAt" | "arrivedAt" | "version" | "status" | "createdAt" | "updatedAt" | "containerCount" | "loadedMass" | "carriesHazmat";
 
 export interface VoyageSortInput {
   field: VoyageSortField;
@@ -933,8 +870,8 @@ export interface VoyageInclude {
 export interface Stowage {
   id: string;
   line: string;
-  voyage_id: string;
-  container_id: string;
+  voyageId: string;
+  containerId: string;
   bay: number;
   stack: number;
   tier: number;
@@ -943,8 +880,8 @@ export interface Stowage {
 }
 
 export interface StowStowageInput {
-  voyage_id: string;
-  container_id: string;
+  voyageId: string;
+  containerId: string;
   bay: number;
   stack: number;
   tier: number;
@@ -953,27 +890,26 @@ export interface StowStowageInput {
 export type StowageStowInput = StowStowageInput;
 
 export interface UnstowStowageInput {
-  id: string;
 }
 
 export type StowageUnstowInput = UnstowStowageInput;
 
 export interface StowageFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  voyage_id?: UuidFilter;
-  container_id?: UuidFilter;
-  bay?: IntFilter;
-  stack?: IntFilter;
-  tier?: IntFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  voyageId?: AshFilter<string>;
+  containerId?: AshFilter<string>;
+  bay?: AshFilter<number>;
+  stack?: AshFilter<number>;
+  tier?: AshFilter<number>;
   voyage?: VoyageFilterInput;
   container?: ContainerFilterInput;
   and?: StowageFilterInput[];
   or?: StowageFilterInput[];
-  not?: StowageFilterInput;
+  not?: StowageFilterInput[];
 }
 
-export type StowageSortField = "id" | "line" | "voyage_id" | "container_id" | "bay" | "stack" | "tier";
+export type StowageSortField = "id" | "line" | "voyageId" | "containerId" | "bay" | "stack" | "tier";
 
 export interface StowageSortInput {
   field: StowageSortField;
@@ -988,39 +924,39 @@ export interface StowageInclude {
 
 export interface TelemetryPing {
   id: string;
-  transponder_id: string;
-  ship_id: string;
+  transponderId: string;
+  shipId: string;
   position: number[];
-  speed_kms: number;
-  fuel_pct: number;
-  recorded_at: string;
-  source_ip: string;
+  speedKms: number;
+  fuelPct: number;
+  recordedAt: string;
+  sourceIp: string;
 }
 
 export interface ReportTelemetryPingInput {
   position: number[];
-  speed_kms: number;
-  fuel_pct: number;
-  recorded_at: string;
-  source_ip: string;
+  speedKms: number;
+  fuelPct: number;
+  recordedAt: string;
+  sourceIp: string;
 }
 
 export type TelemetryPingReportInput = ReportTelemetryPingInput;
 
 export interface TelemetryPingFilterInput {
-  id?: UuidFilter;
-  transponder_id?: UuidFilter;
-  ship_id?: UuidFilter;
-  speed_kms?: FloatFilter;
-  fuel_pct?: IntFilter;
-  recorded_at?: StringFilter;
-  source_ip?: StringFilter;
+  id?: AshFilter<string>;
+  transponderId?: AshFilter<string>;
+  shipId?: AshFilter<string>;
+  speedKms?: AshFilter<number>;
+  fuelPct?: AshFilter<number>;
+  recordedAt?: AshFilter<string>;
+  sourceIp?: AshFilter<string>;
   and?: TelemetryPingFilterInput[];
   or?: TelemetryPingFilterInput[];
-  not?: TelemetryPingFilterInput;
+  not?: TelemetryPingFilterInput[];
 }
 
-export type TelemetryPingSortField = "id" | "transponder_id" | "ship_id" | "position" | "speed_kms" | "fuel_pct" | "recorded_at" | "source_ip";
+export type TelemetryPingSortField = "id" | "transponderId" | "shipId" | "position" | "speedKms" | "fuelPct" | "recordedAt" | "sourceIp";
 
 export interface TelemetryPingSortInput {
   field: TelemetryPingSortField;
@@ -1034,41 +970,41 @@ export interface TelemetryPingInclude {
 export interface OpsEvent {
   id: string;
   line?: string | null;
-  actor_id?: string | null;
+  actorId?: string | null;
   resource: string;
   action: string;
-  record_id: string;
-  client_ip?: string | null;
+  recordId: string;
+  clientIp?: string | null;
   at: string;
 }
 
 export interface RecordOpsEventInput {
   line?: string | null;
-  actor_id?: string | null;
+  actorId?: string | null;
   resource: string;
   action: string;
-  record_id: string;
-  client_ip?: string | null;
+  recordId: string;
+  clientIp?: string | null;
   at: string;
 }
 
 export type OpsEventRecordInput = RecordOpsEventInput;
 
 export interface OpsEventFilterInput {
-  id?: UuidFilter;
-  line?: TextFilter;
-  actor_id?: UuidFilter;
-  resource?: TextFilter;
-  action?: TextFilter;
-  record_id?: UuidFilter;
-  client_ip?: StringFilter;
-  at?: StringFilter;
+  id?: AshFilter<string>;
+  line?: AshTextFilter;
+  actorId?: AshFilter<string>;
+  resource?: AshTextFilter;
+  action?: AshTextFilter;
+  recordId?: AshFilter<string>;
+  clientIp?: AshFilter<string>;
+  at?: AshFilter<string>;
   and?: OpsEventFilterInput[];
   or?: OpsEventFilterInput[];
-  not?: OpsEventFilterInput;
+  not?: OpsEventFilterInput[];
 }
 
-export type OpsEventSortField = "id" | "line" | "actor_id" | "resource" | "action" | "record_id" | "client_ip" | "at";
+export type OpsEventSortField = "id" | "line" | "actorId" | "resource" | "action" | "recordId" | "clientIp" | "at";
 
 export interface OpsEventSortInput {
   field: OpsEventSortField;
@@ -1083,16 +1019,16 @@ export interface OpsEventInclude {
 export const PlanetSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  surface_gravity: z.number(),
+  surfaceGravity: z.number(),
   position: z.array(z.number()).length(3),
   atmosphere: z.enum(["VACUUM", "THIN", "BREATHABLE", "TOXIC"]),
-  created_at: z.string(),
-  updated_at: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const ChartPlanetInputSchema = z.object({
   name: z.string(),
-  surface_gravity: z.number(),
+  surfaceGravity: z.number(),
   position: z.array(z.number()).length(3),
   atmosphere: z.enum(["VACUUM", "THIN", "BREATHABLE", "TOXIC"]),
 });
@@ -1100,16 +1036,15 @@ export const ChartPlanetInputSchema = z.object({
 export const PlanetChartInputSchema = ChartPlanetInputSchema;
 
 export const SurveyPlanetInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  surface_gravity: z.number().nullable().optional(),
+  surfaceGravity: z.number().nullable().optional(),
   position: z.array(z.number()).length(3).nullable().optional(),
 });
 
 export const PlanetSurveyInputSchema = SurveyPlanetInputSchema;
 
 export const RoutePlanetInputSchema = z.object({
-  from_planet: z.string().uuid(),
-  to_planet: z.string().uuid(),
+  fromPlanet: z.string().uuid(),
+  toPlanet: z.string().uuid(),
 });
 
 export const PlanetRouteInputSchema = RoutePlanetInputSchema;
@@ -1117,17 +1052,17 @@ export const PlanetRouteInputSchema = RoutePlanetInputSchema;
 
 export const PortSchema = z.object({
   id: z.string().uuid(),
-  planet_id: z.string().uuid(),
+  planetId: z.string().uuid(),
   code: z.string(),
   name: z.string(),
   kind: z.enum(["GROUND", "LOW_ORBIT", "GEOSTATIONARY", "LAGRANGE"]),
   relay: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const OpenPortInputSchema = z.object({
-  planet_id: z.string().uuid(),
+  planetId: z.string().uuid(),
   code: z.string(),
   name: z.string().min(3).max(80),
   kind: z.enum(["GROUND", "LOW_ORBIT", "GEOSTATIONARY", "LAGRANGE"]),
@@ -1137,14 +1072,12 @@ export const OpenPortInputSchema = z.object({
 export const PortOpenInputSchema = OpenPortInputSchema;
 
 export const RenamePortInputSchema = z.object({
-  id: z.string().uuid().optional(),
   name: z.string().nullable().optional(),
 });
 
 export const PortRenameInputSchema = RenamePortInputSchema;
 
 export const MoveRelayPortInputSchema = z.object({
-  id: z.string().uuid().optional(),
   relay: z.string().nullable().optional(),
 });
 
@@ -1153,31 +1086,31 @@ export const PortMoveRelayInputSchema = MoveRelayPortInputSchema;
 
 export const BerthSchema = z.object({
   id: z.string().uuid(),
-  port_id: z.string().uuid(),
+  portId: z.string().uuid(),
   code: z.string(),
   clamp: z.enum(["STANDARD", "HEAVY_LIFT", "CRYOGENIC"]),
-  max_mass_tonnes: z.number().int(),
+  maxMassTonnes: z.number().int(),
   version: z.number().int(),
 });
 
 export const BuildBerthInputSchema = z.object({
-  port_id: z.string().uuid(),
+  portId: z.string().uuid(),
   code: z.string().min(1).max(12),
   clamp: z.enum(["STANDARD", "HEAVY_LIFT", "CRYOGENIC"]),
-  max_mass_tonnes: z.number().int(),
+  maxMassTonnes: z.number().int(),
 });
 
 export const BerthBuildInputSchema = BuildBerthInputSchema;
 
 export const RecodeBerthInputSchema = z.object({
-  id: z.string().uuid().optional(),
   code: z.string().min(1).max(12).nullable().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const BerthRecodeInputSchema = RecodeBerthInputSchema;
 
 export const ClaimBerthInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const BerthClaimInputSchema = ClaimBerthInputSchema;
@@ -1186,34 +1119,32 @@ export const BerthClaimInputSchema = ClaimBerthInputSchema;
 export const BerthReservationSchema = z.object({
   id: z.string().uuid(),
   line: z.string(),
-  port_id: z.string().uuid(),
-  berth_code: z.string(),
-  ship_id: z.string().uuid(),
-  starts_at: z.string(),
-  ends_at: z.string(),
+  portId: z.string().uuid(),
+  berthCode: z.string(),
+  shipId: z.string().uuid(),
+  startsAt: z.string(),
+  endsAt: z.string(),
   status: z.enum(["ACTIVE", "RELEASED"]),
-  created_at: z.string(),
-  updated_at: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const ReserveBerthReservationInputSchema = z.object({
-  port_id: z.string().uuid(),
-  berth_code: z.string(),
-  ship_id: z.string().uuid(),
-  starts_at: z.string(),
-  ends_at: z.string(),
+  portId: z.string().uuid(),
+  berthCode: z.string(),
+  shipId: z.string().uuid(),
+  startsAt: z.string(),
+  endsAt: z.string(),
 });
 
 export const BerthReservationReserveInputSchema = ReserveBerthReservationInputSchema;
 
 export const ReleaseBerthReservationInputSchema = z.object({
-  id: z.string().uuid().optional(),
 });
 
 export const BerthReservationReleaseInputSchema = ReleaseBerthReservationInputSchema;
 
 export const CancelBerthReservationInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const BerthReservationCancelInputSchema = CancelBerthReservationInputSchema;
@@ -1223,15 +1154,15 @@ export const ShippingLineSchema = z.object({
   id: z.string().uuid(),
   slug: z.string(),
   name: z.string(),
-  dispatch_email: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  dispatchEmail: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const RegisterShippingLineInputSchema = z.object({
   slug: z.string(),
   name: z.string().min(2),
-  dispatch_email: z.string(),
+  dispatchEmail: z.string(),
 });
 
 export const ShippingLineRegisterInputSchema = RegisterShippingLineInputSchema;
@@ -1243,9 +1174,9 @@ export const CrewMemberSchema = z.object({
   email: z.string(),
   name: z.string(),
   role: z.enum(["DISPATCHER", "CAPTAIN", "CUSTOMS", "SHIPPER", "PORT_AUTHORITY"]),
-  hashed_password: z.string().nullable().optional(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  hashedPassword: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const RegisterWithPasswordCrewMemberInputSchema = z.object({
@@ -1258,7 +1189,6 @@ export const RegisterWithPasswordCrewMemberInputSchema = z.object({
 export const CrewMemberRegisterWithPasswordInputSchema = RegisterWithPasswordCrewMemberInputSchema;
 
 export const ReassignCrewMemberInputSchema = z.object({
-  id: z.string().uuid().optional(),
   role: z.enum(["DISPATCHER", "CAPTAIN", "CUSTOMS", "SHIPPER", "PORT_AUTHORITY"]).nullable().optional(),
 });
 
@@ -1268,18 +1198,18 @@ export const CrewMemberReassignInputSchema = ReassignCrewMemberInputSchema;
 export const TransponderSchema = z.object({
   id: z.string().uuid(),
   line: z.string(),
-  ship_id: z.string().uuid(),
+  shipId: z.string().uuid(),
   label: z.string(),
   kind: z.string(),
-  api_key_hash: z.string().nullable().optional(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  apiKeyHash: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const InstallTransponderInputSchema = z.object({
-  ship_id: z.string().uuid(),
+  shipId: z.string().uuid(),
   label: z.string(),
-  api_key_hash: z.string().nullable().optional(),
+  apiKeyHash: z.string().nullable().optional(),
 });
 
 export const TransponderInstallInputSchema = InstallTransponderInputSchema;
@@ -1291,60 +1221,60 @@ export const ShipSchema = z.object({
   registry: z.string(),
   name: z.string(),
   class: z.enum(["SHUTTLE", "HAULER", "TANKER", "FREIGHTER"]),
-  dry_mass_tonnes: z.number().int(),
-  slot_capacity: z.number().int(),
-  captain_id: z.string().uuid().nullable().optional(),
+  dryMassTonnes: z.number().int(),
+  slotCapacity: z.number().int(),
+  captainId: z.string().uuid().nullable().optional(),
   version: z.number().int(),
-  archived_at: z.string().nullable().optional(),
-  status: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  archivedAt: z.string().nullable().optional(),
+  status: z.enum(["docked", "in_transit", "maintenance"]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const CommissionShipInputSchema = z.object({
   registry: z.string(),
   name: z.string().min(2).max(60),
   class: z.enum(["SHUTTLE", "HAULER", "TANKER", "FREIGHTER"]),
-  dry_mass_tonnes: z.number().int(),
-  slot_capacity: z.number().int(),
-  captain_id: z.string().uuid().nullable().optional(),
+  dryMassTonnes: z.number().int(),
+  slotCapacity: z.number().int(),
+  captainId: z.string().uuid().nullable().optional(),
 });
 
 export const ShipCommissionInputSchema = CommissionShipInputSchema;
 
 export const AssignCaptainShipInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  captain_id: z.string().uuid().nullable().optional(),
+  captainId: z.string().uuid().nullable().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ShipAssignCaptainInputSchema = AssignCaptainShipInputSchema;
 
 export const DepartShipInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ShipDepartInputSchema = DepartShipInputSchema;
 
 export const ArriveShipInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ShipArriveInputSchema = ArriveShipInputSchema;
 
 export const BeginMaintenanceShipInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ShipBeginMaintenanceInputSchema = BeginMaintenanceShipInputSchema;
 
 export const EndMaintenanceShipInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ShipEndMaintenanceInputSchema = EndMaintenanceShipInputSchema;
 
 export const DecommissionShipInputSchema = z.object({
-  id: z.string().uuid(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ShipDecommissionInputSchema = DecommissionShipInputSchema;
@@ -1353,57 +1283,57 @@ export const ShipDecommissionInputSchema = DecommissionShipInputSchema;
 export const ContractSchema = z.object({
   id: z.string().uuid(),
   line: z.string(),
-  external_ref: z.string(),
-  shipper_email: z.string(),
-  origin_port_id: z.string().uuid(),
-  destination_port_id: z.string().uuid(),
-  freight_credits: z.number().int(),
-  insured_value: z.string(),
-  deliver_by: z.string(),
+  externalRef: z.string(),
+  shipperEmail: z.string(),
+  originPortId: z.string().uuid(),
+  destinationPortId: z.string().uuid(),
+  freightCredits: z.number().int(),
+  insuredValue: z.string(),
+  deliverBy: z.string(),
   version: z.number().int(),
-  status: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  status: z.enum(["booked", "loaded", "in_transit", "delivered", "closed", "cancelled"]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const BookContractInputSchema = z.object({
-  external_ref: z.string().min(3).max(40),
-  shipper_email: z.string(),
-  origin_port_id: z.string().uuid(),
-  destination_port_id: z.string().uuid(),
-  freight_credits: z.number().int().min(1),
-  insured_value: z.string(),
-  deliver_by: z.string(),
+  externalRef: z.string().min(3).max(40),
+  shipperEmail: z.string(),
+  originPortId: z.string().uuid(),
+  destinationPortId: z.string().uuid(),
+  freightCredits: z.number().int().min(1),
+  insuredValue: z.string(),
+  deliverBy: z.string(),
 });
 
 export const ContractBookInputSchema = BookContractInputSchema;
 
 export const LoadContractInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContractLoadInputSchema = LoadContractInputSchema;
 
 export const DispatchContractInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContractDispatchInputSchema = DispatchContractInputSchema;
 
 export const DeliverContractInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContractDeliverInputSchema = DeliverContractInputSchema;
 
 export const CloseContractInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContractCloseInputSchema = CloseContractInputSchema;
 
 export const CancelContractInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContractCancelInputSchema = CancelContractInputSchema;
@@ -1413,40 +1343,40 @@ export const ContainerSchema = z.object({
   id: z.string().uuid(),
   line: z.string(),
   code: z.string(),
-  contract_id: z.string().uuid(),
-  mass_tonnes: z.number().int(),
+  contractId: z.string().uuid(),
+  massTonnes: z.number().int(),
   hazmat: z.enum(["FLAMMABLE", "CORROSIVE", "RADIOACTIVE", "CRYOGENIC"]).nullable().optional(),
   hazardous: z.boolean(),
   reefer: z.boolean(),
-  manifest: z.record(z.string(), z.unknown()).nullable().optional(),
+  manifest: z.object({ shipper: z.string(), description: z.string(), pieces: z.number().int(), declaredValue: z.string() }).nullable().optional(),
   seal: z.string().nullable().optional(),
   sealed: z.boolean(),
   version: z.number().int(),
-  archived_at: z.string().nullable().optional(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  archivedAt: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const PackContainerInputSchema = z.object({
   code: z.string(),
-  contract_id: z.string().uuid(),
-  mass_tonnes: z.number().int().min(1).max(40),
+  contractId: z.string().uuid(),
+  massTonnes: z.number().int().min(1).max(40),
   hazmat: z.enum(["FLAMMABLE", "CORROSIVE", "RADIOACTIVE", "CRYOGENIC"]).nullable().optional(),
-  reefer: z.boolean(),
-  manifest: z.record(z.string(), z.unknown()).nullable().optional(),
+  reefer: z.boolean().nullable().optional(),
+  manifest: z.object({ shipper: z.string(), description: z.string(), pieces: z.number().int(), declaredValue: z.string() }).nullable().optional(),
 });
 
 export const ContainerPackInputSchema = PackContainerInputSchema;
 
 export const SealContainerInputSchema = z.object({
-  id: z.string().uuid().optional(),
   seal: z.string().nullable().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContainerSealInputSchema = SealContainerInputSchema;
 
 export const ScrapContainerInputSchema = z.object({
-  id: z.string().uuid(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const ContainerScrapInputSchema = ScrapContainerInputSchema;
@@ -1455,75 +1385,75 @@ export const ContainerScrapInputSchema = ScrapContainerInputSchema;
 export const VoyageSchema = z.object({
   id: z.string().uuid(),
   line: z.string(),
-  ship_id: z.string().uuid(),
-  captain_id: z.string().uuid(),
-  origin_port_id: z.string().uuid(),
-  destination_port_id: z.string().uuid(),
-  launch_window: z.string(),
-  distance_au: z.number(),
-  transit_hours: z.number().int(),
-  reservation_id: z.string().uuid().nullable().optional(),
-  departed_at: z.string().nullable().optional(),
-  arrived_at: z.string().nullable().optional(),
+  shipId: z.string().uuid(),
+  captainId: z.string().uuid(),
+  originPortId: z.string().uuid(),
+  destinationPortId: z.string().uuid(),
+  launchWindow: z.string(),
+  distanceAu: z.number(),
+  transitHours: z.number().int(),
+  reservationId: z.string().uuid().nullable().optional(),
+  departedAt: z.string().nullable().optional(),
+  arrivedAt: z.string().nullable().optional(),
   version: z.number().int(),
-  status: z.string(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  status: z.enum(["planned", "cleared", "in_transit", "arrived", "completed", "scrubbed"]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
 export const PlanVoyageInputSchema = z.object({
-  ship_id: z.string().uuid(),
-  captain_id: z.string().uuid(),
-  origin_port_id: z.string().uuid(),
-  destination_port_id: z.string().uuid(),
-  launch_window: z.string(),
-  distance_au: z.number(),
-  transit_hours: z.number().int(),
+  shipId: z.string().uuid(),
+  captainId: z.string().uuid(),
+  originPortId: z.string().uuid(),
+  destinationPortId: z.string().uuid(),
+  launchWindow: z.string(),
+  distanceAu: z.number(),
+  transitHours: z.number().int(),
 });
 
 export const VoyagePlanInputSchema = PlanVoyageInputSchema;
 
 export const HoldBerthVoyageInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  reservation_id: z.string().uuid().nullable().optional(),
+  reservationId: z.string().uuid().nullable().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageHoldBerthInputSchema = HoldBerthVoyageInputSchema;
 
 export const ClearCustomsVoyageInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageClearCustomsInputSchema = ClearCustomsVoyageInputSchema;
 
 export const LaunchVoyageInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  departed_at: z.string().nullable().optional(),
+  departedAt: z.string().nullable().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageLaunchInputSchema = LaunchVoyageInputSchema;
 
 export const ArriveVoyageInputSchema = z.object({
-  id: z.string().uuid().optional(),
-  arrived_at: z.string().nullable().optional(),
+  arrivedAt: z.string().nullable().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageArriveInputSchema = ArriveVoyageInputSchema;
 
 export const CompleteVoyageInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageCompleteInputSchema = CompleteVoyageInputSchema;
 
 export const ScrubVoyageInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageScrubInputSchema = ScrubVoyageInputSchema;
 
 export const DiscardVoyageInputSchema = z.object({
-  id: z.string().uuid(),
+  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageDiscardInputSchema = DiscardVoyageInputSchema;
@@ -1532,16 +1462,16 @@ export const VoyageDiscardInputSchema = DiscardVoyageInputSchema;
 export const StowageSchema = z.object({
   id: z.string().uuid(),
   line: z.string(),
-  voyage_id: z.string().uuid(),
-  container_id: z.string().uuid(),
+  voyageId: z.string().uuid(),
+  containerId: z.string().uuid(),
   bay: z.number().int(),
   stack: z.number().int(),
   tier: z.number().int(),
 });
 
 export const StowStowageInputSchema = z.object({
-  voyage_id: z.string().uuid(),
-  container_id: z.string().uuid(),
+  voyageId: z.string().uuid(),
+  containerId: z.string().uuid(),
   bay: z.number().int(),
   stack: z.number().int(),
   tier: z.number().int(),
@@ -1550,7 +1480,6 @@ export const StowStowageInputSchema = z.object({
 export const StowageStowInputSchema = StowStowageInputSchema;
 
 export const UnstowStowageInputSchema = z.object({
-  id: z.string().uuid(),
 });
 
 export const StowageUnstowInputSchema = UnstowStowageInputSchema;
@@ -1558,21 +1487,21 @@ export const StowageUnstowInputSchema = UnstowStowageInputSchema;
 
 export const TelemetryPingSchema = z.object({
   id: z.string().uuid(),
-  transponder_id: z.string().uuid(),
-  ship_id: z.string().uuid(),
+  transponderId: z.string().uuid(),
+  shipId: z.string().uuid(),
   position: z.array(z.number()).length(3),
-  speed_kms: z.number(),
-  fuel_pct: z.number().int(),
-  recorded_at: z.string(),
-  source_ip: z.string(),
+  speedKms: z.number(),
+  fuelPct: z.number().int(),
+  recordedAt: z.string(),
+  sourceIp: z.string(),
 });
 
 export const ReportTelemetryPingInputSchema = z.object({
   position: z.array(z.number()).length(3),
-  speed_kms: z.number(),
-  fuel_pct: z.number().int(),
-  recorded_at: z.string(),
-  source_ip: z.string(),
+  speedKms: z.number(),
+  fuelPct: z.number().int(),
+  recordedAt: z.string(),
+  sourceIp: z.string(),
 });
 
 export const TelemetryPingReportInputSchema = ReportTelemetryPingInputSchema;
@@ -1581,21 +1510,21 @@ export const TelemetryPingReportInputSchema = ReportTelemetryPingInputSchema;
 export const OpsEventSchema = z.object({
   id: z.string().uuid(),
   line: z.string().nullable().optional(),
-  actor_id: z.string().uuid().nullable().optional(),
+  actorId: z.string().uuid().nullable().optional(),
   resource: z.string(),
   action: z.string(),
-  record_id: z.string().uuid(),
-  client_ip: z.string().nullable().optional(),
+  recordId: z.string().uuid(),
+  clientIp: z.string().nullable().optional(),
   at: z.string(),
 });
 
 export const RecordOpsEventInputSchema = z.object({
   line: z.string().nullable().optional(),
-  actor_id: z.string().uuid().nullable().optional(),
+  actorId: z.string().uuid().nullable().optional(),
   resource: z.string(),
   action: z.string(),
-  record_id: z.string().uuid(),
-  client_ip: z.string().nullable().optional(),
+  recordId: z.string().uuid(),
+  clientIp: z.string().nullable().optional(),
   at: z.string(),
 });
 
@@ -1604,6 +1533,9 @@ export const OpsEventRecordInputSchema = RecordOpsEventInputSchema;
 
 // --- Section 4: Isomorphic Client SDK & Transport ---
 // Ash Client Runtime & Transport
+/** The most records a page holds: Ash's default `max_page_size`. */
+export const ASH_PAGE_SIZE = 250;
+
 export interface AshClientConfig {
   baseUrl: string;
   graphqlEndpoint?: string;
@@ -1611,9 +1543,15 @@ export interface AshClientConfig {
   headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 }
 
+/** An error a mutation reports, as AshGraphql's `MutationError`, or a GraphQL error. */
 export interface AshUserError {
-  field?: string;
   message: string;
+  shortMessage?: string | null;
+  /** Ash's error code, e.g. `invalid_attribute`, `required`, `not_found`, `forbidden`. */
+  code?: string | null;
+  /** The input fields it's about. */
+  fields?: string[];
+  path?: (string | number)[];
 }
 
 export class AshClientError extends Error {
@@ -1664,13 +1602,23 @@ export class AshTransport {
 
     const json = (await res.json()) as {
       data?: T;
-      errors?: Array<{ message: string; path?: string[] }>;
+      errors?: Array<{
+        message: string;
+        path?: (string | number)[];
+        code?: string;
+        extensions?: { code?: string };
+      }>;
     };
 
-    if (json.errors && json.errors.length > 0) {
-      const userErrors: AshUserError[] = json.errors.map((e) => ({
-        field: e.path ? e.path.join(".") : undefined,
+    // A field a policy hides comes back null with a `forbidden_field` error: the null
+    // stands for it, so it fails nothing.
+    const errors = (json.errors ?? []).filter(
+      (e) => (e.extensions?.code ?? e.code) !== "forbidden_field",
+    );
+    if (errors.length > 0) {
+      const userErrors: AshUserError[] = errors.map((e) => ({
         message: e.message,
+        path: e.path,
       }));
       throw new AshClientError(userErrors[0].message || "GraphQL execution error", userErrors);
     }
@@ -1684,7 +1632,7 @@ export class AshTransport {
 }
 
 export function buildPlanetSelectionSet(include?: PlanetInclude): string {
-  let fields = "id name surface_gravity position atmosphere created_at updated_at";
+  let fields = "id name surfaceGravity position atmosphere createdAt updatedAt";
   if (include?.ports) {
     const subInclude = typeof include.ports === "object" ? include.ports : undefined;
     fields += ` ports { ${buildPortSelectionSet(subInclude)} }`;
@@ -1693,7 +1641,7 @@ export function buildPlanetSelectionSet(include?: PlanetInclude): string {
 }
 
 export function buildPortSelectionSet(include?: PortInclude): string {
-  let fields = "id planet_id code name kind relay created_at updated_at";
+  let fields = "id planetId code name kind relay createdAt updatedAt";
   if (include?.planet) {
     const subInclude = typeof include.planet === "object" ? include.planet : undefined;
     fields += ` planet { ${buildPlanetSelectionSet(subInclude)} }`;
@@ -1706,7 +1654,7 @@ export function buildPortSelectionSet(include?: PortInclude): string {
 }
 
 export function buildBerthSelectionSet(include?: BerthInclude): string {
-  let fields = "id port_id code clamp max_mass_tonnes version";
+  let fields = "id portId code clamp maxMassTonnes version";
   if (include?.port) {
     const subInclude = typeof include.port === "object" ? include.port : undefined;
     fields += ` port { ${buildPortSelectionSet(subInclude)} }`;
@@ -1719,7 +1667,7 @@ export function buildBerthSelectionSet(include?: BerthInclude): string {
 }
 
 export function buildBerthReservationSelectionSet(include?: BerthReservationInclude): string {
-  let fields = "id line port_id berth_code ship_id starts_at ends_at status created_at updated_at";
+  let fields = "id line portId berthCode shipId startsAt endsAt status createdAt updatedAt";
   if (include?.berth) {
     const subInclude = typeof include.berth === "object" ? include.berth : undefined;
     fields += ` berth { ${buildBerthSelectionSet(subInclude)} }`;
@@ -1732,17 +1680,17 @@ export function buildBerthReservationSelectionSet(include?: BerthReservationIncl
 }
 
 export function buildShippingLineSelectionSet(include?: ShippingLineInclude): string {
-  let fields = "id slug name dispatch_email created_at updated_at";
+  let fields = "id slug name dispatchEmail createdAt updatedAt";
   return fields;
 }
 
 export function buildCrewMemberSelectionSet(include?: CrewMemberInclude): string {
-  let fields = "id line email name role hashed_password created_at updated_at";
+  let fields = "id line email name role hashedPassword createdAt updatedAt";
   return fields;
 }
 
 export function buildTransponderSelectionSet(include?: TransponderInclude): string {
-  let fields = "id line ship_id label kind api_key_hash created_at updated_at";
+  let fields = "id line shipId label kind apiKeyHash createdAt updatedAt";
   if (include?.ship) {
     const subInclude = typeof include.ship === "object" ? include.ship : undefined;
     fields += ` ship { ${buildShipSelectionSet(subInclude)} }`;
@@ -1751,7 +1699,7 @@ export function buildTransponderSelectionSet(include?: TransponderInclude): stri
 }
 
 export function buildShipSelectionSet(include?: ShipInclude): string {
-  let fields = "id line registry name class dry_mass_tonnes slot_capacity captain_id version archived_at status created_at updated_at";
+  let fields = "id line registry name class dryMassTonnes slotCapacity captainId version archivedAt status createdAt updatedAt";
   if (include?.captain) {
     const subInclude = typeof include.captain === "object" ? include.captain : undefined;
     fields += ` captain { ${buildCrewMemberSelectionSet(subInclude)} }`;
@@ -1772,7 +1720,7 @@ export function buildShipSelectionSet(include?: ShipInclude): string {
 }
 
 export function buildContractSelectionSet(include?: ContractInclude): string {
-  let fields = "id line external_ref shipper_email origin_port_id destination_port_id freight_credits insured_value deliver_by version status created_at updated_at";
+  let fields = "id line externalRef shipperEmail originPortId destinationPortId freightCredits insuredValue deliverBy version status createdAt updatedAt";
   if (include?.origin) {
     const subInclude = typeof include.origin === "object" ? include.origin : undefined;
     fields += ` origin { ${buildPortSelectionSet(subInclude)} }`;
@@ -1789,7 +1737,7 @@ export function buildContractSelectionSet(include?: ContractInclude): string {
 }
 
 export function buildContainerSelectionSet(include?: ContainerInclude): string {
-  let fields = "id line code contract_id mass_tonnes hazmat hazardous reefer manifest seal sealed version archived_at created_at updated_at";
+  let fields = "id line code contractId massTonnes hazmat hazardous reefer manifest { shipper description pieces declaredValue } seal sealed version archivedAt createdAt updatedAt";
   if (include?.contract) {
     const subInclude = typeof include.contract === "object" ? include.contract : undefined;
     fields += ` contract { ${buildContractSelectionSet(subInclude)} }`;
@@ -1798,7 +1746,7 @@ export function buildContainerSelectionSet(include?: ContainerInclude): string {
 }
 
 export function buildVoyageSelectionSet(include?: VoyageInclude): string {
-  let fields = "id line ship_id captain_id origin_port_id destination_port_id launch_window distance_au transit_hours reservation_id departed_at arrived_at version status created_at updated_at";
+  let fields = "id line shipId captainId originPortId destinationPortId launchWindow distanceAu transitHours reservationId departedAt arrivedAt version status createdAt updatedAt";
   if (include?.ship) {
     const subInclude = typeof include.ship === "object" ? include.ship : undefined;
     fields += ` ship { ${buildShipSelectionSet(subInclude)} }`;
@@ -1823,7 +1771,7 @@ export function buildVoyageSelectionSet(include?: VoyageInclude): string {
 }
 
 export function buildStowageSelectionSet(include?: StowageInclude): string {
-  let fields = "id line voyage_id container_id bay stack tier";
+  let fields = "id line voyageId containerId bay stack tier";
   if (include?.voyage) {
     const subInclude = typeof include.voyage === "object" ? include.voyage : undefined;
     fields += ` voyage { ${buildVoyageSelectionSet(subInclude)} }`;
@@ -1836,20 +1784,21 @@ export function buildStowageSelectionSet(include?: StowageInclude): string {
 }
 
 export function buildTelemetryPingSelectionSet(include?: TelemetryPingInclude): string {
-  let fields = "id transponder_id ship_id position speed_kms fuel_pct recorded_at source_ip";
+  let fields = "id transponderId shipId position speedKms fuelPct recordedAt sourceIp";
   return fields;
 }
 
 export function buildOpsEventSelectionSet(include?: OpsEventInclude): string {
-  let fields = "id line actor_id resource action record_id client_ip at";
+  let fields = "id line actorId resource action recordId clientIp at";
   return fields;
 }
+
+const PlanetSortFieldNames: Record<PlanetSortField, string> = { id: "ID", name: "NAME", surfaceGravity: "SURFACE_GRAVITY", position: "POSITION", atmosphere: "ATMOSPHERE", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", portCount: "PORT_COUNT" };
 
 export class PlanetQueryBuilder {
   private _filter?: PlanetFilterInput;
   private _sort: PlanetSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: PlanetInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -1864,13 +1813,9 @@ export class PlanetQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -1879,69 +1824,38 @@ export class PlanetQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Planet[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: PlanetSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Planet[]> {
     const fields = buildPlanetSelectionSet(this._include);
-    const query = `query ListPlanet($filter: PlanetFilterInput, $sort: [PlanetSortInput!], $limit: Int, $offset: Int) {
-      listPlanets(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListPlanet($filter: PlanetFilterInput, $sort: [PlanetSortInput]) {
+      listPlanets(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listPlanets: Planet[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listPlanets;
   }
 
-  public async first(): Promise<Planet | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Planet[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Planet>> {
-    const fields = buildPlanetSelectionSet(this._include);
-    const query = `query ConnPlanet($filter: PlanetFilterInput, $sort: [PlanetSortInput!], $first: Int, $after: String) {
-      planetsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      planetsConnection: {
-        edges: Array<{ node: Planet; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.planetsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Planet | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -1953,37 +1867,20 @@ export class PlanetQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Planet",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const PortSortFieldNames: Record<PortSortField, string> = { id: "ID", planetId: "PLANET_ID", code: "CODE", name: "NAME", kind: "KIND", relay: "RELAY", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", berthCount: "BERTH_COUNT", label: "LABEL" };
 
 export class PortQueryBuilder {
   private _filter?: PortFilterInput;
   private _sort: PortSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: PortInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -1998,13 +1895,9 @@ export class PortQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2013,69 +1906,38 @@ export class PortQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Port[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: PortSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Port[]> {
     const fields = buildPortSelectionSet(this._include);
-    const query = `query ListPort($filter: PortFilterInput, $sort: [PortSortInput!], $limit: Int, $offset: Int) {
-      listPorts(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListPort($filter: PortFilterInput, $sort: [PortSortInput]) {
+      listPorts(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listPorts: Port[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listPorts;
   }
 
-  public async first(): Promise<Port | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Port[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Port>> {
-    const fields = buildPortSelectionSet(this._include);
-    const query = `query ConnPort($filter: PortFilterInput, $sort: [PortSortInput!], $first: Int, $after: String) {
-      portsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      portsConnection: {
-        edges: Array<{ node: Port; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.portsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Port | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2087,37 +1949,20 @@ export class PortQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Port",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const BerthSortFieldNames: Record<BerthSortField, string> = { id: "ID", portId: "PORT_ID", code: "CODE", clamp: "CLAMP", maxMassTonnes: "MAX_MASS_TONNES", version: "VERSION", activeReservations: "ACTIVE_RESERVATIONS" };
 
 export class BerthQueryBuilder {
   private _filter?: BerthFilterInput;
   private _sort: BerthSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: BerthInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2132,13 +1977,9 @@ export class BerthQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2147,69 +1988,38 @@ export class BerthQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Berth[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: BerthSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Berth[]> {
     const fields = buildBerthSelectionSet(this._include);
-    const query = `query ListBerth($filter: BerthFilterInput, $sort: [BerthSortInput!], $limit: Int, $offset: Int) {
-      listBerths(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListBerth($filter: BerthFilterInput, $sort: [BerthSortInput]) {
+      listBerths(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listBerths: Berth[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listBerths;
   }
 
-  public async first(): Promise<Berth | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Berth[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Berth>> {
-    const fields = buildBerthSelectionSet(this._include);
-    const query = `query ConnBerth($filter: BerthFilterInput, $sort: [BerthSortInput!], $first: Int, $after: String) {
-      berthsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      berthsConnection: {
-        edges: Array<{ node: Berth; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.berthsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Berth | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2221,37 +2031,20 @@ export class BerthQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Berth",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const BerthReservationSortFieldNames: Record<BerthReservationSortField, string> = { id: "ID", line: "LINE", portId: "PORT_ID", berthCode: "BERTH_CODE", shipId: "SHIP_ID", startsAt: "STARTS_AT", endsAt: "ENDS_AT", status: "STATUS", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class BerthReservationQueryBuilder {
   private _filter?: BerthReservationFilterInput;
   private _sort: BerthReservationSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: BerthReservationInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2266,13 +2059,9 @@ export class BerthReservationQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2281,69 +2070,38 @@ export class BerthReservationQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<BerthReservation[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: BerthReservationSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<BerthReservation[]> {
     const fields = buildBerthReservationSelectionSet(this._include);
-    const query = `query ListBerthReservation($filter: BerthReservationFilterInput, $sort: [BerthReservationSortInput!], $limit: Int, $offset: Int) {
-      listBerthReservations(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListBerthReservation($filter: BerthReservationFilterInput, $sort: [BerthReservationSortInput]) {
+      listBerthReservations(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listBerthReservations: BerthReservation[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listBerthReservations;
   }
 
-  public async first(): Promise<BerthReservation | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<BerthReservation[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<BerthReservation>> {
-    const fields = buildBerthReservationSelectionSet(this._include);
-    const query = `query ConnBerthReservation($filter: BerthReservationFilterInput, $sort: [BerthReservationSortInput!], $first: Int, $after: String) {
-      berthReservationsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      berthReservationsConnection: {
-        edges: Array<{ node: BerthReservation; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.berthReservationsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<BerthReservation | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2355,37 +2113,20 @@ export class BerthReservationQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "BerthReservation",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const ShippingLineSortFieldNames: Record<ShippingLineSortField, string> = { id: "ID", slug: "SLUG", name: "NAME", dispatchEmail: "DISPATCH_EMAIL", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class ShippingLineQueryBuilder {
   private _filter?: ShippingLineFilterInput;
   private _sort: ShippingLineSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: ShippingLineInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2400,13 +2141,9 @@ export class ShippingLineQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2415,69 +2152,38 @@ export class ShippingLineQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<ShippingLine[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: ShippingLineSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<ShippingLine[]> {
     const fields = buildShippingLineSelectionSet(this._include);
-    const query = `query ListShippingLine($filter: ShippingLineFilterInput, $sort: [ShippingLineSortInput!], $limit: Int, $offset: Int) {
-      listShippingLines(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListShippingLine($filter: ShippingLineFilterInput, $sort: [ShippingLineSortInput]) {
+      listShippingLines(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listShippingLines: ShippingLine[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listShippingLines;
   }
 
-  public async first(): Promise<ShippingLine | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<ShippingLine[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<ShippingLine>> {
-    const fields = buildShippingLineSelectionSet(this._include);
-    const query = `query ConnShippingLine($filter: ShippingLineFilterInput, $sort: [ShippingLineSortInput!], $first: Int, $after: String) {
-      shippingLinesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      shippingLinesConnection: {
-        edges: Array<{ node: ShippingLine; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.shippingLinesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<ShippingLine | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2489,37 +2195,20 @@ export class ShippingLineQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "ShippingLine",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const CrewMemberSortFieldNames: Record<CrewMemberSortField, string> = { id: "ID", line: "LINE", email: "EMAIL", name: "NAME", role: "ROLE", hashedPassword: "HASHED_PASSWORD", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class CrewMemberQueryBuilder {
   private _filter?: CrewMemberFilterInput;
   private _sort: CrewMemberSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: CrewMemberInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2534,13 +2223,9 @@ export class CrewMemberQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2549,69 +2234,38 @@ export class CrewMemberQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<CrewMember[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: CrewMemberSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<CrewMember[]> {
     const fields = buildCrewMemberSelectionSet(this._include);
-    const query = `query ListCrewMember($filter: CrewMemberFilterInput, $sort: [CrewMemberSortInput!], $limit: Int, $offset: Int) {
-      listCrewMembers(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListCrewMember($filter: CrewMemberFilterInput, $sort: [CrewMemberSortInput]) {
+      listCrewMembers(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listCrewMembers: CrewMember[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listCrewMembers;
   }
 
-  public async first(): Promise<CrewMember | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<CrewMember[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<CrewMember>> {
-    const fields = buildCrewMemberSelectionSet(this._include);
-    const query = `query ConnCrewMember($filter: CrewMemberFilterInput, $sort: [CrewMemberSortInput!], $first: Int, $after: String) {
-      crewMembersConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      crewMembersConnection: {
-        edges: Array<{ node: CrewMember; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.crewMembersConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<CrewMember | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2623,37 +2277,20 @@ export class CrewMemberQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "CrewMember",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const TransponderSortFieldNames: Record<TransponderSortField, string> = { id: "ID", line: "LINE", shipId: "SHIP_ID", label: "LABEL", kind: "KIND", apiKeyHash: "API_KEY_HASH", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class TransponderQueryBuilder {
   private _filter?: TransponderFilterInput;
   private _sort: TransponderSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: TransponderInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2668,13 +2305,9 @@ export class TransponderQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2683,69 +2316,38 @@ export class TransponderQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Transponder[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: TransponderSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Transponder[]> {
     const fields = buildTransponderSelectionSet(this._include);
-    const query = `query ListTransponder($filter: TransponderFilterInput, $sort: [TransponderSortInput!], $limit: Int, $offset: Int) {
-      listTransponders(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListTransponder($filter: TransponderFilterInput, $sort: [TransponderSortInput]) {
+      listTransponders(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listTransponders: Transponder[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listTransponders;
   }
 
-  public async first(): Promise<Transponder | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Transponder[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Transponder>> {
-    const fields = buildTransponderSelectionSet(this._include);
-    const query = `query ConnTransponder($filter: TransponderFilterInput, $sort: [TransponderSortInput!], $first: Int, $after: String) {
-      transpondersConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      transpondersConnection: {
-        edges: Array<{ node: Transponder; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.transpondersConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Transponder | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2757,37 +2359,20 @@ export class TransponderQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Transponder",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const ShipSortFieldNames: Record<ShipSortField, string> = { id: "ID", line: "LINE", registry: "REGISTRY", name: "NAME", class: "CLASS", dryMassTonnes: "DRY_MASS_TONNES", slotCapacity: "SLOT_CAPACITY", captainId: "CAPTAIN_ID", version: "VERSION", archivedAt: "ARCHIVED_AT", status: "STATUS", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", voyageCount: "VOYAGE_COUNT", flightsCompleted: "FLIGHTS_COMPLETED" };
 
 export class ShipQueryBuilder {
   private _filter?: ShipFilterInput;
   private _sort: ShipSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: ShipInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2802,13 +2387,9 @@ export class ShipQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2817,69 +2398,38 @@ export class ShipQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Ship[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: ShipSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Ship[]> {
     const fields = buildShipSelectionSet(this._include);
-    const query = `query ListShip($filter: ShipFilterInput, $sort: [ShipSortInput!], $limit: Int, $offset: Int) {
-      listShips(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListShip($filter: ShipFilterInput, $sort: [ShipSortInput]) {
+      listShips(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listShips: Ship[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listShips;
   }
 
-  public async first(): Promise<Ship | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Ship[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Ship>> {
-    const fields = buildShipSelectionSet(this._include);
-    const query = `query ConnShip($filter: ShipFilterInput, $sort: [ShipSortInput!], $first: Int, $after: String) {
-      shipsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      shipsConnection: {
-        edges: Array<{ node: Ship; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.shipsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Ship | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -2891,37 +2441,20 @@ export class ShipQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Ship",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const ContractSortFieldNames: Record<ContractSortField, string> = { id: "ID", line: "LINE", externalRef: "EXTERNAL_REF", shipperEmail: "SHIPPER_EMAIL", originPortId: "ORIGIN_PORT_ID", destinationPortId: "DESTINATION_PORT_ID", freightCredits: "FREIGHT_CREDITS", insuredValue: "INSURED_VALUE", deliverBy: "DELIVER_BY", version: "VERSION", status: "STATUS", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", containerCount: "CONTAINER_COUNT", bookedMass: "BOOKED_MASS" };
 
 export class ContractQueryBuilder {
   private _filter?: ContractFilterInput;
   private _sort: ContractSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: ContractInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -2936,13 +2469,9 @@ export class ContractQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -2951,69 +2480,38 @@ export class ContractQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Contract[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: ContractSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Contract[]> {
     const fields = buildContractSelectionSet(this._include);
-    const query = `query ListContract($filter: ContractFilterInput, $sort: [ContractSortInput!], $limit: Int, $offset: Int) {
-      listContracts(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListContract($filter: ContractFilterInput, $sort: [ContractSortInput]) {
+      listContracts(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listContracts: Contract[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listContracts;
   }
 
-  public async first(): Promise<Contract | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Contract[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Contract>> {
-    const fields = buildContractSelectionSet(this._include);
-    const query = `query ConnContract($filter: ContractFilterInput, $sort: [ContractSortInput!], $first: Int, $after: String) {
-      contractsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      contractsConnection: {
-        edges: Array<{ node: Contract; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.contractsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Contract | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -3025,37 +2523,20 @@ export class ContractQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Contract",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const ContainerSortFieldNames: Record<ContainerSortField, string> = { id: "ID", line: "LINE", code: "CODE", contractId: "CONTRACT_ID", massTonnes: "MASS_TONNES", hazmat: "HAZMAT", hazardous: "HAZARDOUS", reefer: "REEFER", manifest: "MANIFEST", seal: "SEAL", sealed: "SEALED", version: "VERSION", archivedAt: "ARCHIVED_AT", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class ContainerQueryBuilder {
   private _filter?: ContainerFilterInput;
   private _sort: ContainerSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: ContainerInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -3070,13 +2551,9 @@ export class ContainerQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3085,69 +2562,38 @@ export class ContainerQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Container[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: ContainerSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Container[]> {
     const fields = buildContainerSelectionSet(this._include);
-    const query = `query ListContainer($filter: ContainerFilterInput, $sort: [ContainerSortInput!], $limit: Int, $offset: Int) {
-      listContainers(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListContainer($filter: ContainerFilterInput, $sort: [ContainerSortInput]) {
+      listContainers(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listContainers: Container[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listContainers;
   }
 
-  public async first(): Promise<Container | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Container[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Container>> {
-    const fields = buildContainerSelectionSet(this._include);
-    const query = `query ConnContainer($filter: ContainerFilterInput, $sort: [ContainerSortInput!], $first: Int, $after: String) {
-      containersConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      containersConnection: {
-        edges: Array<{ node: Container; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.containersConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Container | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -3159,37 +2605,20 @@ export class ContainerQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Container",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const VoyageSortFieldNames: Record<VoyageSortField, string> = { id: "ID", line: "LINE", shipId: "SHIP_ID", captainId: "CAPTAIN_ID", originPortId: "ORIGIN_PORT_ID", destinationPortId: "DESTINATION_PORT_ID", launchWindow: "LAUNCH_WINDOW", distanceAu: "DISTANCE_AU", transitHours: "TRANSIT_HOURS", reservationId: "RESERVATION_ID", departedAt: "DEPARTED_AT", arrivedAt: "ARRIVED_AT", version: "VERSION", status: "STATUS", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT", containerCount: "CONTAINER_COUNT", loadedMass: "LOADED_MASS", carriesHazmat: "CARRIES_HAZMAT" };
 
 export class VoyageQueryBuilder {
   private _filter?: VoyageFilterInput;
   private _sort: VoyageSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: VoyageInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -3204,13 +2633,9 @@ export class VoyageQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3219,69 +2644,38 @@ export class VoyageQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Voyage[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: VoyageSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Voyage[]> {
     const fields = buildVoyageSelectionSet(this._include);
-    const query = `query ListVoyage($filter: VoyageFilterInput, $sort: [VoyageSortInput!], $limit: Int, $offset: Int) {
-      listVoyages(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListVoyage($filter: VoyageFilterInput, $sort: [VoyageSortInput]) {
+      listVoyages(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listVoyages: Voyage[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listVoyages;
   }
 
-  public async first(): Promise<Voyage | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Voyage[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Voyage>> {
-    const fields = buildVoyageSelectionSet(this._include);
-    const query = `query ConnVoyage($filter: VoyageFilterInput, $sort: [VoyageSortInput!], $first: Int, $after: String) {
-      voyagesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      voyagesConnection: {
-        edges: Array<{ node: Voyage; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.voyagesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Voyage | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -3293,37 +2687,20 @@ export class VoyageQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Voyage",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const StowageSortFieldNames: Record<StowageSortField, string> = { id: "ID", line: "LINE", voyageId: "VOYAGE_ID", containerId: "CONTAINER_ID", bay: "BAY", stack: "STACK", tier: "TIER" };
 
 export class StowageQueryBuilder {
   private _filter?: StowageFilterInput;
   private _sort: StowageSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: StowageInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -3338,13 +2715,9 @@ export class StowageQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3353,69 +2726,38 @@ export class StowageQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<Stowage[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: StowageSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<Stowage[]> {
     const fields = buildStowageSelectionSet(this._include);
-    const query = `query ListStowage($filter: StowageFilterInput, $sort: [StowageSortInput!], $limit: Int, $offset: Int) {
-      listStowages(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListStowage($filter: StowageFilterInput, $sort: [StowageSortInput]) {
+      listStowages(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listStowages: Stowage[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listStowages;
   }
 
-  public async first(): Promise<Stowage | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<Stowage[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<Stowage>> {
-    const fields = buildStowageSelectionSet(this._include);
-    const query = `query ConnStowage($filter: StowageFilterInput, $sort: [StowageSortInput!], $first: Int, $after: String) {
-      stowagesConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      stowagesConnection: {
-        edges: Array<{ node: Stowage; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.stowagesConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<Stowage | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -3427,37 +2769,20 @@ export class StowageQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "Stowage",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const TelemetryPingSortFieldNames: Record<TelemetryPingSortField, string> = { id: "ID", transponderId: "TRANSPONDER_ID", shipId: "SHIP_ID", position: "POSITION", speedKms: "SPEED_KMS", fuelPct: "FUEL_PCT", recordedAt: "RECORDED_AT", sourceIp: "SOURCE_IP" };
 
 export class TelemetryPingQueryBuilder {
   private _filter?: TelemetryPingFilterInput;
   private _sort: TelemetryPingSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: TelemetryPingInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -3472,13 +2797,9 @@ export class TelemetryPingQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3487,69 +2808,38 @@ export class TelemetryPingQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<TelemetryPing[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: TelemetryPingSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<TelemetryPing[]> {
     const fields = buildTelemetryPingSelectionSet(this._include);
-    const query = `query ListTelemetryPing($filter: TelemetryPingFilterInput, $sort: [TelemetryPingSortInput!], $limit: Int, $offset: Int) {
-      listTelemetryPings(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListTelemetryPing($filter: TelemetryPingFilterInput, $sort: [TelemetryPingSortInput]) {
+      listTelemetryPings(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listTelemetryPings: TelemetryPing[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listTelemetryPings;
   }
 
-  public async first(): Promise<TelemetryPing | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<TelemetryPing[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<TelemetryPing>> {
-    const fields = buildTelemetryPingSelectionSet(this._include);
-    const query = `query ConnTelemetryPing($filter: TelemetryPingFilterInput, $sort: [TelemetryPingSortInput!], $first: Int, $after: String) {
-      telemetryPingsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      telemetryPingsConnection: {
-        edges: Array<{ node: TelemetryPing; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.telemetryPingsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<TelemetryPing | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -3561,37 +2851,20 @@ export class TelemetryPingQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
     };
   }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "TelemetryPing",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
-    };
-  }
 }
+
+const OpsEventSortFieldNames: Record<OpsEventSortField, string> = { id: "ID", line: "LINE", actorId: "ACTOR_ID", resource: "RESOURCE", action: "ACTION", recordId: "RECORD_ID", clientIp: "CLIENT_IP", at: "AT" };
 
 export class OpsEventQueryBuilder {
   private _filter?: OpsEventFilterInput;
   private _sort: OpsEventSortInput[] = [];
   private _limit?: number;
-  private _offset?: number;
   private _include?: OpsEventInclude;
 
   constructor(private readonly transport: AshTransport) {}
@@ -3606,13 +2879,9 @@ export class OpsEventQueryBuilder {
     return this;
   }
 
+  /** At most this many records, the first in the query's order. */
   public limit(limit: number): this {
     this._limit = limit;
-    return this;
-  }
-
-  public offset(offset: number): this {
-    this._offset = offset;
     return this;
   }
 
@@ -3621,69 +2890,38 @@ export class OpsEventQueryBuilder {
     return this;
   }
 
-  public async all(): Promise<OpsEvent[]> {
+  /** The sort as the schema takes it: `[{ field: "CALL_SIGN", order: "DESC" }]`. */
+  private sortInput() {
+    if (this._sort.length === 0) return undefined;
+    return this._sort.map(({ field, order }) => ({
+      field: OpsEventSortFieldNames[field],
+      order: order === "desc" ? "DESC" : "ASC",
+    }));
+  }
+
+  private async read(): Promise<OpsEvent[]> {
     const fields = buildOpsEventSelectionSet(this._include);
-    const query = `query ListOpsEvent($filter: OpsEventFilterInput, $sort: [OpsEventSortInput!], $limit: Int, $offset: Int) {
-      listOpsEvents(filter: $filter, sort: $sort, limit: $limit, offset: $offset) {
+    const query = `query ListOpsEvent($filter: OpsEventFilterInput, $sort: [OpsEventSortInput]) {
+      listOpsEvents(filter: $filter, sort: $sort) {
         ${fields}
       }
     }`;
 
     const data = await this.transport.request<{ listOpsEvents: OpsEvent[] }>(query, {
       filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      limit: this._limit,
-      offset: this._offset,
+      sort: this.sortInput(),
     });
-
     return data.listOpsEvents;
   }
 
-  public async first(): Promise<OpsEvent | null> {
-    this._limit = 1;
-    const list = await this.all();
-    return list[0] ?? null;
+  /** Every matching record, or the first `limit` of them. The read doesn't page. */
+  public async all(): Promise<OpsEvent[]> {
+    const records = await this.read();
+    return this._limit === undefined ? records : records.slice(0, this._limit);
   }
 
-  public async page(first: number = 20, after?: string): Promise<PaginatedResult<OpsEvent>> {
-    const fields = buildOpsEventSelectionSet(this._include);
-    const query = `query ConnOpsEvent($filter: OpsEventFilterInput, $sort: [OpsEventSortInput!], $first: Int, $after: String) {
-      opsEventsConnection(filter: $filter, sort: $sort, first: $first, after: $after) {
-        edges {
-          node {
-            ${fields}
-          }
-          cursor
-        }
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      opsEventsConnection: {
-        edges: Array<{ node: OpsEvent; cursor: string }>;
-        pageInfo: PageInfo;
-        totalCount?: number;
-      };
-    }>(query, {
-      filter: this._filter,
-      sort: this._sort.length > 0 ? this._sort : undefined,
-      first,
-      after,
-    });
-
-    const conn = data.opsEventsConnection;
-    return {
-      results: conn.edges.map((e) => e.node),
-      pageInfo: conn.pageInfo,
-      totalCount: conn.totalCount,
-    };
+  public async first(): Promise<OpsEvent | null> {
+    return (await this.read())[0] ?? null;
   }
 
   public queryOptions() {
@@ -3695,28 +2933,10 @@ export class OpsEventQueryBuilder {
           filter: this._filter,
           sort: this._sort,
           limit: this._limit,
-          offset: this._offset,
           include: this._include,
         },
       ],
       queryFn: () => this.all(),
-    };
-  }
-
-  public pageQueryOptions(first: number = 20, after?: string) {
-    return {
-      queryKey: [
-        "OpsEvent",
-        "page",
-        {
-          filter: this._filter,
-          sort: this._sort,
-          first,
-          after,
-          include: this._include,
-        },
-      ],
-      queryFn: () => this.page(first, after),
     };
   }
 }
@@ -3755,83 +2975,55 @@ export class PlanetClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       chartPlanet: {
-        result?: Planet;
+        result?: Planet | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.chartPlanet;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async survey(id: string, input: SurveyPlanetInput, include?: PlanetInclude): Promise<Planet> {
+  public async survey(id: string, input: SurveyPlanetInput = {}, include?: PlanetInclude): Promise<Planet> {
     const fields = buildPlanetSelectionSet(include);
-    const query = `mutation MutatePlanet($input: SurveyPlanetInput!) {
-      surveyPlanet(input: $input) {
+    const query = `mutation MutatePlanet($id: ID!, $input: SurveyPlanetInput) {
+      surveyPlanet(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       surveyPlanet: {
-        result?: Planet;
+        result?: Planet | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.surveyPlanet;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
-    }
-
-    return payload.result;
-  }
-
-  public async route(input?: Record<string, unknown>): Promise<unknown> {
-    const query = `mutation MutatePlanet($input: GenericInput) {
-      routePlanet(input: $input) {
-        result
-        errors {
-          field
-          message
-        }
-        success
-      }
-    }`;
-
-    const data = await this.transport.request<{
-      routePlanet: {
-        result?: unknown;
-        errors: AshUserError[];
-        success: boolean;
-      };
-    }>(query, { input: input ?? {} });
-
-    const payload = data.routePlanet;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Action failed", payload.errors);
     }
 
     return payload.result;
@@ -3872,85 +3064,85 @@ export class PortClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       openPort: {
-        result?: Port;
+        result?: Port | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.openPort;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async rename(id: string, input: RenamePortInput, include?: PortInclude): Promise<Port> {
+  public async rename(id: string, input: RenamePortInput = {}, include?: PortInclude): Promise<Port> {
     const fields = buildPortSelectionSet(include);
-    const query = `mutation MutatePort($input: RenamePortInput!) {
-      renamePort(input: $input) {
+    const query = `mutation MutatePort($id: ID!, $input: RenamePortInput) {
+      renamePort(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       renamePort: {
-        result?: Port;
+        result?: Port | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.renamePort;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async moveRelay(id: string, input: MoveRelayPortInput, include?: PortInclude): Promise<Port> {
+  public async moveRelay(id: string, input: MoveRelayPortInput = {}, include?: PortInclude): Promise<Port> {
     const fields = buildPortSelectionSet(include);
-    const query = `mutation MutatePort($input: MoveRelayPortInput!) {
-      moveRelayPort(input: $input) {
+    const query = `mutation MutatePort($id: ID!, $input: MoveRelayPortInput) {
+      moveRelayPort(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       moveRelayPort: {
-        result?: Port;
+        result?: Port | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.moveRelayPort;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -3992,85 +3184,85 @@ export class BerthClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       buildBerth: {
-        result?: Berth;
+        result?: Berth | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.buildBerth;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async recode(id: string, input: RecodeBerthInput, include?: BerthInclude): Promise<Berth> {
+  public async recode(id: string, input: RecodeBerthInput = {}, include?: BerthInclude): Promise<Berth> {
     const fields = buildBerthSelectionSet(include);
-    const query = `mutation MutateBerth($input: RecodeBerthInput!) {
-      recodeBerth(input: $input) {
+    const query = `mutation MutateBerth($id: ID!, $input: RecodeBerthInput) {
+      recodeBerth(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       recodeBerth: {
-        result?: Berth;
+        result?: Berth | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.recodeBerth;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async claim(id: string, input: ClaimBerthInput, include?: BerthInclude): Promise<Berth> {
+  public async claim(id: string, input: ClaimBerthInput = {}, include?: BerthInclude): Promise<Berth> {
     const fields = buildBerthSelectionSet(include);
-    const query = `mutation MutateBerth($input: ClaimBerthInput!) {
-      claimBerth(input: $input) {
+    const query = `mutation MutateBerth($id: ID!, $input: ClaimBerthInput) {
+      claimBerth(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       claimBerth: {
-        result?: Berth;
+        result?: Berth | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.claimBerth;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -4112,81 +3304,82 @@ export class BerthReservationClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       reserveBerthReservation: {
-        result?: BerthReservation;
+        result?: BerthReservation | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.reserveBerthReservation;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async release(id: string, input: ReleaseBerthReservationInput, include?: BerthReservationInclude): Promise<BerthReservation> {
+  public async release(id: string, _input: ReleaseBerthReservationInput = {}, include?: BerthReservationInclude): Promise<BerthReservation> {
     const fields = buildBerthReservationSelectionSet(include);
-    const query = `mutation MutateBerthReservation($input: ReleaseBerthReservationInput!) {
-      releaseBerthReservation(input: $input) {
+    const query = `mutation MutateBerthReservation($id: ID!) {
+      releaseBerthReservation(id: $id) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       releaseBerthReservation: {
-        result?: BerthReservation;
+        result?: BerthReservation | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id });
 
     const payload = data.releaseBerthReservation;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async cancel(id: string): Promise<boolean> {
-    const query = `mutation MutateBerthReservation($input: CancelBerthReservationInput!) {
-      cancelBerthReservation(input: $input) {
+  public async cancel(id: string, _input: CancelBerthReservationInput = {}): Promise<boolean> {
+    const query = `mutation MutateBerthReservation($id: ID!) {
+      cancelBerthReservation(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       cancelBerthReservation: {
+        result?: BerthReservation | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.cancelBerthReservation;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4227,23 +3420,23 @@ export class ShippingLineClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       registerShippingLine: {
-        result?: ShippingLine;
+        result?: ShippingLine | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.registerShippingLine;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -4285,54 +3478,54 @@ export class CrewMemberClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       registerWithPasswordCrewMember: {
-        result?: CrewMember;
+        result?: CrewMember | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.registerWithPasswordCrewMember;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async reassign(id: string, input: ReassignCrewMemberInput, include?: CrewMemberInclude): Promise<CrewMember> {
+  public async reassign(id: string, input: ReassignCrewMemberInput = {}, include?: CrewMemberInclude): Promise<CrewMember> {
     const fields = buildCrewMemberSelectionSet(include);
-    const query = `mutation MutateCrewMember($input: ReassignCrewMemberInput!) {
-      reassignCrewMember(input: $input) {
+    const query = `mutation MutateCrewMember($id: ID!, $input: ReassignCrewMemberInput) {
+      reassignCrewMember(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       reassignCrewMember: {
-        result?: CrewMember;
+        result?: CrewMember | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.reassignCrewMember;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -4374,23 +3567,23 @@ export class TransponderClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       installTransponder: {
-        result?: Transponder;
+        result?: Transponder | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.installTransponder;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -4432,205 +3625,206 @@ export class ShipClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       commissionShip: {
-        result?: Ship;
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.commissionShip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async assignCaptain(id: string, input: AssignCaptainShipInput, include?: ShipInclude): Promise<Ship> {
+  public async assignCaptain(id: string, input: AssignCaptainShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($input: AssignCaptainShipInput!) {
-      assignCaptainShip(input: $input) {
+    const query = `mutation MutateShip($id: ID!, $input: AssignCaptainShipInput) {
+      assignCaptainShip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       assignCaptainShip: {
-        result?: Ship;
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.assignCaptainShip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async depart(id: string, input: DepartShipInput, include?: ShipInclude): Promise<Ship> {
+  public async depart(id: string, input: DepartShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($input: DepartShipInput!) {
-      departShip(input: $input) {
+    const query = `mutation MutateShip($id: ID!, $input: DepartShipInput) {
+      departShip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       departShip: {
-        result?: Ship;
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.departShip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async arrive(id: string, input: ArriveShipInput, include?: ShipInclude): Promise<Ship> {
+  public async arrive(id: string, input: ArriveShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($input: ArriveShipInput!) {
-      arriveShip(input: $input) {
+    const query = `mutation MutateShip($id: ID!, $input: ArriveShipInput) {
+      arriveShip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       arriveShip: {
-        result?: Ship;
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.arriveShip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async beginMaintenance(id: string, input: BeginMaintenanceShipInput, include?: ShipInclude): Promise<Ship> {
+  public async beginMaintenance(id: string, input: BeginMaintenanceShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($input: BeginMaintenanceShipInput!) {
-      beginMaintenanceShip(input: $input) {
+    const query = `mutation MutateShip($id: ID!, $input: BeginMaintenanceShipInput) {
+      beginMaintenanceShip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       beginMaintenanceShip: {
-        result?: Ship;
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.beginMaintenanceShip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async endMaintenance(id: string, input: EndMaintenanceShipInput, include?: ShipInclude): Promise<Ship> {
+  public async endMaintenance(id: string, input: EndMaintenanceShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($input: EndMaintenanceShipInput!) {
-      endMaintenanceShip(input: $input) {
+    const query = `mutation MutateShip($id: ID!, $input: EndMaintenanceShipInput) {
+      endMaintenanceShip(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       endMaintenanceShip: {
-        result?: Ship;
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.endMaintenanceShip;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async decommission(id: string): Promise<boolean> {
-    const query = `mutation MutateShip($input: DecommissionShipInput!) {
-      decommissionShip(input: $input) {
+  public async decommission(id: string, input: DecommissionShipInput = {}): Promise<boolean> {
+    const query = `mutation MutateShip($id: ID!, $input: DecommissionShipInput) {
+      decommissionShip(id: $id, input: $input) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       decommissionShip: {
+        result?: Ship | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id, input });
 
     const payload = data.decommissionShip;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4671,178 +3865,178 @@ export class ContractClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       bookContract: {
-        result?: Contract;
+        result?: Contract | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.bookContract;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async load(id: string, input: LoadContractInput, include?: ContractInclude): Promise<Contract> {
+  public async load(id: string, input: LoadContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($input: LoadContractInput!) {
-      loadContract(input: $input) {
+    const query = `mutation MutateContract($id: ID!, $input: LoadContractInput) {
+      loadContract(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       loadContract: {
-        result?: Contract;
+        result?: Contract | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.loadContract;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async dispatch(id: string, input: DispatchContractInput, include?: ContractInclude): Promise<Contract> {
+  public async dispatch(id: string, input: DispatchContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($input: DispatchContractInput!) {
-      dispatchContract(input: $input) {
+    const query = `mutation MutateContract($id: ID!, $input: DispatchContractInput) {
+      dispatchContract(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       dispatchContract: {
-        result?: Contract;
+        result?: Contract | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.dispatchContract;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async deliver(id: string, input: DeliverContractInput, include?: ContractInclude): Promise<Contract> {
+  public async deliver(id: string, input: DeliverContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($input: DeliverContractInput!) {
-      deliverContract(input: $input) {
+    const query = `mutation MutateContract($id: ID!, $input: DeliverContractInput) {
+      deliverContract(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       deliverContract: {
-        result?: Contract;
+        result?: Contract | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.deliverContract;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async close(id: string, input: CloseContractInput, include?: ContractInclude): Promise<Contract> {
+  public async close(id: string, input: CloseContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($input: CloseContractInput!) {
-      closeContract(input: $input) {
+    const query = `mutation MutateContract($id: ID!, $input: CloseContractInput) {
+      closeContract(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       closeContract: {
-        result?: Contract;
+        result?: Contract | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.closeContract;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async cancel(id: string, input: CancelContractInput, include?: ContractInclude): Promise<Contract> {
+  public async cancel(id: string, input: CancelContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($input: CancelContractInput!) {
-      cancelContract(input: $input) {
+    const query = `mutation MutateContract($id: ID!, $input: CancelContractInput) {
+      cancelContract(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       cancelContract: {
-        result?: Contract;
+        result?: Contract | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.cancelContract;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -4884,81 +4078,82 @@ export class ContainerClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       packContainer: {
-        result?: Container;
+        result?: Container | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.packContainer;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async seal(id: string, input: SealContainerInput, include?: ContainerInclude): Promise<Container> {
+  public async seal(id: string, input: SealContainerInput = {}, include?: ContainerInclude): Promise<Container> {
     const fields = buildContainerSelectionSet(include);
-    const query = `mutation MutateContainer($input: SealContainerInput!) {
-      sealContainer(input: $input) {
+    const query = `mutation MutateContainer($id: ID!, $input: SealContainerInput) {
+      sealContainer(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       sealContainer: {
-        result?: Container;
+        result?: Container | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.sealContainer;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async scrap(id: string): Promise<boolean> {
-    const query = `mutation MutateContainer($input: ScrapContainerInput!) {
-      scrapContainer(input: $input) {
+  public async scrap(id: string, input: ScrapContainerInput = {}): Promise<boolean> {
+    const query = `mutation MutateContainer($id: ID!, $input: ScrapContainerInput) {
+      scrapContainer(id: $id, input: $input) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       scrapContainer: {
+        result?: Container | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id, input });
 
     const payload = data.scrapContainer;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -4999,236 +4194,237 @@ export class VoyageClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       planVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.planVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async holdBerth(id: string, input: HoldBerthVoyageInput, include?: VoyageInclude): Promise<Voyage> {
+  public async holdBerth(id: string, input: HoldBerthVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($input: HoldBerthVoyageInput!) {
-      holdBerthVoyage(input: $input) {
+    const query = `mutation MutateVoyage($id: ID!, $input: HoldBerthVoyageInput) {
+      holdBerthVoyage(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       holdBerthVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.holdBerthVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async clearCustoms(id: string, input: ClearCustomsVoyageInput, include?: VoyageInclude): Promise<Voyage> {
+  public async clearCustoms(id: string, input: ClearCustomsVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($input: ClearCustomsVoyageInput!) {
-      clearCustomsVoyage(input: $input) {
+    const query = `mutation MutateVoyage($id: ID!, $input: ClearCustomsVoyageInput) {
+      clearCustomsVoyage(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       clearCustomsVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.clearCustomsVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async launch(id: string, input: LaunchVoyageInput, include?: VoyageInclude): Promise<Voyage> {
+  public async launch(id: string, input: LaunchVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($input: LaunchVoyageInput!) {
-      launchVoyage(input: $input) {
+    const query = `mutation MutateVoyage($id: ID!, $input: LaunchVoyageInput) {
+      launchVoyage(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       launchVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.launchVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async arrive(id: string, input: ArriveVoyageInput, include?: VoyageInclude): Promise<Voyage> {
+  public async arrive(id: string, input: ArriveVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($input: ArriveVoyageInput!) {
-      arriveVoyage(input: $input) {
+    const query = `mutation MutateVoyage($id: ID!, $input: ArriveVoyageInput) {
+      arriveVoyage(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       arriveVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.arriveVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async complete(id: string, input: CompleteVoyageInput, include?: VoyageInclude): Promise<Voyage> {
+  public async complete(id: string, input: CompleteVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($input: CompleteVoyageInput!) {
-      completeVoyage(input: $input) {
+    const query = `mutation MutateVoyage($id: ID!, $input: CompleteVoyageInput) {
+      completeVoyage(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       completeVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.completeVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async scrub(id: string, input: ScrubVoyageInput, include?: VoyageInclude): Promise<Voyage> {
+  public async scrub(id: string, input: ScrubVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($input: ScrubVoyageInput!) {
-      scrubVoyage(input: $input) {
+    const query = `mutation MutateVoyage($id: ID!, $input: ScrubVoyageInput) {
+      scrubVoyage(id: $id, input: $input) {
         result {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       scrubVoyage: {
-        result?: Voyage;
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id, ...input } });
+    }>(query, { id, input });
 
     const payload = data.scrubVoyage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async discard(id: string): Promise<boolean> {
-    const query = `mutation MutateVoyage($input: DiscardVoyageInput!) {
-      discardVoyage(input: $input) {
+  public async discard(id: string, input: DiscardVoyageInput = {}): Promise<boolean> {
+    const query = `mutation MutateVoyage($id: ID!, $input: DiscardVoyageInput) {
+      discardVoyage(id: $id, input: $input) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       discardVoyage: {
+        result?: Voyage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id, input });
 
     const payload = data.discardVoyage;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -5269,50 +4465,51 @@ export class StowageClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       stowStowage: {
-        result?: Stowage;
+        result?: Stowage | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.stowStowage;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return payload.result;
   }
 
-  public async unstow(id: string): Promise<boolean> {
-    const query = `mutation MutateStowage($input: UnstowStowageInput!) {
-      unstowStowage(input: $input) {
+  public async unstow(id: string, _input: UnstowStowageInput = {}): Promise<boolean> {
+    const query = `mutation MutateStowage($id: ID!) {
+      unstowStowage(id: $id) {
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       unstowStowage: {
+        result?: Stowage | null;
         errors: AshUserError[];
-        success: boolean;
       };
-    }>(query, { input: { id } });
+    }>(query, { id });
 
     const payload = data.unstowStowage;
-    if (!payload.success) {
-      throw new AshClientError(payload.errors[0]?.message || "Destroy failed", payload.errors);
+    if (payload.errors.length > 0) {
+      throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
     return true;
@@ -5353,23 +4550,23 @@ export class TelemetryPingClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       reportTelemetryPing: {
-        result?: TelemetryPing;
+        result?: TelemetryPing | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.reportTelemetryPing;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -5411,23 +4608,23 @@ export class OpsEventClient {
           ${fields}
         }
         errors {
-          field
           message
+          shortMessage
+          code
+          fields
         }
-        success
       }
     }`;
 
     const data = await this.transport.request<{
       recordOpsEvent: {
-        result?: OpsEvent;
+        result?: OpsEvent | null;
         errors: AshUserError[];
-        success: boolean;
       };
     }>(query, { input });
 
     const payload = data.recordOpsEvent;
-    if (!payload.success || !payload.result) {
+    if (payload.errors.length > 0 || !payload.result) {
       throw new AshClientError(payload.errors[0]?.message || "Mutation failed", payload.errors);
     }
 
@@ -5553,7 +4750,6 @@ export function usePlanetQuery(
   params?: {
     filter?: PlanetFilterInput;
     limit?: number;
-    offset?: number;
     include?: PlanetInclude;
   },
   options?: Record<string, unknown>
@@ -5561,7 +4757,6 @@ export function usePlanetQuery(
   const builder = client.planet.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5609,7 +4804,6 @@ export function usePortQuery(
   params?: {
     filter?: PortFilterInput;
     limit?: number;
-    offset?: number;
     include?: PortInclude;
   },
   options?: Record<string, unknown>
@@ -5617,7 +4811,6 @@ export function usePortQuery(
   const builder = client.port.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5676,7 +4869,6 @@ export function useBerthQuery(
   params?: {
     filter?: BerthFilterInput;
     limit?: number;
-    offset?: number;
     include?: BerthInclude;
   },
   options?: Record<string, unknown>
@@ -5684,7 +4876,6 @@ export function useBerthQuery(
   const builder = client.berth.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5743,7 +4934,6 @@ export function useBerthReservationQuery(
   params?: {
     filter?: BerthReservationFilterInput;
     limit?: number;
-    offset?: number;
     include?: BerthReservationInclude;
   },
   options?: Record<string, unknown>
@@ -5751,7 +4941,6 @@ export function useBerthReservationQuery(
   const builder = client.berthReservation.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5809,7 +4998,6 @@ export function useShippingLineQuery(
   params?: {
     filter?: ShippingLineFilterInput;
     limit?: number;
-    offset?: number;
     include?: ShippingLineInclude;
   },
   options?: Record<string, unknown>
@@ -5817,7 +5005,6 @@ export function useShippingLineQuery(
   const builder = client.shippingLine.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5854,7 +5041,6 @@ export function useCrewMemberQuery(
   params?: {
     filter?: CrewMemberFilterInput;
     limit?: number;
-    offset?: number;
     include?: CrewMemberInclude;
   },
   options?: Record<string, unknown>
@@ -5862,7 +5048,6 @@ export function useCrewMemberQuery(
   const builder = client.crewMember.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5910,7 +5095,6 @@ export function useTransponderQuery(
   params?: {
     filter?: TransponderFilterInput;
     limit?: number;
-    offset?: number;
     include?: TransponderInclude;
   },
   options?: Record<string, unknown>
@@ -5918,7 +5102,6 @@ export function useTransponderQuery(
   const builder = client.transponder.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -5955,7 +5138,6 @@ export function useShipQuery(
   params?: {
     filter?: ShipFilterInput;
     limit?: number;
-    offset?: number;
     include?: ShipInclude;
   },
   options?: Record<string, unknown>
@@ -5963,7 +5145,6 @@ export function useShipQuery(
   const builder = client.ship.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -6065,7 +5246,6 @@ export function useContractQuery(
   params?: {
     filter?: ContractFilterInput;
     limit?: number;
-    offset?: number;
     include?: ContractInclude;
   },
   options?: Record<string, unknown>
@@ -6073,7 +5253,6 @@ export function useContractQuery(
   const builder = client.contract.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -6165,7 +5344,6 @@ export function useContainerQuery(
   params?: {
     filter?: ContainerFilterInput;
     limit?: number;
-    offset?: number;
     include?: ContainerInclude;
   },
   options?: Record<string, unknown>
@@ -6173,7 +5351,6 @@ export function useContainerQuery(
   const builder = client.container.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -6231,7 +5408,6 @@ export function useVoyageQuery(
   params?: {
     filter?: VoyageFilterInput;
     limit?: number;
-    offset?: number;
     include?: VoyageInclude;
   },
   options?: Record<string, unknown>
@@ -6239,7 +5415,6 @@ export function useVoyageQuery(
   const builder = client.voyage.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -6352,7 +5527,6 @@ export function useStowageQuery(
   params?: {
     filter?: StowageFilterInput;
     limit?: number;
-    offset?: number;
     include?: StowageInclude;
   },
   options?: Record<string, unknown>
@@ -6360,7 +5534,6 @@ export function useStowageQuery(
   const builder = client.stowage.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -6407,7 +5580,6 @@ export function useTelemetryPingQuery(
   params?: {
     filter?: TelemetryPingFilterInput;
     limit?: number;
-    offset?: number;
     include?: TelemetryPingInclude;
   },
   options?: Record<string, unknown>
@@ -6415,7 +5587,6 @@ export function useTelemetryPingQuery(
   const builder = client.telemetryPing.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {
@@ -6452,7 +5623,6 @@ export function useOpsEventQuery(
   params?: {
     filter?: OpsEventFilterInput;
     limit?: number;
-    offset?: number;
     include?: OpsEventInclude;
   },
   options?: Record<string, unknown>
@@ -6460,7 +5630,6 @@ export function useOpsEventQuery(
   const builder = client.opsEvent.query();
   if (params?.filter) builder.filter(params.filter);
   if (params?.limit) builder.limit(params.limit);
-  if (params?.offset) builder.offset(params.offset);
   if (params?.include) builder.include(params.include);
 
   return {

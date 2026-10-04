@@ -96,10 +96,13 @@ resource! {
                 accept [captain_id];
             }
 
-            update depart {}
-            update arrive {}
-            update begin_maintenance {}
-            update end_maintenance {}
+            // Each transition checks the stored status. SQLite can't raise that from within
+            // an update statement, as AshSqlite can't, so there these read the record first;
+            // elsewhere they still run as one statement.
+            update depart { require_atomic false; }
+            update arrive { require_atomic false; }
+            update begin_maintenance { require_atomic false; }
+            update end_maintenance { require_atomic false; }
 
             destroy decommission {
                 primary;

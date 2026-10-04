@@ -96,7 +96,7 @@
     },
     {
       "name": "status",
-      "sql_type": "TEXT",
+      "sql_type": "VARCHAR(255)",
       "nullable": false,
       "default": null,
       "is_primary_key": false
@@ -124,6 +124,7 @@
     {
       "name": "idx_voyages_in_flight",
       "columns": [
+        "line",
         "ship_id"
       ],
       "predicate": "status = 'in_transit'",
@@ -132,6 +133,7 @@
     {
       "name": "idx_voyages_by_window",
       "columns": [
+        "line",
         "launch_window"
       ],
       "predicate": null,
@@ -146,6 +148,10 @@
     {
       "name": "ck_voyages_arrives_after_departure",
       "expression": "arrived_at IS NULL OR departed_at IS NULL OR arrived_at > departed_at"
+    },
+    {
+      "name": "ck_voyages_status_one_of",
+      "expression": "\"status\" IN ('planned', 'cleared', 'in_transit', 'arrived', 'completed', 'scrubbed')"
     }
   ],
   "statements": [],

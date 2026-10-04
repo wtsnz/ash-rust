@@ -67,6 +67,7 @@
     {
       "name": "idx_transponders_one_per_ship",
       "columns": [
+        "line",
         "ship_id"
       ],
       "unique": true,

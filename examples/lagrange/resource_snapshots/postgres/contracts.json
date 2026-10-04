@@ -75,7 +75,7 @@
     },
     {
       "name": "status",
-      "sql_type": "TEXT",
+      "sql_type": "VARCHAR(255)",
       "nullable": false,
       "default": null,
       "is_primary_key": false
@@ -114,6 +114,7 @@
     {
       "name": "idx_contracts_open_by_destination",
       "columns": [
+        "line",
         "destination_port_id"
       ],
       "predicate": "status <> 'closed' AND status <> 'cancelled'",
@@ -128,6 +129,10 @@
     {
       "name": "ck_contracts_distinct_ports",
       "expression": "origin_port_id <> destination_port_id"
+    },
+    {
+      "name": "ck_contracts_status_one_of",
+      "expression": "\"status\" IN ('booked', 'loaded', 'in_transit', 'delivered', 'closed', 'cancelled')"
     }
   ],
   "statements": [],

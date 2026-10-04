@@ -146,7 +146,7 @@ async fn recoding_a_berth_moves_its_holds<D: FleetDb>(h: Harness<D>) {
     assert_eq!(moved.berth_code, "A2-WEST");
 
     // A berth with holds can't be torn down.
-    let err = h.app.fleet().destroy(&Berth::DEF, None, berth.id).await.unwrap_err();
+    let err = h.app.fleet().destroy(&Berth::DEF, None, berth.id.into()).await.unwrap_err();
     assert!(!matches!(err, Error::NotFound), "{err:?}");
 }
 on_every_backend!(recoding_a_berth_moves_its_holds);

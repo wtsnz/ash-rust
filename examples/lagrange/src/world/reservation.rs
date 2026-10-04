@@ -13,10 +13,7 @@ pub fn window_runs_forward(ctx: &ValidationContext<'_>) -> Result<()> {
         _ => None,
     };
     match (instant("starts_at"), instant("ends_at")) {
-        (Some(starts), Some(ends)) if ends <= starts => Err(Error::Validation {
-            field: "ends_at".into(),
-            message: "a docking window must end after it starts".into(),
-        }),
+        (Some(starts), Some(ends)) if ends <= starts => Err(Error::validation("ends_at", "a docking window must end after it starts", Vec::new())),
         _ => Ok(()),
     }
 }

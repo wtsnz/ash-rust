@@ -92,11 +92,14 @@ resource! {
                 prepare sort(deliver_by, asc);
             }
 
-            update load {}
-            update dispatch {}
-            update deliver {}
-            update close {}
-            update cancel {}
+            // Each transition checks the stored status. SQLite can't raise that from within
+            // an update statement, as AshSqlite can't, so there these read the record first;
+            // elsewhere they still run as one statement.
+            update load { require_atomic false; }
+            update dispatch { require_atomic false; }
+            update deliver { require_atomic false; }
+            update close { require_atomic false; }
+            update cancel { require_atomic false; }
         }
 
         policies {

@@ -116,6 +116,7 @@
     {
       "name": "idx_containers_live_code",
       "columns": [
+        "line",
         "code"
       ],
       "unique": true,
@@ -127,6 +128,7 @@
     {
       "name": "idx_containers_by_contract",
       "columns": [
+        "line",
         "contract_id"
       ],
       "predicate": null,
@@ -135,6 +137,7 @@
     {
       "name": "idx_containers_hazardous_by_contract",
       "columns": [
+        "line",
         "contract_id"
       ],
       "predicate": "hazardous",

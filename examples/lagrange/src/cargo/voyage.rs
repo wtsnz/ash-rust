@@ -95,18 +95,23 @@ resource! {
                 accept [reservation_id];
             }
 
-            update clear_customs {}
+            // Each transition checks the stored status. SQLite can't raise that from within
+            // an update statement, as AshSqlite can't, so there these read the voyage first;
+            // elsewhere they still run as one statement.
+            update clear_customs { require_atomic false; }
 
             update launch {
                 accept [departed_at];
+                require_atomic false;
             }
 
             update arrive {
                 accept [arrived_at];
+                require_atomic false;
             }
 
-            update complete {}
-            update scrub {}
+            update complete { require_atomic false; }
+            update scrub { require_atomic false; }
 
             destroy discard {
                 primary;
