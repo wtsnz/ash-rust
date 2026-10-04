@@ -102,7 +102,7 @@ impl TableSnapshot {
         for index in resource.indexes {
             indexes.push(IndexSnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), index.name),
-                columns: index.keys.iter().map(|k| k.to_string()).collect(),
+                columns: index.columns(resource.multitenancy).into_iter().map(str::to_string).collect(),
                 predicate: index.predicate.map(str::to_string),
                 method: index.method.filter(|_| postgres).map(str::to_string),
                 include: if postgres {

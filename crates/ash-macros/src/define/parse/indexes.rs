@@ -46,6 +46,7 @@ fn parse_one_index(input: ParseStream, errors: &mut Vec<Error>) -> Result<IndexS
     let mut predicate = None;
     let mut method = None;
     let mut include = Vec::new();
+    let mut all_tenants = false;
     while input.peek(Token![,]) {
         let _: Token![,] = input.parse()?;
         if input.peek(Token![;]) || input.is_empty() {
@@ -84,11 +85,18 @@ fn parse_one_index(input: ParseStream, errors: &mut Vec<Error>) -> Result<IndexS
                     .into_iter()
                     .collect();
             }
+            "all_tenants" => {
+                all_tenants = true;
+                if input.peek(Token![:]) || input.peek(Token![=]) {
+                    let _ = input.parse::<proc_macro2::TokenTree>()?;
+                    all_tenants = input.parse::<syn::LitBool>()?.value;
+                }
+            }
             other => {
                 return Err(Error::new_spanned(
                     key,
                     format!(
-                        "unknown index clause `{other}`, expected `where`, `using`, or `include`"
+                        "unknown index clause `{other}`, expected `where`, `using`, `include`, or `all_tenants`"
                     ),
                 ));
             }
@@ -110,5 +118,6 @@ fn parse_one_index(input: ParseStream, errors: &mut Vec<Error>) -> Result<IndexS
         predicate,
         method,
         include,
+        all_tenants,
     })
 }

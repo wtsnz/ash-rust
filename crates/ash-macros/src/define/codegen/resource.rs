@@ -1078,6 +1078,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 None => quote! { ::std::option::Option::None },
             };
             let include_strs: Vec<String> = index.include.iter().map(|k| k.to_string()).collect();
+            let all_tenants = index.all_tenants;
             quote! {
                 ::ash_core::IndexDef {
                     name: #name_str,
@@ -1085,6 +1086,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     predicate: #predicate_tokens,
                     method: #method_tokens,
                     include: &[#(#include_strs),*],
+                    all_tenants: #all_tenants,
                 }
             }
         })

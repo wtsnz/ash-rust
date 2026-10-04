@@ -115,6 +115,10 @@ pub struct IndexDef {
     pub method: Option<&'static str>,
     /// Extra columns stored in the index for index-only scans (`INCLUDE (...)`), Postgres only.
     pub include: &'static [&'static str],
+    /// On a resource with attribute multitenancy, whether the index spans every tenant.
+    /// Otherwise it leads with the tenant attribute, as AshPostgres's custom indexes do
+    /// unless `all_tenants?: true`.
+    pub all_tenants: bool,
 }
 
 impl IndexDef {
@@ -125,7 +129,27 @@ impl IndexDef {
             predicate: None,
             method: None,
             include: &[],
+            all_tenants: false,
         }
+    }
+
+    pub const fn all_tenants(mut self) -> Self {
+        self.all_tenants = true;
+        self
+    }
+
+    /// The columns the index covers on a resource with `multitenancy`: its keys, led by
+    /// the tenant attribute under attribute multitenancy unless it spans every tenant,
+    /// as AshPostgres scopes custom indexes.
+    pub fn columns(&self, multitenancy: Option<MultitenancyDef>) -> Vec<&'static str> {
+        let mut columns = self.keys.to_vec();
+        if let Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) = multitenancy
+            && !self.all_tenants
+            && !columns.contains(&tenant)
+        {
+            columns.insert(0, tenant);
+        }
+        columns
     }
 
     pub const fn with_predicate(mut self, predicate: &'static str) -> Self {

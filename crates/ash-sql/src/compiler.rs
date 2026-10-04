@@ -2012,7 +2012,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 &format!("idx_{}_{}", resource.table_name(), index.name),
             )?;
             let mut key_cols = Vec::new();
-            for key in index.keys {
+            for key in index.columns(resource.multitenancy) {
                 key_cols.push(ident(self.dialect, key)?);
             }
             let mut include_cols = Vec::new();
