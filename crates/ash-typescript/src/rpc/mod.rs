@@ -395,11 +395,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             }
             _ => None,
         };
+        if !matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+            ash_core::apply_argument_defaults(action.arguments, &mut cast);
+        }
         match action.kind {
             ActionKind::Create | ActionKind::Update | ActionKind::Destroy => {
                 problems.extend(ash_core::DynamicChangeset::problems(&ctx, resource, action, existing, cast));
             }
-            // A read or generic action: its arguments, each it requires given.
+            // A read or generic action: its arguments, each it requires given or defaulted.
             _ => problems.extend(
                 action
                     .arguments
