@@ -32,7 +32,7 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
         }
         AttrType::Map => "z.record(z.string(), z.unknown())".to_string(),
         AttrType::Array { of } => format!("z.array({})", generate_attr_zod(of, false)),
-        AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => composite_zod(attr_ty),
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => composite_zod(attr_ty),
     };
 
     if allow_nil {
@@ -42,14 +42,14 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
     }
 }
 
-/// An embedded resource's or typed map's fields as an object, or a union's members, each
-/// `{ type, value }` as it's held.
+/// An embedded resource's or typed map's fields as an object, or a union's input: one
+/// of its members, by name, as GraphQL takes them.
 fn composite_zod(ty: &AttrType) -> String {
     match ty {
-        AttrType::Union(members) => {
+        AttrType::Union { members, .. } => {
             let members: Vec<String> = members
                 .iter()
-                .map(|member| format!("z.object({{ type: z.literal(\"{}\"), value: {} }})", member.name, generate_attr_zod(&member.ty, false)))
+                .map(|member| format!("z.object({{ {}: {} }})", to_camel_case(member.name), generate_attr_zod(&member.ty, false)))
                 .collect();
             format!("z.union([{}])", members.join(", "))
         }
@@ -58,7 +58,7 @@ fn composite_zod(ty: &AttrType) -> String {
                 .fields()
                 .unwrap_or_default()
                 .iter()
-                .map(|field| format!("{}: {}", field.name, generate_attr_zod(&field.ty, field.allow_nil)))
+                .map(|field| format!("{}: {}", to_camel_case(field.name), generate_attr_zod(&field.ty, field.allow_nil)))
                 .collect();
             format!("z.object({{ {} }})", fields.join(", "))
         }
@@ -163,7 +163,7 @@ fn build_field_zod_schema(action: &ActionDef, field_name: &str, ty: &AttrType, r
             }
             AttrType::Map => "z.record(z.string(), z.unknown())".to_string(),
             AttrType::Array { of } => format!("z.array({})", generate_attr_zod(of, false)),
-            AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => composite_zod(ty),
+            AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => composite_zod(ty),
         }
     };
 

@@ -2,6 +2,7 @@ pub mod builder;
 pub mod dataloader;
 pub mod error;
 pub mod filter;
+mod composite;
 mod generic;
 mod managed;
 pub mod mutation;

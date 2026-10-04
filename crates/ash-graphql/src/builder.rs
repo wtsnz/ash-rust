@@ -200,6 +200,8 @@ impl AshGraphQLBuilder {
             }
         }
 
+        builder = crate::composite::register_composites::<D>(builder, &all_resources);
+
         let mut enums = Vec::new();
         for res in &all_resources {
             builder = builder.register(build_resource_object::<D>(res));

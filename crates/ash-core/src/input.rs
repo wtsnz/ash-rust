@@ -71,7 +71,7 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         (AttrType::Float | AttrType::Decimal, Json::Number(n)) => Value::String(n.to_string()),
         (AttrType::Map, json @ Json::Object(_)) => Value::from_plain_json(json.clone()),
         // Declared fields, each cast to its type, named as declared or in camelCase.
-        (AttrType::Embedded(_) | AttrType::TypedMap(_), Json::Object(given)) => {
+        (AttrType::Embedded(_) | AttrType::TypedMap { .. }, Json::Object(given)) => {
             let mut map = FieldMap::new();
             for field in ty.fields().unwrap_or_default() {
                 if let Some(value) = given.get(field.name).or_else(|| given.get(&camel(field.name))) {
@@ -82,7 +82,7 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         }
         // A union's member: `{member: value}` as a client gives it, or `{type, value}` as
         // it's held.
-        (AttrType::Union(members), Json::Object(given)) => {
+        (AttrType::Union { members, .. }, Json::Object(given)) => {
             let (name, value) = match (given.get("type"), given.get("value")) {
                 (Some(Json::String(name)), Some(value)) if given.len() == 2 => (name.as_str(), value),
                 _ if given.len() == 1 => given.iter().next().map(|(name, value)| (name.as_str(), value)).ok_or_else(mismatch)?,

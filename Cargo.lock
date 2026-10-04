@@ -343,6 +343,7 @@ dependencies = [
  "ash-memory",
  "ash-pubsub",
  "ash-sql",
+ "async-graphql",
  "axum",
  "futures-util",
  "serde_json",

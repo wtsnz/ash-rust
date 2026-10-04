@@ -1,6 +1,6 @@
 //! Isomorphic TypeScript client SDK generator for Ash resources.
 
-use ash_core::{ActionDef, ActionKind, DomainDef, ResourceDef};
+use ash_core::{ActionDef, ActionKind, AttrType, DomainDef, ResourceDef};
 use crate::types::{input_fields, sort_fields, to_camel_case, to_pascal_case, to_upper_snake};
 
 /// Returns plural suffix helper matching ash-graphql list and connection conventions.
@@ -153,6 +153,27 @@ export class AshTransport {{
     )
 }
 
+/// What a field of type `ty` selects of its value: an embedded resource's or typed map's
+/// fields, or each union member's `value`, as GraphQL serves them; nothing for a scalar.
+pub(crate) fn selection_of(ty: &AttrType) -> String {
+    match ty {
+        AttrType::Array { of } => selection_of(of),
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } => {
+            let fields: Vec<String> =
+                ty.fields().unwrap_or_default().iter().map(|field| format!("{}{}", to_camel_case(field.name), selection_of(&field.ty))).collect();
+            format!(" {{ {} }}", fields.join(" "))
+        }
+        AttrType::Union { name, members } => {
+            let members: Vec<String> = members
+                .iter()
+                .map(|member| format!("... on {name}{} {{ value{} }}", crate::types::to_pascal_case(member.name), selection_of(&member.ty)))
+                .collect();
+            format!(" {{ __typename {} }}", members.join(" "))
+        }
+        _ => String::new(),
+    }
+}
+
 /// Generate selection set builder for a resource.
 pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let mut out = String::new();
@@ -161,7 +182,7 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let base_attrs = res
         .attributes
         .iter()
-        .map(|a| to_camel_case(a.name))
+        .map(|a| format!("{}{}", to_camel_case(a.name), selection_of(&a.ty)))
         .collect::<Vec<_>>()
         .join(" ");
 

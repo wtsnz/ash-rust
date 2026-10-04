@@ -184,7 +184,7 @@ fn ts_type(ty: &AttrType) -> String {
             values.iter().map(|value| format!("\"{value}\"")).collect::<Vec<_>>().join(" | ")
         }
         AttrType::Atom { .. } => "string".into(),
-        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => "Record<string, any>".into(),
+        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => "Record<string, any>".into(),
         AttrType::Array { of } => format!("Array<{}>", ts_type(of)),
     }
 }
@@ -365,7 +365,7 @@ fn operators(ty: &AttrType) -> &'static [&'static str] {
     match ty {
         AttrType::Boolean => &["eq", "notEq", "in"],
         AttrType::String | AttrType::CiString => TEXT,
-        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => &["eq", "notEq", "in"],
+        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => &["eq", "notEq", "in"],
         AttrType::Array { .. } => &["eq", "notEq", "in", "has"],
         _ => COMPARE,
     }

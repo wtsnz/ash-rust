@@ -1069,7 +1069,7 @@ fn bind_compiled<'q>(
                     Some(AttrType::Uuid) => query.bind(None::<Uuid>),
                     Some(AttrType::Integer) => query.bind(None::<i64>),
                     Some(AttrType::Boolean) => query.bind(None::<bool>),
-                    Some(AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_)) => query.bind(None::<serde_json::Value>),
+                    Some(AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }) => query.bind(None::<serde_json::Value>),
                     _ => query.bind(None::<String>),
                 };
             }
@@ -1281,8 +1281,8 @@ fn extract_column_value(row: &PgRow, col_name: &str, ty: &ash_core::AttrType) ->
         }
         ash_core::AttrType::Map
         | ash_core::AttrType::Embedded(_)
-        | ash_core::AttrType::TypedMap(_)
-        | ash_core::AttrType::Union(_) => {
+        | ash_core::AttrType::TypedMap { .. }
+        | ash_core::AttrType::Union { .. } => {
             if let Ok(Some(json_val)) = row.try_get::<Option<serde_json::Value>, _>(col_name) {
                 Value::from_plain_json(json_val)
             } else if let Ok(Some(s)) = row.try_get::<Option<String>, _>(col_name) {

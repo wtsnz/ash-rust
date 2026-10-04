@@ -47,6 +47,7 @@ fn value_conversions(name: &syn::Ident) -> TokenStream {
 
 pub fn expand_typed_map(input: DeriveInput) -> Result<TokenStream> {
     let name = &input.ident;
+    let type_name = name.to_string();
     let Data::Struct(data) = &input.data else {
         return Err(Error::new_spanned(&input, "AshTypedMap can only be derived on structs"));
     };
@@ -74,7 +75,7 @@ pub fn expand_typed_map(input: DeriveInput) -> Result<TokenStream> {
     let conversions = value_conversions(name);
     Ok(quote! {
         impl ::ash_core::AshType for #name {
-            const ATTR_TYPE: ::ash_core::AttrType = ::ash_core::AttrType::TypedMap(&[#(#defs),*]);
+            const ATTR_TYPE: ::ash_core::AttrType = ::ash_core::AttrType::TypedMap { name: #type_name, fields: &[#(#defs),*] };
 
             fn to_value(&self) -> ::ash_core::Value {
                 let mut map = ::ash_core::FieldMap::new();
@@ -98,6 +99,7 @@ pub fn expand_typed_map(input: DeriveInput) -> Result<TokenStream> {
 
 pub fn expand_union(input: DeriveInput) -> Result<TokenStream> {
     let name = &input.ident;
+    let type_name = name.to_string();
     let Data::Enum(data) = &input.data else {
         return Err(Error::new_spanned(&input, "AshUnion can only be derived on enums"));
     };
@@ -127,7 +129,7 @@ pub fn expand_union(input: DeriveInput) -> Result<TokenStream> {
     let conversions = value_conversions(name);
     Ok(quote! {
         impl ::ash_core::AshType for #name {
-            const ATTR_TYPE: ::ash_core::AttrType = ::ash_core::AttrType::Union(&[#(#members),*]);
+            const ATTR_TYPE: ::ash_core::AttrType = ::ash_core::AttrType::Union { name: #type_name, members: &[#(#members),*] };
 
             fn to_value(&self) -> ::ash_core::Value {
                 match self {

@@ -491,10 +491,10 @@ pub enum AttrType {
     Embedded(EmbeddedType),
     /// A map of declared fields, as Ash's `:map` with `fields` constraints (or a typed
     /// struct): `#[derive(AshTypedMap)]` on a struct.
-    TypedMap(&'static [MapField]),
+    TypedMap { name: &'static str, fields: &'static [MapField] },
     /// One of several typed members, as Ash's `Ash.Type.Union`, held as `{type, value}`:
     /// `#[derive(AshUnion)]` on an enum.
-    Union(&'static [UnionMember]),
+    Union { name: &'static str, members: &'static [UnionMember] },
 }
 
 /// The embedded resource an [`AttrType::Embedded`] attribute holds.
@@ -549,7 +549,7 @@ impl AttrType {
                     .map(|attr| MapField { name: attr.name, ty: attr.ty, allow_nil: attr.allow_nil })
                     .collect(),
             ),
-            Self::TypedMap(fields) => Some(fields.to_vec()),
+            Self::TypedMap { fields, .. } => Some(fields.to_vec()),
             _ => None,
         }
     }
@@ -557,7 +557,7 @@ impl AttrType {
     /// Whether a value of this type is held as a map: a map, an embedded resource, a
     /// typed map or a union.
     pub const fn is_map_like(self) -> bool {
-        matches!(self, Self::Map | Self::Embedded(_) | Self::TypedMap(_) | Self::Union(_))
+        matches!(self, Self::Map | Self::Embedded(_) | Self::TypedMap { .. } | Self::Union { .. })
     }
 
     /// A UTC datetime to the second, as Ash's `:utc_datetime`.
@@ -591,8 +591,8 @@ impl AttrType {
             Self::CiString => "ci_string",
             Self::Inet => "inet",
             Self::Vector { .. } => "vector",
-            Self::Embedded(_) | Self::TypedMap(_) => "map",
-            Self::Union(_) => "union",
+            Self::Embedded(_) | Self::TypedMap { .. } => "map",
+            Self::Union { .. } => "union",
         }
     }
 }

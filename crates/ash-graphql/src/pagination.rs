@@ -16,7 +16,7 @@ use crate::names::camel;
 use crate::preload::{Load, preload, selected};
 use crate::request::request_context;
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
-use crate::types::{attr_type_to_type_ref, parse_input_val};
+use crate::types::parse_input_val;
 
 /// The most records a page holds, as Ash's default `max_page_size`.
 pub const MAX_PAGE_SIZE: usize = 250;
@@ -228,7 +228,7 @@ pub(crate) fn read_field_arguments(
             TypeRef::named(resource_filter_input_name(resource.name)),
         ));
     for arg in action.arguments {
-        let type_ref = attr_type_to_type_ref(resource.name, arg.name, arg.ty, arg.allow_nil || arg.default.is_some());
+        let type_ref = crate::types::input_type_ref(resource.name, arg.name, arg.ty, arg.allow_nil || arg.default.is_some());
         field = field.argument(InputValue::new(camel(arg.name), type_ref));
     }
     field

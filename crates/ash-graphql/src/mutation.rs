@@ -151,7 +151,7 @@ pub fn register_action_input(
     for (name, ty, required) in fields {
         let type_ref = match managed.iter().find(|(argument, _)| *argument == name) {
             Some((_, managed)) => managed.type_ref(!required),
-            None => attr_type_to_type_ref(resource.name, name, ty, !required),
+            None => crate::types::input_type_ref(resource.name, name, ty, !required),
         };
         input = input.field(InputValue::new(camel(name), type_ref));
     }

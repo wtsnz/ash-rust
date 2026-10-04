@@ -284,8 +284,8 @@ impl SqlDialect for SqliteDialect {
             | AttrType::Atom { .. }
             | AttrType::Map
             | AttrType::Embedded(_)
-            | AttrType::TypedMap(_)
-            | AttrType::Union(_)
+            | AttrType::TypedMap { .. }
+            | AttrType::Union { .. }
             | AttrType::Array { .. } => "TEXT".to_string(),
         }
     }
@@ -404,7 +404,7 @@ impl SqlDialect for PostgresDialect {
             AttrType::Binary => "BYTEA".to_string(),
             AttrType::Inet => "INET".to_string(),
             AttrType::Vector { dimensions } => format!("VECTOR({dimensions})"),
-            AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => "JSONB".to_string(),
+            AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => "JSONB".to_string(),
         }
     }
 

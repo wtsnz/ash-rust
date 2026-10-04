@@ -61,9 +61,9 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
 #[test]
 fn the_types_declare_their_fields_and_members() {
     use ash_core::{AshType, AttrType};
-    let AttrType::TypedMap(fields) = Point::ATTR_TYPE else { panic!() };
+    let AttrType::TypedMap { fields, .. } = Point::ATTR_TYPE else { panic!() };
     assert_eq!(fields.iter().map(|f| (f.name, f.allow_nil)).collect::<Vec<_>>(), [("x", false), ("y", false), ("tag", true)]);
-    let AttrType::Union(members) = Shape::ATTR_TYPE else { panic!() };
+    let AttrType::Union { members, .. } = Shape::ATTR_TYPE else { panic!() };
     assert_eq!(members.iter().map(|m| m.name).collect::<Vec<_>>(), ["dot", "label", "points"]);
 }
 

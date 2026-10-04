@@ -1243,7 +1243,7 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
         // Each item as its type renders.
         (Some(AttrType::Array { of }), Value::Array(items)) => Json::Array(items.iter().map(|item| to_json(Some(*of), item)).collect()),
         // Declared fields, named as a client names them.
-        (Some(ty @ (AttrType::Embedded(_) | AttrType::TypedMap(_))), Value::Map(map)) => Json::Object(
+        (Some(ty @ (AttrType::Embedded(_) | AttrType::TypedMap { .. })), Value::Map(map)) => Json::Object(
             ty.fields()
                 .unwrap_or_default()
                 .iter()
@@ -1251,7 +1251,7 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
                 .collect(),
         ),
         // The member it holds, as AshTypescript renders a union: `{member: value}`.
-        (Some(AttrType::Union(members)), value) => match value.union_member() {
+        (Some(AttrType::Union { members, .. }), value) => match value.union_member() {
             Some((name, held)) => {
                 let ty = members.iter().find(|member| member.name == name).map(|member| member.ty);
                 json!({ to_camel_case(name): to_json(ty, held) })
@@ -1277,7 +1277,7 @@ fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) ->
         (Some(AttrType::Array { of }), Value::Array(items)) => {
             Json::Array(items.iter().map(|item| select_value(Some(*of), item, within)).collect())
         }
-        (Some(ty), Value::Map(map)) if !matches!(ty, AttrType::Union(_)) => {
+        (Some(ty), Value::Map(map)) if !matches!(ty, AttrType::Union { .. }) => {
             let ValueSelection::Fields(selected) = within else {
                 return to_json(Some(ty), value);
             };
@@ -1296,7 +1296,7 @@ fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) ->
                     .collect(),
             )
         }
-        (Some(AttrType::Union(members)), value) => {
+        (Some(AttrType::Union { members, .. }), value) => {
             let (ValueSelection::Members(selected), Some((name, held))) = (within, value.union_member()) else {
                 return Json::Null;
             };

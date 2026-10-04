@@ -54,7 +54,7 @@ impl<D> GenericAction<D> {
     }
 
     fn argument_type(&self, arg: &ash_core::ArgumentDef) -> TypeRef {
-        attr_type_to_type_ref(self.resource.name, arg.name, arg.ty, arg.allow_nil || arg.default.is_some())
+        crate::types::input_type_ref(self.resource.name, arg.name, arg.ty, arg.allow_nil || arg.default.is_some())
     }
 
     /// A mutation's `<Name>Input`, if the action takes arguments.

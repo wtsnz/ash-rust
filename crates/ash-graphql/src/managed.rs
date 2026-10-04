@@ -8,7 +8,7 @@ use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::{InputObject, InputValue, SchemaBuilder, TypeRef};
 
 use crate::names::{camel, pascal};
-use crate::types::{attr_type_to_type_ref, parse_input_value};
+use crate::types::{input_type_ref, parse_input_value};
 
 /// The input object a managed relationship argument takes.
 pub(crate) struct ManagedInput {
@@ -121,7 +121,7 @@ impl ManagedInput {
     pub(crate) fn register(&self, builder: SchemaBuilder, resource: &ResourceDef) -> SchemaBuilder {
         let mut input = InputObject::new(&self.name);
         for (name, ty, required) in &self.fields {
-            input = input.field(InputValue::new(camel(name), attr_type_to_type_ref(resource.name, name, *ty, !required)));
+            input = input.field(InputValue::new(camel(name), input_type_ref(resource.name, name, *ty, !required)));
         }
         builder.register(input)
     }

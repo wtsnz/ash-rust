@@ -28,6 +28,7 @@ ash-sql = { path = "../ash-sql" }
 axum = "0.8"
 tempfile = "3"
 tokio-tungstenite = "0.29"
+async-graphql = { version = "7", features = ["dynamic-schema"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }
 uuid.workspace = true

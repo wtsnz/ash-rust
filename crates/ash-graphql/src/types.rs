@@ -14,8 +14,10 @@ pub fn graphql_type_name(ty: AttrType) -> &'static str {
         AttrType::UtcDatetime { .. } => "DateTime",
         AttrType::Date => "Date",
         AttrType::Decimal => "Decimal",
-        // Served as JSON, as ash-graphql serves a map.
-        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => "Json",
+        AttrType::Map => "Json",
+        // Their own types, as AshGraphql gives them (see `composite`).
+        AttrType::Embedded(embedded) => embedded.resource().name,
+        AttrType::TypedMap { name, .. } | AttrType::Union { name, .. } => name,
         AttrType::Atom { name: Some(name), .. } => name,
         AttrType::Atom { name: None, .. }
         | AttrType::String
@@ -30,6 +32,34 @@ pub fn graphql_type_name(ty: AttrType) -> &'static str {
 
 /// The custom scalars the schema's types use.
 pub const CUSTOM_SCALARS: &[&str] = &["DateTime", "Date", "Decimal", "Json"];
+
+/// The input type a value of `ty` given as `field` of `owner` takes: an embedded
+/// resource's input for that field (`<Owner><Field>Input`), a typed map's or union's
+/// `<Name>Input`, a list of them, or the type's own.
+pub fn input_type_ref(owner: &str, field: &str, ty: AttrType, allow_nil: bool) -> TypeRef {
+    let name = |ty: AttrType| match ty {
+        AttrType::Embedded(_) => format!("{owner}{}Input", crate::names::pascal(field)),
+        AttrType::TypedMap { name, .. } | AttrType::Union { name, .. } => format!("{name}Input"),
+        other => graphql_type_name(other).to_string(),
+    };
+    match ty {
+        AttrType::Array { of } if crate::composite::is_composite(*of) => {
+            if allow_nil {
+                TypeRef::named_nn_list(name(*of))
+            } else {
+                TypeRef::named_nn_list_nn(name(*of))
+            }
+        }
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => {
+            if allow_nil {
+                TypeRef::named(name(ty))
+            } else {
+                TypeRef::named_nn(name(ty))
+            }
+        }
+        _ => attr_type_to_type_ref(owner, field, ty, allow_nil),
+    }
+}
 
 /// Converts an Ash [`AttrType`] into an `async_graphql` [`TypeRef`].
 pub fn attr_type_to_type_ref(
@@ -283,7 +313,7 @@ pub fn parse_input_value(value: &GqlValue, ty: AttrType) -> Result<AshValue, asy
         // A map is JSON, its keys as the client sent them.
         AttrType::Map => Ok(graphql_value_to_ash_value(value)),
         // Cast as the type casts its JSON: each field, or the member given.
-        AttrType::Embedded(_) | AttrType::TypedMap(_) | AttrType::Union(_) => ash_core::input::value_input(ty, &value.clone().into_json()?).map_err(|e| async_graphql::Error::new(e.to_string())),
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => ash_core::input::value_input(ty, &value.clone().into_json()?).map_err(|e| async_graphql::Error::new(e.to_string())),
         // A list, each item as its type takes it.
         AttrType::Array { of } => match value {
             GqlValue::List(items) => items

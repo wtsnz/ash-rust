@@ -45,12 +45,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     }
 
                     if let Some(val) = map.get(attr_name) {
-                        if val.is_null() {
-                            return Ok(None);
-                        }
-                        return Ok(Some(FieldValue::value(ash_value_to_graphql_value_typed(
-                            val, attr_ty,
-                        ))));
+                        return Ok(crate::composite::output_value(attr_ty, val));
                     }
                 }
                 Ok(None)
@@ -77,14 +72,8 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     }
                     // Loaded with the record, nil included: computed from the record as
                     // stored, which the record here may not wholly hold.
-                    match map.get(calc_name) {
-                        Some(val) if val.is_null() => return Ok(None),
-                        Some(val) => {
-                            return Ok(Some(FieldValue::value(ash_value_to_graphql_value_typed(
-                                val, calc_ty,
-                            ))));
-                        }
-                        None => {}
+                    if let Some(val) = map.get(calc_name) {
+                        return Ok(crate::composite::output_value(calc_ty, val));
                     }
 
                     match eval_expr(&expr, map) {

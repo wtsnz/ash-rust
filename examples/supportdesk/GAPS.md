@@ -59,4 +59,4 @@ Behaviours of the Elixir packages the comparison works around. ash-rust doesn't 
   `invalid_calculation_args`), so those answers differ on purpose. So does a page
   request a read can't count or that lacks a limit it needs: `invalid_page`, where
   Ash's errors have no shape either.
-| 29 | ash-graphql serves embedded resources, typed maps and unions as `Json`, where AshGraphql gives an embedded resource object and input types, a typed map its own type, and a union a GraphQL union. | — | open |
+| 29 | ash-graphql serves embedded resources, typed maps and unions as `Json`, where AshGraphql gives an embedded resource object and input types, a typed map its own type, and a union a GraphQL union. | — | fixed: ash-graphql gives an embedded resource its own object type and an input per attribute holding it (`<Resource><Attribute>Input`), a typed map an object and input of its fields (`<Name>`, `<Name>Input`), and a union a GraphQL union of `<Name><Member> { value }` objects with a `<Name>Input` of one field per member, as AshGraphql types them; the generated TS GraphQL client types and selects them so |

@@ -50,8 +50,8 @@ pub(crate) fn selection_category(ty: AttrType) -> Option<&'static str> {
     match ty {
         AttrType::Array { of } => selection_category(*of),
         AttrType::Embedded(_) => Some("embedded_resource"),
-        AttrType::Union(_) => Some("union_attribute"),
-        AttrType::TypedMap(_) => Some("field_constrained_type"),
+        AttrType::Union { .. } => Some("union_attribute"),
+        AttrType::TypedMap { .. } => Some("field_constrained_type"),
         _ => None,
     }
 }
@@ -74,7 +74,7 @@ impl ValueSelection {
         };
         // What each name names: a declared field, or a union's member.
         let (union, entries): (bool, Vec<(&'static str, AttrType)>) = match ty {
-            AttrType::Union(members) => (true, members.iter().map(|member| (member.name, member.ty)).collect()),
+            AttrType::Union { members, .. } => (true, members.iter().map(|member| (member.name, member.ty)).collect()),
             ty => (false, ty.fields().unwrap_or_default().into_iter().map(|field| (field.name, field.ty)).collect()),
         };
         let unknown = |given: &str| match ty {
