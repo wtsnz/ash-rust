@@ -1,9 +1,8 @@
 use ash_core::{
-    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, Value,
+    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef,
     scope_read,
 };
 use async_graphql::dynamic::*;
-use uuid::Uuid;
 
 use crate::redact::redact_record;
 use crate::names::{camel, plural};
@@ -70,12 +69,11 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                     .args
                     .get("id")
                     .ok_or_else(|| async_graphql::Error::new("Missing required id argument"))?;
-                let id = Uuid::parse_str(id_arg.string()?)
-                    .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
+                let id = crate::types::parse_id(resource, id_arg.as_value())?;
                 // A get sees what the primary read sees: an archived record is not found.
                 let fields = selected(ctx.ctx.field(), None);
                 let query = Load::of(resource, &fields, []).onto(CompiledQuery {
-                    filter: Some(Filter::eq(pk_name, Value::Uuid(id))),
+                    filter: Some(Filter::eq(pk_name, id)),
                     limit: Some(1),
                     tenant: ash.tenant.clone(),
                     ..CompiledQuery::default()

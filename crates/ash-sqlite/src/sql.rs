@@ -39,17 +39,17 @@ pub fn insert_query(resource: &ResourceDef, fields: &FieldMap) -> Result<Compile
     compiler.compile_insert(resource, fields)
 }
 
-pub fn update_query(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Result<CompiledSql> {
+pub fn update_query(resource: &ResourceDef, id: Value, fields: &FieldMap) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_update(resource, id, fields)
 }
 
-pub fn delete_query(resource: &ResourceDef, id: Uuid) -> Result<CompiledSql> {
+pub fn delete_query(resource: &ResourceDef, id: Value) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_delete(resource, id)
 }
 
-pub fn bulk_delete_query(resource: &ResourceDef, ids: &[Uuid]) -> Result<CompiledSql> {
+pub fn bulk_delete_query(resource: &ResourceDef, ids: &[Value]) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect);
     compiler.compile_bulk_delete(resource, ids)
 }

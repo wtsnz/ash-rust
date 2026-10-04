@@ -117,7 +117,7 @@ async fn insert<D: DataLayer>(data: &D, resource: &ResourceDef, fields: &[(&str,
     let id = Uuid::new_v4();
     let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(resource, None, id, map).await.unwrap()
+    data.create(resource, None, Value::from(id), map).await.unwrap()
 }
 
 fn texts(rows: &[FieldMap], field: &str) -> Vec<String> {

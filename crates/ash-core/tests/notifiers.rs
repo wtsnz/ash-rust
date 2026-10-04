@@ -80,7 +80,7 @@ async fn test_standalone_crud_notifications() {
         assert_eq!(n.resource, "Order");
         assert_eq!(n.action, "create");
         assert_eq!(n.action_kind, ActionKind::Create);
-        assert_eq!(n.id, order.id);
+        assert_eq!(n.id, ash_core::Value::from(order.id));
         assert_eq!(n.get("status").and_then(|v| v.as_str()), Some("pending"));
         assert_eq!(n.get("amount").and_then(|v| v.as_int()), Some(120));
         assert!(n.previous_fields.is_none());
@@ -180,8 +180,8 @@ async fn test_multi_success_dispatches_all_notifications_in_sqlite() {
     // Verify all notifications arrived in order
     let list = received.lock().unwrap();
     assert_eq!(list.len(), 2);
-    assert_eq!(list[0].id, o1.id);
+    assert_eq!(list[0].id, ash_core::Value::from(o1.id));
     assert_eq!(list[0].get("customer").and_then(|v| v.as_str()), Some("Elena"));
-    assert_eq!(list[1].id, o2.id);
+    assert_eq!(list[1].id, ash_core::Value::from(o2.id));
     assert_eq!(list[1].get("customer").and_then(|v| v.as_str()), Some("Frank"));
 }

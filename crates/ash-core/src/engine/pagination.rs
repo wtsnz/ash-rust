@@ -7,7 +7,7 @@ use crate::value::Value;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct KeysetCursor {
-    pub id: Uuid,
+    pub id: Value,
     pub values: Vec<(String, Value)>,
 }
 
@@ -30,7 +30,7 @@ impl KeysetCursor {
         }
         if let Ok(id) = Uuid::parse_str(cursor_str) {
             return Some(Self {
-                id,
+                id: Value::Uuid(id),
                 values: Vec::new(),
             });
         }
@@ -110,7 +110,7 @@ pub fn keyset_values(resource: &ResourceDef, cursor: &KeysetCursor, sorts: &[Sor
         .iter()
         .map(|sort| match cursor.values.iter().find(|(field, _)| *field == sort.field) {
             Some((_, value)) => value.clone(),
-            None if Some(sort.field.as_str()) == pk => Value::Uuid(cursor.id),
+            None if Some(sort.field.as_str()) == pk => cursor.id.clone(),
             None => Value::Null,
         })
         .collect()
@@ -124,7 +124,7 @@ pub(crate) fn cursor_for_record<R: Resource>(record: &R, sort: &[Sort]) -> Strin
         values.push((s.field.clone(), val));
     }
     KeysetCursor {
-        id: record.id(),
+        id: record.pk(),
         values,
     }
     .encode()

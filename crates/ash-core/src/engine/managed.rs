@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use uuid::Uuid;
+
 
 use crate::action::{ActionDef, ActionKind, ManagedRelType};
 use crate::changeset::ManagedRelationshipSpec;
@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{generate_pk, pk_name};
 use crate::resource::{OnDelete, RelKind, ResourceDef};
-use crate::value::{FieldMap, Value, required_uuid};
+use crate::value::{FieldMap, Value, required_pk};
 
 use super::lifecycle::{create_dynamic, destroy_dynamic, destroy_dynamic_with};
 use crate::changeset::DynamicChangeset;
@@ -17,7 +17,7 @@ use crate::changeset::DynamicChangeset;
 /// State shared by one destroy and everything it cascades into.
 pub(crate) struct Cascade {
     /// Records being destroyed further up, so a cycle in the data ends instead of recursing.
-    visited: std::sync::Mutex<HashSet<(&'static str, Uuid)>>,
+    visited: std::sync::Mutex<HashSet<(&'static str, Value)>>,
     /// Whether cascaded destroys send notifications, as the top-level destroy does.
     pub(crate) notify: bool,
 }
@@ -31,7 +31,7 @@ impl Cascade {
     }
 
     /// Marks the record as being destroyed, returning false if it already is.
-    pub(crate) fn enter(&self, resource: &'static ResourceDef, id: Uuid) -> bool {
+    pub(crate) fn enter(&self, resource: &'static ResourceDef, id: Value) -> bool {
         self.visited
             .lock()
             .map(|mut visited| visited.insert((resource.name, id)))
@@ -58,7 +58,7 @@ async fn destroy_child<D: DataLayer>(
     ctx: &Context<D>,
     dest_def: &'static ResourceDef,
     hard: bool,
-    child_id: Uuid,
+    child_id: Value,
     child_row: &FieldMap,
     cascade: &Cascade,
 ) -> Result<()> {
@@ -68,8 +68,8 @@ async fn destroy_child<D: DataLayer>(
                 .await?;
         }
         None => {
-            if cascade.enter(dest_def, child_id) {
-                Box::pin(cascade_deletes(ctx, dest_def, child_id, child_row, cascade)).await?;
+            if cascade.enter(dest_def, child_id.clone()) {
+                Box::pin(cascade_deletes(ctx, dest_def, child_id.clone(), child_row, cascade)).await?;
                 ctx.data.destroy(dest_def, ctx.tenant.as_deref(), child_id).await?;
             }
         }
@@ -83,7 +83,7 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &ActionDef,
-    parent_id: Uuid,
+    parent_id: Value,
     parent_fields: &FieldMap,
     cascade: &Cascade,
 ) -> Result<()> {
@@ -127,7 +127,7 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
             .await?;
         let child_pk = pk_name(dest_def)?;
         for child_row in rows {
-            let child_id = required_uuid(&child_row, child_pk)?;
+            let child_id = required_pk(&child_row, child_pk)?;
             destroy_child(ctx, dest_def, hard, child_id, &child_row, cascade).await?;
         }
     }
@@ -142,22 +142,22 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &ActionDef,
-    id: Uuid,
+    id: Value,
     existing_fields: &FieldMap,
     fields: FieldMap,
     cascade: &Cascade,
 ) -> Result<FieldMap> {
-    if !cascade.enter(resource, id) {
+    if !cascade.enter(resource, id.clone()) {
         return Ok(existing_fields.clone());
     }
     if action.soft {
         let changes = soft_destroy_changes(resource, existing_fields, fields);
-        let stored = ctx.data.update(resource, ctx.tenant.as_deref(), id, changes).await?;
+        let stored = ctx.data.update(resource, ctx.tenant.as_deref(), id.clone(), changes).await?;
         cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
         return Ok(stored);
     }
-    cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
-    cascade_deletes(ctx, resource, id, existing_fields, cascade).await?;
+    cascade_destroy_related(ctx, resource, action, id.clone(), existing_fields, cascade).await?;
+    cascade_deletes(ctx, resource, id.clone(), existing_fields, cascade).await?;
     ctx.data.destroy(resource, ctx.tenant.as_deref(), id).await?;
     Ok(existing_fields.clone())
 }
@@ -179,11 +179,11 @@ fn soft_destroy_changes(
 }
 
 /// `fields` with the primary key filled in, so a key built from it never misses `id`.
-fn with_primary_key(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Result<FieldMap> {
+fn with_primary_key(resource: &ResourceDef, id: Value, fields: &FieldMap) -> Result<FieldMap> {
     let mut fields = fields.clone();
     fields
         .entry(pk_name(resource)?.to_string())
-        .or_insert(Value::Uuid(id));
+        .or_insert(id.clone());
     Ok(fields)
 }
 
@@ -191,11 +191,11 @@ fn with_primary_key(resource: &ResourceDef, id: Uuid, fields: &FieldMap) -> Resu
 pub async fn handle_cascading_deletes<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    parent_id: Uuid,
+    parent_id: Value,
     parent_fields: &FieldMap,
 ) -> Result<()> {
     let cascade = Cascade::new(true);
-    cascade.enter(resource, parent_id);
+    cascade.enter(resource, parent_id.clone());
     cascade_deletes(ctx, resource, parent_id, parent_fields, &cascade).await
 }
 
@@ -204,11 +204,11 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
 pub(crate) async fn cascade_deletes<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    parent_id: Uuid,
+    parent_id: Value,
     parent_fields: &FieldMap,
     cascade: &Cascade,
 ) -> Result<()> {
-    let parent = with_primary_key(resource, parent_id, parent_fields)?;
+    let parent = with_primary_key(resource, parent_id.clone(), parent_fields)?;
     for rel in resource.relationships {
         match rel.kind {
             RelKind::HasMany | RelKind::HasOne => {
@@ -256,7 +256,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                             .await?;
                         let child_pk = pk_name(dest_def)?;
                         for child_row in rows {
-                            let child_id = required_uuid(&child_row, child_pk)?;
+                            let child_id = required_pk(&child_row, child_pk)?;
                             destroy_child(ctx, dest_def, true, child_id, &child_row, cascade)
                                 .await?;
                         }
@@ -279,7 +279,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                             .await?;
                         let child_pk = pk_name(dest_def)?;
                         for child_row in rows {
-                            let child_id = required_uuid(&child_row, child_pk)?;
+                            let child_id = required_pk(&child_row, child_pk)?;
                             let mut patch = FieldMap::new();
                             for column in rel.destination_columns() {
                                 patch.insert(column.to_string(), Value::Null);
@@ -296,7 +296,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                     let parent_val = parent_fields
                         .get(rel.source_attribute)
                         .cloned()
-                        .unwrap_or_else(|| Value::from(parent_id));
+                        .unwrap_or_else(|| parent_id.clone());
                     let filter = Filter::eq(source_fk, parent_val);
                     match rel.on_delete {
                         OnDelete::Nothing => {}
@@ -334,7 +334,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                                 .await?;
                             let join_pk = pk_name(through_def)?;
                             for join_row in rows {
-                                let join_id = required_uuid(&join_row, join_pk)?;
+                                let join_id = required_pk(&join_row, join_pk)?;
                                 destroy_child(ctx, through_def, true, join_id, &join_row, cascade)
                                     .await?;
                             }
@@ -385,11 +385,11 @@ async fn update_child<D: DataLayer>(
 pub async fn handle_managed_relationships<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    parent_id: Uuid,
+    parent_id: Value,
     parent_fields: &FieldMap,
     managed_list: Vec<ManagedRelationshipSpec>,
 ) -> Result<()> {
-    let parent = with_primary_key(resource, parent_id, parent_fields)?;
+    let parent = with_primary_key(resource, parent_id.clone(), parent_fields)?;
     for managed in managed_list {
         let rel = resource
             .relationship(managed.relationship)
@@ -432,8 +432,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                             } else {
                                 child_fields.extend(link.iter().cloned());
                                 generate_pk(dest_def, &mut child_fields);
-                                let child_id = required_uuid(&child_fields, child_pk)?;
-                                ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
+                                ctx.data.create(dest_def, ctx.tenant.as_deref(), crate::pipeline::new_pk(dest_def, &child_fields)?, child_fields).await?;
                             }
                         }
                     }
@@ -453,7 +452,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
 
                         let mut existing_map = HashMap::new();
                         for row in existing_rows {
-                            if let Ok(id) = required_uuid(&row, child_pk) {
+                            if let Ok(id) = required_pk(&row, child_pk) {
                                 existing_map.insert(id, row);
                             }
                         }
@@ -462,16 +461,12 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                         for mut child_fields in managed.inputs {
                             let given_id = child_fields
                                 .get(child_pk)
-                                .and_then(|v| match v {
-                                    Value::Uuid(u) => Some(*u),
-                                    Value::String(s) => Uuid::parse_str(s).ok(),
-                                    _ => None,
-                                });
+                                .and_then(|v| crate::value::pk_cast(dest_def.primary_key().map_or(crate::resource::AttrType::Uuid, |pk| pk.ty), v));
 
                             if let Some(child_id) = given_id
                                 && let Some(existing) = existing_map.get(&child_id)
                             {
-                                kept_ids.insert(child_id);
+                                kept_ids.insert(child_id.clone());
                                 if let Some(update_act) = child_update_action {
                                     child_fields.remove(child_pk);
                                     update_child(ctx, dest_def, update_act, existing.clone(), child_fields, &link)
@@ -486,13 +481,13 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                 let new_id = if let Some(create_act) = child_create_action {
                                     let stored =
                                         create_child(ctx, dest_def, create_act, child_fields, &link).await?;
-                                    required_uuid(&stored, child_pk)?
+                                    required_pk(&stored, child_pk)?
                                 } else {
                                     child_fields.extend(link.iter().cloned());
                                     generate_pk(dest_def, &mut child_fields);
-                                    let child_id = required_uuid(&child_fields, child_pk)?;
-                                    ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
-                                    child_id
+                                    let stored = ctx.data.create(dest_def, ctx.tenant.as_deref(), crate::pipeline::new_pk(dest_def, &child_fields)?, child_fields).await?;
+                                    
+                                    crate::value::required_pk(&stored, child_pk)?
                                 };
                                 kept_ids.insert(new_id);
                             }
@@ -537,7 +532,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
 
                     match managed.rel_type {
                         ManagedRelType::DirectControl => {
-                            let join_filter = Filter::eq(source_fk, Value::from(parent_id));
+                            let join_filter = Filter::eq(source_fk, parent_id.clone());
                             let existing_joins = ctx
                                 .data
                                 .run_query(
@@ -553,12 +548,8 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                             let mut existing_join_map = HashMap::new();
                             for j_row in existing_joins {
                                 if let Some(target_val) = j_row.get(dest_fk)
-                                    && let Ok(join_id) = required_uuid(&j_row, join_pk)
-                                    && let Some(target_uuid) = match target_val {
-                                        Value::Uuid(u) => Some(*u),
-                                        Value::String(s) => Uuid::parse_str(s).ok(),
-                                        _ => None,
-                                    }
+                                    && let Ok(join_id) = required_pk(&j_row, join_pk)
+                                    && let Some(target_uuid) = crate::value::pk_cast(dest_def.primary_key().map_or(crate::resource::AttrType::Uuid, |pk| pk.ty), target_val)
                                 {
                                     existing_join_map.insert(target_uuid, (join_id, j_row));
                                 }
@@ -566,7 +557,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
 
                             let mut kept_targets = HashSet::new();
                             for mut child_fields in managed.inputs {
-                                let target_id = if let Ok(id) = required_uuid(&child_fields, dest_pk) {
+                                let target_id = if let Ok(id) = required_pk(&child_fields, dest_pk) {
                                     id
                                 } else {
                                     let create_act = dest_def
@@ -576,23 +567,22 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                         .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Create));
                                     if let Some(create_act) = create_act {
                                         let stored = Box::pin(create_dynamic(ctx, dest_def, create_act, child_fields)).await?;
-                                        required_uuid(&stored, dest_pk)?
+                                        required_pk(&stored, dest_pk)?
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
-                                        let child_id = required_uuid(&child_fields, dest_pk)?;
-                                        ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
-                                        child_id
+                                        let stored = ctx.data.create(dest_def, ctx.tenant.as_deref(), crate::pipeline::new_pk(dest_def, &child_fields)?, child_fields).await?;
+                                        
+                                        crate::value::required_pk(&stored, dest_pk)?
                                     }
                                 };
-                                kept_targets.insert(target_id);
+                                kept_targets.insert(target_id.clone());
 
                                 if !existing_join_map.contains_key(&target_id) {
                                     let mut join_fields = FieldMap::new();
-                                    join_fields.insert(source_fk.to_string(), Value::from(parent_id));
-                                    join_fields.insert(dest_fk.to_string(), Value::from(target_id));
+                                    join_fields.insert(source_fk.to_string(), parent_id.clone());
+                                    join_fields.insert(dest_fk.to_string(), target_id);
                                     generate_pk(through_def, &mut join_fields);
-                                    let join_id = required_uuid(&join_fields, join_pk)?;
-                                    ctx.data.create(through_def, ctx.tenant.as_deref(), join_id, join_fields).await?;
+                                    ctx.data.create(through_def, ctx.tenant.as_deref(), crate::pipeline::new_pk(through_def, &join_fields)?, join_fields).await?;
                                 }
                             }
 
@@ -615,7 +605,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                         }
                         ManagedRelType::Create | ManagedRelType::Append => {
                             for mut child_fields in managed.inputs {
-                                let target_id = if let Ok(id) = required_uuid(&child_fields, dest_pk) {
+                                let target_id = if let Ok(id) = required_pk(&child_fields, dest_pk) {
                                     id
                                 } else {
                                     let create_act = dest_def
@@ -625,21 +615,20 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                         .or_else(|| dest_def.actions.iter().find(|a| a.kind == ActionKind::Create));
                                     if let Some(create_act) = create_act {
                                         let stored = Box::pin(create_dynamic(ctx, dest_def, create_act, child_fields)).await?;
-                                        required_uuid(&stored, dest_pk)?
+                                        required_pk(&stored, dest_pk)?
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
-                                        let child_id = required_uuid(&child_fields, dest_pk)?;
-                                        ctx.data.create(dest_def, ctx.tenant.as_deref(), child_id, child_fields).await?;
-                                        child_id
+                                        let stored = ctx.data.create(dest_def, ctx.tenant.as_deref(), crate::pipeline::new_pk(dest_def, &child_fields)?, child_fields).await?;
+                                        
+                                        crate::value::required_pk(&stored, dest_pk)?
                                     }
                                 };
 
                                 let mut join_fields = FieldMap::new();
-                                join_fields.insert(source_fk.to_string(), Value::from(parent_id));
-                                join_fields.insert(dest_fk.to_string(), Value::from(target_id));
+                                join_fields.insert(source_fk.to_string(), parent_id.clone());
+                                join_fields.insert(dest_fk.to_string(), target_id);
                                 generate_pk(through_def, &mut join_fields);
-                                let join_id = required_uuid(&join_fields, join_pk)?;
-                                ctx.data.create(through_def, ctx.tenant.as_deref(), join_id, join_fields).await?;
+                                ctx.data.create(through_def, ctx.tenant.as_deref(), crate::pipeline::new_pk(through_def, &join_fields)?, join_fields).await?;
                             }
                         }
                     }

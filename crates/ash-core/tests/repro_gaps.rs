@@ -281,7 +281,7 @@ async fn bulk_destroy_does_not_delete_other_tenants_by_id() {
         .await
         .unwrap();
 
-    let result = ash_core::bulk_destroy::<TenantNote, _>(
+    let result = ash_core::bulk_destroy::<TenantNote, _, _>(
         &alpha,
         "destroy",
         &[foreign.id],

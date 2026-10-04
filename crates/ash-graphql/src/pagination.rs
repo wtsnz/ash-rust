@@ -494,7 +494,7 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
 }
 
 fn keyset_of(record: &FieldMap, sort: &[Sort], pk_name: &str) -> String {
-    let id = record.get(pk_name).and_then(|v| v.as_uuid()).unwrap_or_default();
+    let id = record.get(pk_name).cloned().unwrap_or(Value::Null);
     let values = sort
         .iter()
         .map(|s| (s.field.clone(), record.get(&s.field).cloned().unwrap_or(Value::Null)))

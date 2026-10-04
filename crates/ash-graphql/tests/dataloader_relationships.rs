@@ -101,13 +101,13 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
     let mut a1 = FieldMap::new();
     a1.insert("id".into(), Value::Uuid(author1_id));
     a1.insert("name".into(), Value::String("Alice".into()));
-    data.create(&AUTHOR_DEF, None, author1_id, a1).await.unwrap();
+    data.create(&AUTHOR_DEF, None, Value::from(author1_id), a1).await.unwrap();
 
     let author2_id = Uuid::new_v4();
     let mut a2 = FieldMap::new();
     a2.insert("id".into(), Value::Uuid(author2_id));
     a2.insert("name".into(), Value::String("Bob".into()));
-    data.create(&AUTHOR_DEF, None, author2_id, a2).await.unwrap();
+    data.create(&AUTHOR_DEF, None, Value::from(author2_id), a2).await.unwrap();
 
     // Alice's posts
     for i in 1..=2 {
@@ -116,7 +116,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Alice Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author1_id));
-        data.create(&POST_DEF, None, p_id, p).await.unwrap();
+        data.create(&POST_DEF, None, Value::from(p_id), p).await.unwrap();
     }
 
     // Bob's posts
@@ -126,7 +126,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Bob Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author2_id));
-        data.create(&POST_DEF, None, p_id, p).await.unwrap();
+        data.create(&POST_DEF, None, Value::from(p_id), p).await.unwrap();
     }
 
     (author1_id, author2_id)

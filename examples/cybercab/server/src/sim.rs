@@ -947,7 +947,7 @@ async fn destroy<R: Resource, D: TransactionSupport + 'static>(ctx: &Context<D>,
         .find(|a| a.kind == ash_core::ActionKind::Destroy)
         .map(|a| a.name)
         .unwrap_or("destroy");
-    ash_core::bulk_destroy::<R, D>(
+    ash_core::bulk_destroy::<R, D, _>(
         ctx,
         action,
         ids,

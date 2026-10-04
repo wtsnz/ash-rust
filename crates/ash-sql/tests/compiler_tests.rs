@@ -144,7 +144,7 @@ fn test_postgres_insert_update_upsert_returning() {
     update_fields.insert("status".into(), Value::String("closed".into()));
 
     let compiled_up = compiler2
-        .compile_update(&TICKET_DEF, id, &update_fields)
+        .compile_update(&TICKET_DEF, id.into(), &update_fields)
         .unwrap();
     assert!(compiled_up
         .sql
@@ -178,7 +178,7 @@ fn test_postgres_bulk_update_is_one_statement_for_rows_that_differ() {
     triages.insert("priority".into(), Value::Int(2));
 
     let compiled = QueryCompiler::new(&dialect)
-        .compile_bulk_update(&TICKET_DEF, &["status", "priority"], &[(closed, &closes), (triaged, &triages)])
+        .compile_bulk_update(&TICKET_DEF, &["status", "priority"], &[(Value::Uuid(closed), &closes), (Value::Uuid(triaged), &triages)])
         .unwrap();
     assert!(compiled.sql.starts_with("UPDATE \"tickets\" SET \"status\" = \"v\".\"status\", \"priority\" = CASE WHEN \"v\".\"__ash_set_1\" THEN \"v\".\"priority\" ELSE \"tickets\".\"priority\" END FROM (VALUES "), "{}", compiled.sql);
     assert!(compiled.sql.ends_with(") AS \"v\" (\"id\", \"status\", \"__ash_set_1\", \"priority\") WHERE \"tickets\".\"id\" = \"v\".\"id\" RETURNING \"tickets\".*"), "{}", compiled.sql);
@@ -188,7 +188,7 @@ fn test_postgres_bulk_update_is_one_statement_for_rows_that_differ() {
 
     // Rows that all set the same columns need no flags.
     let compiled = QueryCompiler::new(&dialect)
-        .compile_bulk_update(&TICKET_DEF, &["status"], &[(closed, &closes), (triaged, &closes)])
+        .compile_bulk_update(&TICKET_DEF, &["status"], &[(Value::Uuid(closed), &closes), (Value::Uuid(triaged), &closes)])
         .unwrap();
     assert!(!compiled.sql.contains("CASE"), "{}", compiled.sql);
     assert_eq!(compiled.params.len(), 4);
@@ -332,7 +332,7 @@ fn test_keyset_cursor_compilation() {
     let mut compiler = QueryCompiler::new(&dialect);
 
     let cursor = ash_core::KeysetCursor {
-        id: Uuid::nil(),
+        id: Value::Uuid(Uuid::nil()),
         values: vec![
             ("priority".to_string(), Value::Int(3)),
             ("subject".to_string(), Value::String("Alpha".to_string())),

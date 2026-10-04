@@ -97,7 +97,7 @@ pub use types::{
 };
 pub use value::{
     ConstValue, FieldMap, IntoOption, Value, get_metadata, optional_int, optional_uuid, put_metadata,
-    required_string, required_uuid, union_value,
+    pk_cast, required_pk, required_string, required_uuid, union_value,
 };
 
 /// Typestate marker: a required action input has not been set yet.

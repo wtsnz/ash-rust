@@ -74,7 +74,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     fields.insert("score".into(), Value::Int(100));
     fields.insert("is_active".into(), Value::Bool(true));
 
-    let created = pg.create(&CUSTOMER_DEF, None, id, fields).await.expect("Create failed");
+    let created = pg.create(&CUSTOMER_DEF, None, Value::from(id), fields).await.expect("Create failed");
     assert_eq!(created.get("id"), Some(&Value::Uuid(id)));
     assert_eq!(created.get("email"), Some(&Value::String(email.clone())));
     assert_eq!(created.get("name"), Some(&Value::String("Alice".into())));
@@ -95,7 +95,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     update_fields.insert("name".into(), Value::String("Alice Updated".into()));
     update_fields.insert("score".into(), Value::Int(250));
 
-    let updated = pg.update(&CUSTOMER_DEF, None, id, update_fields).await.expect("Update failed");
+    let updated = pg.update(&CUSTOMER_DEF, None, Value::from(id), update_fields).await.expect("Update failed");
     assert_eq!(updated.get("name"), Some(&Value::String("Alice Updated".into())));
     assert_eq!(updated.get("score"), Some(&Value::Int(250)));
 
@@ -109,7 +109,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     let upserted = pg
         .upsert(
             &CUSTOMER_DEF, None,
-            id,
+            Value::from(id),
             upsert_fields,
             &CUSTOMER_IDENTS[0],
             &["name".to_string(), "score".to_string()],
@@ -120,7 +120,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     assert_eq!(upserted.get("score"), Some(&Value::Int(300)));
 
     // 5. DESTROY
-    pg.destroy(&CUSTOMER_DEF, None, id).await.expect("Destroy failed");
+    pg.destroy(&CUSTOMER_DEF, None, Value::from(id)).await.expect("Destroy failed");
 
     // Verify row is gone
     let rows_after = pg.run_query(&CUSTOMER_DEF, &query).await.expect("Query failed");
@@ -140,14 +140,14 @@ async fn test_postgres_unique_violation_error_mapping() {
     let id1 = Uuid::new_v4();
     fields1.insert("id".into(), Value::Uuid(id1));
     fields1.insert("email".into(), Value::String(email.clone()));
-    pg.create(&CUSTOMER_DEF, None, id1, fields1).await.unwrap();
+    pg.create(&CUSTOMER_DEF, None, Value::from(id1), fields1).await.unwrap();
 
     let mut fields2 = FieldMap::new();
     let id2 = Uuid::new_v4();
     fields2.insert("id".into(), Value::Uuid(id2));
     fields2.insert("email".into(), Value::String(email.clone()));
 
-    let err = pg.create(&CUSTOMER_DEF, None, id2, fields2).await.unwrap_err();
+    let err = pg.create(&CUSTOMER_DEF, None, Value::from(id2), fields2).await.unwrap_err();
     match err {
         Error::IdentityConflict { identity, .. } => {
             assert_eq!(identity, "unique_email");
@@ -156,7 +156,7 @@ async fn test_postgres_unique_violation_error_mapping() {
     }
 
     // Cleanup
-    let _ = pg.destroy(&CUSTOMER_DEF, None, id1).await;
+    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id1)).await;
 }
 
 #[tokio::test]
@@ -178,7 +178,7 @@ async fn test_postgres_transaction_commit_and_rollback() {
                 let mut fields = FieldMap::new();
                 fields.insert("id".into(), Value::Uuid(id_rollback));
                 fields.insert("email".into(), Value::String(email));
-                tx.create(&CUSTOMER_DEF, None, id_rollback, fields).await?;
+                tx.create(&CUSTOMER_DEF, None, Value::from(id_rollback), fields).await?;
                 // Force error to trigger rollback
                 Err(Error::Invalid("abort transaction".into()))
             }
@@ -206,7 +206,7 @@ async fn test_postgres_transaction_commit_and_rollback() {
             let mut fields = FieldMap::new();
             fields.insert("id".into(), Value::Uuid(id_commit));
             fields.insert("email".into(), Value::String(email));
-            tx.create(&CUSTOMER_DEF, None, id_commit, fields).await?;
+            tx.create(&CUSTOMER_DEF, None, Value::from(id_commit), fields).await?;
             Ok(())
         }
     })
@@ -221,7 +221,7 @@ async fn test_postgres_transaction_commit_and_rollback() {
     assert_eq!(rows_commit.len(), 1);
 
     // Cleanup
-    let _ = pg.destroy(&CUSTOMER_DEF, None, id_commit).await;
+    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id_commit)).await;
 }
 
 #[tokio::test]
@@ -282,7 +282,7 @@ async fn test_postgres_in_query_large_batch_any_array() {
     f1.insert("role".into(), Value::String("customer".into()));
     f1.insert("active".into(), Value::Bool(true));
     f1.insert("points".into(), Value::Int(10));
-    pg.create(&CUSTOMER_DEF, None, id1, f1).await.unwrap();
+    pg.create(&CUSTOMER_DEF, None, Value::from(id1), f1).await.unwrap();
 
     let mut f2 = ash_core::FieldMap::new();
     f2.insert("id".into(), Value::Uuid(id2));
@@ -291,7 +291,7 @@ async fn test_postgres_in_query_large_batch_any_array() {
     f2.insert("role".into(), Value::String("customer".into()));
     f2.insert("active".into(), Value::Bool(true));
     f2.insert("points".into(), Value::Int(20));
-    pg.create(&CUSTOMER_DEF, None, id2, f2).await.unwrap();
+    pg.create(&CUSTOMER_DEF, None, Value::from(id2), f2).await.unwrap();
 
     // Large list with 2,000 UUIDs
     let mut large_ids = vec![id1, id2];
@@ -308,8 +308,8 @@ async fn test_postgres_in_query_large_batch_any_array() {
     let rows = pg.run_query(&CUSTOMER_DEF, &query).await.unwrap();
     assert_eq!(rows.len(), 2);
 
-    let _ = pg.destroy(&CUSTOMER_DEF, None, id1).await;
-    let _ = pg.destroy(&CUSTOMER_DEF, None, id2).await;
+    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id1)).await;
+    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id2)).await;
 }
 
 static NODE_ATTRS: &[AttributeDef] = &[
@@ -367,7 +367,7 @@ async fn test_postgres_self_referential_aggregate() {
     let mut root_fields = ash_core::FieldMap::new();
     root_fields.insert("id".into(), Value::Uuid(root_id));
     root_fields.insert("name".into(), Value::String("Root Node".into()));
-    pg.create(&NODE_DEF, None, root_id, root_fields).await.unwrap();
+    pg.create(&NODE_DEF, None, Value::from(root_id), root_fields).await.unwrap();
 
     for i in 1..=3 {
         let child_id = Uuid::new_v4();
@@ -375,7 +375,7 @@ async fn test_postgres_self_referential_aggregate() {
         child_fields.insert("id".into(), Value::Uuid(child_id));
         child_fields.insert("name".into(), Value::String(format!("Child Node {i}")));
         child_fields.insert("parent_id".into(), Value::Uuid(root_id));
-        pg.create(&NODE_DEF, None, child_id, child_fields).await.unwrap();
+        pg.create(&NODE_DEF, None, Value::from(child_id), child_fields).await.unwrap();
     }
 
     let query = ash_core::CompiledQuery {
@@ -438,17 +438,17 @@ async fn test_postgres_optimistic_locking_stale_record() {
     fields.insert("id".into(), Value::Uuid(id));
     fields.insert("title".into(), Value::String("Version 1".into()));
     fields.insert("version".into(), Value::Int(1));
-    pg.create(&DOCUMENT_DEF, None, id, fields).await.unwrap();
+    pg.create(&DOCUMENT_DEF, None, Value::from(id), fields).await.unwrap();
 
     // Successful update: version moves from 1 to 2
     let mut update_fields = ash_core::FieldMap::new();
     update_fields.insert("title".into(), Value::String("Version 2".into()));
     update_fields.insert("version".into(), Value::Int(2));
-    let res = pg.update(&DOCUMENT_DEF, None, id, update_fields.clone()).await.unwrap();
+    let res = pg.update(&DOCUMENT_DEF, None, Value::from(id), update_fields.clone()).await.unwrap();
     assert_eq!(res.get("version"), Some(&Value::Int(2)));
 
     // Second update with version = 2 (expected 1): fails because current DB version is 2!
-    let err = pg.update(&DOCUMENT_DEF, None, id, update_fields).await.unwrap_err();
+    let err = pg.update(&DOCUMENT_DEF, None, Value::from(id), update_fields).await.unwrap_err();
     assert!(matches!(err, ash_core::Error::StaleRecord { .. }));
 
     // Non-existent ID: returns NotFound
@@ -456,7 +456,7 @@ async fn test_postgres_optimistic_locking_stale_record() {
     let mut missing_fields = ash_core::FieldMap::new();
     missing_fields.insert("title".into(), Value::String("Ghost".into()));
     missing_fields.insert("version".into(), Value::Int(2));
-    let err_missing = pg.update(&DOCUMENT_DEF, None, missing_id, missing_fields).await.unwrap_err();
+    let err_missing = pg.update(&DOCUMENT_DEF, None, Value::from(missing_id), missing_fields).await.unwrap_err();
     assert!(matches!(err_missing, ash_core::Error::NotFound));
 
     let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
@@ -538,7 +538,7 @@ async fn test_postgres_stores_null_in_typed_columns() {
     for name in ["owner_id", "score", "active", "settings"] {
         fields.insert(name.into(), Value::Null);
     }
-    let created = pg.create(&NULLABLE_DEF, None, id, fields).await.unwrap();
+    let created = pg.create(&NULLABLE_DEF, None, Value::from(id), fields).await.unwrap();
     for name in ["owner_id", "score", "active", "settings"] {
         assert_eq!(created.get(name), Some(&Value::Null), "{name}");
     }
@@ -588,7 +588,7 @@ async fn test_postgres_binds_missing_calculation_arguments_with_their_type() {
     let mut fields = FieldMap::new();
     fields.insert("id".into(), Value::Uuid(id));
     fields.insert("score".into(), Value::Int(5));
-    pg.create(&BONUS_DEF, None, id, fields).await.unwrap();
+    pg.create(&BONUS_DEF, None, Value::from(id), fields).await.unwrap();
 
     // Without `extra`, COALESCE needs an integer NULL; a text NULL would not match 0.
     let query = CompiledQuery {
@@ -638,7 +638,7 @@ async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions()
     fields.insert("id".into(), Value::Uuid(id));
     fields.insert("org".into(), Value::String("acme".into()));
     fields.insert("body".into(), Value::String("hello".into()));
-    pg.create(&TENANT_NOTE_DEF, None, id, fields).await.unwrap();
+    pg.create(&TENANT_NOTE_DEF, None, Value::from(id), fields).await.unwrap();
 
     // A tenant names a row filter here, not a schema, so it must not move the search_path.
     let query = CompiledQuery {
@@ -698,14 +698,14 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
     let order = Uuid::new_v4();
     let mut fields = FieldMap::new();
     fields.insert("id".into(), Value::Uuid(order));
-    pg.create(&SUM_ORDER_DEF, None, order, fields).await.unwrap();
+    pg.create(&SUM_ORDER_DEF, None, Value::from(order), fields).await.unwrap();
     for amount in [12, 30] {
         let id = Uuid::new_v4();
         let mut fields = FieldMap::new();
         fields.insert("id".into(), Value::Uuid(id));
         fields.insert("order_id".into(), Value::Uuid(order));
         fields.insert("amount".into(), Value::Int(amount));
-        pg.create(&SUM_LINE_DEF, None, id, fields).await.unwrap();
+        pg.create(&SUM_LINE_DEF, None, Value::from(id), fields).await.unwrap();
     }
 
     // `SUM(bigint)` is `numeric` in Postgres.
@@ -731,7 +731,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
     for amounts in [&[12, 30][..], &[5][..]] {
         let order = Uuid::new_v4();
         orders.push(order);
-        pg.create(&SUM_ORDER_DEF, None, order, FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
+        pg.create(&SUM_ORDER_DEF, None, Value::from(order), FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
         for amount in amounts {
             let id = Uuid::new_v4();
             let fields = FieldMap::from([
@@ -739,7 +739,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
                 ("order_id".into(), Value::Uuid(order)),
                 ("amount".into(), Value::Int(*amount)),
             ]);
-            pg.create(&SUM_LINE_DEF, None, id, fields).await.unwrap();
+            pg.create(&SUM_LINE_DEF, None, Value::from(id), fields).await.unwrap();
         }
     }
     let ours = Filter::in_list("id", orders.iter().copied().map(Value::Uuid));
@@ -817,7 +817,7 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
     };
     pg.install(&[&OWNED_ORDER_DEF, &OWNED_LINE_DEF]).await.unwrap();
     let order = Uuid::new_v4();
-    pg.create(&OWNED_ORDER_DEF, None, order, FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
+    pg.create(&OWNED_ORDER_DEF, None, Value::from(order), FieldMap::from([("id".into(), Value::Uuid(order))])).await.unwrap();
     let (mine, theirs) = (Uuid::new_v4(), Uuid::new_v4());
     for owner in [mine, mine, theirs] {
         let id = Uuid::new_v4();
@@ -827,7 +827,7 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
             ("owner_id".into(), Value::Uuid(owner)),
             ("at".into(), Value::from("2026-01-02T03:04:05.000000Z")),
         ]);
-        pg.create(&OWNED_LINE_DEF, None, id, fields).await.unwrap();
+        pg.create(&OWNED_LINE_DEF, None, Value::from(id), fields).await.unwrap();
     }
     let count_as = |actor: Option<ash_core::Actor>| CompiledQuery {
         filter: Some(Filter::eq("id", Value::Uuid(order))),
@@ -874,7 +874,7 @@ async fn test_postgres_computes_rust_only_calculations() {
     pg.install(&[&SHOUTING_DEF]).await.unwrap();
     let id = Uuid::new_v4();
     let fields = FieldMap::from([("id".into(), Value::Uuid(id)), ("label".into(), Value::from("quiet"))]);
-    pg.create(&SHOUTING_DEF, None, id, fields).await.unwrap();
+    pg.create(&SHOUTING_DEF, None, Value::from(id), fields).await.unwrap();
     let query = CompiledQuery {
         filter: Some(Filter::eq("id", Value::Uuid(id))),
         select: Some(Vec::new()),
@@ -1328,7 +1328,7 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
     // An operator recalls one after the batch has read it.
     let mut recall = FieldMap::new();
     recall.insert("status".into(), Value::from("returning"));
-    ctx.data.update(&PgVehicle::DEF, None, fleet[2].id, recall).await.unwrap();
+    ctx.data.update(&PgVehicle::DEF, None, Value::from(fleet[2].id), recall).await.unwrap();
 
     let updates = reports(&fleet).enumerate().map(|(i, (vehicle, mut input))| {
         // Two of them also change status, so the rows change different columns.
@@ -1373,7 +1373,7 @@ async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
     // One is gone before the batch lands.
-    ctx.data.destroy(&PgVehicle::DEF, None, fleet[4].id).await.unwrap();
+    ctx.data.destroy(&PgVehicle::DEF, None, Value::from(fleet[4].id)).await.unwrap();
     let parked: Vec<(String, f64, i64, String)> = (0..4)
         .map(|i| (format!("{run}-{i}"), -97.7, 0, "available".to_string()))
         .collect();
@@ -1425,7 +1425,7 @@ async fn test_postgres_bulk_update_transaction_scopes() {
 
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
-    ctx.data.destroy(&PgVehicle::DEF, None, fleet[3].id).await.unwrap();
+    ctx.data.destroy(&PgVehicle::DEF, None, Value::from(fleet[3].id)).await.unwrap();
     let result = PgVehicle::bulk_update_with_opts(&ctx, "report", reports(&fleet), opts.clone())
         .await
         .unwrap();
@@ -1437,7 +1437,7 @@ async fn test_postgres_bulk_update_transaction_scopes() {
 
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
-    ctx.data.destroy(&PgVehicle::DEF, None, fleet[3].id).await.unwrap();
+    ctx.data.destroy(&PgVehicle::DEF, None, Value::from(fleet[3].id)).await.unwrap();
     let result = PgVehicle::bulk_update_with_opts(
         &ctx,
         "report",

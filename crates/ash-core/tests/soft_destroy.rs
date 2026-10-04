@@ -160,7 +160,7 @@ async fn bulk_scenario<D: TransactionSupport + 'static>(ctx: Context<D>) {
     for body in ["a", "b"] {
         ids.push(Note::create(&ctx).folder_id(folder.id).body(body).await.unwrap().id);
     }
-    let result = bulk_destroy::<Note, D>(&ctx, "destroy", &ids, BulkDestroyOptions::default())
+    let result = bulk_destroy::<Note, D, _>(&ctx, "destroy", &ids, BulkDestroyOptions::default())
         .await
         .unwrap();
     assert_eq!(result.count, 2);

@@ -73,7 +73,16 @@ impl FieldSpec {
     pub fn attribute_def(&self) -> Option<TokenStream> {
         let name = self.ident.to_string();
         match &self.kind {
-            Kind::Pk => Some(quote! { ::ash_core::AttributeDef::uuid_pk(#name) }),
+            Kind::Pk => {
+                let ty = &self.ty;
+                Some(if is_uuid(ty) {
+                    quote! { ::ash_core::AttributeDef::uuid_pk(#name) }
+                } else if is_integer(ty) {
+                    quote! { ::ash_core::AttributeDef::integer_pk(#name) }
+                } else {
+                    quote! { ::ash_core::AttributeDef::pk(#name, <#ty as ::ash_core::AshType>::ATTR_TYPE) }
+                })
+            }
             Kind::Stored {
                 optional,
                 atom,
@@ -196,8 +205,11 @@ impl FieldSpec {
         let name = ident.to_string();
         let ty = &self.ty;
         match &self.kind {
-            Kind::Pk => quote! {
+            Kind::Pk if is_uuid(ty) => quote! {
                 #ident: ::ash_core::required_uuid(fields, #name)?
+            },
+            Kind::Pk => quote! {
+                #ident: <#ty as ::ash_core::AshType>::from_value(&::ash_core::required_pk(fields, #name)?)?
             },
             Kind::Stored {
                 is_enum: true,
@@ -339,10 +351,13 @@ impl FieldSpec {
         let ident = &self.ident;
         let name = ident.to_string();
         match &self.kind {
-            Kind::Pk => quote! {
-                pub const #ident: ::ash_core::Attr<super::#owner, ::uuid::Uuid> =
-                    ::ash_core::Attr::new(#name);
-            },
+            Kind::Pk => {
+                let ty = &self.ty;
+                quote! {
+                    pub const #ident: ::ash_core::Attr<super::#owner, #ty> =
+                        ::ash_core::Attr::new(#name);
+                }
+            }
             Kind::Stored { is_enum: true, .. } => {
                 let inner = option_inner(&self.ty).unwrap_or(&self.ty);
                 quote! {

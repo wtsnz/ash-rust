@@ -396,6 +396,40 @@ impl AttributeDef {
         }
     }
 
+    /// An integer primary key the data layer assigns, as Ash's `integer_primary_key`: an
+    /// identity column in SQL, a counter in memory.
+    pub const fn integer_pk(name: &'static str) -> Self {
+        Self {
+            name,
+            ty: AttrType::Integer,
+            primary_key: true,
+            allow_nil: false,
+            generated: true,
+            version: false,
+            default_fn: None,
+        }
+    }
+
+    /// Whether the data layer assigns the attribute's value to a new record, as it does
+    /// an `integer_primary_key`: absent until the record is stored.
+    pub fn assigned_on_insert(&self) -> bool {
+        self.primary_key && self.generated && self.ty != AttrType::Uuid
+    }
+
+    /// A primary key of type `ty` given with each new record, as an Ash attribute with
+    /// `primary_key?: true` is.
+    pub const fn pk(name: &'static str, ty: AttrType) -> Self {
+        Self {
+            name,
+            ty,
+            primary_key: true,
+            allow_nil: false,
+            generated: false,
+            version: false,
+            default_fn: None,
+        }
+    }
+
     pub const fn required(name: &'static str, ty: AttrType) -> Self {
         Self {
             name,
@@ -822,7 +856,13 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
     type Store: crate::store::StoreTag;
     const DEF: ResourceDef;
 
-    fn id(&self) -> Uuid;
+    /// The record's primary key, whatever its type.
+    fn pk(&self) -> crate::value::Value;
+
+    /// The record's primary key, where it's a UUID. For any key, [`Resource::pk`].
+    fn id(&self) -> Uuid {
+        self.pk().as_uuid().expect("`Resource::id` is for a UUID primary key; use `pk` for any key")
+    }
     fn to_fields(&self) -> FieldMap;
     fn from_fields(fields: &FieldMap) -> Result<Self>;
 
@@ -856,7 +896,7 @@ pub trait ResourceExt: Resource {
         &'a self,
         ctx: &'a Context<D>,
     ) -> Pin<Box<dyn Future<Output = Result<Self>> + Send + 'a>> {
-        Box::pin(async move { crate::engine::get::<Self, D>(ctx, self.id()).await })
+        Box::pin(async move { crate::engine::get::<Self, D>(ctx, self.pk()).await })
     }
 
     /// Destroy this record using its primary destroy action (or the first destroy action found).

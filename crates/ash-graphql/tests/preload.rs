@@ -47,15 +47,15 @@ impl Counting {
 }
 
 impl DataLayer for Counting {
-    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
         self.inner.create(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
         self.inner.update(resource, tenant, id, fields).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         self.inner.destroy(resource, tenant, id).await
     }
 
@@ -219,7 +219,7 @@ async fn insert(data: &Counting, def: &ResourceDef, fields: &[(&str, Value)]) ->
     let id = Uuid::new_v4();
     let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(def, None, id, map).await.unwrap();
+    data.create(def, None, Value::from(id), map).await.unwrap();
     id
 }
 
@@ -627,7 +627,7 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
 #[tokio::test]
 async fn a_mutation_result_checks_field_policies_against_the_record_as_stored() {
     let (data, post) = seeded().await;
-    data.update(&POST_DEF, None, post, FieldMap::from([("label".to_string(), Value::from("secret"))])).await.unwrap();
+    data.update(&POST_DEF, None, Value::from(post), FieldMap::from([("label".to_string(), Value::from("secret"))])).await.unwrap();
     let page = run(
         &data,
         &format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "Labelled" }}) {{ result {{ title commentCount }} }} }}"#),

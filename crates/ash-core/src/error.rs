@@ -1,5 +1,4 @@
 use std::fmt;
-use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum Error {
@@ -52,7 +51,7 @@ pub enum Error {
     Extension(Box<dyn std::error::Error + Send + Sync>),
     StaleRecord {
         resource: &'static str,
-        id: Uuid,
+        id: crate::value::Value,
     },
     /// An update that must run atomically can't, as Ash's `MustBeAtomic`.
     MustBeAtomic {

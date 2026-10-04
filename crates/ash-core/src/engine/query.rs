@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::marker::PhantomData;
 
-use uuid::Uuid;
 
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, Sort};
@@ -312,8 +311,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             results.truncate(limit);
         }
 
-        let after = results.last().map(|r| r.id().to_string());
-        let before = results.first().map(|r| r.id().to_string());
+        let after = results.last().map(|r| r.pk().to_string());
+        let before = results.first().map(|r| r.pk().to_string());
 
         Ok(Page {
             results,
@@ -351,14 +350,14 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             && let Some(mut cursor) = KeysetCursor::decode(c_str)
         {
             if cursor.values.is_empty() {
-                if let Ok(rec) = get::<R, D>(self.ctx, cursor.id).await {
+                if let Ok(rec) = get::<R, D>(self.ctx, cursor.id.clone()).await {
                     let fields = R::to_fields(&rec);
                     for s in &self.sort {
                         let val = fields.get(&s.field).cloned().unwrap_or(Value::Null);
                         cursor.values.push((s.field.clone(), val));
                     }
                 } else {
-                    cursor.values.push((pk.clone(), Value::Uuid(cursor.id)));
+                    cursor.values.push((pk.clone(), cursor.id.clone()));
                 }
             }
 
@@ -415,8 +414,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         D: crate::data_layer::TransactionSupport + 'static,
     {
         let records = self.clone().load().await?;
-        let ids: Vec<Uuid> = records.iter().map(Resource::id).collect();
-        crate::bulk::bulk_destroy::<R, D>(self.ctx, action, &ids, opts).await
+        let ids: Vec<Value> = records.iter().map(Resource::pk).collect();
+        crate::bulk::bulk_destroy::<R, D, Value>(self.ctx, action, &ids, opts).await
     }
 
     /// Chunked streaming over offset-based pagination for large datasets.

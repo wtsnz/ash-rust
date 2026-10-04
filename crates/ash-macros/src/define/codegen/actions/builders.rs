@@ -277,7 +277,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 ::ash_core::query(ctx)
             }
 
-            pub async fn get<D: ::ash_core::DataLayer>(ctx: &::ash_core::Context<D>, id: ::uuid::Uuid) -> ::ash_core::Result<Self> {
+            pub async fn get<D: ::ash_core::DataLayer>(ctx: &::ash_core::Context<D>, id: impl ::std::convert::Into<::ash_core::Value>) -> ::ash_core::Result<Self> {
                 ::ash_core::get(ctx, id).await
             }
         });
@@ -354,17 +354,17 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
     {
         let act_name_str = destroy_act.name.to_string();
         resource_methods.push(quote! {
-            pub async fn bulk_destroy<D: ::ash_core::TransactionSupport + 'static>(
+            pub async fn bulk_destroy<D: ::ash_core::TransactionSupport + 'static, I: ::std::clone::Clone + ::std::convert::Into<::ash_core::Value>>(
                 ctx: &::ash_core::Context<D>,
-                ids: &[::uuid::Uuid],
+                ids: &[I],
             ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
                 ::ash_core::bulk_destroy(ctx, #act_name_str, ids, ::ash_core::BulkDestroyOptions::default()).await
             }
 
-            pub async fn bulk_destroy_with_opts<D: ::ash_core::TransactionSupport + 'static>(
+            pub async fn bulk_destroy_with_opts<D: ::ash_core::TransactionSupport + 'static, I: ::std::clone::Clone + ::std::convert::Into<::ash_core::Value>>(
                 ctx: &::ash_core::Context<D>,
                 action: &str,
-                ids: &[::uuid::Uuid],
+                ids: &[I],
                 opts: ::ash_core::BulkDestroyOptions,
             ) -> ::ash_core::Result<::ash_core::BulkResult<Self>> {
                 ::ash_core::bulk_destroy(ctx, action, ids, opts).await
@@ -923,7 +923,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     #need_traits
 
                     pub enum #target_enum {
-                        Id(::uuid::Uuid),
+                        Id(::ash_core::Value),
                         Existing(#resource),
                     }
 
@@ -942,10 +942,10 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     }
 
                     #impl_new {
-                        pub fn for_id(ctx: &'a ::ash_core::Context<D>, id: ::uuid::Uuid) -> Self {
+                        pub fn for_id(ctx: &'a ::ash_core::Context<D>, id: impl ::std::convert::Into<::ash_core::Value>) -> Self {
                             Self {
                                 ctx,
-                                target: #target_enum::Id(id),
+                                target: #target_enum::Id(id.into()),
                                 tenant_override: ::std::option::Option::None,
                                 before_actions: ::std::vec::Vec::new(),
                                 after_actions: ::std::vec::Vec::new(),

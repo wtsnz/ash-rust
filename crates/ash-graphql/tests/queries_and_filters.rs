@@ -70,7 +70,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f1.insert("priority".into(), Value::Int(1));
     f1.insert("status".into(), Value::String("open".into()));
     f1.insert("is_published".into(), Value::Bool(true));
-    data.create(&TICKET_DEF, None, id1, f1).await.unwrap();
+    data.create(&TICKET_DEF, None, Value::from(id1), f1).await.unwrap();
 
     let id2 = Uuid::new_v4();
     let mut f2 = FieldMap::new();
@@ -79,7 +79,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f2.insert("priority".into(), Value::Int(5));
     f2.insert("status".into(), Value::String("in_progress".into()));
     f2.insert("is_published".into(), Value::Bool(false));
-    data.create(&TICKET_DEF, None, id2, f2).await.unwrap();
+    data.create(&TICKET_DEF, None, Value::from(id2), f2).await.unwrap();
 
     let id3 = Uuid::new_v4();
     let mut f3 = FieldMap::new();
@@ -88,7 +88,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f3.insert("priority".into(), Value::Int(10));
     f3.insert("status".into(), Value::String("closed".into()));
     f3.insert("is_published".into(), Value::Bool(true));
-    data.create(&TICKET_DEF, None, id3, f3).await.unwrap();
+    data.create(&TICKET_DEF, None, Value::from(id3), f3).await.unwrap();
 
     (id1, id2, id3)
 }

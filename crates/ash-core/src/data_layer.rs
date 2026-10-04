@@ -1,9 +1,9 @@
-use uuid::Uuid;
+
 
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{IdentityDef, ResourceDef};
-use crate::value::FieldMap;
+use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Debug, Default)]
 pub struct Sort {
@@ -105,7 +105,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send;
 
@@ -113,7 +113,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send;
 
@@ -121,7 +121,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn run_query(
@@ -223,7 +223,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
         _identity: &IdentityDef,
         _update_fields: &[String],
@@ -238,7 +238,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         async move {
             let mut results = Vec::with_capacity(rows.len());
@@ -253,11 +253,11 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        ids: &[Uuid],
+        ids: &[Value],
     ) -> impl Future<Output = Result<()>> + Send {
         async move {
             for id in ids {
-                self.destroy(resource, tenant, *id).await?;
+                self.destroy(resource, tenant, id.clone()).await?;
             }
             Ok(())
         }
@@ -271,7 +271,7 @@ pub trait DataLayer: Send + Sync {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> impl Future<Output = Result<Vec<Result<FieldMap>>>> + Send {
         async move {
             let mut results = Vec::with_capacity(rows.len());
@@ -302,7 +302,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         no_data_layer(resource)
@@ -312,7 +312,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         no_data_layer(resource)
@@ -322,7 +322,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
     ) -> impl Future<Output = Result<()>> + Send {
         no_data_layer(resource)
     }
@@ -339,7 +339,7 @@ impl DataLayer for NoDataLayer {
         &self,
         resource: &ResourceDef,
         _tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         _fields: FieldMap,
         _identity: &IdentityDef,
         _update_fields: &[String],

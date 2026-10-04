@@ -1,4 +1,3 @@
-use uuid::Uuid;
 
 use crate::action::{ActionKind, PersistKind};
 use crate::changeset::IntoFieldMap;
@@ -11,7 +10,7 @@ use crate::changeset::DynamicChangeset;
 use crate::changeset::dynamic_upsert_identity as upsert_identity;
 use crate::pipeline::{action_named, expect_kind, expect_persist, pk_name, visible_scope};
 use crate::resource::Resource;
-use crate::value::{FieldMap, Value, required_uuid};
+use crate::value::{FieldMap, Value};
 
 /// How a bulk action uses transactions: Ash's `transaction` option.
 ///
@@ -244,7 +243,7 @@ impl<R> BulkResult<R> {
 /// One row of a bulk action, prepared as a single write prepares, with the hooks to run
 /// once its outcome is known.
 struct PreparedRow {
-    id: Uuid,
+    id: Value,
     changeset: DynamicChangeset,
     after_transactions: Vec<DynamicAfterTransactionHook>,
 }
@@ -356,7 +355,7 @@ where
 /// fails the batch.
 async fn finish_rows<D: DataLayer>(
     ctx: &Context<D>,
-    rows: Vec<(Uuid, DynamicChangeset)>,
+    rows: Vec<(Value, DynamicChangeset)>,
     stored: Vec<Result<FieldMap>>,
     notify: bool,
     transactional: bool,
@@ -417,7 +416,7 @@ fn settle<R: Resource>(
 }
 
 /// Splits prepared rows into what their batch writes and the hooks that wait on it.
-fn split(chunk: Vec<PreparedRow>) -> (Vec<(Uuid, DynamicChangeset)>, Vec<Vec<DynamicAfterTransactionHook>>) {
+fn split(chunk: Vec<PreparedRow>) -> (Vec<(Value, DynamicChangeset)>, Vec<Vec<DynamicAfterTransactionHook>>) {
     chunk
         .into_iter()
         .map(|row| ((row.id, row.changeset), row.after_transactions))
@@ -489,13 +488,13 @@ where
                     let cascade = crate::engine::Cascade::new(notify);
                     let mut stored = Vec::with_capacity(batch.len());
                     for (id, changeset) in &mut batch {
-                        stored.push(changeset.persist(&ctx, *id, &cascade).await);
+                        stored.push(changeset.persist(&ctx, id.clone(), &cascade).await);
                     }
                     stored
                 } else {
                     let tuples = batch
                         .iter_mut()
-                        .map(|(id, changeset)| (*id, changeset.take_fields()))
+                        .map(|(id, changeset)| (id.clone(), changeset.take_fields()))
                         .collect();
                     let stored = ctx.data.bulk_create(&R::DEF, ctx.tenant.as_deref(), tuples).await?;
                     stored.into_iter().map(Ok).collect()
@@ -512,10 +511,10 @@ where
 
 /// Destroy multiple records by ID in a single batch or in chunked batches, each batch in a
 /// transaction, as Ash's are, unless [`BulkDestroyOptions::transaction`] says otherwise.
-pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static>(
+pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone + Into<Value>>(
     ctx: &Context<D>,
     action: &str,
-    ids: &[Uuid],
+    ids: &[I],
     opts: BulkDestroyOptions,
 ) -> Result<BulkResult<R>> {
     let action_def = action_named(&R::DEF, action)?;
@@ -527,12 +526,12 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static>(
     }
 
     let pk = pk_name(&R::DEF)?;
-    let ids = ids.to_vec();
+    let ids: Vec<Value> = ids.iter().cloned().map(Into::into).collect();
     let scope = Scope::new(ctx, opts.transaction, opts.stop_on_error);
     in_scope(ctx, scope, ids.len(), move |ctx| async move {
         // Fetch existing records for authorization, cascading deletes, and notifications.
         // Tenant scope must match Query::load so knowing a UUID is not enough to delete across tenants.
-        let id_filter = Filter::In(pk.to_string(), ids.into_iter().map(Value::Uuid).collect());
+        let id_filter = Filter::In(pk.to_string(), ids);
         let (filter, tenant) = visible_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
         let rows = ctx
             .data
@@ -560,7 +559,7 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static>(
                     let cascade = crate::engine::Cascade::new(notify);
                     let mut outcomes = Vec::with_capacity(batch.len());
                     for row in batch {
-                        let id = required_uuid(&row, pk)?;
+                        let id = crate::value::required_pk(&row, pk)?;
                         let destroyed = crate::engine::destroy_dynamic_with(
                             &ctx, &R::DEF, action_def, id, &row, &cascade,
                         )
@@ -609,14 +608,14 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static>(
             let outcomes = in_batch(&ctx, scope, move |ctx| async move {
                 // Each row's relationships go as it does, in the same transaction. Outside
                 // one, a row whose relationships can't go fails alone and stays.
-                let parents: Vec<(Uuid, FieldMap)> = batch
+                let parents: Vec<(Value, FieldMap)> = batch
                     .iter()
-                    .map(|(id, changeset)| (*id, changeset.existing().cloned().unwrap_or_default()))
+                    .map(|(id, changeset)| (id.clone(), changeset.existing().cloned().unwrap_or_default()))
                     .collect();
                 let mut existing = Vec::with_capacity(batch.len());
                 let mut ids = Vec::with_capacity(batch.len());
                 for (id, fields) in parents {
-                    match crate::engine::handle_cascading_deletes(&ctx, &R::DEF, id, &fields).await {
+                    match crate::engine::handle_cascading_deletes(&ctx, &R::DEF, id.clone(), &fields).await {
                         Ok(()) => {
                             ids.push(id);
                             existing.push(Ok(fields));
@@ -700,7 +699,7 @@ where
                     .iter_mut()
                     .map(|(id, changeset)| {
                         let fields = changeset.take_fields();
-                        (*id, changeset.changes(fields))
+                        (id.clone(), changeset.changes(fields))
                     })
                     .collect();
                 let stored = ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?;

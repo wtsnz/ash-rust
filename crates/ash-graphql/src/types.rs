@@ -1,4 +1,4 @@
-use ash_core::{AttrType, FieldMap, Value as AshValue};
+use ash_core::{AttrType, FieldMap, ResourceDef, Value as AshValue};
 use async_graphql::dynamic::TypeRef;
 use async_graphql::{Name, Value as GqlValue};
 
@@ -27,6 +27,31 @@ pub fn graphql_type_name(ty: AttrType) -> &'static str {
         | AttrType::Vector { .. } => TypeRef::STRING,
         // A list within a list has no GraphQL type of its own here.
         AttrType::Array { .. } => "Json",
+    }
+}
+
+/// The record a client named by its `ID`, as the resource's primary key: a UUID, an
+/// integer, or text, as AshGraphql decodes an encoded primary key.
+pub(crate) fn parse_id(resource: &ResourceDef, value: &GqlValue) -> async_graphql::Result<AshValue> {
+    let text = match value {
+        GqlValue::String(text) => AshValue::String(text.clone()),
+        GqlValue::Number(n) => n.as_i64().map(AshValue::Int).ok_or_else(|| async_graphql::Error::new("Invalid primary key"))?,
+        _ => return Err(async_graphql::Error::new("Invalid primary key")),
+    };
+    let ty = resource.primary_key().map_or(AttrType::Uuid, |pk| pk.ty);
+    let key = match (ty, &text) {
+        (AttrType::String | AttrType::CiString, AshValue::Int(n)) => Some(AshValue::String(n.to_string())),
+        _ => ash_core::pk_cast(ty, &text),
+    };
+    key.ok_or_else(|| async_graphql::Error::new("Invalid primary key"))
+}
+
+/// A primary key as an `ID` gives it: text, as Absinthe serializes an ID.
+pub(crate) fn id_output(value: &AshValue) -> Option<GqlValue> {
+    match value {
+        AshValue::Null => None,
+        AshValue::String(text) => Some(GqlValue::String(text.clone())),
+        other => Some(GqlValue::String(other.to_string())),
     }
 }
 

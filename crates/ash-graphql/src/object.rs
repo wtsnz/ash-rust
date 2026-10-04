@@ -32,6 +32,20 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
             .iter()
             .any(|fp| fp.field == attr.name);
         let allow_nil = attr.allow_nil || has_field_policy;
+        // The primary key is the record's `id: ID!`, as AshGraphql encodes it by default,
+        // whatever its type; one by another name is its own field as well.
+        let pk = attr.primary_key && resource.attributes.iter().filter(|a| a.primary_key).count() == 1;
+        if pk {
+            obj = obj.field(Field::new("id", TypeRef::named_nn(TypeRef::ID), move |ctx| {
+                FieldFuture::new(async move {
+                    let id = ctx.parent_value.downcast_ref::<FieldMap>().and_then(|map| map.get(attr_name));
+                    Ok(id.and_then(crate::types::id_output).map(FieldValue::value))
+                })
+            }));
+            if attr_name == "id" {
+                continue;
+            }
+        }
         let type_ref = attr_type_to_type_ref(resource.name, attr.name, attr.ty, allow_nil);
 
         let field = Field::new(camel(attr_name), type_ref, move |ctx| {

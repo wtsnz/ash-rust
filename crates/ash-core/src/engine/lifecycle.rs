@@ -1,5 +1,4 @@
 use std::future::Future;
-use uuid::Uuid;
 
 use crate::action::{ActionDef, ActionKind, PersistKind};
 use crate::changeset::{self, Changeset, DynamicChangeset};
@@ -9,12 +8,13 @@ use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::pipeline::{expect_kind, expect_persist, pk_name};
 use crate::resource::{Resource, ResourceDef};
-use crate::value::{FieldMap, Value, required_uuid};
+use crate::value::{FieldMap, Value};
 
 use super::query::query;
 
-pub async fn get<R: Resource, D: DataLayer>(ctx: &Context<D>, id: Uuid) -> Result<R> {
+pub async fn get<R: Resource, D: DataLayer>(ctx: &Context<D>, id: impl Into<Value>) -> Result<R> {
     let pk = pk_name(&R::DEF)?;
+    let id: Value = id.into();
     query::<R, D>(ctx).filter(Filter::eq(pk, id)).one().await
 }
 
@@ -31,9 +31,10 @@ pub async fn create<R: Resource, D: DataLayer>(
 pub async fn update<R: Resource, D: DataLayer>(
     ctx: &Context<D>,
     action: &str,
-    id: Uuid,
+    id: impl Into<Value>,
     input: FieldMap,
 ) -> Result<R> {
+    let id: Value = id.into();
     let existing = get::<R, D>(ctx, id).await?;
     Changeset::for_update_on(ctx, action, existing, input)?
         .commit(ctx)
@@ -54,8 +55,9 @@ pub async fn update_existing<R: Resource, D: DataLayer>(
 pub async fn destroy<R: Resource, D: DataLayer>(
     ctx: &Context<D>,
     action: &str,
-    id: Uuid,
+    id: impl Into<Value>,
 ) -> Result<()> {
+    let id: Value = id.into();
     let existing = get::<R, D>(ctx, id).await?;
     destroy_existing(ctx, action, existing).await
 }
@@ -82,9 +84,10 @@ pub async fn destroy_dynamic<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    id: Uuid,
+    id: impl Into<Value>,
     existing_fields: &FieldMap,
 ) -> Result<()> {
+    let id: Value = id.into();
     let cascade = super::managed::Cascade::new(true);
     destroy_dynamic_with(ctx, resource, action, id, existing_fields, &cascade)
         .await
@@ -97,7 +100,7 @@ pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    id: Uuid,
+    id: Value,
     existing_fields: &FieldMap,
     cascade: &super::managed::Cascade,
 ) -> Result<FieldMap> {
@@ -110,7 +113,7 @@ async fn destroy_dynamic_input<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    id: Uuid,
+    id: Value,
     existing_fields: &FieldMap,
     input: FieldMap,
     cascade: &super::managed::Cascade,
@@ -118,7 +121,7 @@ async fn destroy_dynamic_input<D: DataLayer>(
     let mut existing = existing_fields.clone();
     existing
         .entry(pk_name(resource)?.to_string())
-        .or_insert(Value::Uuid(id));
+        .or_insert(id.clone());
     DynamicChangeset::for_destroy_with(ctx, resource, action, existing, input)?
         .commit_within(ctx, cascade)
         .await
@@ -137,9 +140,10 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    id: Uuid,
+    id: impl Into<Value>,
     expected_version: Option<i64>,
 ) -> Result<FieldMap> {
+    let id: Value = id.into();
     destroy_dynamic_via(ctx, resource, None, action, id, FieldMap::new(), expected_version).await
 }
 
@@ -152,10 +156,11 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
     resource: &'static ResourceDef,
     read: Option<&'static ActionDef>,
     action: &'static ActionDef,
-    id: Uuid,
+    id: impl Into<Value>,
     input: FieldMap,
     expected_version: Option<i64>,
 ) -> Result<FieldMap> {
+    let id: Value = id.into();
     expect_kind(action, ActionKind::Destroy)?;
     let read = match read {
         Some(read) => Some(read),
@@ -177,14 +182,14 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
                     tenant: ctx.tenant(),
                     sets: accepted,
                     arguments: &arguments,
-                    expected_version: expected_version.map(|version| (id, version)),
+                    expected_version: expected_version.map(|version| (id.clone(), version)),
                     collect_hooks: true,
                     can_raise: ctx.data.can_raise_atomically(resource),
                 },
             )?;
             Ok((plan, arguments))
         });
-        match found_first(ctx, resource, id, &scope, planned).await? {
+        match found_first(ctx, resource, id.clone(), &scope, planned).await? {
             (Ok(plan), arguments) => {
                 return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan, scope).await;
             }
@@ -199,7 +204,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
             (Err(_), _) => {}
         }
     }
-    let existing = read_visible(ctx, resource, id, scope).await?;
+    let existing = read_visible(ctx, resource, id.clone(), scope).await?;
     if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
         && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
     {
@@ -217,7 +222,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
 async fn found_first<D: DataLayer, T>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    id: Uuid,
+    id: Value,
     scope: &Option<Filter>,
     planned: Result<T>,
 ) -> Result<T> {
@@ -232,11 +237,11 @@ async fn found_first<D: DataLayer, T>(
 async fn read_visible<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
-    id: Uuid,
+    id: Value,
     scope: Option<Filter>,
 ) -> Result<FieldMap> {
     let pk = pk_name(resource)?;
-    let by_id = Some(Filter::eq(pk, Value::Uuid(id)));
+    let by_id = Some(Filter::eq(pk, id.clone()));
     let (filter, tenant) = match scope {
         Some(scope) => {
             let (filter, tenant) = crate::pipeline::apply_tenant_scope(resource, by_id, ctx.tenant.clone())?;
@@ -270,9 +275,10 @@ pub async fn update_dynamic<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    id: Uuid,
+    id: impl Into<Value>,
     input: FieldMap,
 ) -> Result<FieldMap> {
+    let id: Value = id.into();
     update_dynamic_expecting(ctx, resource, action, id, input, None).await
 }
 
@@ -287,10 +293,11 @@ pub async fn update_dynamic_expecting<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-    id: Uuid,
+    id: impl Into<Value>,
     input: FieldMap,
     expected_version: Option<i64>,
 ) -> Result<FieldMap> {
+    let id: Value = id.into();
     update_dynamic_via(ctx, resource, None, action, id, input, expected_version).await
 }
 
@@ -302,10 +309,11 @@ pub async fn update_dynamic_via<D: DataLayer>(
     resource: &'static ResourceDef,
     read: Option<&'static ActionDef>,
     action: &'static ActionDef,
-    id: Uuid,
+    id: impl Into<Value>,
     input: FieldMap,
     expected_version: Option<i64>,
 ) -> Result<FieldMap> {
+    let id: Value = id.into();
     expect_kind(action, ActionKind::Update)?;
     let read = match read {
         Some(read) => Some(read),
@@ -322,14 +330,14 @@ pub async fn update_dynamic_via<D: DataLayer>(
                     tenant: ctx.tenant(),
                     sets: accepted,
                     arguments: &arguments,
-                    expected_version: expected_version.map(|version| (id, version)),
+                    expected_version: expected_version.map(|version| (id.clone(), version)),
                     collect_hooks: true,
                     can_raise: ctx.data.can_raise_atomically(resource),
                 },
             )?;
             Ok((plan, arguments))
         });
-        match found_first(ctx, resource, id, &scope, planned).await? {
+        match found_first(ctx, resource, id.clone(), &scope, planned).await? {
             (Ok(plan), arguments) => {
                 return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan, scope).await;
             }
@@ -343,7 +351,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
             (Err(_), _) => {}
         }
     }
-    let existing = read_visible(ctx, resource, id, scope).await?;
+    let existing = read_visible(ctx, resource, id.clone(), scope).await?;
     if let (Some(expected), Some(version)) = (expected_version, resource.optimistic_lock_attribute())
         && existing.get(version).and_then(Value::as_int).unwrap_or(1) != expected
     {
@@ -389,7 +397,7 @@ where
 /// Data-layer insert with no action pipeline. Manual persist uses this to also store locally.
 pub async fn insert<R: Resource, D: DataLayer>(ctx: &Context<D>, record: &R) -> Result<R> {
     let fields = record.to_fields();
-    let id = required_uuid(&fields, pk_name(&R::DEF)?)?;
+    let id = crate::pipeline::new_pk(&R::DEF, &fields)?;
     let stored = ctx.data.create(&R::DEF, ctx.tenant.as_deref(), id, fields).await?;
     R::from_fields(&stored)
 }

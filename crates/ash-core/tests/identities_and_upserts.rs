@@ -385,7 +385,7 @@ async fn memory_updates_check_only_the_identities_they_change() {
     };
     let (first, first_row) = row("shared@example.com", "first");
     let (second, second_row) = row("shared@example.com", "second");
-    let table = std::collections::HashMap::from([(first, first_row), (second, second_row)]);
+    let table = std::collections::HashMap::from([(first.into(), first_row), (second.into(), second_row)]);
     let ctx = Context::new(Memory::from_tables(std::collections::HashMap::from([(
         "Account".to_string(),
         table,

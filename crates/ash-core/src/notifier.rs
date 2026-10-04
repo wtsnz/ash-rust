@@ -2,7 +2,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::action::ActionKind;
 use crate::actor::Actor;
@@ -19,7 +18,7 @@ pub struct Notification {
     /// Kind of action (`Create`, `Update`, or `Destroy`).
     pub action_kind: ActionKind,
     /// Primary key of the affected record.
-    pub id: Uuid,
+    pub id: Value,
     /// Fields of the record after the action was committed.
     pub record_fields: FieldMap,
     /// Previous fields before the action, if available (e.g. for update and destroy).
@@ -39,7 +38,7 @@ impl Notification {
         resource: &'static str,
         action: impl Into<String>,
         action_kind: ActionKind,
-        id: Uuid,
+        id: impl Into<Value>,
         record_fields: FieldMap,
         previous_fields: Option<FieldMap>,
         actor: Option<Actor>,
@@ -49,7 +48,7 @@ impl Notification {
             resource,
             action: action.into(),
             action_kind,
-            id,
+            id: id.into(),
             record_fields,
             previous_fields,
             actor,

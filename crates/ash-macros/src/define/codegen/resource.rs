@@ -116,11 +116,11 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     let (pk_fn_body, has_pk) = match pk_attr {
         Some(pk) => {
             let pk_id = &pk.ident;
-            (quote! { self.#pk_id }, true)
+            (quote! { ::ash_core::AshType::to_value(&self.#pk_id) }, true)
         }
         None => {
             if def.embedded {
-                (quote! { ::uuid::Uuid::nil() }, false)
+                (quote! { ::ash_core::Value::Null }, false)
             } else {
                 return Err(Error::new_spanned(
                     resource,
@@ -175,7 +175,16 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
         let name_str = a.ident.to_string();
         let ty = &a.ty;
         if a.pk {
-            attr_defs.push(quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) });
+            // A primary key of its own type, as Ash's are: a UUID made for each new record
+            // (`uuid_primary_key`), an integer the data layer assigns
+            // (`integer_primary_key`), or another type given with the record.
+            attr_defs.push(if is_uuid(ty) {
+                quote! { ::ash_core::AttributeDef::uuid_pk(#name_str) }
+            } else if is_integer(ty) {
+                quote! { ::ash_core::AttributeDef::integer_pk(#name_str) }
+            } else {
+                quote! { ::ash_core::AttributeDef::pk(#name_str, <#ty as ::ash_core::AshType>::ATTR_TYPE) }
+            });
         } else if a.version || def.optimistic_lock.as_ref() == Some(&a.ident) {
             attr_defs.push(quote! { ::ash_core::AttributeDef::version(#name_str) });
         } else if a.uses_ash_type_storage() {
@@ -717,7 +726,11 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             continue;
         }
 
-        if a.pk || is_uuid(ty) {
+        if a.pk && !is_uuid(ty) {
+            from_inits.push(quote! {
+                #id: <#ty as ::ash_core::AshType>::from_value(&::ash_core::required_pk(fields, #name_str)?)?
+            });
+        } else if a.pk || is_uuid(ty) {
             from_inits.push(quote! { #id: ::ash_core::required_uuid(fields, #name_str)? });
         } else if option_inner(ty).is_some_and(is_uuid) {
             from_inits.push(quote! { #id: ::ash_core::optional_uuid(fields, #name_str)? });
@@ -913,7 +926,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::ash_core::Attr::new(#name_str);
                 });
             }
-        } else if a.pk || is_uuid(ty) || option_inner(ty).is_some_and(is_uuid) {
+        } else if (a.pk && is_uuid(ty)) || (!a.pk && (is_uuid(ty) || option_inner(ty).is_some_and(is_uuid))) {
             field_consts.push(quote! {
                 #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, ::uuid::Uuid> =
@@ -1402,7 +1415,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 }
             };
 
-            fn id(&self) -> ::uuid::Uuid {
+            fn pk(&self) -> ::ash_core::Value {
                 #pk_fn_body
             }
 

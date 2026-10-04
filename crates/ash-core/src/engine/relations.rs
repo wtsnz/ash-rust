@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use uuid::Uuid;
 
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, PerKey, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{RelKind, Resource, ResourceDef};
-use crate::value::{FieldMap, Value, required_uuid};
+use crate::value::{FieldMap, Value, required_pk};
 
 pub(crate) async fn attach_relationships<R: Resource, D: DataLayer>(
     ctx: &Context<D>,
@@ -137,7 +136,7 @@ pub async fn load_related_query<D: DataLayer>(
         RelKind::ManyToMany => {
             let keys: Vec<Option<Vec<Value>>> = sources
                 .iter()
-                .map(|source| required_uuid(source, rel.source_attribute).ok().map(|id| vec![Value::Uuid(id)]))
+                .map(|source| required_pk(source, rel.source_attribute).ok().map(|id| vec![id]))
                 .collect();
             let source_ids: Vec<Value> =
                 keys.iter().flatten().flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
@@ -170,12 +169,12 @@ pub async fn load_related_query<D: DataLayer>(
                 }
             } else {
                 let join_rows = read_batch(ctx, through, source_on_join, source_ids, joins.clone()).await?;
-                let mut source_to_dest: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+                let mut source_to_dest: HashMap<Value, HashSet<Value>> = HashMap::new();
                 let mut all_dest_ids: BTreeSet<Value> = BTreeSet::new();
                 for j_row in &join_rows.rows {
-                    if let (Ok(s_id), Ok(d_id)) = (required_uuid(j_row, source_on_join), required_uuid(j_row, dest_on_join)) {
-                        source_to_dest.entry(s_id).or_default().insert(d_id);
-                        all_dest_ids.insert(Value::Uuid(d_id));
+                    if let (Ok(s_id), Ok(d_id)) = (required_pk(j_row, source_on_join), required_pk(j_row, dest_on_join)) {
+                        source_to_dest.entry(s_id).or_default().insert(d_id.clone());
+                        all_dest_ids.insert(d_id);
                     }
                 }
                 // Each source's rows keep the destination read's order.
@@ -185,10 +184,10 @@ pub async fn load_related_query<D: DataLayer>(
                     let rows = related
                         .rows
                         .iter()
-                        .filter(|row| required_uuid(row, rel.destination_attribute).is_ok_and(|id| linked.contains(&id)))
+                        .filter(|row| required_pk(row, rel.destination_attribute).is_ok_and(|id| linked.contains(&id)))
                         .cloned()
                         .collect();
-                    groups.insert(vec![Value::Uuid(source_id)], related.page(rows));
+                    groups.insert(vec![source_id], related.page(rows));
                 }
             }
             (keys, groups)

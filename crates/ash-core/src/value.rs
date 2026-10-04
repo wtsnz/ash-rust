@@ -398,6 +398,29 @@ impl From<ConstValue> for Value {
 
 pub type FieldMap = HashMap<String, Value>;
 
+/// The primary key `key` of a record, which it must hold: any type (a UUID, an integer,
+/// text), as Ash's primary keys are.
+pub fn required_pk(fields: &FieldMap, key: &str) -> Result<Value> {
+    match fields.get(key) {
+        Some(Value::Null) | None => Err(Error::Missing { field: key.to_string() }),
+        Some(value) => Ok(value.clone()),
+    }
+}
+
+/// `value` as a key of type `ty`: text a client gave for a UUID or an integer, cast; a
+/// value already of the type, as it is. `None` where it can't be one.
+pub fn pk_cast(ty: crate::resource::AttrType, value: &Value) -> Option<Value> {
+    use crate::resource::AttrType;
+    match (ty, value) {
+        (_, Value::Null) => None,
+        (AttrType::Uuid, Value::String(text)) => Uuid::parse_str(text).ok().map(Value::Uuid),
+        (AttrType::Integer, Value::String(text)) => text.parse().ok().map(Value::Int),
+        (AttrType::Uuid, Value::Uuid(_)) | (AttrType::Integer, Value::Int(_)) => Some(value.clone()),
+        (AttrType::Uuid | AttrType::Integer, _) => None,
+        (_, value) => Some(value.clone()),
+    }
+}
+
 pub fn required_uuid(fields: &FieldMap, key: &str) -> Result<Uuid> {
     match fields.get(key) {
         Some(Value::Uuid(id)) => Ok(*id),

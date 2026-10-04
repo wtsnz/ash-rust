@@ -14,7 +14,6 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
 use ash_core::{Notification, Notifier, Result};
-use uuid::Uuid;
 
 /// Events buffered per topic by [`PubSub::new`] for subscribers that haven't taken them
 /// yet. Notifications are shared, so a slot holds a reference, not a copy of a record:
@@ -115,9 +114,10 @@ impl PubSub {
     /// Subscribe to events for a specific record ID (e.g. `"order:<id>:*"` or `"order:<id>:action"`).
     pub fn subscribe_record<R: ash_core::Resource>(
         &self,
-        id: Uuid,
+        id: impl Into<ash_core::Value>,
         action: Option<&str>,
     ) -> Subscription {
+        let id = id.into();
         let prefix = R::DEF.name.to_lowercase();
         match action {
             Some(act) => self.subscribe(format!("{prefix}:{id}:{act}")),
@@ -249,7 +249,7 @@ impl Notifier for PubSubNotifier {
         } else {
             let res = notification.resource.to_lowercase();
             let act = &notification.action;
-            let id = notification.id;
+            let id = &notification.id;
             vec![format!("{res}:{act}"), format!("{res}:{id}:{act}")]
         };
 
@@ -289,7 +289,7 @@ pub trait PubSubResourceExt: ash_core::Resource {
     /// If `action` is `Some("pay")`, subscribes to `"<resource>:<id>:pay"`.
     /// If `action` is `None`, subscribes to `"<resource>:<id>:*"`.
     fn subscribe(&self, pubsub: &PubSub, action: Option<&str>) -> Subscription {
-        pubsub.subscribe_record::<Self>(self.id(), action)
+        pubsub.subscribe_record::<Self>(self.pk(), action)
     }
 }
 

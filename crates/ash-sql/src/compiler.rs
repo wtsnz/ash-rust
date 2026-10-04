@@ -3,7 +3,6 @@ use ash_core::{
     AggregateDef, AggregateFilter, AggregateKind, AttrType, CalculationDef, CompiledQuery, Error,
     Expr, FieldMap, Filter, IdentityDef, KeysetCursor, RelKind, ResourceDef, Result, Sort, Value,
 };
-use uuid::Uuid;
 
 use crate::dialect::{AggregateStrategy, SqlDialect, TextMatch};
 use crate::param::SqlParam;
@@ -898,7 +897,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if sorts.is_empty() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.push_param(Value::Uuid(cursor.id));
+            let p = self.bind_field(resource, pk, cursor.id.clone());
             return Ok(format!("{pk_col} > {p}"));
         }
 
@@ -937,7 +936,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 }
             }
             let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.push_param(Value::Uuid(cursor.id));
+            let p = self.bind_field(resource, pk, cursor.id.clone());
             let mut branch = format!("{pk_col} > {p}");
             if !prefix_match.is_empty() {
                 branch = format!("{} AND {branch}", prefix_match.join(" AND "));
@@ -948,7 +947,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if conds.is_empty() {
             let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
             let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.push_param(Value::Uuid(cursor.id));
+            let p = self.bind_field(resource, pk, cursor.id.clone());
             Ok(format!("{pk_col} > {p}"))
         } else {
             Ok(format!("({})", conds.join(" OR ")))
@@ -1710,6 +1709,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
         for attr in resource.attributes {
             if let Some(val) = fields.get(attr.name) {
+                // A key the database assigns is left out, for it to assign.
+                if attr.primary_key && val.is_null() {
+                    continue;
+                }
                 col_names.push(ident(self.dialect, attr.name)?);
                 placeholders.push(self.bind_typed(attr.ty, val.clone()));
             }
@@ -1731,16 +1734,24 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_bulk_insert(
         &mut self,
         resource: &ResourceDef,
-        rows: &[(Uuid, FieldMap)],
+        rows: &[(Value, FieldMap)],
     ) -> Result<CompiledSql> {
         if rows.is_empty() {
             return Ok(CompiledSql::new(String::new(), Vec::new()));
         }
         let table = self.table(resource)?;
 
+        // A key the database assigns is left out, for it to assign.
+        let assigned = rows.iter().all(|(id, fields)| {
+            id.is_null()
+                && resource.primary_key().is_none_or(|pk| fields.get(pk.name).is_none_or(Value::is_null))
+        });
         let mut col_names = Vec::new();
         let mut attrs = Vec::new();
         for attr in resource.attributes {
+            if attr.primary_key && assigned {
+                continue;
+            }
             col_names.push(ident(self.dialect, attr.name)?);
             attrs.push(attr);
         }
@@ -1750,7 +1761,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let mut placeholders = Vec::with_capacity(attrs.len());
             for attr in &attrs {
                 let val = if attr.primary_key {
-                    fields.get(attr.name).cloned().unwrap_or(Value::Uuid(*id))
+                    fields.get(attr.name).filter(|v| !v.is_null()).cloned().unwrap_or_else(|| id.clone())
                 } else {
                     fields.get(attr.name).cloned().unwrap_or(Value::Null)
                 };
@@ -1775,7 +1786,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_update(
         &mut self,
         resource: &ResourceDef,
-        id: Uuid,
+        id: Value,
         fields: &FieldMap,
     ) -> Result<CompiledSql> {
         let pk = resource
@@ -1801,7 +1812,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
 
         let pk_col = ident(self.dialect, pk.name)?;
-        let pk_param = self.push_param(Value::Uuid(id));
+        let pk_param = self.bind_typed(pk.ty, id);
 
         let mut sql = format!(
             "UPDATE {table} SET {} WHERE {pk_col} = {pk_param}",
@@ -1834,7 +1845,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         &mut self,
         resource: &ResourceDef,
         columns: &[&str],
-        rows: &[(Uuid, &FieldMap)],
+        rows: &[(Value, &FieldMap)],
     ) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()
@@ -1865,7 +1876,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
         let mut values = Vec::with_capacity(rows.len());
         for (id, fields) in rows {
-            let mut tuple = vec![self.bind_typed(pk.ty, Value::Uuid(*id))];
+            let mut tuple = vec![self.bind_typed(pk.ty, id.clone())];
             for (name, ty, partial) in &types {
                 if *partial {
                     tuple.push(if fields.contains_key(*name) { "TRUE" } else { "FALSE" }.to_string());
@@ -1884,13 +1895,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
-    pub fn compile_delete(&mut self, resource: &ResourceDef, id: Uuid) -> Result<CompiledSql> {
+    pub fn compile_delete(&mut self, resource: &ResourceDef, id: Value) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()
             .ok_or(Error::NoPrimaryKey(resource.name))?;
         let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
-        let p = self.push_param(Value::Uuid(id));
+        let p = self.bind_typed(pk.ty, id);
 
         let sql = format!("DELETE FROM {table} WHERE {pk_col} = {p}");
         Ok(CompiledSql::new(sql, self.params.clone()))
@@ -1899,7 +1910,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     pub fn compile_bulk_delete(
         &mut self,
         resource: &ResourceDef,
-        ids: &[Uuid],
+        ids: &[Value],
     ) -> Result<CompiledSql> {
         let pk = resource
             .primary_key()
@@ -1914,7 +1925,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             ));
         }
 
-        let vals: Vec<Value> = ids.iter().map(|id| Value::Uuid(*id)).collect();
+        let vals: Vec<Value> = ids.to_vec();
         let param = self.push_list_param(vals);
         let condition = self.dialect.render_in_list(&pk_col, &param);
 

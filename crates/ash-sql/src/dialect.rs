@@ -390,6 +390,11 @@ impl SqlDialect for PostgresDialect {
     }
 
     fn column_type(&self, attr: &AttributeDef) -> String {
+        // An integer key the database assigns, as AshPostgres migrates
+        // `integer_primary_key` to `bigserial`.
+        if attr.primary_key && attr.generated && attr.ty == AttrType::Integer {
+            return "BIGSERIAL".to_string();
+        }
         match attr.ty {
             AttrType::Uuid => "UUID".to_string(),
             AttrType::String => "TEXT".to_string(),

@@ -55,7 +55,6 @@ use ash_core::{
     ChangeContext, Context, CustomChange, DataLayer, Error, FieldMap, Filter, Resource,
     ResourceExtension, Result, Value,
 };
-use uuid::Uuid;
 
 pub use ash_archival_macros::archival;
 
@@ -165,7 +164,7 @@ impl CustomChange for UnarchiveChange {
 ///
 /// Primary reads hide archived records, so the record is loaded with the first of
 /// `exclude_read_actions`, which keeps read policies and tenancy in force.
-pub async fn unarchive<R: Resource, D: DataLayer>(ctx: &Context<D>, id: Uuid) -> Result<R> {
+pub async fn unarchive<R: Resource, D: DataLayer>(ctx: &Context<D>, id: impl Into<ash_core::Value>) -> Result<R> {
     let def = archive_def::<R>().ok_or_else(|| {
         Error::Invalid(format!("{} does not use #[archival]", R::DEF.name))
     })?;
@@ -186,7 +185,7 @@ pub async fn unarchive<R: Resource, D: DataLayer>(ctx: &Context<D>, id: Uuid) ->
         .ok_or_else(|| Error::Invalid(format!("{} has no primary key", R::DEF.name)))?;
     let record = ash_core::query::<R, D>(ctx)
         .action(read)
-        .filter(Filter::eq(pk.name, id))
+        .filter(Filter::eq(pk.name, id.into()))
         .one()
         .await?;
     ash_core::update_existing::<R, D>(ctx, action, record, FieldMap::new()).await

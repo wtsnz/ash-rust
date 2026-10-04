@@ -71,8 +71,8 @@ pub fn expand(input: DeriveInput) -> Result<TokenStream> {
                 multitenancy: None,
             };
 
-            fn id(&self) -> ::uuid::Uuid {
-                self.#pk_ident
+            fn pk(&self) -> ::ash_core::Value {
+                ::ash_core::AshType::to_value(&self.#pk_ident)
             }
 
             fn to_fields(&self) -> ::ash_core::FieldMap {

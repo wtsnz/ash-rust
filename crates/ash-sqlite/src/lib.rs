@@ -433,12 +433,20 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        _id: Uuid,
-        fields: FieldMap,
+        id: Value,
+        mut fields: FieldMap,
     ) -> Result<FieldMap> {
         refuse_tenant_schema(resource, tenant)?;
         let qb = sql::insert_query(resource, &fields)?;
-        self.execute_query_resource(&qb, resource).await?;
+        let result = self.execute_query_resource(&qb, resource).await?;
+        // An integer key SQLite assigned: the row's rowid, which an INTEGER PRIMARY KEY is.
+        if id.is_null()
+            && let Some(pk) = resource.primary_key()
+            && pk.ty == ash_core::AttrType::Integer
+            && fields.get(pk.name).is_none_or(Value::is_null)
+        {
+            fields.insert(pk.name.to_string(), Value::Int(result.last_insert_rowid()));
+        }
         Ok(fields)
     }
 
@@ -446,11 +454,11 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        id: Uuid,
+        id: Value,
         fields: FieldMap,
     ) -> Result<FieldMap> {
         refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::update_query(resource, id, &fields)?;
+        let qb = sql::update_query(resource, id.clone(), &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
             if resource.optimistic_lock_attribute().is_some() {
@@ -463,7 +471,7 @@ impl DataLayer for Sqlite {
                     pk.name
                 );
                 let check_compiled =
-                    CompiledSql::new(check_sql, vec![SqlParam::new(Value::Uuid(id))]);
+                    CompiledSql::new(check_sql, vec![SqlParam::new(id.clone())]);
                 if self.fetch_all(&check_compiled).await?.is_empty() {
                     return Err(Error::NotFound);
                 } else {
@@ -485,7 +493,7 @@ impl DataLayer for Sqlite {
             resource.table_name(),
             pk.name
         );
-        let fetch_compiled = CompiledSql::new(fetch_sql, vec![SqlParam::new(Value::Uuid(id))]);
+        let fetch_compiled = CompiledSql::new(fetch_sql, vec![SqlParam::new(id)]);
         let mut fetched = self.fetch_all(&fetch_compiled).await?;
         if let Some(row) = fetched.pop() {
             sql::row_to_fields(&row, resource, &[], &[])
@@ -494,7 +502,7 @@ impl DataLayer for Sqlite {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Uuid) -> Result<()> {
+    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         refuse_tenant_schema(resource, tenant)?;
         let qb = sql::delete_query(resource, id)?;
         let result = self.execute_query(&qb).await?;
@@ -561,7 +569,7 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        _id: Uuid,
+        _id: Value,
         fields: FieldMap,
         identity: &ash_core::IdentityDef,
         update_fields: &[String],
@@ -608,7 +616,7 @@ impl DataLayer for Sqlite {
         &self,
         resource: &ResourceDef,
         tenant: Option<&str>,
-        rows: Vec<(Uuid, FieldMap)>,
+        rows: Vec<(Value, FieldMap)>,
     ) -> Result<Vec<FieldMap>> {
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -626,7 +634,7 @@ impl DataLayer for Sqlite {
         .await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Uuid]) -> Result<()> {
+    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
         refuse_tenant_schema(resource, tenant)?;
         if ids.is_empty() {
             return Ok(());

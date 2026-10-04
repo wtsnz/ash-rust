@@ -1,7 +1,7 @@
 use crate::actor::Actor;
 use crate::error::{Error, Result};
 use crate::resource::AttrType;
-use crate::value::{ConstValue, FieldMap};
+use crate::value::{ConstValue, FieldMap, Value};
 
 /// Dynamic hook running before persistence with mutable access to attributes.
 pub type DynamicBeforeActionHook = Box<dyn FnOnce(&mut FieldMap) -> Result<()> + Send + 'static>;
@@ -30,29 +30,49 @@ pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
 ///   avoiding an extra query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionTarget<R> {
-    Id(uuid::Uuid),
+    /// A record by its primary key.
+    Id(Value),
     Record(R),
 }
 
 impl<R: crate::resource::Resource> ActionTarget<R> {
-    /// Returns the entity ID of this target, whether given as an ID or extracted from an existing record.
-    pub fn id(&self) -> uuid::Uuid {
+    /// The primary key of this target, whether given as a key or read from an existing record.
+    pub fn id(&self) -> Value {
         match self {
-            Self::Id(id) => *id,
-            Self::Record(rec) => rec.id(),
+            Self::Id(id) => id.clone(),
+            Self::Record(rec) => rec.pk(),
         }
     }
 }
 
-impl<R> From<uuid::Uuid> for ActionTarget<R> {
-    fn from(id: uuid::Uuid) -> Self {
-        Self::Id(id)
-    }
+/// A target by its primary key, of whichever type the resource's key is.
+macro_rules! target_by_key {
+    ($($ty:ty),*) => {$(
+        impl<R> From<$ty> for ActionTarget<R> {
+            fn from(id: $ty) -> Self {
+                Self::Id(Value::from(id))
+            }
+        }
+    )*};
 }
+
+target_by_key!(uuid::Uuid, i64, String, &str, Value);
 
 impl<R> From<&uuid::Uuid> for ActionTarget<R> {
     fn from(id: &uuid::Uuid) -> Self {
-        Self::Id(*id)
+        Self::Id(Value::Uuid(*id))
+    }
+}
+
+impl<R> From<&String> for ActionTarget<R> {
+    fn from(id: &String) -> Self {
+        Self::Id(Value::String(id.clone()))
+    }
+}
+
+impl<R> From<&Value> for ActionTarget<R> {
+    fn from(id: &Value) -> Self {
+        Self::Id(id.clone())
     }
 }
 

@@ -541,11 +541,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     /// Record `id`, as the read the action finds records through finds it.
-    async fn found(&self, ctx: &Context<D>, rpc: &RpcAction<D>, id: uuid::Uuid) -> Result<FieldMap, Failure> {
+    async fn found(&self, ctx: &Context<D>, rpc: &RpcAction<D>, id: Value) -> Result<FieldMap, Failure> {
         let resource = rpc.resource;
         let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
         let read = rpc.read.or_else(|| resource.primary_read()).ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
-        let query = CompiledQuery { filter: Some(Filter::eq(pk, Value::Uuid(id))), tenant: ctx.tenant.clone(), limit: Some(1), ..CompiledQuery::default() };
+        let query = CompiledQuery { filter: Some(Filter::eq(pk, id.clone())), tenant: ctx.tenant.clone(), limit: Some(1), ..CompiledQuery::default() };
         let scoped = ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query).map_err(|e| self.failure(e))?;
         let rows = ctx.data.run_query(resource, &scoped).await.map_err(|e| self.failure(e))?;
         rows.into_iter().next().ok_or_else(|| Failure::new("not_found", "Not found", format!("record with id: {:?} not found", id.to_string())))
@@ -664,7 +664,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     found => found?,
                 };
                 // What it selects of the record, read before it goes.
-                let loaded = self.loads_of(&ctx, resource, id, &selection).await?;
+                let loaded = self.loads_of(&ctx, resource, id.clone(), &selection).await?;
                 match ash_core::destroy_dynamic_via(&ctx, resource, rpc.read, action, id, input, None).await {
                     Err(Error::NotFound) => Ok(nothing().into()),
                     Err(e) => Err(self.failure_of(action, e)),
@@ -690,7 +690,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// the fields of one of the action's identities, found through the read the action
     /// finds records through. An action taking no identity changes the one record that
     /// read finds.
-    async fn identity(&self, ctx: &Context<D>, rpc: &RpcAction<D>, given: Option<&Json>) -> Result<uuid::Uuid, Failure> {
+    async fn identity(&self, ctx: &Context<D>, rpc: &RpcAction<D>, given: Option<&Json>) -> Result<Value, Failure> {
         let resource = rpc.resource;
         let identities = &rpc.options.identities;
         let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
@@ -712,8 +712,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             None if identities.is_empty() => Filter::True,
             None => return Err(Failure::missing_identity(expected(), identities == &[Identity::PrimaryKey])),
             // A primary key given directly: the record by id, with no read first.
-            Some(Json::String(text)) if identities.contains(&Identity::PrimaryKey) => {
-                return uuid::Uuid::parse_str(text).map_err(|_| self.failure(Error::Invalid(format!("invalid primary key {text:?}"))));
+            Some(given @ (Json::String(_) | Json::Number(_))) if identities.contains(&Identity::PrimaryKey) => {
+                let ty = resource.primary_key().map_or(AttrType::Uuid, |attr| attr.ty);
+                let invalid = || self.failure(Error::Invalid(format!("invalid primary key {given}")));
+                let value = value_input(ty, given).map_err(|_| invalid())?;
+                return ash_core::pk_cast(ty, &value).ok_or_else(invalid);
             }
             Some(Json::Object(fields)) => {
                 let fields: HashMap<String, &Json> = fields.iter().map(|(key, value)| (self.names.field_named(resource, key), value)).collect();
@@ -757,7 +760,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let query = CompiledQuery { filter: Some(filter), tenant: ctx.tenant.clone(), limit: Some(1), select: Some(vec![pk.to_string()]), ..CompiledQuery::default() };
         let scoped = ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query).map_err(|e| self.failure(e))?;
         let rows = ctx.data.run_query(resource, &scoped).await.map_err(|e| self.failure(e))?;
-        rows.first().and_then(|row| row.get(pk)).and_then(Value::as_uuid).ok_or_else(|| self.failure(Error::NotFound))
+        rows.first().and_then(|row| row.get(pk)).filter(|id| !id.is_null()).cloned().ok_or_else(|| self.failure(Error::NotFound))
     }
 
     /// The one record a get finds, as selected.
@@ -889,7 +892,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         }
         let cursor = |row: Option<&FieldMap>| -> Json {
             row.map_or(Json::Null, |row| {
-                let id = row.get(pk).and_then(Value::as_uuid).unwrap_or_default();
+                let id = row.get(pk).cloned().unwrap_or(Value::Null);
                 let values = sort.iter().map(|s| (s.field.clone(), row.get(&s.field).cloned().unwrap_or(Value::Null))).collect();
                 Json::String(KeysetCursor { id, values }.encode())
             })
@@ -901,13 +904,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
 
     /// The aggregates and calculations `selection` loads of record `id`, as the actor
     /// reads them.
-    async fn loads_of(&self, ctx: &Context<D>, resource: &'static ResourceDef, id: uuid::Uuid, selection: &Selection) -> Result<FieldMap, Failure> {
+    async fn loads_of(&self, ctx: &Context<D>, resource: &'static ResourceDef, id: Value, selection: &Selection) -> Result<FieldMap, Failure> {
         let loads = selection.of(|name| resource.attribute(name).is_none());
         let Some(pk) = resource.primary_key().filter(|_| !loads.is_empty()) else {
             return Ok(FieldMap::new());
         };
         let query = CompiledQuery {
-            filter: Some(Filter::eq(pk.name, Value::Uuid(id))),
+            filter: Some(Filter::eq(pk.name, id)),
             tenant: ctx.tenant.clone(),
             actor: ctx.actor.clone(),
             calculation_args: selection.calculation_args.clone(),
@@ -920,7 +923,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// A written record, as the client selected it: its aggregates and calculations read as
     /// the actor sees them, and its relationships loaded.
     async fn written(&self, ctx: &Context<D>, resource: &'static ResourceDef, mut stored: FieldMap, selection: &Selection) -> Result<Json, Failure> {
-        if let Some(id) = resource.primary_key().and_then(|pk| stored.get(pk.name)).and_then(Value::as_uuid) {
+        if let Some(id) = resource.primary_key().and_then(|pk| stored.get(pk.name)).filter(|id| !id.is_null()).cloned() {
             stored.extend(self.loads_of(ctx, resource, id, selection).await?);
         }
         let rows = self.render(ctx, resource, vec![stored], selection).await?;
@@ -1056,7 +1059,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             }
             let cursor = |row: Option<&FieldMap>| -> Json {
                 row.map_or(Json::Null, |row| {
-                    let id = row.get(pk).and_then(Value::as_uuid).unwrap_or_default();
+                    let id = row.get(pk).cloned().unwrap_or(Value::Null);
                     let values = sort.iter().map(|s| (s.field.clone(), row.get(&s.field).cloned().unwrap_or(Value::Null))).collect();
                     Json::String(KeysetCursor { id, values }.encode())
                 })

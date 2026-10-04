@@ -6,7 +6,6 @@ use crate::preload::{load_selected, preload, selected};
 use ash_core::update_dynamic_expecting;
 use ash_core::{ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value};
 use async_graphql::dynamic::*;
-use uuid::Uuid;
 
 use crate::error::{MUTATION_ERROR, UserError};
 use crate::managed::managed_inputs;
@@ -232,8 +231,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     .args
                     .get("id")
                     .ok_or_else(|| async_graphql::Error::new("Missing required id argument"))?;
-                let id = Uuid::parse_str(id_arg.string()?)
-                    .map_err(|e| async_graphql::Error::new(format!("Invalid UUID: {e}")))?;
+                let id = crate::types::parse_id(resource, id_arg.as_value())?;
 
                 // An update runs by id, as AshGraphql's does: as one statement where it can,
                 // the record's visibility, the action's validations and policies and the

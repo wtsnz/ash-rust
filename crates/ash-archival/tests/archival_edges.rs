@@ -219,7 +219,7 @@ async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>
     // Timestamps have one-second resolution, so start from an old one.
     let mut old = ash_core::FieldMap::new();
     old.insert("updated_at".into(), Value::String("2000-01-01T00:00:00Z".into()));
-    ctx.data.update(&Ledger::DEF, None, ledger.id, old).await.unwrap();
+    ctx.data.update(&Ledger::DEF, None, Value::from(ledger.id), old).await.unwrap();
 
     ledger.destroy(&ctx).await.expect("a locked record can be archived");
 
@@ -282,7 +282,7 @@ async fn archived_records_are_out_of_reach<D: ash_core::TransactionSupport + 'st
     ledger.destroy(&ctx).await.unwrap();
     let archived_at = stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at");
 
-    let result = bulk_destroy::<Ledger, D>(&ctx, "destroy", &[id], BulkDestroyOptions::default())
+    let result = bulk_destroy::<Ledger, D, _>(&ctx, "destroy", &[id], BulkDestroyOptions::default())
         .await
         .unwrap();
     assert_eq!(result.count, 0, "an archived record is not archived again");
@@ -324,7 +324,7 @@ async fn bulk_notify_false_covers_cascaded_children() {
         notify: false,
         ..BulkDestroyOptions::default()
     };
-    let result = bulk_destroy::<Node, Memory>(&ctx, "destroy", &[parent.id], options)
+    let result = bulk_destroy::<Node, Memory, _>(&ctx, "destroy", &[parent.id], options)
         .await
         .unwrap();
     assert_eq!(result.count, 1);

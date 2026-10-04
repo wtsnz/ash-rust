@@ -102,13 +102,23 @@ pub(crate) fn cast_text(ty: AttrType, value: &mut Value) {
 }
 
 
+/// Gives a new record its generated primary key where it has none: a UUID made here, as
+/// Ash's `uuid_primary_key`. Any other generated key (an integer, as Ash's
+/// `integer_primary_key`) the data layer assigns as it writes the record.
 pub fn generate_pk(def: &ResourceDef, fields: &mut FieldMap) {
     if let Some(pk) = def.primary_key()
         && pk.generated
+        && pk.ty == crate::resource::AttrType::Uuid
         && !fields.contains_key(pk.name)
     {
         fields.insert(pk.name.to_string(), Value::Uuid(Uuid::new_v4()));
     }
+}
+
+/// A new record's primary key: what it holds, or `Null` where the data layer assigns it.
+pub(crate) fn new_pk(def: &ResourceDef, fields: &FieldMap) -> Result<Value> {
+    let pk = pk_name(def)?;
+    Ok(fields.get(pk).cloned().unwrap_or(Value::Null))
 }
 
 pub fn apply_changes(
@@ -411,7 +421,7 @@ pub fn apply_tenant_to_fields(
 pub fn validate(def: &ResourceDef, fields: &mut FieldMap) -> Result<()> {
     for attribute in def.attributes {
         match fields.get_mut(attribute.name) {
-            None | Some(Value::Null) if attribute.allow_nil => {}
+            None | Some(Value::Null) if attribute.allow_nil || attribute.assigned_on_insert() => {}
             None | Some(Value::Null) => {
                 return Err(Error::Missing {
                     field: attribute.name.to_string(),

@@ -3,7 +3,6 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::bulk::{BulkCreateOptions, BulkDestroyOptions};
 use crate::changeset::Changeset;
@@ -11,7 +10,7 @@ use crate::context::Context;
 use crate::data_layer::{DataLayer, TransactionSupport};
 use crate::error::{Error, Result};
 use crate::resource::Resource;
-use crate::value::FieldMap;
+use crate::value::{FieldMap, Value};
 
 use super::result::MultiResult;
 
@@ -317,7 +316,7 @@ impl<D: TransactionSupport + 'static, R: Resource> Step<D> for BulkCreateStep<R>
 pub(crate) struct BulkDestroyStep<R: Resource> {
     pub(crate) name: String,
     pub(crate) action: &'static str,
-    pub(crate) ids: Vec<Uuid>,
+    pub(crate) ids: Vec<Value>,
     pub(crate) opts: BulkDestroyOptions,
     pub(crate) _phantom: PhantomData<R>,
 }
@@ -334,7 +333,7 @@ impl<D: TransactionSupport + 'static, R: Resource> Step<D> for BulkDestroyStep<R
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let ids = std::mem::take(&mut self.ids);
-            let res = crate::bulk::bulk_destroy::<R, D>(ctx, self.action, &ids, self.opts.clone()).await?;
+            let res = crate::bulk::bulk_destroy::<R, D, Value>(ctx, self.action, &ids, self.opts.clone()).await?;
             results.insert(self.name.clone(), res);
             Ok(())
         })

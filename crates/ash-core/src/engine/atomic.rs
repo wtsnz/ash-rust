@@ -5,7 +5,6 @@
 //! the record in memory: a `before_action` hook, a change or validation function,
 //! managed relationships, or a hard destroy's cascades.
 
-use uuid::Uuid;
 
 use crate::action::{
     ActionDef, ActionKind, Change, DynamicAfterActionHook, DynamicAfterTransactionHook, PersistKind, Validation,
@@ -58,13 +57,13 @@ impl Guards {
         &self,
         ctx: &crate::context::Context<D>,
         resource: &'static ResourceDef,
-        id: Uuid,
+        id: Value,
     ) -> Error {
         let Ok(pk) = pk_name(resource) else {
             return Error::NotFound;
         };
         let Ok((filter, tenant)) =
-            crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())
+            crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, id.clone())), ctx.tenant.clone())
         else {
             return Error::NotFound;
         };
@@ -88,7 +87,7 @@ pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
     ctx: &crate::context::Context<D>,
     resource: &'static ResourceDef,
     action: &ActionDef,
-    id: Uuid,
+    id: Value,
     update: &AtomicUpdate,
     guards: Option<&Filter>,
     scope: Option<&Filter>,
@@ -105,7 +104,7 @@ pub(crate) async fn run_atomic_destroy<D: crate::data_layer::DataLayer>(
     ctx: &crate::context::Context<D>,
     resource: &'static ResourceDef,
     action: &ActionDef,
-    id: Uuid,
+    id: Value,
     conditions: &[AtomicCondition],
     scope: Option<&Filter>,
 ) -> Result<Option<FieldMap>> {
@@ -145,12 +144,12 @@ fn atomic_query<D>(
     ctx: &crate::context::Context<D>,
     resource: &'static ResourceDef,
     action: &ActionDef,
-    id: Uuid,
+    id: Value,
     scope: Option<&Filter>,
 ) -> Result<crate::data_layer::CompiledQuery> {
     let pk = pk_name(resource)?;
     let (filter, tenant) =
-        crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, Value::Uuid(id))), ctx.tenant.clone())?;
+        crate::pipeline::apply_tenant_scope(resource, Some(Filter::eq(pk, id.clone())), ctx.tenant.clone())?;
     let filter = match scope {
         Some(scope) => crate::pipeline::and_filters(filter, Some(scope.clone())),
         None => {
@@ -175,7 +174,7 @@ pub(crate) struct PlanInput<'a> {
     pub sets: FieldMap,
     pub arguments: &'a FieldMap,
     /// The lock version the record must still have, and the record's id for the error.
-    pub expected_version: Option<(Uuid, i64)>,
+    pub expected_version: Option<(Value, i64)>,
     /// Whether the action's after-action and after-transaction changes are this plan's
     /// to run: not when a changeset already holds them.
     pub collect_hooks: bool,
@@ -350,7 +349,7 @@ pub(crate) fn plan_update(
             let resource_name = resource.name;
             update.conditions.push(AtomicCondition::failing_with(
                 AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
-                move || Error::StaleRecord { resource: resource_name, id },
+                move || Error::StaleRecord { resource: resource_name, id: id.clone() },
             ));
         } else {
             guards.version = Some((version, expected));

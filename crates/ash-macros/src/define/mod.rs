@@ -70,12 +70,12 @@ fn richer_fallback_resource_stub(def: &ResourceDefinition) -> proc_macro2::Token
     let id_body = def
         .attributes
         .iter()
-        .find(|a| a.pk && crate::ast_helpers::is_uuid(&a.ty))
+        .find(|a| a.pk)
         .map(|a| {
             let id = &a.ident;
-            quote::quote! { self.#id }
+            quote::quote! { ::ash_core::AshType::to_value(&self.#id) }
         })
-        .unwrap_or_else(|| quote::quote! { ::uuid::Uuid::nil() });
+        .unwrap_or_else(|| quote::quote! { ::ash_core::Value::Null });
 
     let fields = if attr_names.is_empty() && calc_names.is_empty() {
         quote::quote! {
@@ -125,7 +125,7 @@ fn richer_fallback_resource_stub(def: &ResourceDefinition) -> proc_macro2::Token
                 multitenancy: None,
             };
 
-            fn id(&self) -> ::uuid::Uuid {
+            fn pk(&self) -> ::ash_core::Value {
                 #id_body
             }
 
