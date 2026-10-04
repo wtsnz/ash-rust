@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "table": "stowage",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "voyage_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "container_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "bay",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "stack",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "tier",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_stowage_slot",
+      "columns": [
+        "line",
+        "voyage_id",
+        "bay",
+        "stack",
+        "tier"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    },
+    {
+      "name": "idx_stowage_once_per_voyage",
+      "columns": [
+        "line",
+        "voyage_id",
+        "container_id"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [
+    {
+      "name": "ck_stowage_slot_in_hold",
+      "expression": "bay BETWEEN 1 AND 40 AND stack BETWEEN 1 AND 16 AND tier BETWEEN 1 AND 8"
+    }
+  ],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_stowage_voyage",
+      "column": "voyage_id",
+      "columns": [
+        "voyage_id"
+      ],
+      "target_table": "voyages",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "CASCADE",
+      "on_update": "NO ACTION"
+    },
+    {
+      "name": "fk_stowage_container",
+      "column": "container_id",
+      "columns": [
+        "container_id"
+      ],
+      "target_table": "containers",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "RESTRICT",
+      "on_update": "NO ACTION"
+    }
+  ]
+}

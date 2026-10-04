@@ -1,0 +1,169 @@
+{
+  "format_version": 1,
+  "table": "contracts",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "external_ref",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "shipper_email",
+      "sql_type": "TEXT COLLATE NOCASE",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "origin_port_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "destination_port_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "freight_credits",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "insured_value",
+      "sql_type": "NUMERIC",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "deliver_by",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "version",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "status",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_contracts_external",
+      "columns": [
+        "line",
+        "external_ref"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_contracts_open_by_destination",
+      "columns": [
+        "line",
+        "destination_port_id"
+      ],
+      "predicate": "status <> 'closed' AND status <> 'cancelled'",
+      "method": null
+    }
+  ],
+  "checks": [
+    {
+      "name": "ck_contracts_positive_freight",
+      "expression": "freight_credits > 0"
+    },
+    {
+      "name": "ck_contracts_distinct_ports",
+      "expression": "origin_port_id <> destination_port_id"
+    },
+    {
+      "name": "ck_contracts_status_one_of",
+      "expression": "\"status\" IN ('booked', 'loaded', 'in_transit', 'delivered', 'closed', 'cancelled')"
+    }
+  ],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_contracts_origin",
+      "column": "origin_port_id",
+      "columns": [
+        "origin_port_id"
+      ],
+      "target_table": "ports",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    },
+    {
+      "name": "fk_contracts_destination",
+      "column": "destination_port_id",
+      "columns": [
+        "destination_port_id"
+      ],
+      "target_table": "ports",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION"
+    }
+  ]
+}

@@ -4,3 +4,4 @@
 helpdesk.db
 helpdesk.db-wal
 helpdesk.db-shm
+.ash.lock

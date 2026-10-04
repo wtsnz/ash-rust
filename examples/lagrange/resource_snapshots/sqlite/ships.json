@@ -1,0 +1,155 @@
+{
+  "format_version": 1,
+  "table": "ships",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "registry",
+      "sql_type": "TEXT COLLATE NOCASE",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "name",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "class",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "dry_mass_tonnes",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "slot_capacity",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "captain_id",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "version",
+      "sql_type": "INTEGER",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "archived_at",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "status",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_ships_live_registry",
+      "columns": [
+        "line",
+        "registry"
+      ],
+      "unique": true,
+      "predicate": "archived_at IS NULL",
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [
+    {
+      "name": "idx_ships_by_captain",
+      "columns": [
+        "line",
+        "captain_id"
+      ],
+      "predicate": "captain_id IS NOT NULL",
+      "method": null
+    }
+  ],
+  "checks": [
+    {
+      "name": "ck_ships_sane_hull",
+      "expression": "dry_mass_tonnes > 0 AND slot_capacity > 0"
+    },
+    {
+      "name": "ck_ships_class_one_of",
+      "expression": "\"class\" IN ('shuttle', 'hauler', 'tanker', 'freighter')"
+    },
+    {
+      "name": "ck_ships_status_one_of",
+      "expression": "\"status\" IN ('docked', 'in_transit', 'maintenance')"
+    }
+  ],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_ships_captain",
+      "column": "captain_id",
+      "columns": [
+        "captain_id"
+      ],
+      "target_table": "crew_members",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "SET NULL",
+      "on_update": "NO ACTION"
+    }
+  ]
+}

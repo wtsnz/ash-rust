@@ -1,0 +1,97 @@
+{
+  "format_version": 1,
+  "table": "transponders",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "line",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "ship_id",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "label",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "kind",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": "'transponder'",
+      "is_primary_key": false
+    },
+    {
+      "name": "api_key_hash",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "created_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "updated_at",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_transponders_one_per_ship",
+      "columns": [
+        "line",
+        "ship_id"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [],
+  "statements": [],
+  "references": [
+    {
+      "name": "fk_transponders_ship",
+      "column": "ship_id",
+      "columns": [
+        "ship_id"
+      ],
+      "target_table": "ships",
+      "target_column": "id",
+      "target_columns": [
+        "id"
+      ],
+      "on_delete": "CASCADE",
+      "on_update": "NO ACTION"
+    }
+  ]
+}
