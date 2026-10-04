@@ -89,10 +89,11 @@ pub async fn postgres_fleet() -> Option<Postgres> {
         eprintln!("skipping Postgres: DATABASE_URL is not set");
         return None;
     };
-    let admin = Postgres::connect(&base).await.expect("connect to DATABASE_URL");
+    // Setup SQL runs through a pool of its own: the data layer's is tokio-postgres's.
+    let admin = sqlx::PgPool::connect(&base).await.expect("connect to DATABASE_URL");
     // Extensions are database-wide and racing `CREATE EXTENSION` calls collide, so
     // install them once, under a lock, before any schema migrates.
-    let mut tx = admin.pool().unwrap().begin().await.unwrap();
+    let mut tx = admin.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock(7303013)")
         .execute(&mut *tx)
         .await
@@ -108,7 +109,7 @@ pub async fn postgres_fleet() -> Option<Postgres> {
     tx.commit().await.unwrap();
     let schema = format!("lagrange_{}", uuid::Uuid::new_v4().simple());
     sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
-        .execute(admin.pool().unwrap())
+        .execute(&admin)
         .await
         .unwrap();
     let separator = if base.contains('?') { '&' } else { '?' };

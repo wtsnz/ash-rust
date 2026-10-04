@@ -38,7 +38,37 @@ pub fn scratch_dir(kind: &str) -> PathBuf {
 
 pub enum Db {
     Sqlite(ash_sqlite::Sqlite),
-    Postgres(ash_postgres::Postgres),
+    Postgres(Pg),
+}
+
+/// The Postgres data layer under test, and a sqlx pool on the same database for reading
+/// its catalog, as `cargo ash` reads it.
+#[derive(Clone)]
+pub struct Pg {
+    pub ash: ash_postgres::Postgres,
+    catalog: sqlx::PgPool,
+}
+
+impl std::ops::Deref for Pg {
+    type Target = ash_postgres::Postgres;
+
+    fn deref(&self) -> &ash_postgres::Postgres {
+        &self.ash
+    }
+}
+
+impl Pg {
+    async fn connect(url: &str) -> Self {
+        Self {
+            ash: ash_postgres::Postgres::connect(url).await.unwrap(),
+            catalog: sqlx::PgPool::connect(url).await.unwrap(),
+        }
+    }
+
+    /// The sqlx pool to read the database with.
+    pub fn pool(&self) -> Option<&sqlx::PgPool> {
+        Some(&self.catalog)
+    }
 }
 
 pub struct TestDb {
@@ -57,9 +87,10 @@ impl TestDb {
             eprintln!("skipping Postgres scenario: DATABASE_URL is not set");
             return None;
         };
-        let admin = ash_postgres::Postgres::connect(&base)
+        ash_postgres::Postgres::connect(&base)
             .await
             .expect("DATABASE_URL is set but Postgres is unreachable");
+        let admin = Pg::connect(&base).await;
         // Tests run in parallel, and concurrent `CREATE EXTENSION` calls race on a fresh
         // database. Install extensions once under a lock so migrations find them already
         // there. pgvector is optional locally; vector tests skip without it.
@@ -101,7 +132,7 @@ impl TestDb {
         let db = if url.starts_with("sqlite:") {
             Db::Sqlite(ash_sqlite::Sqlite::connect(&url).await.unwrap())
         } else {
-            Db::Postgres(ash_postgres::Postgres::connect(&url).await.unwrap())
+            Db::Postgres(Pg::connect(&url).await)
         };
         Self { db, url }
     }

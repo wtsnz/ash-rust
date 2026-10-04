@@ -325,11 +325,8 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
             // A page sorts stably, so every record has its own keyset.
             let sort = keyset_sort(resource, scoped.sort.clone());
 
-            let count = if ctx.look_ahead().field("count").exists() {
-                Some(count_records(&ash, resource, &scoped).await?)
-            } else {
-                None
-            };
+            // Counted alongside the page, as Ash reads a page's count.
+            let count_scope = ctx.look_ahead().field("count").exists().then(|| scoped.clone());
 
             let mut page_filter = scoped.filter.clone();
             let cursor = if backward { before.as_deref() } else { after.as_deref() };
@@ -363,11 +360,18 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 offset: None,
                 ..scoped
             });
-            let mut records = ash
-                .data
-                .run_query(resource, &query)
-                .await
-                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+            // The count is read alongside the page, as Ash reads a page's count: the data
+            // layer reads them at once (Postgres down one connection, pipelined).
+            let error = |e: ash_core::Error| async_graphql::Error::new(e.to_string());
+            let count_query =
+                count_scope.map(|scoped| CompiledQuery { sort: Vec::new(), limit: None, offset: None, ..scoped });
+            let (mut records, count) = match &count_query {
+                Some(count_query) => {
+                    let (records, count) = ash.data.run_query_with_count(resource, &query, count_query).await.map_err(error)?;
+                    (records, Some(count))
+                }
+                None => (ash.data.run_query(resource, &query).await.map_err(error)?, None),
+            };
             if backward {
                 records.reverse();
             }

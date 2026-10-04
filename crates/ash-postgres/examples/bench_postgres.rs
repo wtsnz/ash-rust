@@ -154,29 +154,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Connecting to PostgreSQL: {database_url} ...\n");
 
     let pg = Postgres::connect(&database_url).await?;
-    let pool = pg.pool().expect("Expected PostgreSQL connection pool");
 
     // Initialize clean schema
-    sqlx::query("DROP TABLE IF EXISTS tickets CASCADE;").execute(pool).await?;
-    sqlx::query("DROP TABLE IF EXISTS users CASCADE;").execute(pool).await?;
+    pg.execute_sql("DROP TABLE IF EXISTS tickets CASCADE;").await?;
+    pg.execute_sql("DROP TABLE IF EXISTS users CASCADE;").await?;
 
-    sqlx::query(
-        "CREATE TABLE users (
+    pg.execute_sql("CREATE TABLE users (
             id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL
-        );"
-    ).execute(pool).await?;
+        );").await?;
 
-    sqlx::query(
-        "CREATE TABLE tickets (
+    pg.execute_sql("CREATE TABLE tickets (
             id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
             priority BIGINT NOT NULL DEFAULT 1,
             user_id UUID REFERENCES users(id)
-        );"
-    ).execute(pool).await?;
+        );").await?;
 
     // Seed 5 users
     let mut user_ids = Vec::new();

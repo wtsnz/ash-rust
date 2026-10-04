@@ -103,28 +103,23 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
     });
 
     let pg = Postgres::connect(&database_url).await.ok()?;
-    let pool = pg.pool()?;
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS tickets CASCADE;").execute(pool).await;
-    let _ = sqlx::query("DROP TABLE IF EXISTS users CASCADE;").execute(pool).await;
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS tickets CASCADE;").await;
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS users CASCADE;").await;
 
-    sqlx::query(
-        "CREATE TABLE users (
+    pg.execute_sql("CREATE TABLE users (
             id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL
-        );"
-    ).execute(pool).await.ok()?;
+        );").await.ok()?;
 
-    sqlx::query(
-        "CREATE TABLE tickets (
+    pg.execute_sql("CREATE TABLE tickets (
             id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
             priority BIGINT NOT NULL DEFAULT 1,
             user_id UUID REFERENCES users(id)
-        );"
-    ).execute(pool).await.ok()?;
+        );").await.ok()?;
 
     // Seed 5 users
     let mut user_ids = Vec::new();

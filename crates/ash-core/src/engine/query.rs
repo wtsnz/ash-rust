@@ -282,30 +282,33 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         offset: usize,
         count_total: bool,
     ) -> Result<Page<R>> {
-        let total_count = if count_total {
-            let count_query = Query {
-                ctx: self.ctx,
-                action: self.action,
-                arguments: self.arguments.clone(),
-                filter: self.filter.clone(),
-                sort: Vec::new(),
-                calculations: Vec::new(),
-                calculation_args: std::collections::HashMap::new(),
-                aggregates: Vec::new(),
-                loads: Vec::new(),
-                limit: None,
-                offset: None,
-                tenant: self.tenant.clone(),
-                _resource: PhantomData::<R>,
-            };
-            Some(count_query.count().await?)
-        } else {
-            None
-        };
+        let count_query = count_total.then(|| Query {
+            ctx: self.ctx,
+            action: self.action,
+            arguments: self.arguments.clone(),
+            filter: self.filter.clone(),
+            sort: Vec::new(),
+            calculations: Vec::new(),
+            calculation_args: std::collections::HashMap::new(),
+            aggregates: Vec::new(),
+            loads: Vec::new(),
+            limit: None,
+            offset: None,
+            tenant: self.tenant.clone(),
+            _resource: PhantomData::<R>,
+        });
 
         self.limit = Some(limit + 1);
         self.offset = Some(offset);
-        let mut results = self.load().await?;
+        // The count is read alongside the page, as Ash reads a page's count. In a
+        // transaction, its one connection takes them in turn.
+        let counting = async {
+            match count_query {
+                Some(query) => query.count().await.map(Some),
+                None => Ok(None),
+            }
+        };
+        let (total_count, mut results) = futures_util::future::try_join(counting, self.load()).await?;
         let has_more = results.len() > limit;
         if has_more {
             results.truncate(limit);

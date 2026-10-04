@@ -258,11 +258,8 @@ async fn test_postgres_declarative_migration_runner() {
     assert!(applied_again.is_empty());
 
     // Cleanup
-    let _ = sqlx::query("DELETE FROM _ash_schema_migrations WHERE version = $1")
-        .bind(&version)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}")).execute(pool).await;
+    let _ = pg.execute_sql(&format!("DELETE FROM _ash_schema_migrations WHERE version = '{version}'")).await;
+    let _ = pg.execute_sql(&format!("DROP TABLE IF EXISTS {table}")).await;
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
@@ -355,11 +352,9 @@ async fn test_postgres_self_referential_aggregate() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
-    let pool = pg.pool().unwrap();
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
-    let _ = sqlx::query("CREATE TABLE nodes (id UUID PRIMARY KEY, name TEXT NOT NULL, parent_id UUID REFERENCES nodes(id));")
-        .execute(pool)
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS nodes;").await;
+    pg.execute_sql("CREATE TABLE nodes (id UUID PRIMARY KEY, name TEXT NOT NULL, parent_id UUID REFERENCES nodes(id));")
         .await
         .unwrap();
 
@@ -388,7 +383,7 @@ async fn test_postgres_self_referential_aggregate() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("children_count"), Some(&Value::Int(3)));
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS nodes;").execute(pool).await;
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS nodes;").await;
 }
 
 static DOCUMENT_ATTRS: &[AttributeDef] = &[
@@ -426,10 +421,8 @@ async fn test_postgres_optimistic_locking_stale_record() {
     let Some(pg) = get_test_postgres().await else {
         return;
     };
-    let pool = pg.pool().unwrap();
-    let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
-    let _ = sqlx::query("CREATE TABLE documents (id UUID PRIMARY KEY, title TEXT NOT NULL, version BIGINT NOT NULL);")
-        .execute(pool)
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
+    pg.execute_sql("CREATE TABLE documents (id UUID PRIMARY KEY, title TEXT NOT NULL, version BIGINT NOT NULL);")
         .await
         .unwrap();
 
@@ -459,7 +452,7 @@ async fn test_postgres_optimistic_locking_stale_record() {
     let err_missing = pg.update(&DOCUMENT_DEF, None, Value::from(missing_id), missing_fields).await.unwrap_err();
     assert!(matches!(err_missing, ash_core::Error::NotFound));
 
-    let _ = sqlx::query("DROP TABLE IF EXISTS documents;").execute(pool).await;
+    let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
 }
 
 #[tokio::test]
@@ -622,10 +615,7 @@ async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions()
     };
     // The app's tables live outside `public`, as they do with one schema per deployment.
     let schema = format!("app_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
-        .execute(admin.pool().unwrap())
-        .await
-        .unwrap();
+    admin.execute_sql(&format!("CREATE SCHEMA \"{schema}\"")).await.unwrap();
     let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
     let separator = if base.contains('?') { '&' } else { '?' };
     let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
@@ -1194,10 +1184,7 @@ async fn test_postgres_installs_tables_that_refer_to_each_other() {
         return;
     };
     let schema = format!("cycle_{}", Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
-        .execute(admin.pool().unwrap())
-        .await
-        .unwrap();
+    admin.execute_sql(&format!("CREATE SCHEMA \"{schema}\"")).await.unwrap();
     let base = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".to_string());
     let separator = if base.contains('?') { '&' } else { '?' };
     let pg = Postgres::connect(&format!("{base}{separator}options=-c%20search_path%3D{schema}"))
@@ -1451,6 +1438,88 @@ async fn test_postgres_bulk_update_transaction_scopes() {
         stored_fleet(&ctx, &run).await,
         vec![parked(&run, 0), parked(&run, 1), parked(&run, 2), parked(&run, 4)]
     );
+}
+
+/// A counted page reads its count alongside the page; in a transaction, whose one
+/// connection takes them in turn, it counts and pages as it does outside one.
+#[tokio::test]
+async fn test_postgres_counted_page_in_and_out_of_a_transaction() {
+    use ash_core::{Context, Resource};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg);
+    let run = Uuid::new_v4().simple().to_string();
+    for i in 0..5 {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}-{i}"))
+            .lng(-97.7)
+            .speed_kph(0)
+            .status(run.clone())
+            .await
+            .unwrap();
+    }
+    let page = |ctx: Context<Postgres>, run: String| async move {
+        let page = PgVehicle::query(&ctx)
+            .filter(Filter::eq("status", run))
+            .page_offset(2, 0, true)
+            .await?;
+        Ok::<_, ash_core::Error>((page.results.len(), page.total_count))
+    };
+
+    assert_eq!(page(ctx.clone(), run.clone()).await.unwrap(), (2, Some(5)));
+    let in_transaction = ctx.transaction(|tx| page(tx, run.clone())).await.unwrap();
+    assert_eq!(in_transaction, (2, Some(5)));
+}
+
+/// A page and its count, sent down one connection together, read what each would alone,
+/// in and out of a transaction.
+#[tokio::test]
+async fn test_postgres_reads_a_page_and_its_count_together() {
+    use ash_core::{CompiledQuery, Context, Resource, Sort};
+    use pg_fleet::PgVehicle;
+
+    let Some(pg) = get_test_postgres().await else {
+        eprintln!("PostgreSQL not reachable; skipping test");
+        return;
+    };
+    pg.install(&[&PgVehicle::DEF]).await.unwrap();
+    let ctx = Context::new(pg.clone());
+    let run = Uuid::new_v4().simple().to_string();
+    for i in 0..5 {
+        PgVehicle::create(&ctx)
+            .call_sign(format!("{run}-{i}"))
+            .lng(-97.7)
+            .speed_kph(10 * i)
+            .status(run.clone())
+            .await
+            .unwrap();
+    }
+    let count = CompiledQuery {
+        filter: Some(Filter::eq("status", run.clone())),
+        ..CompiledQuery::default()
+    };
+    let page = CompiledQuery {
+        sort: vec![Sort { field: "speed_kph".into(), descending: true, ..Default::default() }],
+        limit: Some(2),
+        ..count.clone()
+    };
+    let read = |pg: Postgres| {
+        let (page, count) = (page.clone(), count.clone());
+        async move {
+            let (records, counted) = pg.run_query_with_count(&PgVehicle::DEF, &page, &count).await?;
+            let speeds: Vec<Value> = records.iter().map(|r| r["speed_kph"].clone()).collect();
+            Ok::<_, ash_core::Error>((speeds, counted))
+        }
+    };
+    let expected = (vec![Value::Int(40), Value::Int(30)], 5);
+    assert_eq!(read(pg.clone()).await.unwrap(), expected);
+    let in_transaction = pg.transaction(|tx| read(tx.clone())).await.unwrap();
+    assert_eq!(in_transaction, expected);
 }
 
 /// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.

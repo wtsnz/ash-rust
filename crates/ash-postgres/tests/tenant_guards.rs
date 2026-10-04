@@ -214,7 +214,7 @@ async fn tenant_guards_in_postgres() {
     };
     // Built afresh: the identities' indexes changed shape.
     for table in ["guard_kids", "guard_families", "guard_notes"] {
-        sqlx::query(&format!("DROP TABLE IF EXISTS {table} CASCADE")).execute(pg.pool().unwrap()).await.unwrap();
+        pg.execute_sql(&format!("DROP TABLE IF EXISTS {table} CASCADE")).await.unwrap();
     }
     pg.install(&[&Note::DEF, &Family::DEF, &Kid::DEF]).await.unwrap();
     let ctx = Context::new(pg);
