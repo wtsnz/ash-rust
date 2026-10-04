@@ -5,7 +5,7 @@
 //! `tickets`, `comments`, `ticket_tags`), each record its attributes by name, ids and
 //! timestamps as strings. The Elixir app reads the same file.
 
-use ash_core::{AttrType, Context, DataLayer, FieldMap, Resource, ResourceDef, Result, Value};
+use ash_core::{AttrType, Context, FieldMap, Resource, ResourceDef, Result, TransactionSupport, Value};
 use serde_json::{Map, Value as Json, json};
 use uuid::Uuid;
 
@@ -196,7 +196,7 @@ fn fields(resource: &ResourceDef, record: &Map<String, Json>) -> FieldMap {
 }
 
 /// Loads `fixture` through each resource's `seed` action, as an admin of each org.
-pub async fn load<D: DataLayer + 'static>(ctx: &Context<D>, fixture: &Json) -> Result<()> {
+pub async fn load<D: TransactionSupport + 'static>(ctx: &Context<D>, fixture: &Json) -> Result<()> {
     let records = |key: &str| fixture[key].as_array().cloned().unwrap_or_default();
     let admin = ash_core::Actor::new(Uuid::nil()).with_role("admin");
     let ctx = ctx.with_actor(admin);
@@ -215,7 +215,7 @@ pub async fn load<D: DataLayer + 'static>(ctx: &Context<D>, fixture: &Json) -> R
     Ok(())
 }
 
-async fn seed<R: Resource, D: DataLayer + 'static>(ctx: &Context<D>, records: &[Json]) -> Result<()> {
+async fn seed<R: Resource, D: TransactionSupport + 'static>(ctx: &Context<D>, records: &[Json]) -> Result<()> {
     let rows: Vec<FieldMap> = records
         .iter()
         .filter_map(Json::as_object)
