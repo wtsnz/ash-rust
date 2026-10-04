@@ -177,7 +177,7 @@ steps around a difference between the desks.
 
 ### Latest results
 
-A full run on 2026-10-04: ash-rust at `3de168f` (PR #82) against Ash (Elixir), on an
+A full run on 2026-10-04: ash-rust against Ash (Elixir), on an
 Apple M4 Max (16 cores) with PostgreSQL 16.15. Parity (115 checks) and the smoke test (7)
 matched first. Reads ran 3 reps of 5 s per desk, writes 2 reps per desk, each figure the
 median over reps. **Ratio** is how many times better ash-rust does: throughput for

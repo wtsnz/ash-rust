@@ -40,43 +40,11 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 
 ---
 
-## Performance Comparison: Rust (`ash-rust`) vs. Elixir (`Ash 3.0`)
+## Results
 
-These are micro-benchmarks of the framework's own overhead, mostly in memory. For what an application sees end to end (about 1.1–2.5x), see [docs/benchmarks.md](../docs/benchmarks.md).
-
-Measured 2026-09-18 on Apple M4 Max (16 cores, 128GB RAM). Elixir 1.20.1 / OTP 29.0.2 with the code server in `:embedded` mode after warmup. Rust 1.90.0 release. Ash 3.33.6 vs `ash-core` 0.1.0.
-
-### Core Engine & Actions
-
-| Workload | Ash Elixir Throughput | Ash Elixir Median Latency | ash-rust Throughput | ash-rust Median Latency | Speedup |
-|:---|:---:|:---:|:---:|:---:|:---:|
-| `Ticket.open` (Validation + Action) | 37,550 ips | 24.8 µs | **309,211 ips** | **3.0 µs** | **~8.2x faster** |
-| `Representative.create` (Action) | 42,120 ips | 22.0 µs | **405,219 ips** | **2.3 µs** | **~9.6x faster** |
-| `Ticket.read` (100 records filter) | 4,790 ips | 192.3 µs | **30,501 ips** | **31.6 µs** | **~6.4x faster** |
-
-### GraphQL API Layer
-
-| GraphQL Workload | Ash Elixir (`ash_graphql` + Absinthe) | Ash Rust (`ash-graphql`) | Rust Speedup Multiplier |
-|:---|:---:|:---:|:---:|
-| **1. Single Record by ID** | 2,850 ops/sec (311 µs) | **26,861 ops/sec (35.5 µs)** | **~9.4x faster** (8.8x lower latency) |
-| **2. 100 Tickets Collection** | 1,180 ops/sec (796 µs) | **4,471 ops/sec (216.5 µs)** | **~3.8x faster** (3.7x lower latency) |
-| **3. Filtered & Sorted (50 items)** | 1,380 ops/sec (688 µs) | **7,932 ops/sec (119.7 µs)** | **~5.8x faster** (5.8x lower latency) |
-| **4. Keyset Pagination (first: 20)** | 1,780 ops/sec (531 µs) | **6,942 ops/sec (137.0 µs)** | **~3.9x faster** (3.9x lower latency) |
-| **5. DataLoader (100 Tickets + Author)** | **760 ops/sec (1,358 µs)** | 664 ops/sec (1,419 µs) | **~0.9x** (Elixir slightly ahead) |
-| **6. Mutation: `openTicket`** | 5,800 ops/sec (156 µs) | **41,845 ops/sec (22.5 µs)** | **~7.2x faster** (6.9x lower latency) |
-
-### PostgreSQL Data Layer (`ash-postgres` vs `ash_postgres` + Ecto)
-
-Not re-run in this pass (Docker was unavailable). Previous numbers, measured against PostgreSQL 16 on port 5433:
-
-| PostgreSQL Workload | Ash Elixir (`ash_postgres` + Ecto) | Ash Rust (`ash-postgres` + sqlx) | Rust Speedup Multiplier |
-|:---|:---:|:---:|:---:|
-| **1. Point Write (`RETURNING *`)** | 615 ops/sec (1,150 µs) | **832 ops/sec (1,006 µs)** | **~1.35x faster** (1.14x lower latency) |
-| **2. Point Read (`id` PK Lookup)** | 4,243 ops/sec (220 µs) | **2,980 ops/sec (323 µs)** | ~0.7x (both ~200-300 µs network roundtrip) |
-| **3. Filtered & Sorted (50 items)** | 988 ops/sec (910 µs) | **1,623 ops/sec (595 µs)** | **~1.64x faster** (1.53x lower latency) |
-| **4. Correlated Aggregates (Subqueries)** | 959 ops/sec (970 µs) | **1,394 ops/sec (694 µs)** | **~1.45x faster** (1.40x lower latency) |
-| **5. Bulk Ingestion (100 Tickets)** | 152 ops/sec (6,050 µs) | **354 ops/sec (2,570 µs)** | **~2.33x faster** (2.35x lower latency) |
-| **6. Transactional Workflow (BEGIN/COMMIT)** | 571 ops/sec (1,590 µs) | **691 ops/sec (1,312 µs)** | **~1.21x faster** (1.21x lower latency) |
+These suites measure the framework's own overhead, mostly in memory, and track it over time.
+For how ash-rust compares with Ash on a real application, see
+[docs/benchmarks.md](../docs/benchmarks.md).
 
 ---
 
