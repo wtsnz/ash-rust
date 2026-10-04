@@ -124,7 +124,9 @@ pub trait SqlDialect: Send + Sync + 'static {
     fn column_type(&self, attr: &AttributeDef) -> String;
 
     /// Emits `ON CONFLICT (...) DO UPDATE` clause.
-    fn upsert_clause(&self, identity: &IdentityDef, update_fields: &[String]) -> String;
+    /// `ON CONFLICT` on `identity`, whose unique index covers `columns`
+    /// ([`IdentityDef::columns`]).
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String;
 
     /// Whether the dialect supports `RETURNING *` on INSERT/UPDATE.
     fn supports_returning(&self) -> bool;
@@ -296,9 +298,8 @@ impl SqlDialect for SqliteDialect {
         }
     }
 
-    fn upsert_clause(&self, identity: &IdentityDef, update_fields: &[String]) -> String {
-        let key_cols = identity
-            .keys
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String {
+        let key_cols = columns
             .iter()
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
@@ -425,9 +426,8 @@ impl SqlDialect for PostgresDialect {
         }
     }
 
-    fn upsert_clause(&self, identity: &IdentityDef, update_fields: &[String]) -> String {
-        let key_cols = identity
-            .keys
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String {
+        let key_cols = columns
             .iter()
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
@@ -440,7 +440,7 @@ impl SqlDialect for PostgresDialect {
         // `DO NOTHING` returns no row for an existing record, so with nothing to update
         // we rewrite a key column to itself and `RETURNING *` still yields the record.
         let fields: Vec<&str> = if update_fields.is_empty() {
-            identity.keys.iter().take(1).copied().collect()
+            columns.iter().take(1).copied().collect()
         } else {
             update_fields.iter().map(String::as_str).collect()
         };

@@ -443,25 +443,42 @@ impl DynamicChangeset {
 
     /// [`commit`](Self::commit) inside a destroy `cascade`, which decides whether it
     /// notifies.
-    pub(crate) async fn commit_within<D: DataLayer>(
+    ///
+    /// Boxed as `Send`: a managed relationship commits actions of its own, and the cycle
+    /// would otherwise hide whether the future is.
+    pub(crate) fn commit_within<'a, D: DataLayer>(
         mut self,
-        ctx: &Context<D>,
-        cascade: &Cascade,
-    ) -> Result<FieldMap> {
-        let after_transactions = std::mem::take(&mut self.after_transactions);
-        let result = async {
-            if let Some(plan) = self.atomic_plan(ctx)? {
-                return self.persist_atomically(ctx, plan, cascade).await;
+        ctx: &'a Context<D>,
+        cascade: &'a Cascade,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<FieldMap>> + Send + 'a>> {
+        Box::pin(async move {
+            let after_transactions = std::mem::take(&mut self.after_transactions);
+            let beyond = self.writes_beyond_record();
+            let work = move |ctx: Context<D>| async move {
+                if let Some(plan) = self.atomic_plan(&ctx)? {
+                    return self.persist_atomically(&ctx, plan, cascade).await;
+                }
+                let id = self.prepare(&ctx).await?;
+                let stored = self.persist(&ctx, id.clone(), cascade).await?;
+                self.finish(&ctx, id, stored, cascade.notify).await
+            };
+            // An action writing more than its own row writes in one transaction, as Ash runs
+            // an action in one: a managed relationship that fails takes the record and every
+            // related write before it with it. A lone statement is atomic as it is.
+            let result = if beyond { ctx.atomically(work).await } else { work(ctx.clone()).await };
+            for hook in after_transactions {
+                hook(result.as_ref());
             }
-            let id = self.prepare(ctx).await?;
-            let stored = self.persist(ctx, id.clone(), cascade).await?;
-            self.finish(ctx, id, stored, cascade.notify).await
-        }
-        .await;
-        for hook in after_transactions {
-            hook(result.as_ref());
-        }
-        result
+            result
+        })
+    }
+
+    /// Whether the action may write rows besides its own: related records it manages, or
+    /// those a destroy cascades to.
+    fn writes_beyond_record(&self) -> bool {
+        !self.managed_relationships.is_empty()
+            || (self.action.kind == ActionKind::Destroy
+                && self.resource.relationships.iter().any(|rel| rel.kind != crate::resource::RelKind::BelongsTo))
     }
 
     /// The update of the record in hand as one statement, as Ash upgrades an update of a
@@ -784,11 +801,13 @@ impl DynamicChangeset {
             return Err(err);
         }
 
-        crate::policy::redact_fields(self.resource, ctx.actor.as_ref(), &mut stored)?;
         for hook in std::mem::take(&mut self.after_actions) {
             hook(&mut stored)?;
         }
 
+        // The notification carries the record as committed, as Ash's does: each
+        // subscriber reads it through its own field policies. Only what the writer gets
+        // back is redacted for the writer.
         if notify {
             let mut metadata = ctx.metadata.clone();
             metadata.extend(self.metadata.clone());
@@ -806,6 +825,7 @@ impl DynamicChangeset {
             .with_tenant(self.tenant.clone().or_else(|| ctx.tenant.clone()));
             crate::notifier::dispatch_notification(ctx, self.resource, notification).await?;
         }
+        crate::policy::redact_fields(self.resource, ctx.actor.as_ref(), &mut stored)?;
         Ok(stored)
     }
 }

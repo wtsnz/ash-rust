@@ -373,8 +373,21 @@ fn guard_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter, p
         Filter::And(parts) => Filter::and(guard_all(parts)?),
         Filter::Or(parts) => Filter::or(guard_all(parts)?),
         Filter::Not(inner) => !guard_filter(resource, actor, *inner, !positive)?,
+        // The related rows a client's filter reaches are those the actor may read, as Ash
+        // adds the destination read's authorization filter to each relationship path in
+        // a client's filter: a filter can't find records by related rows hidden from it.
         Filter::Related { relationship, filter } => match resource.relationship(&relationship) {
-            Some(rel) => Filter::related(relationship, guard_filter((rel.destination)(), actor, *filter, positive)?),
+            Some(rel) => {
+                let dest = (rel.destination)();
+                let inner = guard_filter(dest, actor, *filter, positive)?;
+                let readable = match compile_read_filter(dest, dest.default_read(), actor) {
+                    Ok(None) => inner,
+                    Ok(Some(policy)) => Filter::and([inner, policy]),
+                    Err(Error::Forbidden) => Filter::False,
+                    Err(err) => return Err(err),
+                };
+                Filter::related(relationship, readable)
+            }
             None => Filter::Related { relationship, filter },
         },
         leaf => {

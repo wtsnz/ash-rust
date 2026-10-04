@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use crate::actor::Actor;
-use crate::data_layer::{SchemaSupport, TransactionSupport};
+use crate::data_layer::{DataLayer, SchemaSupport, TransactionSupport};
 use crate::error::Result;
 use crate::notifier::{Notification, Notifier};
 use crate::resource::ResourceDef;
@@ -205,6 +205,45 @@ impl<D: crate::data_layer::DataLayer + 'static> Context<D> {
 impl<D: SchemaSupport> Context<D> {
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
         self.data.install_resources(resources).await
+    }
+}
+
+impl<D: DataLayer> Context<D> {
+    /// Runs `f` in one transaction where the data layer has them
+    /// ([`DataLayer::in_transaction`]), its notifications sent once it commits, as Ash
+    /// runs an action in a transaction; within one already, or where the data layer has
+    /// none, as it is.
+    pub(crate) async fn atomically<F, Fut, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(Context<D>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        if self.notification_queue.is_some() {
+            return f(self.clone()).await;
+        }
+        let queue = Arc::new(Mutex::new(Vec::new()));
+        let outside = self.clone();
+        let tx_queue = Arc::clone(&queue);
+        let result = self
+            .data
+            .in_transaction(move |tx_data| {
+                let ctx = match tx_data {
+                    Some(tx_data) => Context {
+                        data: Arc::new(tx_data),
+                        notification_queue: Some(tx_queue),
+                        ..outside
+                    },
+                    None => outside,
+                };
+                f(ctx)
+            })
+            .await;
+        match &result {
+            Ok(_) => crate::notifier::flush_queued_notifications(&queue, &self.notifiers).await,
+            Err(_) => queue.lock().unwrap().clear(),
+        }
+        result
     }
 }
 

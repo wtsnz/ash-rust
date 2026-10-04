@@ -498,3 +498,36 @@ fn indexes_lead_with_the_tenant_attribute() {
     assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");
     assert!(ddl[1].contains(r#"("username")"#), "{ddl:?}");
 }
+
+/// An identity on a resource with attribute multitenancy is unique within the tenant, as
+/// Ash's identities are, unless it spans every tenant: its unique index and an upsert's
+/// conflict target lead with the tenant attribute.
+#[test]
+fn identities_are_unique_within_the_tenant() {
+    static ATTRS: &[AttributeDef] = &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("org", AttrType::String),
+        AttributeDef::required("username", AttrType::String),
+    ];
+    static IDENTITIES: &[IdentityDef] = &[
+        IdentityDef::new("unique_username", &["username"]),
+        IdentityDef::new("unique_anywhere", &["username"]).all_tenants(),
+    ];
+    let mut resource = RES_V1;
+    resource.attributes = ATTRS;
+    resource.identities = IDENTITIES;
+    resource.multitenancy = Some(ash_core::MultitenancyDef::attribute("org"));
+    let snapshot = TableSnapshot::from_resource(&resource, &PostgresDialect);
+    let columns: Vec<Vec<&str>> =
+        snapshot.identities.iter().map(|identity| identity.columns.iter().map(String::as_str).collect()).collect();
+    assert_eq!(columns, [vec!["org", "username"], vec!["username"]]);
+
+    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect).compile_create_indexes(&resource).unwrap();
+    assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");
+    let fields = ash_core::FieldMap::from([
+        ("org".to_string(), ash_core::Value::from("a")),
+        ("username".to_string(), ash_core::Value::from("ada")),
+    ]);
+    let upsert = ash_sql::QueryCompiler::new(&PostgresDialect).compile_upsert(&resource, &fields, &IDENTITIES[0], &[]).unwrap();
+    assert!(upsert.sql().contains(r#"ON CONFLICT ("org", "username")"#), "{}", upsert.sql());
+}

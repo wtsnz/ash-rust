@@ -67,12 +67,41 @@ pub struct IdentityDef {
     pub predicate: Option<&'static str>,
     /// When false, Postgres emits `UNIQUE NULLS NOT DISTINCT`. SQLite has no equivalent and keeps the default unique index.
     pub nils_distinct: bool,
+    /// On a resource with attribute multitenancy, whether the identity spans every
+    /// tenant. Otherwise it's unique within each tenant, as Ash's identities are unless
+    /// `all_tenants?: true`.
+    pub all_tenants: bool,
+}
+
+/// `keys`, led by the tenant attribute under attribute multitenancy unless they span
+/// every tenant, as AshPostgres scopes identities and custom indexes: the tenant first,
+/// wherever it was declared.
+fn tenant_led(keys: &'static [&'static str], multitenancy: Option<MultitenancyDef>, all_tenants: bool) -> Vec<&'static str> {
+    match multitenancy {
+        Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) if !all_tenants => {
+            std::iter::once(tenant).chain(keys.iter().copied().filter(|key| *key != tenant)).collect()
+        }
+        _ => keys.to_vec(),
+    }
 }
 
 impl IdentityDef {
     pub const fn with_nils_distinct(mut self, nils_distinct: bool) -> Self {
         self.nils_distinct = nils_distinct;
         self
+    }
+
+    pub const fn all_tenants(mut self) -> Self {
+        self.all_tenants = true;
+        self
+    }
+
+    /// The columns the identity is unique over on a resource with `multitenancy`: its
+    /// keys, within the tenant under attribute multitenancy unless it spans every tenant.
+    /// Its unique index, an upsert's conflict target and the in-memory check all use
+    /// these; a lookup by the identity gives its keys, the tenant coming from the context.
+    pub fn columns(&self, multitenancy: Option<MultitenancyDef>) -> Vec<&'static str> {
+        tenant_led(self.keys, multitenancy, self.all_tenants)
     }
 
     pub const fn new(name: &'static str, keys: &'static [&'static str]) -> Self {
@@ -82,6 +111,7 @@ impl IdentityDef {
             message: None,
             predicate: None,
             nils_distinct: true,
+            all_tenants: false,
         }
     }
 
@@ -96,6 +126,7 @@ impl IdentityDef {
             message: Some(message),
             predicate: None,
             nils_distinct: true,
+            all_tenants: false,
         }
     }
 
@@ -142,12 +173,7 @@ impl IndexDef {
     /// the tenant attribute under attribute multitenancy unless it spans every tenant, as
     /// AshPostgres scopes custom indexes (the tenant first, wherever it was declared).
     pub fn columns(&self, multitenancy: Option<MultitenancyDef>) -> Vec<&'static str> {
-        match multitenancy {
-            Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) if !self.all_tenants => {
-                std::iter::once(tenant).chain(self.keys.iter().copied().filter(|key| *key != tenant)).collect()
-            }
-            _ => self.keys.to_vec(),
-        }
+        tenant_led(self.keys, multitenancy, self.all_tenants)
     }
 
     pub const fn with_predicate(mut self, predicate: &'static str) -> Self {

@@ -88,7 +88,7 @@ impl TableSnapshot {
         for id in resource.identities {
             identities.push(IdentitySnapshot {
                 name: format!("idx_{}_{}", resource.table_name(), id.name),
-                columns: id.keys.iter().map(|k| k.to_string()).collect(),
+                columns: id.columns(resource.multitenancy).into_iter().map(str::to_string).collect(),
                 unique: true,
                 predicate: id.predicate.map(str::to_string),
                 nils_distinct: id.nils_distinct,

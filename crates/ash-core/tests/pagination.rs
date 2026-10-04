@@ -430,6 +430,7 @@ fn keyset_sort_breaks_ties_as_ash_does() {
             message: None,
             predicate: None,
             nils_distinct: true,
+            all_tenants: false,
         }],
         ..Article::DEF
     };

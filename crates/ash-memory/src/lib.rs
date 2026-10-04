@@ -62,8 +62,10 @@ fn check_identities(
         if ident.predicate.is_some() {
             continue;
         }
+        // Unique within the tenant, unless the identity spans every tenant.
+        let columns = ident.columns(resource.multitenancy);
         if let Some(before) = before
-            && ident.keys.iter().all(|k| fields.get(*k) == before.get(*k))
+            && columns.iter().all(|k| fields.get(*k) == before.get(*k))
         {
             continue;
         }
@@ -71,7 +73,7 @@ fn check_identities(
             if existing_id == id {
                 continue;
             }
-            let matches_all = ident.keys.iter().all(|k| {
+            let matches_all = columns.iter().all(|k| {
                 let new_val = fields.get(*k).filter(|v| !v.is_null());
                 let existing_val = row.get(*k).filter(|v| !v.is_null());
                 match (new_val, existing_val) {
@@ -94,6 +96,12 @@ fn check_identities(
         }
     }
     Ok(())
+}
+
+/// Whether `row` is the tenant's, as Ash filters every update and destroy to the tenant's
+/// rows under attribute multitenancy: another tenant's record isn't there to write.
+fn in_tenant(resource: &ResourceDef, tenant: Option<&str>, row: &FieldMap) -> bool {
+    resource.tenant_filter(tenant).is_none_or(|filter| filter.matches_on(resource, row))
 }
 
 /// The key of a new record: the one it was given, or for an integer key the data layer
@@ -167,7 +175,7 @@ impl DataLayer for Memory {
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
-            let mut current_row = table.get(&id).ok_or(Error::NotFound)?.clone();
+            let mut current_row = table.get(&id).filter(|row| in_tenant(resource, tenant, row)).ok_or(Error::NotFound)?.clone();
 
             if let Some(v_attr) = resource.optimistic_lock_attribute()
                 && let Some(Value::Int(new_v)) = fields.get(v_attr)
@@ -216,10 +224,11 @@ impl DataLayer for Memory {
             }
             let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
+            let columns = identity.columns(resource.multitenancy);
             let existing_entry = table
                 .iter()
                 .find(|(_, row)| {
-                    identity.keys.iter().all(|k| {
+                    columns.iter().all(|k| {
                         let new_val = fields.get(*k).filter(|v| !v.is_null());
                         let existing_val = row.get(*k).filter(|v| !v.is_null());
                         match (new_val, existing_val) {
@@ -267,7 +276,10 @@ impl DataLayer for Memory {
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
-            table.remove(&id).ok_or(Error::NotFound)?;
+            if !table.get(&id).is_some_and(|row| in_tenant(resource, tenant, row)) {
+                return Err(Error::NotFound);
+            }
+            table.remove(&id);
             Ok(())
         })())
     }
@@ -308,7 +320,9 @@ impl DataLayer for Memory {
             let mut tables = self.write()?;
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             for id in ids {
-                table.remove(id);
+                if table.get(id).is_some_and(|row| in_tenant(resource, tenant, row)) {
+                    table.remove(id);
+                }
             }
             Ok(())
         })())

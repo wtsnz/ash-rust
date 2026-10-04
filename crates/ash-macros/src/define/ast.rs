@@ -80,6 +80,7 @@ pub struct IdentitySpec {
     pub message: Option<String>,
     pub predicate: Option<String>,
     pub nils_distinct: bool,
+    pub all_tenants: bool,
 }
 
 pub struct IndexSpec {

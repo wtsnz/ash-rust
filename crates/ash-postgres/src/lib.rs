@@ -455,6 +455,16 @@ impl SchemaSupport for Postgres {
 }
 
 impl DataLayer for Postgres {
+    async fn in_transaction<T, F, Fut>(&self, work: F) -> Result<T>
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        TransactionSupport::transaction(self, move |tx| work(Some(tx.clone()))).await
+    }
+
     async fn create(
         &self,
         resource: &ResourceDef,

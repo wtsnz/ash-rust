@@ -1051,6 +1051,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 None => quote! { ::std::option::Option::None },
             };
             let nils_distinct = ident.nils_distinct;
+            let all_tenants = ident.all_tenants;
             quote! {
                 ::ash_core::IdentityDef {
                     name: #name_str,
@@ -1058,6 +1059,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     message: #msg_tokens,
                     predicate: #predicate_tokens,
                     nils_distinct: #nils_distinct,
+                    all_tenants: #all_tenants,
                 }
             }
         })

@@ -145,6 +145,19 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         self
     }
 
+    /// ` AND <tenant attribute> = <tenant>` for a write to a resource with attribute
+    /// multitenancy, as Ash filters every update and destroy to the tenant's rows: a
+    /// record from another tenant isn't there to write. `qualifier` names the table.
+    fn tenant_condition(&mut self, resource: &ResourceDef, qualifier: Option<&str>) -> Result<String> {
+        let Some(ash_core::Filter::Eq(attribute, tenant)) = resource.tenant_filter(self.tenant.as_deref()) else {
+            return Ok(String::new());
+        };
+        let column = ident(self.dialect, &attribute)?;
+        let column = qualifier.map_or(column.clone(), |table| format!("{table}.{column}"));
+        let p = self.push_param(tenant);
+        Ok(format!(" AND {column} = {p}"))
+    }
+
     /// `resource`'s table as this statement reaches it: in the tenant's schema for a
     /// context-tenant resource, as AshPostgres prefixes it, or unqualified. Every table a
     /// statement touches goes through here, subqueries included, so none reads the wrong
@@ -1825,6 +1838,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             "UPDATE {table} SET {} WHERE {pk_col} = {pk_param}",
             set_clauses.join(", ")
         );
+        sql.push_str(&self.tenant_condition(resource, None)?);
 
         if let Some(v_attr) = resource.optimistic_lock_attribute()
             && let Some(Value::Int(new_v)) = fields.get(v_attr)
@@ -1893,8 +1907,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
             values.push(format!("({})", tuple.join(", ")));
         }
+        let tenant = self.tenant_condition(resource, Some(&table))?;
         let sql = format!(
-            "UPDATE {table} SET {} FROM (VALUES {}) AS \"v\" ({}) WHERE {table}.{pk_col} = \"v\".{pk_col} RETURNING {table}.*",
+            "UPDATE {table} SET {} FROM (VALUES {}) AS \"v\" ({}) WHERE {table}.{pk_col} = \"v\".{pk_col}{tenant} RETURNING {table}.*",
             set_clauses.join(", "),
             values.join(", "),
             aliases.join(", "),
@@ -1909,8 +1924,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let table = self.table(resource)?;
         let pk_col = ident(self.dialect, pk.name)?;
         let p = self.bind_typed(pk.ty, id);
+        let tenant = self.tenant_condition(resource, None)?;
 
-        let sql = format!("DELETE FROM {table} WHERE {pk_col} = {p}");
+        let sql = format!("DELETE FROM {table} WHERE {pk_col} = {p}{tenant}");
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
@@ -1935,8 +1951,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         let vals: Vec<Value> = ids.to_vec();
         let param = self.push_list_param(vals);
         let condition = self.dialect.render_in_list(&pk_col, &param);
+        let tenant = self.tenant_condition(resource, None)?;
 
-        let sql = format!("DELETE FROM {table} WHERE {condition}");
+        let sql = format!("DELETE FROM {table} WHERE {condition}{tenant}");
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
@@ -1958,7 +1975,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         compiled.sql.push(' ');
         compiled
             .sql
-            .push_str(&self.dialect.upsert_clause(identity, update_fields));
+            .push_str(&self.dialect.upsert_clause(identity, &identity.columns(resource.multitenancy), update_fields));
 
         if self.dialect.supports_returning() {
             compiled.sql.push_str(" RETURNING *");
@@ -1989,7 +2006,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 &format!("idx_{}_{}", resource.table_name(), identity.name),
             )?;
             let mut key_cols = Vec::new();
-            for key in identity.keys {
+            for key in identity.columns(resource.multitenancy) {
                 key_cols.push(ident(self.dialect, key)?);
             }
             stmts.push(crate::generator::format_create_index(

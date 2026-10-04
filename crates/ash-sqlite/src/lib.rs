@@ -429,6 +429,16 @@ fn refuse_tenant_schema(resource: &ResourceDef, tenant: Option<&str>) -> Result<
 }
 
 impl DataLayer for Sqlite {
+    async fn in_transaction<T, F, Fut>(&self, work: F) -> Result<T>
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        TransactionSupport::transaction(self, move |tx| work(Some(tx.clone()))).await
+    }
+
     async fn create(
         &self,
         resource: &ResourceDef,
@@ -458,7 +468,7 @@ impl DataLayer for Sqlite {
         fields: FieldMap,
     ) -> Result<FieldMap> {
         refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::update_query(resource, id.clone(), &fields)?;
+        let qb = sql::update_query(resource, tenant, id.clone(), &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
             if resource.optimistic_lock_attribute().is_some() {
@@ -504,7 +514,7 @@ impl DataLayer for Sqlite {
 
     async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
         refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::delete_query(resource, id)?;
+        let qb = sql::delete_query(resource, tenant, id)?;
         let result = self.execute_query(&qb).await?;
         if result.rows_affected() == 0 {
             return Err(Error::NotFound);
@@ -580,8 +590,8 @@ impl DataLayer for Sqlite {
 
         let mut where_parts = Vec::new();
         let mut params = Vec::new();
-        for key in identity.keys {
-            if let Some(val) = fields.get(*key) {
+        for key in identity.columns(resource.multitenancy) {
+            if let Some(val) = fields.get(key) {
                 where_parts.push(format!("\"{}\" = ?", key));
                 params.push(SqlParam::new(val.clone()));
             } else {
@@ -639,7 +649,7 @@ impl DataLayer for Sqlite {
         if ids.is_empty() {
             return Ok(());
         }
-        let qb = sql::bulk_delete_query(resource, ids)?;
+        let qb = sql::bulk_delete_query(resource, tenant, ids)?;
         self.execute_query_resource(&qb, resource).await?;
         Ok(())
     }

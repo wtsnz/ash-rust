@@ -164,6 +164,12 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                                 if notif.action_kind != kind {
                                     continue;
                                 }
+                                // Another tenant's change reaches no one here, as AshGraphql
+                                // resolves none from another tenant: a context tenant's
+                                // records carry no tenant attribute to filter on.
+                                if resource.multitenancy.is_some() && notif.tenant.as_deref() != tenant.as_deref() {
+                                    continue;
+                                }
                                 if let Some(f) = &filter
                                     && !f.matches_on(resource, &notif.record_fields)
                                 {

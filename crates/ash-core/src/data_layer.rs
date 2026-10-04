@@ -144,6 +144,20 @@ pub trait DataLayer: Send + Sync {
         self.can_update_atomically(resource)
     }
 
+    /// Runs `work` in one of this data layer's transactions, given the data layer that
+    /// writes within it, as Ash runs an action in a transaction (`transaction?: true`)
+    /// where its data layer can transact. One that can't, as Ash's ETS layer can't, gives
+    /// `None` and `work` runs as it is: the default.
+    fn in_transaction<T, F, Fut>(&self, work: F) -> impl Future<Output = Result<T>> + Send
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        work(None)
+    }
+
     /// Updates the records `query` selects as `update` says, in one statement: checks
     /// each record against the update's conditions, in order, failing with the first
     /// that holds, then sets the update's values, every one computed from the record as
