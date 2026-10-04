@@ -344,10 +344,12 @@ dependencies = [
  "ash-pubsub",
  "ash-sql",
  "axum",
+ "futures-util",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 

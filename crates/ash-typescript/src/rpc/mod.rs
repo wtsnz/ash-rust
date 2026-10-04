@@ -52,7 +52,7 @@ use serde_json::{Map, Value as Json, json};
 pub use error::Failure;
 pub use fields::LoadRestrictions;
 use fields::{NestedPage, Rules, Selection, ValueSelection, sort_text};
-use names::{snake, snake_input, snake_keys, snake_sort};
+use names::{Names, snake};
 
 use crate::types::to_camel_case;
 
@@ -232,11 +232,12 @@ pub struct Rpc<D> {
     on_error: Option<ErrorReporter>,
     error_handler: Option<ErrorHandler>,
     show_raised_errors: bool,
+    names: Names,
 }
 
 impl<D> Default for Rpc<D> {
     fn default() -> Self {
-        Self { actions: HashMap::new(), not_found_error: true, on_error: None, error_handler: None, show_raised_errors: false }
+        Self { actions: HashMap::new(), not_found_error: true, on_error: None, error_handler: None, show_raised_errors: false, names: Names::default() }
     }
 }
 
@@ -251,6 +252,32 @@ fn action_def(resource: &'static ResourceDef, action: &str) -> &'static ActionDe
 impl<D: TransactionSupport + 'static> Rpc<D> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// `field_names`: the names clients know `R`'s fields by, where not their own in
+    /// camelCase, as AshTypescript maps them: `("address_line_1", "address_line1")`
+    /// names it `addressLine1`.
+    pub fn field_names<R: Resource>(mut self, names: &[(&'static str, &'static str)]) -> Self {
+        let resource = &R::DEF;
+        for (field, _) in names {
+            let known = resource.attribute(field).is_some()
+                || resource.calculation(field).is_some()
+                || resource.aggregate(field).is_some()
+                || resource.relationship(field).is_some();
+            assert!(known, "{} has no field `{field}` to name", resource.name);
+        }
+        self.names.map_fields(resource.name, names);
+        self
+    }
+
+    /// `argument_names`: the names clients know the arguments of `R`'s `action` by.
+    pub fn argument_names<R: Resource>(mut self, action: &str, names: &[(&'static str, &'static str)]) -> Self {
+        let action = action_def(&R::DEF, action);
+        for (argument, _) in names {
+            assert!(action.arguments.iter().any(|arg| arg.name == *argument), "`{}` has no argument `{argument}` to name", action.name);
+        }
+        self.names.map_arguments(R::DEF.name, action.name, names);
+        self
     }
 
     /// `rpc_action :name, :action`: an action of `R`, a generic one run as its own `run`
@@ -462,19 +489,24 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         if problems.is_empty() {
             return Ok(());
         }
-        Err(problems.into_iter().map(|problem| self.form_failure(problem)).collect())
+        Err(problems.into_iter().map(|problem| self.form_failure(resource, action, problem)).collect())
     }
 
     /// A problem a form finds, as AshTypescript reports it: an invalid attribute, its
     /// message filled in, at its field.
-    fn form_failure(&self, problem: Error) -> Failure {
+    fn form_failure(&self, resource: &ResourceDef, action: &ActionDef, problem: Error) -> Failure {
         let (field, message) = match &problem {
             Error::Validation { field, .. } => (field.clone(), problem.message()),
             Error::Missing { field } => (field.clone(), "is required".to_string()),
             Error::TypeMismatch { field, .. } => (field.clone(), "is invalid".to_string()),
             _ => return self.failure(problem),
         };
-        Failure::form_error(&to_camel_case(&field), message)
+        let name = if action.arguments.iter().any(|arg| arg.name == field) {
+            self.names.argument(resource, action.name, &field)
+        } else {
+            self.names.field(resource, &field)
+        };
+        Failure::form_error(&name, message)
     }
 
     /// Record `id`, as the read the action finds records through finds it.
@@ -532,7 +564,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         }
 
         // What it selects.
-        let rules = Rules { actor: ctx.actor.as_ref(), enable_filter: options.enable_filter, enable_sort: options.enable_sort, loads: &options.loads };
+        let rules = Rules { actor: ctx.actor.as_ref(), enable_filter: options.enable_filter, enable_sort: options.enable_sort, loads: &options.loads, names: &self.names };
         let selection = match given("fields") {
             None => Selection::default(),
             Some(Json::Array(items)) if validating && items.is_empty() => Selection::default(),
@@ -545,13 +577,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             Some(input @ Json::Object(_)) => input.clone(),
             Some(other) => return Err(Failure::invalid_input_format(other)),
         };
-        let get_by = if options.get_by.is_empty() { Vec::new() } else { get_by_filters(resource, &options.get_by, request.get("getBy"))? };
+        let get_by = if options.get_by.is_empty() { Vec::new() } else { get_by_filters(&self.names, resource, &options.get_by, request.get("getBy"))? };
         let page = match given("page") {
             None => None,
             Some(page) => Some(PageRequest::parse(page)?),
         };
         let shown = shown_metadata(rpc, request.get("metadataFields"));
-        Ok(Parsed { rpc, ctx, get, selection, input: snake_input(&raw_input), get_by, page, shown })
+        Ok(Parsed { rpc, ctx, get, selection, input: self.names.input(resource, action, &raw_input), get_by, page, shown })
     }
 
     async fn answer_one(&self, ctx: &Context<D>, request: &Json) -> Result<Answer, Failure> {
@@ -594,7 +626,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 // Nothing to destroy: a bulk destroy of no records, which succeeds, its
                 // selected fields as an empty record's.
                 let nothing = || Json::Object(
-                    selection.fields.iter().chain(selection.relationships.iter().map(|(name, _)| name)).map(|name| (to_camel_case(name), Json::Null)).collect(),
+                    selection.fields.iter().chain(selection.relationships.iter().map(|(name, _)| name)).map(|name| (self.names.field(resource, name), Json::Null)).collect(),
                 );
                 let id = match self.identity(&ctx, rpc, request.get("identity")).await {
                     Err(failure) if failure.kind == "not_found" => return Ok(nothing().into()),
@@ -653,7 +685,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 return uuid::Uuid::parse_str(text).map_err(|_| self.failure(Error::Invalid(format!("invalid primary key {text:?}"))));
             }
             Some(Json::Object(fields)) => {
-                let fields: HashMap<String, &Json> = fields.iter().map(|(key, value)| (snake(key), value)).collect();
+                let fields: HashMap<String, &Json> = fields.iter().map(|(key, value)| (self.names.field_named(resource, key), value)).collect();
                 let matched = identities.iter().find_map(|identity| {
                     let keys: Vec<&str> = match identity {
                         // A map names a composite primary key; a single one is given
@@ -717,14 +749,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let actor = ctx.actor.as_ref();
         let mut filters = Vec::new();
         if let Some(filter) = request.get("filter").filter(|value| !value.is_null()) {
-            let filter = filter_input(resource, &snake_keys(filter)).map_err(|e| self.failure(e).under("filter"))?;
+            let filter = filter_input(resource, &self.names.filter(resource, filter)).map_err(|e| self.failure(e).under("filter"))?;
             filters.push(ash_core::guard_input_filter(resource, actor, filter).map_err(|e| self.failure(e))?);
         }
         // The action's sort, then the client's, as AshTypescript sorts its query after
         // running the read's preparations.
         let mut sort = prepared_sort(action);
         if let Some(text) = request.get("sort").filter(|value| !value.is_null()).map(sort_text) {
-            let given = sort_input(resource, &snake_sort(&text)).map_err(|e| self.failure(e).under("sort"))?;
+            let given = sort_input(resource, &self.names.sort(resource, &text)).map_err(|e| self.failure(e).under("sort"))?;
             sort.extend(ash_core::guard_input_sort(resource, actor, given).map_err(|e| self.failure(e))?);
         }
         let base = CompiledQuery { filter: Some(Filter::and(filters)), sort, tenant: ctx.tenant.clone(), ..CompiledQuery::default() };
@@ -901,7 +933,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                                 Some(within) => select_value(field_type(resource, name), value, within),
                                 None => to_json(field_type(resource, name), value),
                             });
-                            (to_camel_case(name), value)
+                            (self.names.field(resource, name), value)
                         })
                         .collect()
                 })
@@ -926,7 +958,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     Some(page) => self.nested_pages(ctx, resource, rel_name, dest, &rows, nested, page).await?,
                 };
                 for (object, value) in out.iter_mut().zip(values) {
-                    object.insert(to_camel_case(rel_name), value);
+                    object.insert(self.names.field(resource, rel_name), value);
                 }
             }
             Ok(out.into_iter().map(Json::Object).collect())
@@ -1115,10 +1147,11 @@ impl PageRequest {
 }
 
 /// A get's equality filters, from the request's `getBy`: exactly its fields, scalar.
-fn get_by_filters(resource: &ResourceDef, fields: &[&'static str], given: Option<&Json>) -> Result<Vec<Filter>, Failure> {
+fn get_by_filters(names: &Names, resource: &ResourceDef, fields: &[&'static str], given: Option<&Json>) -> Result<Vec<Filter>, Failure> {
     let empty = Map::new();
     let given = given.and_then(Json::as_object).unwrap_or(&empty);
-    let provided: HashMap<String, &Json> = given.iter().map(|(key, value)| (snake(key), value)).collect();
+    let provided: HashMap<String, &Json> = given.iter().map(|(key, value)| (names.field_named(resource, key), value)).collect();
+    let to_camel_case = |field: &str| names.field(resource, field);
     let allowed: Vec<String> = fields.iter().map(|field| to_camel_case(field)).collect();
     let extra: Vec<String> = provided.keys().filter(|key| !fields.contains(&key.as_str())).map(|key| to_camel_case(key)).collect();
     if !extra.is_empty() {
@@ -1249,6 +1282,9 @@ fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) ->
         (ty, value) => to_json(ty, value),
     }
 }
+
+#[cfg(feature = "axum")]
+pub mod channel;
 
 #[cfg(feature = "axum")]
 pub mod axum {

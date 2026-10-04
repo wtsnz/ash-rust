@@ -19,7 +19,7 @@ use ash_core::{Actor, AttrType, FieldMap, RelKind, RelatedQuery, ResourceDef};
 use serde_json::{Map, Value as Json};
 
 use super::error::Failure;
-use super::names::{snake, snake_keys, snake_sort};
+use super::names::{Names, snake};
 
 /// What a request selects of a resource.
 #[derive(Clone, Debug, Default)]
@@ -136,6 +136,7 @@ pub(crate) struct Rules<'a> {
     pub enable_filter: bool,
     pub enable_sort: bool,
     pub loads: &'a LoadRestrictions,
+    pub names: &'a Names,
 }
 
 /// An RPC action's `allowed_loads` or `denied_loads`, as paths of field names.
@@ -220,10 +221,10 @@ impl Selection {
         let mut selection = Selection::default();
         for item in items {
             match item {
-                Json::String(name) => selection.simple(resource, &snake(name), path, rules)?,
+                Json::String(name) => selection.simple(resource, &rules.names.field_named(resource, name), path, rules)?,
                 Json::Object(map) => {
                     for (name, spec) in map {
-                        selection.nested(resource, &snake(name), spec, path, rules)?;
+                        selection.nested(resource, &rules.names.field_named(resource, name), spec, path, rules)?;
                     }
                 }
                 other => return Err(Failure::invalid_field_format(path, other)),
@@ -361,7 +362,7 @@ impl Selection {
         let filter = match given("filter") {
             None => None,
             Some(filter) => {
-                let filter = filter_input(dest, &snake_keys(filter)).map_err(|e| failure(&e).under("filter"))?;
+                let filter = filter_input(dest, &rules.names.filter(dest, filter)).map_err(|e| failure(&e).under("filter"))?;
                 Some(ash_core::guard_input_filter(dest, rules.actor, filter).map_err(|e| failure(&e))?)
             }
         };
@@ -369,7 +370,7 @@ impl Selection {
             None => Vec::new(),
             Some(sort) => {
                 let text = sort_text(sort);
-                let sort = sort_input(dest, &snake_sort(&text)).map_err(|e| failure(&e).under("sort"))?;
+                let sort = sort_input(dest, &rules.names.sort(dest, &text)).map_err(|e| failure(&e).under("sort"))?;
                 ash_core::guard_input_sort(dest, rules.actor, sort).map_err(|e| failure(&e))?
             }
         };
