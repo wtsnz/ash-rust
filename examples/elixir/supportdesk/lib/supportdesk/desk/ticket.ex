@@ -271,6 +271,7 @@ defmodule Supportdesk.Desk.Ticket do
       update :view_ticket, :view
       update :edit_ticket, :edit
       destroy :destroy_ticket, :destroy
+      action :route_ticket, :route
     end
 
     subscriptions do

@@ -175,7 +175,7 @@ pub fn graphql_value_to_ash_value(val: &GqlValue) -> AshValue {
             if let Some(i) = n.as_i64() {
                 AshValue::Int(i)
             } else if let Some(f) = n.as_f64() {
-                AshValue::Int(f.round() as i64)
+                AshValue::Float(f)
             } else {
                 AshValue::Null
             }
@@ -279,6 +279,17 @@ pub fn parse_input_value(value: &GqlValue, ty: AttrType) -> Result<AshValue, asy
                 Ok(AshValue::String(name.to_string()))
             }
         }
-        _ => Ok(AshValue::Null),
+        // A map is JSON, its keys as the client sent them.
+        AttrType::Map => Ok(graphql_value_to_ash_value(value)),
+        // A list, each item as its type takes it.
+        AttrType::Array { of } => match value {
+            GqlValue::List(items) => items
+                .iter()
+                .map(|item| if matches!(item, GqlValue::Null) { Ok(AshValue::Null) } else { parse_input_value(item, *of) })
+                .collect::<Result<Vec<_>, _>>()
+                .map(AshValue::Array),
+            // A single item stands for a list of it, as GraphQL coerces one.
+            item => Ok(AshValue::Array(vec![parse_input_value(item, *of)?])),
+        },
     }
 }

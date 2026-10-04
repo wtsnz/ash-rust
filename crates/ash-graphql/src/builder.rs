@@ -1,9 +1,12 @@
-use ash_core::{ActionKind, Context, DataLayer, DomainDef, ResourceDef};
+use std::any::Any;
+
+use ash_core::{ActionKind, Context, DataLayer, DomainDef, Resource, ResourceDef, TransactionSupport};
 use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 
 use crate::error::register_user_error;
 use crate::filter::register_resource_filter_inputs;
+use crate::generic::GenericAction;
 use crate::mutation::{
     build_action_mutation, register_action_input, register_action_payload,
 };
@@ -18,6 +21,9 @@ pub struct AshGraphQLBuilder {
     pub(crate) resources: Vec<&'static ResourceDef>,
     pub(crate) pubsub: Option<PubSub>,
     pub(crate) dataloader_enabled: bool,
+    /// Generic actions served, each a `GenericAction<D>` for the data layer the schema
+    /// is finished for.
+    generic: Vec<Box<dyn Any + Send + Sync>>,
 }
 
 impl AshGraphQLBuilder {
@@ -27,6 +33,7 @@ impl AshGraphQLBuilder {
             resources: domain.resources.to_vec(),
             pubsub: None,
             dataloader_enabled: false,
+            generic: Vec::new(),
         }
     }
 
@@ -36,6 +43,7 @@ impl AshGraphQLBuilder {
             resources: resources.to_vec(),
             pubsub: None,
             dataloader_enabled: false,
+            generic: Vec::new(),
         }
     }
 
@@ -58,6 +66,23 @@ impl AshGraphQLBuilder {
         self
     }
 
+    /// Serves `R`'s generic action `action` as the query `name`, as AshGraphql's
+    /// `action :name, :action` in `queries`: taking the action's arguments, answering
+    /// what it returns (or `true`). It runs as its own `run` does, over the data layer
+    /// `D` the schema is finished for.
+    pub fn query_action<R: Resource, D: TransactionSupport + Clone + 'static>(mut self, name: &str, action: &str) -> Self {
+        self.generic.push(Box::new(GenericAction::<D>::of::<R>(name, action, false)));
+        self
+    }
+
+    /// Serves `R`'s generic action `action` as the mutation `name`, as AshGraphql's
+    /// `action :name, :action` in `mutations`: taking the action's arguments as its
+    /// `input`.
+    pub fn mutation_action<R: Resource, D: TransactionSupport + Clone + 'static>(mut self, name: &str, action: &str) -> Self {
+        self.generic.push(Box::new(GenericAction::<D>::of::<R>(name, action, true)));
+        self
+    }
+
     /// Builds the dynamic GraphQL schema for the specified data layer context type `D`.
     pub fn finish<D: DataLayer + Clone + 'static>(self) -> Result<Schema, SchemaError> {
         self.finish_internal::<D>(None)
@@ -75,6 +100,15 @@ impl AshGraphQLBuilder {
         self,
         default_ctx: Option<Context<D>>,
     ) -> Result<Schema, SchemaError> {
+        let generic = self
+            .generic
+            .into_iter()
+            .map(|action| {
+                action.downcast::<GenericAction<D>>().map(|action| *action).map_err(|_| {
+                    SchemaError("a generic action was registered for another data layer than the schema's".into())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         // Absinthe's root type names, as AshGraphql's schemas have them.
         let mut query = Object::new(ROOT_QUERY);
         // The pages each resource's queries return.
@@ -93,6 +127,16 @@ impl AshGraphQLBuilder {
 
         let mut mutation = Object::new(ROOT_MUTATION);
         let mut has_mutations = false;
+        let mut generic_inputs = Vec::new();
+        for action in generic {
+            generic_inputs.extend(action.input_object());
+            if action.mutation {
+                has_mutations = true;
+                mutation = mutation.field(action.field());
+            } else {
+                query = query.field(action.field());
+            }
+        }
         for res in &self.resources {
             for action in res.actions {
                 if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
@@ -118,6 +162,10 @@ impl AshGraphQLBuilder {
             has_subscriptions.then_some(ROOT_SUBSCRIPTION),
         );
         builder = register_user_error(builder);
+        builder = builder.extension(crate::error::ErrorPaths);
+        for input in generic_inputs {
+            builder = builder.register(input);
+        }
         builder = register_sort_order(builder);
 
         // Every reachable resource: those given, and the destinations of their relationships.

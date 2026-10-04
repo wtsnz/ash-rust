@@ -9,6 +9,7 @@ use async_graphql::dynamic::*;
 use uuid::Uuid;
 
 use crate::error::{MUTATION_ERROR, UserError};
+use crate::managed::managed_inputs;
 use crate::names::{camel, pascal};
 use crate::types::{attr_type_to_type_ref, parse_input_val};
 
@@ -100,9 +101,10 @@ pub fn register_action_payload(
     )
 }
 
-/// Registers `<Mutation>Input`, if the action takes any input.
+/// Registers `<Mutation>Input`, if the action takes any input, and the input objects of
+/// the relationships it manages.
 pub fn register_action_input(
-    builder: SchemaBuilder,
+    mut builder: SchemaBuilder,
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> SchemaBuilder {
@@ -110,12 +112,17 @@ pub fn register_action_input(
     if fields.is_empty() {
         return builder;
     }
+    let managed = managed_inputs(resource, action);
     let mut input = InputObject::new(mutation_input_name(action.name, resource.name));
     for (name, ty, required) in fields {
-        input = input.field(InputValue::new(
-            camel(name),
-            attr_type_to_type_ref(resource.name, name, ty, !required),
-        ));
+        let type_ref = match managed.iter().find(|(argument, _)| *argument == name) {
+            Some((_, managed)) => managed.type_ref(!required),
+            None => attr_type_to_type_ref(resource.name, name, ty, !required),
+        };
+        input = input.field(InputValue::new(camel(name), type_ref));
+    }
+    for (_, managed) in &managed {
+        builder = managed.register(builder, resource);
     }
     builder.register(input)
 }
@@ -153,6 +160,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 let mut version = None;
                 if let Some(given) = ctx.args.get("input").filter(|value| !value.is_null()) {
                     let given = given.object()?;
+                    let managed = managed_inputs(resource, action);
                     for (name, ty, _) in input_fields(action, resource) {
                         let Some(value) = given.get(&camel(name)) else {
                             continue;
@@ -164,7 +172,11 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                             version = value.i64().ok();
                             continue;
                         }
-                        let value = if value.is_null() { Value::Null } else { parse_input_val(&value, ty)? };
+                        let value = match managed.iter().find(|(argument, _)| *argument == name) {
+                            Some((_, managed)) => managed.parse(value.as_value())?,
+                            None if value.is_null() => Value::Null,
+                            None => parse_input_val(&value, ty)?,
+                        };
                         input.insert(name.to_string(), value);
                     }
                 }

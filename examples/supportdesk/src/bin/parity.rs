@@ -478,6 +478,38 @@ async fn main() -> ExitCode {
         report.check(&short(&body), &validated(&r), &validated(&e));
     }
 
+    println!("GraphQL generic actions and managed relationships:");
+    let route_m = "mutation R($input: RouteTicketInput!) { routeTicket(input: $input) }";
+    let route_input = json!({ "subject": "Printer on fire", "body": "Smoke", "priority": 3, "requesterEmail": "pat@example.com" });
+    // A new record's id is each desk's own.
+    let an_id = |mut v: Value| {
+        if v["data"]["routeTicket"].as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) {
+            v["data"]["routeTicket"] = json!("an id");
+        }
+        v
+    };
+    for (name, who, input) in [
+        ("routeTicket", &agent, route_input.clone()),
+        ("routeTicket as a viewer", &viewer, route_input.clone()),
+        ("routeTicket, invalid", &agent, json!({ "subject": "x", "body": "y", "priority": 9, "requesterEmail": "a@b.c" })),
+    ] {
+        let r = an_id(desks[0].graphql(who, route_m, json!({ "input": input.clone() })).await);
+        let e = an_id(desks[1].graphql(who, route_m, json!({ "input": input })).await);
+        let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
+        report.check(name, &r, &e);
+    }
+    let open_m = "mutation O($input: OpenTicketInput!) { openTicket(input: $input) { result { subject commentCount comments(sort: [{ field: BODY }]) { body internal } } errors { code fields } } }";
+    for (name, comments) in [
+        ("openTicket, its comments managed", json!([{ "body": "Called it in" }, { "body": "Escalate", "internal": true }])),
+        ("openTicket, a managed comment invalid", json!([{ "internal": true }])),
+    ] {
+        let input = json!({ "subject": "Hello there", "body": "b", "priority": 2, "requesterEmail": "a@b.c", "comments": comments });
+        let r = desks[0].graphql(&agent, open_m, json!({ "input": input.clone() })).await;
+        let e = desks[1].graphql(&agent, open_m, json!({ "input": input })).await;
+        let (r, e) = (comparable(&r, &mut report.forbidden), comparable(&e, &mut report.forbidden));
+        report.check(name, &r, &e);
+    }
+
     println!("Subscriptions:");
     let mut heard = Vec::new();
     for desk in &desks {

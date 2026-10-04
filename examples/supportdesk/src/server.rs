@@ -65,6 +65,7 @@ pub fn router<D: TransactionSupport + 'static>(
     let schema = AshGraphQL::builder(&DESK_DEF)
         .with_pubsub(pubsub)
         .with_dataloader()
+        .mutation_action::<Ticket, D>("route_ticket", "route")
         .finish_with_context(base.clone())?;
     let graphql = ash_graphql::axum::graphql_router_with(
         schema,
