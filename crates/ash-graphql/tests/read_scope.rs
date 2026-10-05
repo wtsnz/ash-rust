@@ -169,12 +169,15 @@ async fn relationships_load_as_the_request_reads() {
     let clerk = h.acme.with_actor(role("clerk"));
     assert_eq!(h.as_(&clerk, DOCKS).await["listDocks"]["results"][0]["notes"], Value::Null);
 
-    // Without an actor the dock's read policy hides it, through a berth too.
+    // Without an actor the dock's read policy forbids the read, through a berth too: Ash
+    // answers a relationship load its destination's policies forbid with `forbidden`.
     let berths = "{ listBerths { results { code dock { name } } } }";
+    let response = h.schema.execute(Request::new(berths).data(h.acme.clone())).await;
     assert_eq!(
-        h.as_(&h.acme, berths).await["listBerths"]["results"],
-        json!([{ "code": "A", "dock": null }])
+        response.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(),
+        ["forbidden"]
     );
+    assert_eq!(h.as_(&h.acme.with_actor(role("clerk")), berths).await["listBerths"]["results"][0]["dock"]["name"], "North");
 
     // Another tenant's berth can't reach acme's dock.
     let globex = h.globex.with_actor(role("harbourmaster"));

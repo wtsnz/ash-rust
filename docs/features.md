@@ -768,6 +768,11 @@ policies {
 
 Applicable across both resource policies and `field_policies` for fine-grained column redaction and field write controls.
 
+### Forbidden reads and filtered reads
+As in Ash, a read's policies are settled in two steps. What depends on the actor alone is decided before any record is looked at: `actor_present`, `actor_attribute_equals`, and `relates_to_actor` or `authorize_if` over an actor that isn't there are false when they can't hold, and a `forbid_if` that holds forbids. If no policy then lets the reader read, the read is `Forbidden`, not an empty list. What depends on the record (`relates_to_actor(owner_id)` for an actor, `is_nil(field)`) becomes a filter, and the reader finds the rows it holds for.
+
+So a read with no actor, against policies that all ask for one, is `Forbidden`; so is a banned author's read above. A customer reading someone else's tickets finds none. The same holds for a typed read, a GraphQL query, a `get` by id, and a relationship load, which fails the read that asked for it (`forbidden` at the relationship's path) where its destination forbids the reader. Aggregates and relationship filters, which Ash authorizes by narrowing, count and find none. A tenant the resource needs is asked for first: an anonymous read with no tenant is `TenantRequired`.
+
 ---
 
 ## 13. Changeset Lifecycle Hooks (`before_action`, `after_action`, `after_transaction`)

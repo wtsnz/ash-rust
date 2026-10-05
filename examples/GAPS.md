@@ -10,7 +10,7 @@ keep their own list in [`supportdesk/GAPS.md`](supportdesk/GAPS.md).
 
 | # | Gap | What the twins do meanwhile | Status |
 |---|---|---|---|
-| 1 | A read with no actor at all: ash-rust answers an empty list where Ash answers `Forbidden`, for a read policy that filters on the actor (`expr(opener_id == ^actor(:id))`). An actor whose `id` is nil reads an empty list in both. `Ash.can?({Ticket, :read}, nil)` is false. | the Elixir test asserts `Forbidden`; the Rust helpdesk has no test of an anonymous read | open: the helpdesk's `tests/helpdesk.rs` should pin whichever behaviour is chosen. Changing it changes every read policy |
+| 1 | A read with no actor at all: ash-rust answered an empty list where Ash answers `Forbidden`, for a read policy that filters on the actor (`expr(opener_id == ^actor(:id))`). Ash's `FilterCheck.strict_check(nil, ...)` is false for a check that references the actor, and a read no policy lets the actor make is `Forbidden`. The same went for an actor whose attributes no `authorize_if` accepts, a `forbid_if` that holds for the actor, `get` by id, and a relationship load whose destination forbids the reader (Ash fails the whole read, with `forbidden` at the relationship's path). | the Elixir test asserts `Forbidden` | fixed: `compile_read_filter` answers `Forbidden` when the policies settle to false before any record is looked at; the tenant a resource needs is still asked for first, as Ash asks. Aggregates and relationship filters still narrow to none, as Ash's do |
 | 2 | ash-rust's text filters take `like` and `ilike` on any data layer. AshGraphql serves them only where the data layer defines the functions (AshPostgres does, ETS doesn't). | `astro-helpdesk/tests/schema_parity.rs` treats them as a widening, as it does a state machine's text operators | open: harmless to a client of AshGraphql's |
 | 3 | A calculation used only in a filter isn't loaded onto the records in ash-rust, on any data layer. ETS evaluates it onto them; AshSqlite filters in SQL and doesn't. | the Elixir test doesn't assert either way | none needed: Ash's two data layers differ among themselves |
 
@@ -48,15 +48,14 @@ Behaviours of the Elixir packages the comparison works around. ash-rust doesn't 
 ## The benchmark that wasn't like for like
 
 `benches/ash_elixir_bench.exs`, which the published Rust-versus-Elixir core figures come from,
-models a `Ticket` with no policies, while the Rust helpdesk's actions run through its policies
-(an actor, a read filter). `elixir/helpdesk/bench/core.exs` runs the same workloads on the
-full desk. On an Apple M4 Max (Elixir 1.20.1 / OTP 29, ETS), one run of each:
+modelled a `Ticket` with no policies, while the Rust helpdesk's actions run through its policies
+(an actor, a read filter). On the full desk (`elixir/helpdesk/bench/core.exs`, ETS) Elixir took
+35.1 µs for `Ticket.open` and 366.6 µs for the filtered read, against the published 26.6 µs and
+208.6 µs. The script now carries the desk's policies, and the published core figures are
+re-measured with it (`docs/benchmarks.md`, `benches/README.md`): the speedups are 8.1x, 7.4x
+and 8.0x, where they were 8.2x, 9.6x and 6.4x.
 
-| Workload | Without policies (`benches/`) | With the desk's policies |
-|---|---|---|
-| `Ticket.open` | 26.6 µs | 35.1 µs |
-| `Ticket.read` (100 records, filter) | 208.6 µs | 366.6 µs |
-| `Representative.create` | 23.7 µs | 24.8 µs |
-
-The published speedups (8.2x, 6.4x) compare Rust with policies to Elixir without. The
-published figures are unchanged until they're re-run on a quiet machine.
+The Rust Criterion `load_aggregates` benchmark counted nothing: it read as no one, whose read
+policy leaves no tickets, and assigned its tickets to a representative who didn't exist. It
+counts Bob's twenty tickets as the customer who opened them now, asserts it does, and runs at
+26.1 µs where ~3 µs was published; Elixir takes 476 µs for the same query.

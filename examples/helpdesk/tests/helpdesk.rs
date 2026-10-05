@@ -161,6 +161,24 @@ async fn open_without_actor_is_forbidden() {
 }
 
 #[tokio::test]
+async fn read_without_an_actor_is_forbidden() {
+    let ctx = ctx();
+    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
+
+    // Every read policy asks for an actor, so none can let an anonymous reader read, and
+    // the read is forbidden, as Ash forbids it, not answered with no rows.
+    let err = Ticket::query(&ctx).load().await.unwrap_err();
+    assert!(matches!(err, Error::Forbidden));
+    let err = Ticket::get(&ctx, ticket.id).await.unwrap_err();
+    assert!(matches!(err, Error::Forbidden));
+
+    // A reader the policies let in finds only the rows they hold.
+    let as_other = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    assert!(Ticket::query(&as_other).load().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn user_filter_and_policy_filter_combine() {
     let ctx = ctx();
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));

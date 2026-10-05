@@ -15,7 +15,7 @@ Modeled with the `Helpdesk` bounded context via `domain!`:
   - Policies:
     - Customers can only read and close their own opened tickets.
     - Representatives can view unassigned tickets and assigned tickets, and close assigned tickets.
-    - Missing or unauthorized actors are blocked at query time via compiled read filters.
+    - A read no policy lets the reader make (no actor at all) is `Forbidden`, as in Ash; one that depends on the row (another customer's ticket) is filtered away at query time via compiled read filters.
   - Calculations: `subject_length` computed dynamically or inlined into SQL.
   - Relationships: `belongs_to representative: Representative`.
 - **`Representative` Resource**:

@@ -60,6 +60,9 @@ pub fn scope_read(
         }
     }
     filters.extend(query.filter.take());
+    // A tenant a resource needs is asked for before its policies are, as Ash asks: an
+    // anonymous read with no tenant is `TenantRequired`, not `Forbidden`.
+    apply_tenant_scope(resource, None, query.tenant.clone())?;
     filters.extend(compile_read_filter(resource, action, actor)?);
     let filter = match Filter::and(filters) {
         Filter::True => None,

@@ -47,6 +47,13 @@ async fn graphql(router: &axum::Router, token: Option<&str>, query: &str) -> Val
     body["data"].clone()
 }
 
+/// The errors a request answers, as text, for a request that's meant to fail.
+async fn graphql_errors(router: &axum::Router, token: Option<&str>, query: &str) -> String {
+    let (_, body) = call(router, "/graphql", token, json!({ "query": query })).await;
+    assert!(!body["errors"].is_null(), "expected errors: {body}");
+    body["errors"].to_string()
+}
+
 fn names(list: &Value, field: &str) -> Vec<String> {
     let mut names: Vec<String> = list.as_array().unwrap().iter().map(|item| item[field].as_str().unwrap().to_string()).collect();
     names.sort();
@@ -77,7 +84,14 @@ async fn http_api<D: FleetDb>(h: Harness<D>) {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     // Relationships load as the request reads, batched per request: the map is public
-    // but its berths are for crew, and a ship's captain is crew of its line.
+    // but its berths are for crew, so a request for them without a token is forbidden, as
+    // Ash forbids a relationship load its destination's policies refuse; and a ship's
+    // captain is crew of its line.
+    let anonymous_berths = graphql_errors(&router, None, "{ listPorts { code berths { code } } }").await;
+    assert!(anonymous_berths.contains("forbidden"), "{anonymous_berths}");
+    let map = graphql(&router, None, "{ listPorts { code planet { name } } }").await;
+    let leo = map["listPorts"].as_array().unwrap().iter().find(|port| port["code"] == "LEO").unwrap().clone();
+    assert_eq!(leo["planet"]["name"], "Earth");
     let leo_berths = |token: Option<String>| {
         let router = router.clone();
         async move {
@@ -87,7 +101,6 @@ async fn http_api<D: FleetDb>(h: Harness<D>) {
             leo["berths"].as_array().unwrap().len()
         }
     };
-    assert_eq!(leo_berths(None).await, 0);
     assert_eq!(leo_berths(Some(ada.clone())).await, 4);
     let crewed = graphql(&router, Some(&ada), "{ listShips { name captain { name } } }").await;
     let mut captains: Vec<(String, Value)> = crewed["listShips"]

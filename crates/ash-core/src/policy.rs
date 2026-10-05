@@ -94,6 +94,15 @@ pub enum Check {
     Or(&'static [Check]),
 }
 
+/// The filter `actor`'s read of `resource` through `action` must hold, or none.
+///
+/// Policies that settle against the actor alone, before any record is looked at, are decided
+/// as Ash decides them: a read that no policy lets this actor make is `Forbidden`, not an
+/// empty list. A check that reads the actor (`actor_present`, `relates_to(field)`,
+/// `actor_eq(..)`) is false when there's no actor, so an anonymous read of a resource whose
+/// policies all ask for one is `Forbidden`; and so is a read by an actor whose attributes
+/// match no `authorize_if`. What depends on the record (`relates_to(field)` for an actor,
+/// `is_nil(field)`) is left to the filter, which keeps the rows it holds for.
 pub fn compile_read_filter(
     resource: &ResourceDef,
     action: &ActionDef,
@@ -128,7 +137,7 @@ pub fn compile_read_filter(
         if bypass_filters.is_empty() {
             return Err(Error::Forbidden);
         }
-        return Ok(Some(Filter::or(bypass_filters)));
+        return forbid_if_false(Filter::or(bypass_filters));
     }
 
     let mut parts = Vec::new();
@@ -138,10 +147,19 @@ pub fn compile_read_filter(
     let normal_filter = Filter::and(parts);
 
     if bypass_filters.is_empty() {
-        Ok(Some(normal_filter))
+        forbid_if_false(normal_filter)
     } else {
         let combined_bypass = Filter::or(bypass_filters);
-        Ok(Some(Filter::or([combined_bypass, normal_filter])))
+        forbid_if_false(Filter::or([combined_bypass, normal_filter]))
+    }
+}
+
+/// A filter that holds for no record, whatever the records are, is a read that policies
+/// forbid: Ash's static `forbidden`.
+fn forbid_if_false(filter: Filter) -> Result<Option<Filter>> {
+    match filter {
+        Filter::False => Err(Error::Forbidden),
+        filter => Ok(Some(filter)),
     }
 }
 
@@ -590,11 +608,17 @@ mod tests {
     }
 
     #[test]
-    fn missing_actor_matches_nothing_on_relates_to_actor() {
-        let filter = compile_read_filter(&THING, &THING.actions[0], None)
-            .unwrap()
-            .unwrap();
-        assert!(!filter.matches(&fields! { "owner_id" => Uuid::new_v4() }));
+    fn missing_actor_is_forbidden_where_a_policy_relates_to_actor() {
+        let err = compile_read_filter(&THING, &THING.actions[0], None).unwrap_err();
+        assert!(matches!(err, Error::Forbidden));
+    }
+
+    #[test]
+    fn an_actor_no_policy_lets_read_is_forbidden() {
+        // QUEUE lets only a representative read; a customer settles to false before any row.
+        let customer = Actor::new(Uuid::new_v4()).with("role", "customer");
+        let err = compile_read_filter(&QUEUE, &QUEUE.actions[0], Some(&customer)).unwrap_err();
+        assert!(matches!(err, Error::Forbidden));
     }
 
     #[test]
@@ -607,12 +631,9 @@ mod tests {
         let as_rep = compile_read_filter(&QUEUE, &QUEUE.actions[0], Some(&rep))
             .unwrap()
             .unwrap();
-        let as_customer = compile_read_filter(&QUEUE, &QUEUE.actions[0], Some(&customer))
-            .unwrap()
-            .unwrap();
 
         assert!(as_rep.matches(&unassigned));
         assert!(!as_rep.matches(&assigned));
-        assert!(!as_customer.matches(&unassigned));
+        assert!(compile_read_filter(&QUEUE, &QUEUE.actions[0], Some(&customer)).is_err());
     }
 }

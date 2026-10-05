@@ -139,12 +139,10 @@ async fn test_forbid_if_blocks_even_author() {
     let banned_author = Actor::new(author_id).with_attr("status", "banned");
     let banned_ctx = ctx.with_actor(banned_author);
 
-    let banned_docs = Document::query(&banned_ctx).all().await.unwrap();
-    assert_eq!(
-        banned_docs.len(),
-        0,
-        "Banned author is forbidden from querying"
-    );
+    // The ban settles against the actor alone, so the read is forbidden outright, as Ash
+    // forbids a read its policies decide statically, not answered with no rows.
+    let banned_read = Document::query(&banned_ctx).all().await.unwrap_err();
+    assert!(matches!(banned_read, Error::Forbidden), "Banned author is forbidden from querying");
 
     let write_res = Document::update(&banned_ctx, doc.id)
         .title("Hacked Title")
