@@ -338,13 +338,6 @@ impl ResourceDef {
             .find_map(|ext| ext.as_any().downcast_ref::<T>())
     }
 
-    pub fn optimistic_lock_attribute(&self) -> Option<&'static str> {
-        self.attributes
-            .iter()
-            .find(|attribute| attribute.version)
-            .map(|attribute| attribute.name)
-    }
-
     pub fn relationship(&self, name: &str) -> Option<&RelationshipDef> {
         self.relationships
             .iter()
@@ -427,7 +420,6 @@ pub struct AttributeDef {
     pub primary_key: bool,
     pub allow_nil: bool,
     pub generated: bool,
-    pub version: bool,
     pub default_fn: Option<fn() -> crate::value::Value>,
 }
 
@@ -439,7 +431,6 @@ impl AttributeDef {
             primary_key: true,
             allow_nil: false,
             generated: true,
-            version: false,
             default_fn: None,
         }
     }
@@ -453,7 +444,6 @@ impl AttributeDef {
             primary_key: true,
             allow_nil: false,
             generated: true,
-            version: false,
             default_fn: None,
         }
     }
@@ -473,7 +463,6 @@ impl AttributeDef {
             primary_key: true,
             allow_nil: false,
             generated: false,
-            version: false,
             default_fn: None,
         }
     }
@@ -485,7 +474,6 @@ impl AttributeDef {
             primary_key: false,
             allow_nil: false,
             generated: false,
-            version: false,
             default_fn: None,
         }
     }
@@ -497,19 +485,6 @@ impl AttributeDef {
             primary_key: false,
             allow_nil: true,
             generated: false,
-            version: false,
-            default_fn: None,
-        }
-    }
-
-    pub const fn version(name: &'static str) -> Self {
-        Self {
-            name,
-            ty: AttrType::Integer,
-            primary_key: false,
-            allow_nil: false,
-            generated: false,
-            version: true,
             default_fn: None,
         }
     }
@@ -521,7 +496,6 @@ impl AttributeDef {
             primary_key: false,
             allow_nil: false,
             generated: true,
-            version: false,
             default_fn: None,
         }
     }
@@ -537,7 +511,6 @@ impl AttributeDef {
             primary_key: false,
             allow_nil: false,
             generated: false,
-            version: false,
             default_fn: Some(default_fn),
         }
     }

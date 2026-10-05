@@ -146,8 +146,8 @@ Webhooks (e.g. Stripe, GitHub) and concurrent ingestion require idempotent write
 ### 7. Optimistic Locking Race Conditions
 * **The Pitfall**: Two workers concurrently updating the same record. The second worker overwrites the first worker's modifications without realizing the state changed.
 * **Ash-Rust Handling**:
-  * If a resource defines an optimistic lock attribute (`version`), `UPDATE` appends `WHERE id = $id AND version = $expected_version`.
-  * If rows affected == 0, the driver verifies if the row was deleted (`Error::NotFound`) or modified by another worker (`Error::StaleRecord`).
+  * As in Ash, an action with `change optimistic_lock(version);` filters its write to the version the record was read at (`WHERE id = $id AND version = $read_version`) and adds one to it. Actions without it leave the version alone.
+  * If no row matches, the record was deleted (`Error::NotFound`) or changed by another worker (`Error::StaleRecord`). An update by id reads the record first, so a record changed between that read and the write is `Error::NotFound`, as AshGraphql answers it; in bulk, a stale record is left out, as Ash's bulk update leaves it.
 
 ### 8. Wildcards in Text Search Input
 * **The Pitfall**: Building `WHERE title LIKE '%' || $1 || '%'` from a search box. A user typing `50%` or `a_b` gets wildcard matches instead of the literal text, and SQLite's `LIKE` ignores ASCII case while Postgres's does not.
@@ -193,7 +193,7 @@ Every pattern and edge case is tested continuously in CI:
    - `crates/ash-sql/tests/compiler_tests.rs` (`test_keyset_cursor_compilation`).
    - `crates/ash-core/tests/pagination.rs` (`test_keyset_pagination_sqlite`).
 5. **Optimistic Locking & Stale Record Rejection**:
-   - `crates/ash-core/tests/optimistic_locking.rs` (`test_optimistic_locking_sqlite_increments_and_detects_conflict`).
+   - `crates/ash-core/tests/optimistic_locking.rs` (`optimistic_locks_in_memory`, `optimistic_locks_in_sqlite`).
    - `crates/ash-postgres/tests/postgres_tests.rs` (`test_postgres_optimistic_locking_stale_record`).
 6. **SQL 3-Valued Logic & Null Semantics**:
    - `crates/ash-core/tests/null_inequality.rs` (`test_null_inequality_identical_in_memory_and_sqlite`).

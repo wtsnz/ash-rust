@@ -229,7 +229,6 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
     let mut extensions = Vec::new();
     let mut notifiers = Vec::new();
     let mut extends = Vec::new();
-    let mut optimistic_lock = None;
     let mut identities = Vec::new();
     let mut indexes = Vec::new();
     let mut checks = Vec::new();
@@ -392,16 +391,12 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                     }
                 }
             } else if section_ident == "optimistic_lock" {
-                if input.peek(Token![:]) {
-                    let _ = input.parse::<Token![:]>();
-                }
-                match input.parse::<Ident>() {
-                    Ok(opt_ident) => optimistic_lock = Some(opt_ident),
-                    Err(e) => {
-                        errors.push(e);
-                        recover::skip_to_semi(input);
-                    }
-                }
+                // An optimistic lock is an action's, as in Ash.
+                errors.push(Error::new_spanned(
+                    &section_ident,
+                    "`optimistic_lock` is a change on the actions that lock, as in Ash: `change optimistic_lock(version);`",
+                ));
+                recover::skip_to_semi(input);
                 let _ = input.parse::<Token![;]>();
             } else if section_ident == "identities" {
                 if let Some(parsed) = parse_braced_with(input, errors, identities::parse_identities)
@@ -567,7 +562,6 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                 ident: c_ident,
                 ty: str_ty,
                 pk: false,
-                version: false,
                 generated: true,
                 atom: None,
                 is_enum: false,
@@ -583,7 +577,6 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
                 ident: u_ident,
                 ty: str_ty,
                 pk: false,
-                version: false,
                 generated: true,
                 atom: None,
                 is_enum: false,
@@ -607,7 +600,6 @@ fn parse_from_stream(input: ParseStream, errors: &mut Vec<Error>) -> ResourceDef
         extensions,
         notifiers,
         extends,
-        optimistic_lock,
         identities,
         indexes,
         checks,

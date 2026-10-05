@@ -628,6 +628,13 @@ pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> 
                 "expected `manage_relationship(rel)` or `manage_relationship(rel, type: create)`",
             ))
         }
+        "optimistic_lock" => {
+            if call.args.len() == 1 {
+                let field = expr_to_ident(&call.args[0])?;
+                return Ok(ChangeSpec::OptimisticLock { field });
+            }
+            Err(Error::new_spanned(call, "expected `optimistic_lock(field)`"))
+        }
         "atomic_update" => {
             if call.args.len() == 2 {
                 let field = expr_to_ident(&call.args[0])?;
@@ -682,6 +689,7 @@ pub fn parse_change(expr: &Expr, errors: &mut Vec<Error>) -> Result<ChangeSpec> 
                 "set_from_arg",
                 "manage_relationship",
                 "atomic_update",
+                "optimistic_lock",
                 "before_action",
                 "after_action",
                 "after_transaction",

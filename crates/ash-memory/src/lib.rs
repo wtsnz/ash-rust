@@ -177,25 +177,6 @@ impl DataLayer for Memory {
             let table = tables.get_mut(&table_key(resource, tenant)).ok_or(Error::NotFound)?;
             let mut current_row = table.get(&id).filter(|row| in_tenant(resource, tenant, row)).ok_or(Error::NotFound)?.clone();
 
-            if let Some(v_attr) = resource.optimistic_lock_attribute()
-                && let Some(Value::Int(new_v)) = fields.get(v_attr)
-            {
-                let expected_v = new_v - 1;
-                let actual_v = current_row
-                    .get(v_attr)
-                    .and_then(|v| match v {
-                        Value::Int(n) => Some(*n),
-                        _ => None,
-                    })
-                    .unwrap_or(1);
-                if actual_v != expected_v {
-                    return Err(Error::StaleRecord {
-                        resource: resource.name,
-                        id,
-                    });
-                }
-            }
-
             current_row.extend(fields);
             let before = table.get(&id).ok_or(Error::NotFound)?;
             check_identities(resource, table, &id, &current_row, Some(before))?;

@@ -35,7 +35,7 @@ is the org's slug, and reads, writes and identities are scoped to it.
 | `assign` | update | accepts `assignee_id` |
 | `start`, `hold`, `resolve`, `reopen`, `close` | update | the status machine: `new` → `open` → `pending`/`resolved` → `closed`, `resolved` → `open`; `reopen` also adds one to `reopen_count`, atomically |
 | `view` | update | adds one to `view_count`, atomically |
-| `edit` | update | accepts `subject`, `priority`, under the `version` optimistic lock |
+| `edit` | update | accepts `subject`, `priority`, under the `version` optimistic lock (as is every update) |
 | `route` | generic | in one transaction: opens a ticket with its comments, assigns it to the active agent or admin with the fewest open tickets (then by name), and records an `AuditEvent`; returns the ticket's id |
 | `destroy` | destroy | primary |
 
@@ -174,3 +174,37 @@ nothing else. It needs Node 22.18 or later and `psql`, and nothing to install.
 Postgres, both desks and the driver share one machine, so the figures compare the desks
 with each other rather than measure capacity. [GAPS.md](GAPS.md) notes where a scenario
 steps around a difference between the desks.
+
+### Latest results
+
+A full run on 2026-10-04: ash-rust against Ash (Elixir), on an
+Apple M4 Max (16 cores) with PostgreSQL 16.15. Parity (115 checks) and the smoke test (7)
+matched first. Reads ran 3 reps of 5 s per desk, writes 2 reps per desk, each figure the
+median over reps. **Ratio** is how many times better ash-rust does: throughput for
+reads, p50 latency for writes.
+
+| Scenario | Over | Rust | Elixir | Ratio | Rust p50 / p99 ms | Elixir p50 / p99 ms | Server CPU s per 1k ops (Rust / Elixir) |
+|---|---|---:|---:|---:|---|---|---|
+| inbox | rpc | 7322/s | 4194/s | 1.75× | 1.89 / 6.76 | 3.49 / 9.98 | 0.34 / 1.47 |
+| inbox | graphql | 6950/s | 3617/s | 1.92× | 2.15 / 5.46 | 4.26 / 9.42 | 0.56 / 2.03 |
+| dashboard | rpc | 4054/s | 2132/s | 1.90× | 3.73 / 8.02 | 6.5 / 19.05 | 0.26 / 1.94 |
+| dashboard | graphql | 3976/s | 2589/s | 1.54× | 3.83 / 8.08 | 5.95 / 11.2 | 0.36 / 2.5 |
+| detail | rpc | 8300/s | 3356/s | 2.47× | 1.82 / 4 | 3.67 / 18.97 | 0.23 / 1.61 |
+| detail | graphql | 4721/s | 2006/s | 2.35× | 2.85 / 10.76 | 6.89 / 23.26 | 0.39 / 2.83 |
+| workflow | rpc | 10.91 ms | 19.38 ms | 1.78× | 10.91 / - | 19.38 / - | 0.75 / 7.3 |
+| workflow | graphql | 14.08 ms | 18.14 ms | 1.29× | 14.08 / - | 18.14 / - | 1.1 / 8.4 |
+| route | rpc | 6.47 ms | 12.41 ms | 1.92× | 6.47 / - | 12.41 / - | 0.65 / 5.25 |
+| route | graphql | 9.52 ms | 12.92 ms | 1.36× *within noise* | 9.52 / - | 12.92 / - | 0.65 / 5.3 |
+| counters | rpc | 4.03 ms | 6.2 ms | 1.54× | 4.03 / - | 6.2 / - | 0.31 / 2.34 |
+| counters | graphql | 4.51 ms | 6.07 ms | 1.35× | 4.51 / - | 6.07 / - | 0.34 / 2.32 |
+| edit races | json | 6.35 ms | 9.23 ms | 1.45× | 6.35 / - | 9.23 / - | 0.7 / 6.1 |
+| bulk | json | 66.63 ms | 74.65 ms | 1.12× *within noise* | 66.63 / - | 74.65 / - | 6.5 / 25 |
+| events | graphql | 5.38 ms | 8.54 ms | 1.59× | 5.38 / - | 8.54 / - | - |
+
+Every check held: each acknowledged view counted, exactly one edit of each race won, and
+every update delivered once to every subscriber. The only failures were expected ones:
+`counters` views that lost a race under the ticket's optimistic lock, answered
+`not_found` (19 on the Rust desk, 9 on the Elixir desk, across both transports and
+reps), and one `events` request on the Elixir desk. No request was sent late or left
+unanswered. `detail` over GraphQL varied most between reps on both desks (Rust 7476 to
+about 4700/s, Elixir about 2000 to 1212/s), so read that row as the noisiest.

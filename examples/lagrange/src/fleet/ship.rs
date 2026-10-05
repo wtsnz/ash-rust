@@ -36,7 +36,7 @@ resource! {
             dry_mass_tonnes: i64;
             slot_capacity: i64;
             captain_id: Option<Uuid>;
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         identities {
@@ -93,16 +93,17 @@ resource! {
             }
 
             update assign_captain {
+                change optimistic_lock(version);
                 accept [captain_id];
             }
 
             // Each transition checks the stored status. SQLite can't raise that from within
             // an update statement, as AshSqlite can't, so there these read the record first;
             // elsewhere they still run as one statement.
-            update depart { require_atomic false; }
-            update arrive { require_atomic false; }
-            update begin_maintenance { require_atomic false; }
-            update end_maintenance { require_atomic false; }
+            update depart { change optimistic_lock(version); require_atomic false; }
+            update arrive { change optimistic_lock(version); require_atomic false; }
+            update begin_maintenance { change optimistic_lock(version); require_atomic false; }
+            update end_maintenance { change optimistic_lock(version); require_atomic false; }
 
             destroy decommission {
                 primary;

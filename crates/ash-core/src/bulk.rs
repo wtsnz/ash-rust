@@ -367,6 +367,9 @@ async fn finish_rows<D: DataLayer>(
             Err(err) => Err(err),
         };
         match outcome {
+            // A record changed since it was read is left out, as Ash's bulk actions leave
+            // a stale record out; it doesn't undo the batch.
+            Err(Error::StaleRecord { .. }) => outcomes.push(outcome),
             Err(err) if transactional => return Err(err),
             outcome => outcomes.push(outcome),
         }
@@ -409,6 +412,7 @@ fn settle<R: Resource>(
                 }
                 result.count += 1;
             }
+            Err(Error::StaleRecord { .. }) => {}
             Err(err) => result.fail(err, scope.stop_on_error)?,
         }
     }
@@ -560,6 +564,18 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                     let mut outcomes = Vec::with_capacity(batch.len());
                     for row in batch {
                         let id = crate::value::required_pk(&row, pk)?;
+                        // A record changed since it was read is left out before anything
+                        // runs for it, as Ash's filter leaves a stale record out.
+                        if let Some(lock) = crate::engine::lock_of(action_def, &row)
+                            && let Err(err) = crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
+                        {
+                            match err {
+                                Error::StaleRecord { .. } => outcomes.push(Err(err)),
+                                err if scope.transactional() => return Err(err),
+                                err => outcomes.push(Err(err)),
+                            }
+                            continue;
+                        }
                         let destroyed = crate::engine::destroy_dynamic_with(
                             &ctx, &R::DEF, action_def, id, &row, &cascade,
                         )
@@ -615,6 +631,17 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                 let mut existing = Vec::with_capacity(batch.len());
                 let mut ids = Vec::with_capacity(batch.len());
                 for (id, fields) in parents {
+                    // A stale record is left out before its related records go.
+                    if let Some(lock) = crate::engine::lock_of(action_def, &fields)
+                        && let Err(err) = crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
+                    {
+                        match err {
+                            Error::StaleRecord { .. } => existing.push(Err(err)),
+                            err if scope.transactional() => return Err(err),
+                            err => existing.push(Err(err)),
+                        }
+                        continue;
+                    }
                     match crate::engine::handle_cascading_deletes(&ctx, &R::DEF, id.clone(), &fields).await {
                         Ok(()) => {
                             ids.push(id);
@@ -624,7 +651,24 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         Err(err) => existing.push(Err(err)),
                     }
                 }
-                ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?;
+                if action_def.has_optimistic_lock() {
+                    // Each record as it was read, under the action's lock.
+                    let cascades = crate::engine::cascades(&R::DEF, action_def);
+                    for row in existing.iter_mut() {
+                        let Ok(fields) = row else { continue };
+                        let id = crate::pipeline::pk_name(&R::DEF).and_then(|pk| crate::value::required_pk(fields, pk))?;
+                        let lock = crate::engine::lock_of(action_def, fields);
+                        match crate::engine::destroy_guarded(&ctx, &R::DEF, id, lock.as_ref()).await {
+                            Ok(()) => {}
+                            // Changed after its lock was checked and its related records
+                            // went: those must come back, so the batch fails.
+                            Err(err) if cascades && scope.transactional() => return Err(err),
+                            Err(err) => *row = Err(err),
+                        }
+                    }
+                } else {
+                    ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?;
+                }
                 finish_rows(&ctx, batch, existing, notify, scope.transactional()).await
             })
             .await;
@@ -695,14 +739,25 @@ where
         while rows.peek().is_some() {
             let (mut batch, hooks) = split(rows.by_ref().take(chunk_size).collect());
             let outcomes = in_batch(&ctx, scope, move |ctx| async move {
-                let writes = batch
+                let writes: Vec<(Value, FieldMap)> = batch
                     .iter_mut()
                     .map(|(id, changeset)| {
                         let fields = changeset.take_fields();
                         (id.clone(), changeset.changes(fields))
                     })
                     .collect();
-                let stored = ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?;
+                let stored = if action_def.has_optimistic_lock() {
+                    // Each record as it was read, under the action's lock.
+                    let locks: Vec<_> =
+                        batch.iter().map(|(_, changeset)| changeset.existing().and_then(|existing| crate::engine::lock_of(action_def, existing))).collect();
+                    let mut stored = Vec::with_capacity(writes.len());
+                    for ((id, changes), lock) in writes.into_iter().zip(locks) {
+                        stored.push(crate::engine::update_guarded(&ctx, &R::DEF, id, changes, lock).await);
+                    }
+                    stored
+                } else {
+                    ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?
+                };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await
             })
             .await;

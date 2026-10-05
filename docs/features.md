@@ -100,7 +100,8 @@ match err {
 
 ## 3. Optimistic Locking
 
-Prevents concurrent updates from overwriting each other by tagging an integer attribute with `[version]`:
+As in Ash's `optimistic_lock(:version)` change, an action that locks writes only if the record
+still holds the version it was read at, so a concurrent update can't be overwritten:
 
 ```rust
 resource! {
@@ -109,29 +110,39 @@ resource! {
 
         attributes {
             id: Uuid [pk];
+            holder: String;
             balance: i64;
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         actions {
-            create open { primary; accept [balance]; }
-            update deposit { accept [balance]; }
+            create open { primary; accept [holder, balance]; }
+            update deposit { change optimistic_lock(version); accept [balance]; }
+            update rename { accept [holder]; } // no lock: leaves the version alone
+            destroy close { change optimistic_lock(version); }
         }
     }
 }
 ```
 
 ### How it behaves:
-1. When created, `version` defaults to `1`.
-2. Every update increments the version attribute (`version + 1`).
-3. In SQL / DataLayers, the update applies an atomic check:
+1. The lock is the action's, not the attribute's: give the attribute a default, and add
+   `change optimistic_lock(version);` to each update or destroy that should lock.
+2. A locking update adds one to the version; actions without the lock leave it alone.
+3. The write is filtered to the version the record was read at:
    ```sql
-   UPDATE bank_accounts SET balance = ?, version = ? WHERE id = ? AND version = ?
+   UPDATE bank_accounts SET balance = ?, version = version + 1 WHERE id = ? AND version = ?
    ```
-4. If another process modified the row in the meantime, the update affects `0` rows and returns:
+4. If another process changed the record in the meantime, nothing matches and it returns:
    ```rust
    Error::StaleRecord { resource: "BankAccount", id: account.id }
    ```
+5. The lock guards the write however the action runs: as one statement, after a
+   `before_action` hook, as a (soft) destroy, and in bulk. An update or destroy by id
+   (`update_dynamic`, a GraphQL or RPC mutation) can't run over a query, so it reads the
+   record first and writes at the version it read, as Ash does; a record changed between
+   the two is `NotFound`, as AshGraphql answers it. In bulk, a stale record is left out
+   rather than failing the batch, as in Ash.
 
 ---
 
@@ -141,7 +152,7 @@ As in Ash, an update runs as one statement in the data layer rather than read, c
 memory and written back. Each part of the action says how it runs there:
 
 - **Changes** become values computed from the record as stored: `set`, `set_new`,
-  `set_from_arg`, `relate_actor`, the lock version (`version + 1`), and `updated_at`, which
+  `set_from_arg`, `relate_actor`, an optimistic lock's version (`version + 1`), and `updated_at`, which
   moves only when a value does. A custom change implements `CustomChange::atomic`, as an
   Ash change implements `atomic/3`; a state machine's transition sets the target state.
 - **Validations, write policies and transitions** become conditions checked in the same
@@ -165,10 +176,11 @@ RETURNING t.*
 The memory data layer runs it under its lock. SQLite, which can't raise an error from a
 statement, reads the record first, as AshSqlite does.
 
-An update by id (`update_dynamic`, and a GraphQL update mutation) needs no read at all;
-one of a record in hand (`update_existing`, or an instance action such as
-`cab.recall_on(&ctx)`) checks it hasn't changed
-since, failing with `StaleRecord` if it has.
+An update by id (`update_dynamic`, and a GraphQL update mutation) needs no read at all,
+unless its action has an optimistic lock, which needs the version the record was read at.
+One of a record in hand (`update_existing`, or an instance action such as
+`cab.recall_on(&ctx)`) with an optimistic lock checks the record hasn't changed since,
+failing with `StaleRecord` if it has.
 
 An update that needs the record in memory (a `before_action` hook, a change or validation
 function, managed relationships) can't run in the statement. As Ash's `require_atomic?`,

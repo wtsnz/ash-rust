@@ -471,28 +471,7 @@ impl DataLayer for Sqlite {
         let qb = sql::update_query(resource, tenant, id.clone(), &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
         if result.rows_affected() == 0 {
-            if resource.optimistic_lock_attribute().is_some() {
-                let pk = resource
-                    .primary_key()
-                    .ok_or(Error::NoPrimaryKey(resource.name))?;
-                let check_sql = format!(
-                    "SELECT 1 FROM \"{}\" WHERE \"{}\" = ?",
-                    resource.table_name(),
-                    pk.name
-                );
-                let check_compiled =
-                    CompiledSql::new(check_sql, vec![SqlParam::new(id.clone())]);
-                if self.fetch_all(&check_compiled).await?.is_empty() {
-                    return Err(Error::NotFound);
-                } else {
-                    return Err(Error::StaleRecord {
-                        resource: resource.name,
-                        id,
-                    });
-                }
-            } else {
-                return Err(Error::NotFound);
-            }
+            return Err(Error::NotFound);
         }
 
         let pk = resource
@@ -537,6 +516,22 @@ impl DataLayer for Sqlite {
 
     fn can_update_atomically(&self, _resource: &ResourceDef) -> bool {
         true
+    }
+
+    // A delete filtered as a query is one statement, as an update is, so an optimistic
+    // lock's guard holds as it deletes. Like an update, it checks no conditions.
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    async fn destroy_atomic(&self, resource: &ResourceDef, query: &CompiledQuery, conditions: &[ash_core::AtomicCondition]) -> Result<Vec<FieldMap>> {
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
+        if !conditions.is_empty() {
+            return Err(Error::Invalid(format!("SQLite can't check a destroy of {}'s conditions in its statement", resource.name)));
+        }
+        let compiled = QueryCompiler::new(&SqliteDialect).compile_atomic_destroy(resource, query, conditions)?;
+        let rows = self.fetch_all_resource(&compiled, resource).await?;
+        rows.iter().map(|row| sql::row_to_fields(row, resource, &[], &[])).collect()
     }
 
     /// SQLite can't raise an error from within a statement, as AshSqlite can't

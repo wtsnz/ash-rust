@@ -499,16 +499,6 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             ));
         }
     }
-
-    if let Some(lock) = &def.optimistic_lock
-        && def.attributes.iter().all(|a| a.ident != *lock) {
-            errors.push(slot_error(
-                lock,
-                "attribute",
-                &attr_names,
-                &names,
-            ));
-        }
 }
 
 fn lint_uncovered_actions(def: &ResourceDefinition, errors: &mut Vec<Error>) {
@@ -679,6 +669,21 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                         keep = false;
                     }
                     if keep {
+                        kept_changes.push(chg);
+                    }
+                }
+                ChangeSpec::OptimisticLock { field } => {
+                    let kind = action.kind;
+                    if def.attributes.iter().all(|a| a.ident != *field) {
+                        let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                        errors.push(slot_error(field, "attribute", &attr_names, &names));
+                    } else if !matches!(kind, crate::define::ast::ActionKind::Update | crate::define::ast::ActionKind::Destroy) {
+                        // As Ash's: it guards a write of a record that was read.
+                        errors.push(Error::new_spanned(
+                            field,
+                            "`optimistic_lock` is only valid on `update` and `destroy` actions",
+                        ));
+                    } else {
                         kept_changes.push(chg);
                     }
                 }
@@ -1309,22 +1314,6 @@ mod tests {
             msg.contains("duplicate identity `unique_email`"),
             "got: {msg}"
         );
-    }
-
-    #[test]
-    fn test_optimistic_lock_unknown_attribute_suggests_did_you_mean() {
-        let msg = validate_err_msg(quote! {
-            TestResource {
-            attributes {
-                id: Uuid [pk];
-                version: i64 [version];
-            }
-            optimistic_lock versoin;
-            actions {
-                read read { primary; }
-            }
-        }});
-        assert!(msg.contains("Did you mean `version`?"), "got: {msg}");
     }
 
     #[test]

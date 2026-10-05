@@ -26,13 +26,13 @@ pub mod ledger_mod {
             attributes {
                 id: Uuid [pk];
                 name: String;
-                version: i64 [version];
+                version: i64 [default: 1];
             }
 
             actions {
                 create create { primary; accept [name]; }
                 read read { primary; }
-                destroy destroy { primary; }
+                destroy destroy { primary; change optimistic_lock(version); }
             }
         }
     }
