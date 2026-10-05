@@ -1013,12 +1013,22 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     ) -> Result<Vec<Json>, Failure> {
         let pk = dest.primary_key().map(|attr| attr.name).unwrap_or("id");
         let mut query: RelatedQuery = nested.query.clone();
-        let mut sort = ash_core::keyset_sort(dest, query.sort.clone());
+        // The request's sort, then the read's prepared sort, then the primary key to break
+        // ties, as Ash adds its stability sort to the prepared query.
+        let mut sort = query.sort.clone();
+        for prepared in prepared_sort(dest.default_read()) {
+            if !sort.iter().any(|given| given.field == prepared.field) {
+                sort.push(prepared);
+            }
+        }
+        let mut sort = ash_core::keyset_sort(dest, sort);
         let backward = page.keyset && page.before.is_some();
         if page.keyset {
             if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
                 let direction = if backward { "before" } else { "after" };
-                let keyset = KeysetCursor::decode(cursor).ok_or_else(|| Failure::invalid_keyset(cursor, direction))?;
+                let keyset = KeysetCursor::decode(cursor)
+                    .filter(|keyset| keyset.values.len() == sort.len() && keyset.values.iter().zip(&sort).all(|((field, _), s)| field == &s.field))
+                    .ok_or_else(|| Failure::invalid_keyset(cursor, direction))?;
                 let values = ash_core::keyset_values(dest, &keyset, &sort);
                 if let Some(after) = ash_core::build_keyset_filter(dest, &sort, &values, !backward) {
                     query.filter = Some(Filter::and(query.filter.take().into_iter().chain([after])));
@@ -1028,13 +1038,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 sort = sort.iter().map(Sort::reversed).collect();
             }
             query.sort = sort.clone();
-            if let Some(select) = &mut query.select {
-                for s in &sort {
-                    if dest.attribute(&s.field).is_some() && !select.contains(&s.field) {
-                        select.push(s.field.clone());
-                    }
-                }
-            }
+            // The cursor holds every sort field, a calculation or aggregate included, so
+            // the next page filters on the value the row sorted by.
+            keep_sort_fields(dest, &mut query, &sort);
         } else {
             query.offset = page.offset;
         }
@@ -1042,9 +1048,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         query.limit = limit.map(|limit| limit + 1);
         let groups = ash_core::load_related_query(ctx, resource, rel_name, rows, &query).await.map_err(|e| self.failure(e))?;
         let counts = if page.count {
-            let counting = RelatedQuery { select: Some(vec![pk.to_string()]), limit: None, offset: None, ..nested.query.clone() };
-            let all = ash_core::load_related_query(ctx, resource, rel_name, rows, &counting).await.map_err(|e| self.failure(e))?;
-            all.iter().map(|group| Json::from(group.len())).collect()
+            let action = dest.default_read();
+            if action.pagination.is_some_and(|pagination| pagination.countable == Countable::No) {
+                return Err(Failure::new("invalid_page", "Invalid pagination", format!("Action {} cannot be counted", action.name)));
+            }
+            let counting =
+                RelatedQuery { filter: nested.query.filter.clone(), calculation_args: nested.query.calculation_args.clone(), ..RelatedQuery::default() };
+            ash_core::count_related_query(ctx, resource, rel_name, rows, &counting).await.map_err(|e| self.failure(e))?.into_iter().map(Json::from).collect()
         } else {
             vec![Json::Null; rows.len()]
         };
@@ -1207,6 +1217,24 @@ fn get_by_filters(names: &Names, resource: &ResourceDef, fields: &[&'static str]
             Ok(Filter::eq(*field, value))
         })
         .collect()
+}
+
+/// Reads `sort`'s fields on `query`, so a keyset cursor can hold a calculation or an
+/// aggregate the page sorted by, not only an attribute.
+fn keep_sort_fields(dest: &ResourceDef, query: &mut RelatedQuery, sort: &[Sort]) {
+    for field in sort.iter().map(|sort| sort.field.as_str()) {
+        if dest.attribute(field).is_some() {
+            if let Some(select) = &mut query.select
+                && !select.iter().any(|name| name == field)
+            {
+                select.push(field.to_string());
+            }
+        } else if dest.calculation(field).is_some() && !query.calculations.iter().any(|name| name == field) {
+            query.calculations.push(field.to_string());
+        } else if dest.aggregate(field).is_some() && !query.aggregates.iter().any(|name| name == field) {
+            query.aggregates.push(field.to_string());
+        }
+    }
 }
 
 /// The sort a read's preparations give it.

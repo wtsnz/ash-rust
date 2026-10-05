@@ -33,6 +33,7 @@ mod post {
     use uuid::Uuid;
 
     use super::note::Note;
+    use super::stamp::Stamp;
     use super::writer::Writer;
 
     resource! {
@@ -56,6 +57,7 @@ mod post {
             relationships {
                 belongs_to writer: Writer [fk: writer_id];
                 has_many notes: Note [fk: post_id];
+                has_many stamps: Stamp [fk: post_id];
             }
 
             aggregates {
@@ -157,7 +159,43 @@ mod note {
             actions {
                 read read {
                     primary;
-                    pagination keyset: true, countable: true, required: false;
+                    pagination keyset: true, countable: true, required: false, max_page_size: 1;
+                }
+                create create { primary; accept [post_id, body]; }
+            }
+
+            calculations {
+                span: i64 = string_length(body);
+            }
+        }
+    }
+}
+
+mod stamp {
+    use ash_core::resource;
+    use uuid::Uuid;
+
+    use super::post::Post;
+
+    resource! {
+        Stamp {
+            table "stamps";
+
+            attributes {
+                id: Uuid [pk];
+                post_id: Uuid;
+                body: String;
+            }
+
+            relationships {
+                belongs_to post: Post [fk: post_id];
+            }
+
+            actions {
+                read read {
+                    primary;
+                    // Both ways of paging, and a count the action refuses.
+                    pagination keyset: true, offset: true, countable: false, required: false;
                 }
                 create create { primary; accept [post_id, body]; }
             }
@@ -507,6 +545,58 @@ async fn relationships_come_as_pages() {
     // A keyset read takes no offset.
     let offset = blog.run(reader(), request(json!({ "limit": 1, "offset": 1 }))).await;
     assert_eq!(error_types(&offset), ["invalid_pagination"]);
+}
+
+#[tokio::test]
+async fn a_nested_page_follows_its_reads_pagination() {
+    let blog = Blog::new().await;
+    let post = blog.published[1];
+    // The read holds at most one note, whatever limit the page asks.
+    let large = blog
+        .run(reader(), json!({
+            "action": "get_post", "getBy": { "id": post },
+            "fields": ["id", { "notes": { "fields": ["body"], "sort": "body", "page": { "limit": 10, "count": true } } }],
+        }))
+        .await;
+    let notes = &large["data"]["notes"];
+    assert_eq!(notes["limit"], 1);
+    assert_eq!(notes["results"].as_array().unwrap().len(), 1);
+    assert_eq!((notes["hasMore"].clone(), notes["count"].clone()), (json!(true), json!(2)));
+    // A cursor from another sort is not a page of this one.
+    let mismatched = blog
+        .run(reader(), json!({
+            "action": "get_post", "getBy": { "id": post },
+            "fields": ["id", { "notes": { "fields": ["body"], "sort": "id", "page": { "limit": 1, "after": notes["nextPage"] } } }],
+        }))
+        .await;
+    assert_eq!(error_types(&mismatched), ["invalid_keyset"]);
+    // Sorted by the length of the body, which the cursor has to carry.
+    let by_length = |page: Json| {
+        json!({
+            "action": "get_post", "getBy": { "id": post },
+            "fields": ["id", { "notes": { "fields": ["body"], "sort": "span", "page": page } }],
+        })
+    };
+    let first = blog.run(reader(), by_length(json!({ "limit": 1 }))).await;
+    assert_eq!(first["data"]["notes"]["results"], json!([{ "body": "first" }]));
+    let next = blog.run(reader(), by_length(json!({ "limit": 1, "after": first["data"]["notes"]["nextPage"] }))).await;
+    assert_eq!(next["data"]["notes"]["results"], json!([{ "body": "second" }]));
+    // Both keyset and offset: a page with only a limit is a keyset. A count the read
+    // refuses fails.
+    let stamps = blog
+        .run(reader(), json!({
+            "action": "get_post", "getBy": { "id": post },
+            "fields": ["id", { "stamps": { "fields": ["body"], "page": { "limit": 1 } } }],
+        }))
+        .await;
+    assert_eq!(stamps["data"]["stamps"]["type"], "keyset");
+    let counted = blog
+        .run(reader(), json!({
+            "action": "get_post", "getBy": { "id": post },
+            "fields": ["id", { "stamps": { "fields": ["body"], "page": { "limit": 1, "count": true } } }],
+        }))
+        .await;
+    assert_eq!(error_types(&counted), ["invalid_page"]);
 }
 
 #[tokio::test]

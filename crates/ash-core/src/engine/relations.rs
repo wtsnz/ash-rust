@@ -196,6 +196,122 @@ pub async fn load_related_query<D: DataLayer>(
     Ok(distribute(keys, groups))
 }
 
+/// How many of `query`'s rows relate to each of `sources`, in the same order.
+///
+/// The count is the relationship read's, as Ash counts a nested page: the destination's
+/// read policies, the tenant and `query`'s filter (with the arguments of the calculations
+/// it filters on), with no limit, offset or sort. It counts the rows the page can link to
+/// a source: a row whose key a field policy hides from the actor links to none, so it
+/// isn't counted. Each distinct key is counted through the data layer, `COUNT(*)` where
+/// it has one. Sources that share a key share a count.
+pub async fn count_related_query<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &ResourceDef,
+    relationship: &str,
+    sources: &[FieldMap],
+    query: &RelatedQuery,
+) -> Result<Vec<usize>> {
+    let rel = resource.relationship(relationship).ok_or_else(|| {
+        Error::Invalid(format!(
+            "unknown relationship `{relationship}` on {}",
+            resource.name
+        ))
+    })?;
+    let dest = (rel.destination)();
+    let shape = RelatedQuery { filter: query.filter.clone(), calculation_args: query.calculation_args.clone(), ..RelatedQuery::default() };
+    // The rows the page links: their keys readable to the actor.
+    let linkable = |columns: &[&str]| -> Result<CompiledQuery> {
+        let mut base = unpaged(related_read(ctx, dest, None, &shape)?);
+        if let Some(readable) = crate::policy::readable_condition(dest, columns, ctx.actor.as_ref())? {
+            base.filter = Some(Filter::and(base.filter.take().into_iter().chain([readable])));
+        }
+        Ok(base)
+    };
+    match rel.kind {
+        RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
+            let keys: Vec<Option<Vec<Value>>> = sources.iter().map(|source| rel.source_key(source)).collect();
+            if keys.iter().all(Option::is_none) {
+                return Ok(vec![0; sources.len()]);
+            }
+            let base = linkable(&rel.destination_columns())?;
+            let mut counts: BTreeMap<Vec<Value>, usize> = BTreeMap::new();
+            for source in sources {
+                let Some(key) = rel.source_key(source) else { continue };
+                if counts.contains_key(&key) {
+                    continue;
+                }
+                let mut read = base.clone();
+                let link = rel.destination_filter(source).expect("a present key links");
+                read.filter = Some(Filter::and(read.filter.take().into_iter().chain([link])));
+                counts.insert(key, ctx.data.count(dest, &read).await?);
+            }
+            Ok(keys
+                .into_iter()
+                .map(|key| key.and_then(|key| counts.get(&key).copied()).unwrap_or(0))
+                .collect())
+        }
+        RelKind::ManyToMany => {
+            let keys: Vec<Option<Value>> = sources
+                .iter()
+                .map(|source| required_pk(source, rel.source_attribute).ok())
+                .collect();
+            let source_ids: Vec<Value> = keys.iter().flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+            if source_ids.is_empty() {
+                return Ok(vec![0; sources.len()]);
+            }
+            let through = rel.through.ok_or_else(|| {
+                Error::Invalid(format!(
+                    "many_to_many relationship `{}` on `{}` requires through join resource",
+                    rel.name, resource.name
+                ))
+            })?();
+            let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
+            let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
+            let mut joins = related_read(ctx, through, None, &RelatedQuery::default())?;
+            joins.limit = None;
+            joins.offset = None;
+            let join_rows = read_batch(ctx, through, source_on_join, source_ids, joins).await?;
+            let mut linked: BTreeMap<Value, BTreeSet<Value>> = BTreeMap::new();
+            for row in &join_rows.rows {
+                if let (Ok(source_id), Ok(dest_id)) = (required_pk(row, source_on_join), required_pk(row, dest_on_join)) {
+                    linked.entry(source_id).or_default().insert(dest_id);
+                }
+            }
+            let base = linkable(&[rel.destination_attribute])?;
+            let mut counts: BTreeMap<Value, usize> = BTreeMap::new();
+            for source_id in keys.iter().flatten() {
+                if counts.contains_key(source_id) {
+                    continue;
+                }
+                let Some(ids) = linked.get(source_id).filter(|ids| !ids.is_empty()) else {
+                    counts.insert(source_id.clone(), 0);
+                    continue;
+                };
+                let mut read = base.clone();
+                let among = Filter::In(rel.destination_attribute.to_string(), ids.iter().cloned().collect());
+                read.filter = Some(Filter::and(read.filter.take().into_iter().chain([among])));
+                counts.insert(source_id.clone(), ctx.data.count(dest, &read).await?);
+            }
+            Ok(keys
+                .into_iter()
+                .map(|key| key.and_then(|key| counts.get(&key).copied()).unwrap_or(0))
+                .collect())
+        }
+    }
+}
+
+/// `read` with the paging and the loads taken off, so a count counts every matching row.
+/// The calculations' arguments stay: the filter may compute a calculation that takes them.
+fn unpaged(mut read: CompiledQuery) -> CompiledQuery {
+    read.limit = None;
+    read.offset = None;
+    read.sort.clear();
+    read.select = None;
+    read.aggregates.clear();
+    read.calculations.clear();
+    read
+}
+
 /// Each source's rows, by its key. Sources sharing a key (posts by one author) each get
 /// its rows: copies for all but the last, which takes them.
 fn distribute(keys: Vec<Option<Vec<Value>>>, mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>>) -> Vec<Vec<FieldMap>> {
