@@ -21,7 +21,7 @@ cargo run --release -p ash-graphql --example bench_graphql --features axum
 echo ""
 echo "[3/4] Running canonical Ash (Elixir + ETS) core benchmark..."
 if command -v mise >/dev/null 2>&1; then
-    mise exec erlang@27.1.1 -- elixir benches/ash_elixir_bench.exs
+    mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs
 elif command -v elixir >/dev/null 2>&1; then
     elixir benches/ash_elixir_bench.exs
 else
@@ -31,7 +31,7 @@ fi
 echo ""
 echo "[4/4] Running Ash Elixir + Absinthe GraphQL benchmark..."
 if command -v mise >/dev/null 2>&1; then
-    mise exec erlang@27.1.1 -- elixir benches/ash_graphql_elixir_bench.exs
+    mise exec elixir erlang -- elixir benches/ash_graphql_elixir_bench.exs
 elif command -v elixir >/dev/null 2>&1; then
     elixir benches/ash_graphql_elixir_bench.exs
 else

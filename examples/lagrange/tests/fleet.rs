@@ -58,13 +58,15 @@ async fn lines_see_their_own_fleet<D: FleetDb>(h: Harness<D>) {
     let long_haul = h.sol.ship("Long Haul");
     assert!(matches!(Ship::get(mae, long_haul.id).await, Err(Error::NotFound)));
 
-    // The map is shared, and anyone may read it. Read policies filter rather than
-    // fail, so a reader who isn't signed in sees no ships at all.
+    // The map is shared, and anyone may read it. Ships are for crew: a reader who isn't
+    // signed in is forbidden to read them, as Ash forbids a read its policies settle
+    // against the actor, where a read that depends on the row (another line's ship) finds
+    // nothing.
     assert_eq!(Port::query(&h.app.anonymous()).count().await.unwrap(), 7);
     assert_eq!(Port::query(mae).count().await.unwrap(), 7);
     let stranger = h.app.anonymous().with_tenant(HELIOS);
-    assert!(Ship::query(&stranger).all().await.unwrap().is_empty());
-    assert!(matches!(Ship::get(&stranger, long_haul.id).await, Err(Error::NotFound)));
+    assert!(matches!(Ship::query(&stranger).all().await, Err(Error::Forbidden)));
+    assert!(matches!(Ship::get(&stranger, long_haul.id).await, Err(Error::Forbidden)));
 
     // Ships are created in the dispatcher's line, never another.
     let commissioned = Ship::commission(mae)

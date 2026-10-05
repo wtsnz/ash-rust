@@ -90,7 +90,8 @@ flags regressions); they don't predict how much faster an application will be. S
   2. Runs validations: `present(:subject)` and `string_length(:subject, min: 2)`.
   3. Executes changeset mutations: `set_attribute(:status, "open")` and sets actor relationship.
   4. Persists the record to the in-memory data layer (`ash-memory` vs `Ash.DataLayer.Ets`).
-- **Elixir Implementation**: `Helpdesk.Support.open_ticket!("Printer is broken")`
+  Both run through the desk's policies: `open` needs an actor.
+- **Elixir Implementation**: `Helpdesk.Support.open_ticket!("Printer is broken", actor: customer)`
 - **Rust Implementation**: `customer.open_ticket("Printer is broken").await.unwrap()`
 
 #### Workload 2: `Representative.create`
@@ -106,12 +107,20 @@ flags regressions); they don't predict how much faster an application will be. S
   1. Pre-populates 100 ticket records in memory.
   2. Builds query with filter `status == "open"`.
   3. Executes data layer query, materializes records into resource structs.
-- **Elixir Implementation**: `Ash.Query.filter(Helpdesk.Support.Ticket, status == "open") |> Ash.read!()`
+  The reader is the customer who opened the tickets: the read policy filters to the tickets they may read.
+- **Elixir Implementation**: `Ash.Query.filter(Helpdesk.Support.Ticket, status == "open") |> Ash.read!(actor: reader)`
 - **Rust Implementation**: `Ticket::query(&customer).filter(t::status.eq("open")).all().await.unwrap()`
 
 #### Workload 4: `load_aggregates`
 - **Pipeline**:
-  1. Runs query loading 3 concurrent aggregates: `ticket_count` (`count`), `open_ticket_count` (`count` with filter), and `has_tickets` (`exists`).
+  1. Pre-populates a representative with 20 assigned tickets.
+  2. Runs a query loading 3 aggregates: `ticket_count` (`count`), `open_ticket_count` (`count` with filter), and `has_tickets` (`exists`), as the customer who opened the tickets: an aggregate counts what its reader may read.
+- **Elixir Implementation**: `Ash.Query.load(Helpdesk.Support.Representative, [:ticket_count, :open_ticket_count, :has_tickets]) |> Ash.read!(actor: reader)`
+- **Rust Implementation**: `Representative::query(&customer).aggregate(r::ticket_count).aggregate(r::open_ticket_count).aggregate(r::has_tickets).all().await.unwrap()`
+
+Both sides read through the helpdesk's policies, as the Rust desk always did. Until 2026-10-05 the
+Elixir script modelled a ticket with no policies, and the Rust `load_aggregates` benchmark read
+as no one, so it counted no tickets (see [`examples/GAPS.md`](../examples/GAPS.md)).
 
 ---
 
@@ -156,6 +165,17 @@ ash-rust/
         └── benches/
             └── helpdesk_bench.rs # Criterion statistical regression suite
 ```
+
+### Every benchmark, Rust and Elixir
+
+| Layer | Rust | Elixir |
+| :--- | :--- | :--- |
+| Core actions | `examples/helpdesk` (`examples/bench.rs`, Criterion) | `benches/ash_elixir_bench.exs` (ETS); `examples/elixir/helpdesk/bench/core.exs` (the Elixir twin, ETS and SQLite) |
+| Core aggregates | Criterion `load_aggregates` | `benches/ash_elixir_bench.exs` and `bench/core.exs` (ETS; AshSqlite has none) |
+| GraphQL | `crates/ash-graphql/examples/bench_graphql.rs` | `benches/ash_graphql_elixir_bench.exs` |
+| Postgres | `crates/ash-postgres/examples/bench_postgres.rs` | `benches/ash_postgres_elixir_bench.exs` |
+| Cybercab, over HTTP and WebSocket | `examples/benchmarks/cybercab` | the same driver, against `examples/elixir/cybercab` |
+| Supportdesk, through the generated clients | `examples/supportdesk/bench` | the same driver, against `examples/elixir/supportdesk` |
 
 ---
 

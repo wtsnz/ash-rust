@@ -248,3 +248,21 @@ Verify frontend build:
 cd examples/astro-helpdesk/frontend
 bun run build  # or: npm run build
 ```
+
+---
+
+## The Elixir twin
+
+The same API on Ash for Elixir, AshGraphql and Absinthe, in
+[`examples/elixir/astro-helpdesk`](../elixir/astro-helpdesk): seeded the same and serving
+GraphQL at `/graphql`, GraphiQL at `/graphiql`, subscriptions at `/graphql/ws` and `/health`,
+so this frontend runs against either server:
+
+```bash
+(cd ../elixir/astro-helpdesk && mix deps.get && PORT=4000 mix run --no-halt)
+cd frontend && API_URL=http://127.0.0.1:4000 bun run dev
+```
+
+`tests/schema_parity.rs` checks the Rust server's schema against the one AshGraphql generates,
+`../elixir/astro-helpdesk/priv/schema.graphql`. What the twin found missing, or different, is
+in [GAPS.md](../GAPS.md).

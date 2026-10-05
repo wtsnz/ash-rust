@@ -13,11 +13,11 @@ The application is split into two bounded contexts via the `domain!` macro:
 1. **`Workspaces` Domain**:
    - `User`: user accounts and registration.
    - `Workspace`: team or organization workspace.
-   - `WorkspaceMember`: membership association with role validation (`"admin"`, `"member"`, `"observer"`).
+   - `WorkspaceMember`: membership association with role validation (`"admin"`, `"member"`, `"guest"`).
 2. **`Kanban` Domain**:
    - `Board`: boards belonging to a workspace with aggregates (`list_count`, `card_count`).
    - `List`: columns belonging to a board, ordered by `position`.
-   - `Card`: cards with optimistic locking, labels, position, and aggregates (`comment_count`, `checklist_count`).
+   - `Card`: cards with a position, an estimate, a due date and aggregates (`comment_count`, `checklist_count`).
    - `Comment`: activity stream and card discussions.
    - `ChecklistItem`: checklist items associated with cards.
 
@@ -40,6 +40,14 @@ cargo run -p kanban -- board create --workspace-id <WS_ID> --title "Product Road
 # List boards
 cargo run -p kanban -- board list
 ```
+
+---
+
+## The Elixir twin
+
+The same boards on Ash for Elixir, [`examples/elixir/kanban`](../elixir/kanban): the same
+two domains and eight resources, on ETS and on SQLite, and the pipelines the `Multi`s build as
+`Ash.transact` steps. What the twin found missing, or different, is in [GAPS.md](../GAPS.md).
 
 ---
 

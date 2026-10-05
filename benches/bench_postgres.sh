@@ -39,7 +39,7 @@ cargo run --release -p ash-postgres --example bench_postgres
 echo ""
 echo "[2/2] Running canonical Ash Elixir PostgreSQL benchmark (ash_postgres + Ecto + Postgrex)..."
 if command -v mise >/dev/null 2>&1; then
-    mise exec erlang@27.1.1 -- elixir benches/ash_postgres_elixir_bench.exs
+    mise exec elixir erlang -- elixir benches/ash_postgres_elixir_bench.exs
 elif command -v elixir >/dev/null 2>&1; then
     elixir benches/ash_postgres_elixir_bench.exs
 else

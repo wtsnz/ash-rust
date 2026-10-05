@@ -105,25 +105,31 @@ fn bench_aggregates(c: &mut Criterion) {
 
     // Memory setup
     let desk_mem = Helpdesk::new(Memory::new());
-    let rep_id_mem = Uuid::new_v4();
-    let rep_actor_mem = actor_representative(rep_id_mem);
     let customer_mem = desk_mem.with_actor(actor_customer(Uuid::new_v4()));
 
+    // Twenty tickets assigned to Bob, whom the customer who opened them reads: the
+    // aggregates count what the reader may read, so another reader would count none.
     rt.block_on(async {
-        desk_mem.create_representative("Bob Jones").await.unwrap();
+        let bob = desk_mem.create_representative("Bob Jones").await.unwrap();
+        let as_rep = desk_mem.with_actor(actor_representative(bob.id));
         for i in 1..=20 {
             let ticket = customer_mem
                 .open_ticket(&format!("Ticket {i}"))
                 .await
                 .unwrap();
-            let as_rep = desk_mem.with_actor(rep_actor_mem.clone());
-            as_rep.assign_ticket(&ticket, rep_id_mem).await.unwrap();
+            as_rep.assign_ticket(&ticket, bob.id).await.unwrap();
         }
     });
 
+    // The benchmark counts something: Bob's twenty tickets, for the customer who opened them.
+    let bob = rt
+        .block_on(Representative::query(&customer_mem).aggregate(r::ticket_count).one())
+        .unwrap();
+    assert_eq!(bob.ticket_count, Some(20));
+
     group.bench_function("load_aggregates_memory", |b| {
         b.to_async(&rt).iter(|| async {
-            let res = Representative::query(&desk_mem)
+            let res = Representative::query(&customer_mem)
                 .aggregate(r::ticket_count)
                 .aggregate(r::open_ticket_count)
                 .aggregate(r::has_tickets)
@@ -140,25 +146,31 @@ fn bench_aggregates(c: &mut Criterion) {
         d.install().await.unwrap();
         d
     });
-    let rep_id_sql = Uuid::new_v4();
-    let rep_actor_sql = actor_representative(rep_id_sql);
     let customer_sql = desk_sql.with_actor(actor_customer(Uuid::new_v4()));
 
+    // Twenty tickets assigned to Bob, whom the customer who opened them reads: the
+    // aggregates count what the reader may read, so another reader would count none.
     rt.block_on(async {
-        desk_sql.create_representative("Bob Jones").await.unwrap();
+        let bob = desk_sql.create_representative("Bob Jones").await.unwrap();
+        let as_rep = desk_sql.with_actor(actor_representative(bob.id));
         for i in 1..=20 {
             let ticket = customer_sql
                 .open_ticket(&format!("Ticket {i}"))
                 .await
                 .unwrap();
-            let as_rep = desk_sql.with_actor(rep_actor_sql.clone());
-            as_rep.assign_ticket(&ticket, rep_id_sql).await.unwrap();
+            as_rep.assign_ticket(&ticket, bob.id).await.unwrap();
         }
     });
 
+    // The benchmark counts something: Bob's twenty tickets, for the customer who opened them.
+    let bob = rt
+        .block_on(Representative::query(&customer_sql).aggregate(r::ticket_count).one())
+        .unwrap();
+    assert_eq!(bob.ticket_count, Some(20));
+
     group.bench_function("load_aggregates_sqlite", |b| {
         b.to_async(&rt).iter(|| async {
-            let res = Representative::query(&desk_sql)
+            let res = Representative::query(&customer_sql)
                 .aggregate(r::ticket_count)
                 .aggregate(r::open_ticket_count)
                 .aggregate(r::has_tickets)

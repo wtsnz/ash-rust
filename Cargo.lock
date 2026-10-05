@@ -366,6 +366,7 @@ dependencies = [
  "ash-memory",
  "ash-pubsub",
  "ash-typescript",
+ "async-graphql",
  "axum",
  "http-body-util",
  "serde_json",

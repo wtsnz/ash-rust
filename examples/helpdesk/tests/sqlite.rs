@@ -70,6 +70,16 @@ async fn representative_sees_unassigned_then_only_assigned() {
 }
 
 #[tokio::test]
+async fn read_without_an_actor_is_forbidden() {
+    let ctx = ctx().await;
+    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    Ticket::open(&as_customer).subject("Printer").await.unwrap();
+
+    let err = Ticket::query(&ctx).load().await.unwrap_err();
+    assert!(matches!(err, Error::Forbidden));
+}
+
+#[tokio::test]
 async fn user_filter_and_policy_filter_combine() {
     let ctx = ctx().await;
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
