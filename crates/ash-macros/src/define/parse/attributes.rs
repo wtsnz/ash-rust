@@ -86,7 +86,6 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
     let ty: Type = input.parse()?;
 
     let mut pk = false;
-    let mut version = false;
     let mut generated = false;
     let mut default = None;
     let mut default_fn = None;
@@ -108,7 +107,11 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
                 pk = true;
                 generated = true;
             } else if flag_ident == "version" {
-                version = true;
+                // A lock version is an ordinary integer; the actions that lock say so.
+                return Err(syn::Error::new_spanned(
+                    &flag_ident,
+                    "`[version]` is gone: give the attribute `[default: 1]` and add `change optimistic_lock(field);` to the actions that lock, as in Ash",
+                ));
             } else if flag_ident == "generated" {
                 generated = true;
             } else if flag_ident == "enum" || flag_ident == "ash_enum" {
@@ -151,7 +154,6 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
             } else {
                 const ATTR_OPTIONS: &[&str] = &[
                     "pk",
-                    "version",
                     "generated",
                     "default",
                     "default_fn",
@@ -178,7 +180,6 @@ fn parse_one_attribute(input: ParseStream, errors: &mut Vec<Error>) -> Result<At
         ident,
         ty,
         pk,
-        version,
         generated,
         atom,
         is_enum,

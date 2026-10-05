@@ -40,7 +40,7 @@ resource! {
             author_id: Option<Uuid>;
             view_count: i64 [default: 0];
             reopen_count: i64 [default: 0];
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         state_machine {
@@ -138,26 +138,30 @@ resource! {
             }
 
             update assign {
+                change optimistic_lock(version);
                 accept [assignee_id];
             }
 
-            update start {}
+            update start { change optimistic_lock(version); }
 
-            update hold {}
+            update hold { change optimistic_lock(version); }
 
-            update resolve {}
+            update resolve { change optimistic_lock(version); }
 
             update reopen {
+                change optimistic_lock(version);
                 change atomic_update(reopen_count, reopen_count + 1);
             }
 
-            update close {}
+            update close { change optimistic_lock(version); }
 
             update view {
+                change optimistic_lock(version);
                 change atomic_update(view_count, view_count + 1);
             }
 
             update edit {
+                change optimistic_lock(version);
                 accept [subject, priority];
                 validate string_length(subject, min: 3, max: 200);
                 validate numericality(priority, min: 1, max: 4);

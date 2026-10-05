@@ -546,33 +546,7 @@ impl DataLayer for Postgres {
         let opt_row = self.fetch_optional_resource(&compiled, resource).await?;
         match opt_row {
             Some(row) => row_to_fields(&row, resource),
-            None => {
-                // If 0 rows were updated, check optimistic lock or not found
-                if resource.optimistic_lock_attribute().is_some() {
-                    let pk = resource
-                        .primary_key()
-                        .ok_or(Error::NoPrimaryKey(resource.name))?;
-                    // Whether the row is there at all, read in the same tenant.
-                    let exists = CompiledQuery {
-                        filter: Some(ash_core::Filter::eq(pk.name, id.clone())),
-                        tenant: tenant.map(str::to_string),
-                        limit: Some(1),
-                        ..CompiledQuery::default()
-                    };
-                    let check_compiled = QueryCompiler::new(&dialect).compile_select(resource, &exists)?;
-                    let rows = self.fetch_all(&check_compiled).await?;
-                    if rows.is_empty() {
-                        Err(Error::NotFound)
-                    } else {
-                        Err(Error::StaleRecord {
-                            resource: resource.name,
-                            id,
-                        })
-                    }
-                } else {
-                    Err(Error::NotFound)
-                }
-            }
+            None => Err(Error::NotFound),
         }
     }
 
@@ -778,7 +752,7 @@ impl DataLayer for Postgres {
         };
         let mut together = Vec::new();
         for (i, (id, fields)) in rows.iter().enumerate() {
-            if !writes(fields) || resource.optimistic_lock_attribute().is_some() {
+            if !writes(fields) {
                 results[i] = Some(self.update(resource, tenant, id.clone(), fields.clone()).await);
             } else {
                 together.push(i);

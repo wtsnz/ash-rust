@@ -6,7 +6,7 @@ use ash_core::{
     ActionDef, ActionKind, Actor, Atomic, AtomicCondition, AtomicContext, AtomicExpr, AttrType,
     AttributeDef, Change, ChangeContext, Check, Context, CustomChange, CustomValidation, DataLayer,
     ConstValue, Error, FieldMap, PolicyDef, PolicyEffect, PolicyWhen, ResourceDef, Result, Validation,
-    ValidationContext, Value, destroy_dynamic_by_id, update_dynamic, update_dynamic_expecting,
+    ValidationContext, Value, destroy_dynamic_by_id, update_dynamic,
     update_existing_dynamic,
 };
 use ash_memory::Memory;
@@ -76,6 +76,8 @@ static ACTIONS: &[ActionDef] = &[
         .accept(&["name"])
         .validations(&[Validation::string_length("name", Some(2), None), Validation::present("status")]),
     ActionDef::update("bump").changes(&[Change::Custom(&INCREMENT)]),
+    // Under an optimistic lock: it writes only at the version it read.
+    ActionDef::update("locked_bump").changes(&[Change::OptimisticLock { field: "version" }, Change::Custom(&INCREMENT)]),
     ActionDef::update("close")
         .changes(&[Change::SetAttribute { field: "status", value: ash_core::ConstValue::Str("closed") }])
         .validations(&[Validation::Custom(&MUST_BE_OPEN)]),
@@ -86,13 +88,17 @@ static ACTIONS: &[ActionDef] = &[
     ActionDef::destroy("shout_and_remove").changes(&[Change::Func(shout)]),
     ActionDef::destroy("archive")
         .soft()
-        .changes(&[Change::SetAttributeFn { field: "archived_at", value: now }]),
+        .changes(&[Change::OptimisticLock { field: "version" }, Change::SetAttributeFn { field: "archived_at", value: now }]),
     ActionDef::destroy("shout_and_archive").soft().changes(&[Change::Func(shout)]),
     ActionDef::destroy("shout_and_archive_reading_first")
         .soft()
         .changes(&[Change::Func(shout)])
         .require_atomic(false),
 ];
+
+fn first_version() -> Value {
+    Value::Int(1)
+}
 
 fn now() -> Value {
     ash_core::AshType::to_value(&ash_core::UtcDateTimeUsec::now())
@@ -121,7 +127,10 @@ static COUNTER: ResourceDef = ResourceDef {
         AttributeDef::required("status", AttrType::String),
         AttributeDef::required("count", AttrType::Integer),
         AttributeDef::optional("owner_id", AttrType::Uuid),
-        AttributeDef::version("version"),
+        AttributeDef {
+            default_fn: Some(first_version),
+            ..AttributeDef::required("version", AttrType::Integer)
+        },
         AttributeDef::optional("created_at", AttrType::UTC_DATETIME_USEC),
         AttributeDef::optional("updated_at", AttrType::UTC_DATETIME_USEC),
         AttributeDef::optional("archived_at", AttrType::UTC_DATETIME_USEC),
@@ -210,12 +219,12 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     let created = counter(&ctx, owner).await;
     let id = id_of(&created);
 
-    // What it sets, with the version bumped and `updated_at` moved.
+    // What it sets, with `updated_at` moved. With no lock, the version stays.
     let renamed = update_dynamic(&ctx, &COUNTER, action("rename"), id, input(&[("name", Value::from("second"))]))
         .await
         .unwrap();
     assert_eq!(renamed.get("name"), Some(&Value::from("second")));
-    assert_eq!(renamed.get("version"), Some(&Value::Int(2)));
+    assert_eq!(renamed.get("version"), Some(&Value::Int(1)));
     assert_ne!(renamed.get("updated_at"), created.get("updated_at"));
 
     // Setting what it holds changes nothing, so `updated_at` stays, as in Ash.
@@ -223,7 +232,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
         .await
         .unwrap();
     assert_eq!(same.get("updated_at"), renamed.get("updated_at"));
-    assert_eq!(same.get("version"), Some(&Value::Int(3)));
+    assert_eq!(same.get("version"), Some(&Value::Int(1)));
 
     // A value it sets that fails validation fails before the statement.
     let short = update_dynamic(&ctx, &COUNTER, action("rename"), id, input(&[("name", Value::from("x"))])).await;
@@ -257,14 +266,15 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     let forbidden = update_dynamic(&ctx, &COUNTER, action("bump"), id_of(&ownerless), FieldMap::new()).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
 
-    // No such record: not found. Another version: stale.
+    // No such record: not found.
     let missing = update_dynamic(&ctx, &COUNTER, action("bump"), Uuid::new_v4(), FieldMap::new()).await;
     assert!(matches!(missing, Err(Error::NotFound)), "{missing:?}");
-    let stale = update_dynamic_expecting(&ctx, &COUNTER, action("bump"), id, FieldMap::new(), Some(1)).await;
-    assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
 
-    // The record in hand, updated from a stale copy: stale.
-    let stale = update_existing_dynamic(&ctx, &COUNTER, action("bump"), created.clone(), FieldMap::new()).await;
+    // Under a lock, by id: read first, then written at the version read, which it moves on.
+    let locked = update_dynamic(&ctx, &COUNTER, action("locked_bump"), id, FieldMap::new()).await.unwrap();
+    assert_eq!(locked.get("version"), Some(&Value::Int(2)));
+    // The record in hand, from a copy before that: stale.
+    let stale = update_existing_dynamic(&ctx, &COUNTER, action("locked_bump"), created.clone(), FieldMap::new()).await;
     assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
 
     // Increments from the stored count: none lost, however many at once.
@@ -281,7 +291,27 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
         .await
         .unwrap();
     assert_eq!(counted.get("count"), Some(&Value::Int(20)));
-    assert_eq!(counted.get("version"), Some(&Value::Int(22)));
+
+    // Under a lock, at once by id: each written at the version it read, so one that read
+    // a version another moved on fails, as not found (Ash's bulk update drops it). Every
+    // one that succeeded is counted.
+    let locked_bumps = (0..20).map(|_| {
+        let ctx = ctx.clone();
+        tokio::spawn(async move { update_dynamic(&ctx, &COUNTER, action("locked_bump"), fresh_id, FieldMap::new()).await })
+    });
+    let mut succeeded = 0;
+    for bump in locked_bumps {
+        match bump.await.unwrap() {
+            Ok(_) => succeeded += 1,
+            Err(Error::NotFound) => {}
+            Err(other) => panic!("a lost race is not found, not {other:?}"),
+        }
+    }
+    let after = update_dynamic(&ctx, &COUNTER, action("rename"), fresh_id, input(&[("name", Value::from("done"))]))
+        .await
+        .unwrap();
+    assert_eq!(after.get("count"), Some(&Value::Int(20 + succeeded)));
+    assert_eq!(after.get("version"), Some(&Value::Int(1 + succeeded)));
 
     // A change that needs the record in memory: must be atomic, unless it reads first.
     let must = update_dynamic(&ctx, &COUNTER, action("shout"), fresh_id, FieldMap::new()).await;
@@ -302,23 +332,19 @@ async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
 
     // Policies are checked against the stored record: only the owner destroys it.
     let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
-    let forbidden = destroy_dynamic_by_id(&stranger, &COUNTER, action("remove"), id, None).await;
+    let forbidden = destroy_dynamic_by_id(&stranger, &COUNTER, action("remove"), id).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
-    // Another version: stale.
-    let stale = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id, Some(2)).await;
-    assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
-
     // It returns the record as it was deleted, and then there's none.
-    let removed = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id, Some(1)).await.unwrap();
+    let removed = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id).await.unwrap();
     assert_eq!(removed.get("name"), Some(&Value::from("first")));
-    let missing = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id, None).await;
+    let missing = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id).await;
     assert!(matches!(missing, Err(Error::NotFound)), "{missing:?}");
 
     // A condition on the stored record fails in the statement, and nothing goes.
     let closing = counter(&ctx, owner).await;
     let closing_id = id_of(&closing);
     update_dynamic(&ctx, &COUNTER, action("close"), closing_id, FieldMap::new()).await.unwrap();
-    let refused = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id, None).await;
+    let refused = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id).await;
     match refused {
         Err(Error::Validation { message, .. }) => assert_eq!(message, "is closed, not open"),
         other => panic!("expected the closed error, got {other:?}"),
@@ -327,22 +353,22 @@ async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert!(still_there.is_ok(), "{still_there:?}");
 
     // A hard destroy that can't be one statement reads first, as in Ash.
-    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_remove"), closing_id, None).await;
+    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_remove"), closing_id).await;
     assert!(shouted.is_ok(), "{shouted:?}");
-    let gone = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id, None).await;
+    let gone = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id).await;
     assert!(matches!(gone, Err(Error::NotFound)), "{gone:?}");
 
     // A soft destroy is an update: the version bumped, the change made.
     let archivable = counter(&ctx, owner).await;
     let archivable_id = id_of(&archivable);
-    let archived = destroy_dynamic_by_id(&ctx, &COUNTER, action("archive"), archivable_id, Some(1)).await.unwrap();
+    let archived = destroy_dynamic_by_id(&ctx, &COUNTER, action("archive"), archivable_id).await.unwrap();
     assert!(!archived.get("archived_at").is_none_or(Value::is_null), "{archived:?}");
     assert_eq!(archived.get("version"), Some(&Value::Int(2)));
 
     // A soft destroy that can't be one statement must be atomic, unless it reads first.
-    let must = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive"), archivable_id, None).await;
+    let must = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive"), archivable_id).await;
     assert!(matches!(must, Err(Error::MustBeAtomic { action: "shout_and_archive", .. })), "{must:?}");
-    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive_reading_first"), archivable_id, None)
+    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive_reading_first"), archivable_id)
         .await
         .unwrap();
     assert_eq!(shouted.get("name"), Some(&Value::from("FIRST")));
@@ -421,9 +447,9 @@ async fn read_scope_scenario<D: DataLayer + Clone + 'static>(data: D) {
         assert!(matches!(visible, Err(Error::Forbidden)), "{name}: {visible:?}");
     }
     for name in ["remove", "archive"] {
-        let hidden = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), private, None).await;
+        let hidden = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), private).await;
         assert!(matches!(hidden, Err(Error::NotFound)), "{name}: {hidden:?}");
-        let visible = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), public, None).await;
+        let visible = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), public).await;
         assert!(matches!(visible, Err(Error::Forbidden)), "{name}: {visible:?}");
     }
 

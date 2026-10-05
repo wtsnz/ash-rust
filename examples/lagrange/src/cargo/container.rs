@@ -43,7 +43,7 @@ resource! {
             manifest: Option<Manifest>;
             seal: Option<Binary>;
             sealed: bool [default: false];
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         identities {
@@ -93,6 +93,7 @@ resource! {
             }
 
             update seal {
+                change optimistic_lock(version);
                 accept [seal];
                 change set(sealed = true);
             }

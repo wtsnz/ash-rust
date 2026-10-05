@@ -47,15 +47,16 @@ Behaviours of the Elixir packages the comparison works around. ash-rust doesn't 
 
 ## The benchmark that wasn't like for like
 
-`benches/ash_elixir_bench.exs`, which the published Rust-versus-Elixir core figures come from,
+`benches/ash_elixir_bench.exs`, which the in-memory core figures once published came from,
 modelled a `Ticket` with no policies, while the Rust helpdesk's actions run through its policies
 (an actor, a read filter). On the full desk (`elixir/helpdesk/bench/core.exs`, ETS) Elixir took
-35.1 µs for `Ticket.open` and 366.6 µs for the filtered read, against the published 26.6 µs and
-208.6 µs. The script now carries the desk's policies, and the published core figures are
-re-measured with it (`docs/benchmarks.md`, `benches/README.md`): the speedups are 8.1x, 7.4x
-and 8.0x, where they were 8.2x, 9.6x and 6.4x.
+35.1 µs for `Ticket.open` and 366.6 µs for the filtered read, against the 26.6 µs and 208.6 µs
+published. The script now carries the desk's policies. Re-measured with it, on 2026-10-05 and
+under load, the speedups are 8.1x for `Ticket.open`, 7.4x for `Representative.create` and 8.0x
+for the filtered read, where they were 8.2x, 9.6x and 6.4x. `docs/benchmarks.md` no longer
+publishes the in-memory ratios, so those are the only record of them.
 
 The Rust Criterion `load_aggregates` benchmark counted nothing: it read as no one, whose read
 policy leaves no tickets, and assigned its tickets to a representative who didn't exist. It
 counts Bob's twenty tickets as the customer who opened them now, asserts it does, and runs at
-26.1 µs where ~3 µs was published; Elixir takes 476 µs for the same query.
+26.1 µs where ~3 µs was published; Elixir takes 476 µs for the same query (a ratio of 18x).

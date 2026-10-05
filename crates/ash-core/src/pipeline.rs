@@ -229,7 +229,8 @@ pub fn apply_changes_with_context(
                 };
                 c.apply(&mut ctx)?;
             }
-            Change::ManageRelationship { .. } => {}
+            // The lock version moves as the update is prepared; it's checked as it's written.
+            Change::ManageRelationship { .. } | Change::OptimisticLock { .. } => {}
             Change::AtomicUpdate { field, expr } => {
                 let value = crate::expr::eval_with_args(expr, fields, arguments)?;
                 fields.insert((*field).to_string(), value);
@@ -571,16 +572,11 @@ pub(crate) fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> 
 }
 
 /// Values a new record gets before its action's changes run: a generated primary key,
-/// the first lock version, attribute defaults, and timestamps.
+/// attribute defaults, and timestamps.
 pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
     let missing =
         |fields: &FieldMap, name: &str| matches!(fields.get(name), None | Some(Value::Null));
     generate_pk(def, fields);
-    if let Some(version) = def.optimistic_lock_attribute()
-        && missing(fields, version)
-    {
-        fields.insert(version.to_string(), Value::Int(1));
-    }
     for attr in def.attributes {
         if let Some(default) = attr.default_fn
             && missing(fields, attr.name)
@@ -598,15 +594,11 @@ pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
     }
 }
 
-/// Values an update sets before its action's changes run: the next lock version and a
-/// new `updated_at`.
-pub(crate) fn prepare_update_fields(def: &ResourceDef, existing: &FieldMap, fields: &mut FieldMap) {
-    if let Some(version) = def.optimistic_lock_attribute() {
-        let current = match existing.get(version) {
-            Some(Value::Int(n)) => *n,
-            _ => 1,
-        };
-        fields.insert(version.to_string(), Value::Int(current + 1));
+/// Values an update sets before its action's changes run: the next lock version, where
+/// the action has an optimistic lock (as Ash's adds one to it), and a new `updated_at`.
+pub(crate) fn prepare_update_fields(def: &ResourceDef, action: &ActionDef, existing: &FieldMap, fields: &mut FieldMap) {
+    for version in action.optimistic_locks() {
+        fields.insert(version.to_string(), crate::engine::next_version(existing.get(version)));
     }
     if let Some((_created_at, updated_at)) = def.timestamps {
         fields.insert(

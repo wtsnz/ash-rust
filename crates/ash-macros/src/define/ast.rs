@@ -15,7 +15,6 @@ pub struct ResourceDefinition {
     pub extensions: Vec<Expr>,
     pub notifiers: Vec<Expr>,
     pub extends: Vec<ExtendSpec>,
-    pub optimistic_lock: Option<Ident>,
     pub identities: Vec<IdentitySpec>,
     pub indexes: Vec<IndexSpec>,
     pub checks: Vec<CheckSpec>,
@@ -45,7 +44,6 @@ impl ResourceDefinition {
             extensions: Vec::new(),
             notifiers: Vec::new(),
             extends: Vec::new(),
-            optimistic_lock: None,
             identities: Vec::new(),
             indexes: Vec::new(),
             checks: Vec::new(),
@@ -118,7 +116,6 @@ pub struct AttributeSpec {
     pub ident: Ident,
     pub ty: Type,
     pub pk: bool,
-    pub version: bool,
     pub generated: bool,
     pub atom: Option<Vec<String>>,
     pub is_enum: bool,
@@ -132,7 +129,7 @@ impl AttributeSpec {
         if self.is_enum {
             return true;
         }
-        if self.pk || self.version || self.atom.is_some() {
+        if self.pk || self.atom.is_some() {
             return false;
         }
         !crate::ast_helpers::is_builtin_attr_type(&self.ty)
@@ -367,6 +364,10 @@ pub enum ChangeSpec {
     AtomicUpdate {
         field: Ident,
         expr: crate::define::ast::CalculationExprSpec,
+    },
+    /// `optimistic_lock(field)`: the action writes only at the version it read.
+    OptimisticLock {
+        field: Ident,
     },
     BeforeAction(Expr),
     AfterAction(Expr),

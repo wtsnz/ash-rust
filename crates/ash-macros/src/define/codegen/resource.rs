@@ -185,8 +185,6 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             } else {
                 quote! { ::ash_core::AttributeDef::pk(#name_str, <#ty as ::ash_core::AshType>::ATTR_TYPE) }
             });
-        } else if a.version || def.optimistic_lock.as_ref() == Some(&a.ident) {
-            attr_defs.push(quote! { ::ash_core::AttributeDef::version(#name_str) });
         } else if a.uses_ash_type_storage() {
             let inner_ty = option_inner(ty).unwrap_or(ty);
             if let Some(default_expr) = &a.default {

@@ -1652,13 +1652,16 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         items.extend(self.atomic_check(resource, conditions)?);
         let subquery = self.atomic_subquery(resource, query, &table, &items)?;
 
-        let mut sql = format!(
-            "DELETE FROM {table} AS __ash_t USING ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}"
-        );
-        if !conditions.is_empty() {
-            sql.push_str(" AND __ash_s.\"__ash_check\" IS NULL");
-        }
-        sql.push_str(" RETURNING __ash_t.*");
+        let checked = if conditions.is_empty() { "" } else { " AND __ash_s.\"__ash_check\" IS NULL" };
+        let sql = if self.dialect.deletes_using() {
+            format!(
+                "DELETE FROM {table} AS __ash_t USING ({subquery}) AS __ash_s WHERE __ash_t.{pk_col} = __ash_s.{pk_col}{checked} RETURNING __ash_t.*"
+            )
+        } else {
+            let checked = checked.trim_start_matches(" AND ");
+            let checked = if checked.is_empty() { String::new() } else { format!(" WHERE {checked}") };
+            format!("DELETE FROM {table} WHERE {pk_col} IN (SELECT __ash_s.{pk_col} FROM ({subquery}) AS __ash_s{checked}) RETURNING *")
+        };
         if let Some(err) = self.invalid_param.take() {
             return Err(err);
         }
@@ -1839,15 +1842,6 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             set_clauses.join(", ")
         );
         sql.push_str(&self.tenant_condition(resource, None)?);
-
-        if let Some(v_attr) = resource.optimistic_lock_attribute()
-            && let Some(Value::Int(new_v)) = fields.get(v_attr)
-        {
-            let expected_v = new_v - 1;
-            let v_col = ident(self.dialect, v_attr)?;
-            let v_param = self.push_param(Value::Int(expected_v));
-            sql.push_str(&format!(" AND {v_col} = {v_param}"));
-        }
 
         if self.dialect.supports_returning() {
             sql.push_str(" RETURNING *");

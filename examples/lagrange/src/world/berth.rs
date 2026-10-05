@@ -24,7 +24,7 @@ resource! {
             code: String;
             clamp: ClampType;
             max_mass_tonnes: i64;
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         identities {
@@ -56,13 +56,14 @@ resource! {
             }
 
             update recode {
+                change optimistic_lock(version);
                 accept [code];
                 validate string_length(code, min: 1, max: 12);
             }
 
             /// Takes the berth's lock before a reservation is written. Two dispatchers
             /// that read the same version cannot both claim it.
-            update claim {}
+            update claim { change optimistic_lock(version); }
         }
 
         policies {

@@ -17,7 +17,7 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
   - **Pattern 1: Additive Token-Forwarding (`extend <path>! { ... }`)**: Zero-coupling hooks for companion traits, search indexing, and audit logging.
   - **Pattern 2: Transformative Macro Decorators (`#[transformer] resource! { ... }`)**: Spark-style compile-time AST transformers for state machines, soft delete, and timestamps.
 - **Declarative State Machines (`ash-state-machine`)**: Model lifecycles, valid transitions, and state checks with zero boilerplate.
-- **Optimistic Concurrency Control**: Built-in `[version]` attributes prevent lost updates with `Error::StaleRecord`.
+- **Optimistic Concurrency Control**: As in Ash, an action with `change optimistic_lock(version);` writes only at the version the record was read at, else `Error::StaleRecord`, preventing lost updates.
 - **Keyset & Offset Pagination**: Cursor-based keyset pagination (`page_keyset`) and offset pagination (`page_offset`) returning a uniform `Page<T>`.
 - **PubSub & Action Notifiers**: Decoupled post-commit event broadcasts with wildcard topic subscriptions (`"orders:*"`, `"order:create"`) and atomic transactional buffering in `Multi`.
 - **Resource & Field-Level Authorization**: Role- and actor-based policies with automatic read redaction and mutation enforcement.
@@ -79,7 +79,7 @@ resource! {
             title: String;
             completed: bool;
             priority: i64;
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         actions {
@@ -97,6 +97,7 @@ resource! {
             }
 
             update complete {
+                change optimistic_lock(version);
                 change set(completed = true);
             }
 
@@ -160,7 +161,7 @@ Comprehensive guides are available in the **[`docs/`](docs/)** directory:
 - **[DSL & Modeling Guide](docs/dsl-guide.md)**: In-depth reference for `resource!`, `domain!`, attributes, identities, indexes, checks, embedded resources, timestamps, calculations, aggregates, relationships (`belongs_to`, `has_one`, `has_many`, `many_to_many`), and actions.
 - **[Advanced Capabilities](docs/features.md)**: Ash.Multi transactions, state machines, optimistic locking, query preparations, SQL calculations, multi-store data layer registry, keyset/offset pagination, field-level policies, cascading deletes, managed relationships, and bulk operations.
 - **[Authentication & Token Security](docs/wip/0004-ash-authentication.md)**: Declarative authentication strategies (`ash-authentication`), Argon2id password hashing, JWT bearer tokens, API key management, and Axum HTTP extractor.
-- **[Performance Benchmarks](docs/benchmarks.md)**: Empirical comparison against canonical Ash Elixir (about 8x on core actions, 1.7–3.3x on PostgreSQL reads, zero GC pressure) and Criterion regression testing.
+- **[Performance Benchmarks](docs/benchmarks.md)**: End-to-end comparison against Ash in Elixir (about 1.1–2.5x ahead on the same app over HTTP and PostgreSQL, with 3.5–10x less server CPU per operation), in-memory framework-overhead micro-benchmarks, and Criterion regression testing.
 
 ---
 

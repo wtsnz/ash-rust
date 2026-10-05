@@ -535,10 +535,13 @@ fn nested_page(page: &Json, pagination: ash_core::Pagination, path: &[String], n
     let text = |key: &str| map.get(key).and_then(Json::as_str).map(str::to_string);
     let offset = number("offset");
     let (after, before) = (text("after"), text("before"));
+    let limit = number("limit").or(pagination.default_limit).map(|limit| pagination.max_page_size.map_or(limit, |max| limit.min(max)));
     Ok(NestedPage {
-        limit: number("limit").or(pagination.default_limit),
+        limit,
         offset,
-        keyset: offset.is_none() && (after.is_some() || before.is_some() || (pagination.keyset && !pagination.offset)),
+        // As Ash picks a page: a cursor is a keyset, an offset is an offset, and
+        // otherwise a read that can page by keyset does, even when it also offsets.
+        keyset: after.is_some() || before.is_some() || (offset.is_none() && pagination.keyset),
         after,
         before,
         count: map.get("count").and_then(Json::as_bool) == Some(true),

@@ -18,7 +18,7 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
   - Query preparations on read actions (`prepare filter(...)`, `prepare sort(...)`, `prepare limit(...)`, `prepare offset(...)`).
   - Rich expressions in calculations (`total = price * quantity`, `display = coalesce(...)`, `badge = if_else(...)`).
   - Custom action arguments (`argument name: Type`), validations (`present`, `string_length`, `numericality`, `one_of`), and changes (`set`, `set_new`).
-  - Optimistic locking configuration (`[version]`).
+  - Optimistic locking, per action (`change optimistic_lock(version);`).
   - Per-resource storage (`store SqliteStore;` / `MemoryStore` / `PostgresStore`, or a custom `StoreTag`).
   - Extension token forwarding (`extend <macro>! { ... }`) for zero-coupling 3rd-party integrations (Pattern 1).
 - **`domain!` Macro**:

@@ -202,7 +202,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         __ash_assert_assignable(&__ash_record.#field, &#argument);
                     });
                 }
-                ChangeSpec::RelateActor { field } | ChangeSpec::AtomicUpdate { field, .. } => {
+                ChangeSpec::RelateActor { field } | ChangeSpec::AtomicUpdate { field, .. } | ChangeSpec::OptimisticLock { field } => {
                     field_probes.push(quote_spanned! { field.span() =>
                         let _ = &__ash_record.#field;
                     });
@@ -539,13 +539,6 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
         probes.push(quote_spanned! { ext.span() =>
             let _: &'static dyn ::ash_core::ResourceExtension = #ext;
         });
-    }
-
-    if let Some(lock) = &def.optimistic_lock {
-        probes.push(ns_field_probe(
-            &Ident::new("__ash_accept", lock.span()),
-            lock,
-        ));
     }
 
     for identity in &def.identities {
