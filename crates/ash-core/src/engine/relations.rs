@@ -199,9 +199,11 @@ pub async fn load_related_query<D: DataLayer>(
 /// How many of `query`'s rows relate to each of `sources`, in the same order.
 ///
 /// The count is the relationship read's, as Ash counts a nested page: the destination's
-/// read policies, the tenant and `query`'s filter, with no limit, offset or sort. Each
-/// distinct key is counted through the data layer, `COUNT(*)` where it has one. Sources
-/// that share a key share a count.
+/// read policies, the tenant and `query`'s filter (with the arguments of the calculations
+/// it filters on), with no limit, offset or sort. It counts the rows the page can link to
+/// a source: a row whose key a field policy hides from the actor links to none, so it
+/// isn't counted. Each distinct key is counted through the data layer, `COUNT(*)` where
+/// it has one. Sources that share a key share a count.
 pub async fn count_related_query<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ResourceDef,
@@ -216,14 +218,22 @@ pub async fn count_related_query<D: DataLayer>(
         ))
     })?;
     let dest = (rel.destination)();
-    let shape = RelatedQuery { filter: query.filter.clone(), ..RelatedQuery::default() };
+    let shape = RelatedQuery { filter: query.filter.clone(), calculation_args: query.calculation_args.clone(), ..RelatedQuery::default() };
+    // The rows the page links: their keys readable to the actor.
+    let linkable = |columns: &[&str]| -> Result<CompiledQuery> {
+        let mut base = unpaged(related_read(ctx, dest, None, &shape)?);
+        if let Some(readable) = crate::policy::readable_condition(dest, columns, ctx.actor.as_ref())? {
+            base.filter = Some(Filter::and(base.filter.take().into_iter().chain([readable])));
+        }
+        Ok(base)
+    };
     match rel.kind {
         RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
             let keys: Vec<Option<Vec<Value>>> = sources.iter().map(|source| rel.source_key(source)).collect();
             if keys.iter().all(Option::is_none) {
                 return Ok(vec![0; sources.len()]);
             }
-            let base = unpaged(related_read(ctx, dest, None, &shape)?);
+            let base = linkable(&rel.destination_columns())?;
             let mut counts: BTreeMap<Vec<Value>, usize> = BTreeMap::new();
             for source in sources {
                 let Some(key) = rel.source_key(source) else { continue };
@@ -267,7 +277,7 @@ pub async fn count_related_query<D: DataLayer>(
                     linked.entry(source_id).or_default().insert(dest_id);
                 }
             }
-            let base = unpaged(related_read(ctx, dest, None, &shape)?);
+            let base = linkable(&[rel.destination_attribute])?;
             let mut counts: BTreeMap<Value, usize> = BTreeMap::new();
             for source_id in keys.iter().flatten() {
                 if counts.contains_key(source_id) {
@@ -291,6 +301,7 @@ pub async fn count_related_query<D: DataLayer>(
 }
 
 /// `read` with the paging and the loads taken off, so a count counts every matching row.
+/// The calculations' arguments stay: the filter may compute a calculation that takes them.
 fn unpaged(mut read: CompiledQuery) -> CompiledQuery {
     read.limit = None;
     read.offset = None;
@@ -298,7 +309,6 @@ fn unpaged(mut read: CompiledQuery) -> CompiledQuery {
     read.select = None;
     read.aggregates.clear();
     read.calculations.clear();
-    read.calculation_args.clear();
     read
 }
 

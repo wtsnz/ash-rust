@@ -334,6 +334,16 @@ pub fn hidden_fields(resource: &ResourceDef, actor: Option<&Actor>, record: &Fie
     Ok(hidden)
 }
 
+/// Where `actor` may read every one of `fields` of `resource` under its field policies, as
+/// a filter on the record: `None` where nothing hides any of them.
+pub(crate) fn readable_condition(resource: &ResourceDef, fields: &[&str], actor: Option<&Actor>) -> Result<Option<Filter>> {
+    let conditions: Vec<Filter> = fields.iter().map(|field| field_condition(resource, field, actor)).collect::<Result<Vec<_>>>()?.into_iter().flatten().collect();
+    Ok(match Filter::and(conditions) {
+        Filter::True => None,
+        condition => Some(condition),
+    })
+}
+
 /// Where `actor` may read `field` of `resource` under its field policies, as a filter on
 /// the record: `None` where nothing hides it (no field policy, or the primary key, which
 /// Ash never hides).

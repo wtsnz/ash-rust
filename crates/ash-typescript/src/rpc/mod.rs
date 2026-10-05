@@ -1013,7 +1013,15 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     ) -> Result<Vec<Json>, Failure> {
         let pk = dest.primary_key().map(|attr| attr.name).unwrap_or("id");
         let mut query: RelatedQuery = nested.query.clone();
-        let mut sort = ash_core::keyset_sort(dest, query.sort.clone());
+        // The request's sort, then the read's prepared sort, then the primary key to break
+        // ties, as Ash adds its stability sort to the prepared query.
+        let mut sort = query.sort.clone();
+        for prepared in prepared_sort(dest.default_read()) {
+            if !sort.iter().any(|given| given.field == prepared.field) {
+                sort.push(prepared);
+            }
+        }
+        let mut sort = ash_core::keyset_sort(dest, sort);
         let backward = page.keyset && page.before.is_some();
         if page.keyset {
             if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
@@ -1044,13 +1052,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             if action.pagination.is_some_and(|pagination| pagination.countable == Countable::No) {
                 return Err(Failure::new("invalid_page", "Invalid pagination", format!("Action {} cannot be counted", action.name)));
             }
-            let counting = RelatedQuery { filter: nested.query.filter.clone(), ..RelatedQuery::default() };
-            ash_core::count_related_query(ctx, resource, rel_name, rows, &counting)
-                .await
-                .map_err(|e| self.failure(e))?
-                .into_iter()
-                .map(|count| Json::from(count))
-                .collect()
+            let counting =
+                RelatedQuery { filter: nested.query.filter.clone(), calculation_args: nested.query.calculation_args.clone(), ..RelatedQuery::default() };
+            ash_core::count_related_query(ctx, resource, rel_name, rows, &counting).await.map_err(|e| self.failure(e))?.into_iter().map(Json::from).collect()
         } else {
             vec![Json::Null; rows.len()]
         };
