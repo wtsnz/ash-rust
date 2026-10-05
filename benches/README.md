@@ -29,7 +29,7 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 4. **Ash Elixir Benchmark Suites (Benchee)**
    After priming each workload, the suites switch the BEAM code server to `:embedded` mode (the production release default) so optional-module lookups do not walk the Mix.install code path.
    - **Core Engine Benchmark**: `benches/ash_elixir_bench.exs`
-     - Measures `Ticket.open`, `Representative.create`, and 100-record filtered reads using Ash 3.0 + `Ash.DataLayer.Ets`.
+     - Measures `Ticket.open`, `Representative.create`, 100-record filtered reads and `load_aggregates` using Ash 3.0 + `Ash.DataLayer.Ets`, through the helpdesk's policies.
      - Run: `mise exec elixir erlang -- elixir benches/ash_elixir_bench.exs`
    - **GraphQL API Benchmark**: `benches/ash_graphql_elixir_bench.exs`
      - Measures `getTicket` single record, 100-record collection, filtered & sorted queries, keyset pagination, DataLoader nested relationships, and `openTicket` mutations using `ash_graphql` + `absinthe` + ETS.
@@ -41,8 +41,8 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 5. **The Elixir twins' benchmarks**
    - **Helpdesk with its policies**: `examples/elixir/helpdesk/bench/core.exs`
      - The workloads of `examples/helpdesk/examples/bench.rs` on the full Elixir desk, with the
-       policies the Rust desk runs (the Benchee scripts above model resources with none), on ETS
-       and on SQLite, plus `load_aggregates` on ETS. AshSqlite serves no resource aggregates.
+       policies the Rust desk runs, as the Benchee script above does, on ETS and on SQLite,
+       plus `load_aggregates` on ETS. AshSqlite serves no resource aggregates.
      - Run: `cd examples/elixir/helpdesk && mise exec elixir erlang -- mix run bench/core.exs`
    - **Cybercab**: `examples/benchmarks/cybercab` drives the Rust and Elixir servers with the same load.
    - **Supportdesk**: `examples/supportdesk/bench` drives both desks through their real clients.
@@ -52,15 +52,18 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
 
 ## Performance Comparison: Rust (`ash-rust`) vs. Elixir (`Ash 3.0`)
 
-Measured 2026-09-18 on Apple M4 Max (16 cores, 128GB RAM). Elixir 1.20.1 / OTP 29.0.2 with the code server in `:embedded` mode after warmup. Rust 1.90.0 release. Ash 3.33.6 vs `ash-core` 0.1.0.
+Measured 2026-10-05 (core actions and PostgreSQL) on Apple M4 Max (16 cores, 128GB RAM), with other applications open (load average 6-10), so read the ratios rather than the absolute figures; the GraphQL figures are those of 2026-09-18. Elixir 1.20.1 / OTP 29.0.5 with the code server in `:embedded` mode after warmup. Rust 1.90.0 release. Ash 3.34.4 vs `ash-core` 0.1.0. Every figure is the median of several runs (core: 6 Rust, 4 Elixir; PostgreSQL: 8 Rust, 5 Elixir).
 
 ### Core Engine & Actions
 
+Both sides run through the helpdesk's policies: `open` needs an actor, and a read is filtered to what the reader may read (the customer who opened the tickets).
+
 | Workload | Ash Elixir Throughput | Ash Elixir Median Latency | ash-rust Throughput | ash-rust Median Latency | Speedup |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| `Ticket.open` (Validation + Action) | 37,550 ips | 24.8 µs | **309,211 ips** | **3.0 µs** | **~8.2x faster** |
-| `Representative.create` (Action) | 42,120 ips | 22.0 µs | **405,219 ips** | **2.3 µs** | **~9.6x faster** |
-| `Ticket.read` (100 records filter) | 4,790 ips | 192.3 µs | **30,501 ips** | **31.6 µs** | **~6.4x faster** |
+| `Ticket.open` (Policy + Validation + Action) | 28,270 ips | 33.8 µs | **228,073 ips** | **4.08 µs** | **~8.1x faster** |
+| `Representative.create` (Action) | 37,985 ips | 25.0 µs | **279,831 ips** | **3.33 µs** | **~7.4x faster** |
+| `Ticket.read` (100 records filter) | 3,215 ips | 296.3 µs | **25,715 ips** | **37.7 µs** | **~8.0x faster** |
+| `load_aggregates` (3 aggregates, 20 tickets) | 2,100 ips | 457.6 µs | **38,344 ips** | **26.1 µs** | **~18.3x faster** |
 
 ### GraphQL API Layer
 
@@ -75,16 +78,18 @@ Measured 2026-09-18 on Apple M4 Max (16 cores, 128GB RAM). Elixir 1.20.1 / OTP 2
 
 ### PostgreSQL Data Layer (`ash-postgres` vs `ash_postgres` + Ecto)
 
-Not re-run in this pass (Docker was unavailable). Previous numbers, measured against PostgreSQL 16 on port 5433:
+PostgreSQL 16 (`pgvector/pgvector:pg16`) in Docker on the same machine. Writes are bound by the VM's fsync and vary by about 2x between runs, so the table gives each side's median throughput and median latency, with the range across runs below it.
 
-| PostgreSQL Workload | Ash Elixir (`ash_postgres` + Ecto) | Ash Rust (`ash-postgres` + sqlx) | Rust Speedup Multiplier |
+| PostgreSQL Workload | Ash Elixir (`ash_postgres` + Ecto) | Ash Rust (`ash-postgres`, tokio-postgres) | Rust Speedup Multiplier |
 |:---|:---:|:---:|:---:|
-| **1. Point Write (`RETURNING *`)** | 615 ops/sec (1,150 µs) | **832 ops/sec (1,006 µs)** | **~1.35x faster** (1.14x lower latency) |
-| **2. Point Read (`id` PK Lookup)** | 4,243 ops/sec (220 µs) | **2,980 ops/sec (323 µs)** | ~0.7x (both ~200-300 µs network roundtrip) |
-| **3. Filtered & Sorted (50 items)** | 988 ops/sec (910 µs) | **1,623 ops/sec (595 µs)** | **~1.64x faster** (1.53x lower latency) |
-| **4. Correlated Aggregates (Subqueries)** | 959 ops/sec (970 µs) | **1,394 ops/sec (694 µs)** | **~1.45x faster** (1.40x lower latency) |
-| **5. Bulk Ingestion (100 Tickets)** | 152 ops/sec (6,050 µs) | **354 ops/sec (2,570 µs)** | **~2.33x faster** (2.35x lower latency) |
-| **6. Transactional Workflow (BEGIN/COMMIT)** | 571 ops/sec (1,590 µs) | **691 ops/sec (1,312 µs)** | **~1.21x faster** (1.21x lower latency) |
+| **1. Point Write (`RETURNING *`)** | 766 ops/sec (1,120 µs) | **958 ops/sec (1,010 µs)** | **~1.25x faster** (1.11x lower latency) |
+| **2. Point Read (`id` PK Lookup)** | 6,960 ops/sec (137 µs) | **11,969 ops/sec (81 µs)** | **~1.72x faster** (1.70x lower latency) |
+| **3. Filtered & Sorted (50 items)** | 1,250 ops/sec (770 µs) | **3,390 ops/sec (304 µs)** | **~2.71x faster** (2.53x lower latency) |
+| **4. Correlated Aggregates (Subqueries)** | 1,250 ops/sec (670 µs) | **4,137 ops/sec (251 µs)** | **~3.31x faster** (2.67x lower latency) |
+| **5. Bulk Ingestion (100 Tickets)** | 137 ops/sec (6,650 µs) | **311 ops/sec (2,934 µs)** | **~2.27x faster** (2.27x lower latency) |
+| **6. Transactional Workflow (BEGIN/COMMIT)** | 750 ops/sec (1,200 µs) | 646 ops/sec (1,144 µs) | ~0.9x (level: the runs' ranges overlap) |
+
+Range of throughput across runs, Elixir / Rust, in ops/sec: write 510-990 / 520-1,527; read 6,220-6,990 / 11,290-12,748; filtered 599-2,010 / 1,959-4,778; aggregates 1,190-1,880 / 2,713-6,055; bulk 105-149 / 239-377; transaction 660-950 / 328-1,066.
 
 ---
 

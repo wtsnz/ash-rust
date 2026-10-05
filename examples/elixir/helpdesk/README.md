@@ -36,7 +36,6 @@ mise exec elixir erlang -- mix run bench/core.exs
 
 `bench/core.exs` runs the workloads of the Rust example's `examples/bench.rs` and Criterion suite:
 `Ticket.open`, `Representative.create`, a filtered read of 100 tickets, and aggregates, on
-ETS and on SQLite. Unlike `benches/ash_elixir_bench.exs`, its resources carry the desk's
-policies, as the Rust ones do.
+ETS and on SQLite, through the desk's policies as the Rust ones run.
 
 What the twin found missing, or different, is in [`examples/GAPS.md`](../../GAPS.md).
