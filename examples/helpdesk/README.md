@@ -39,6 +39,15 @@ cargo run -p helpdesk -- list
 
 ---
 
+## The Elixir twin
+
+The same desk on Ash for Elixir, [`examples/elixir/helpdesk`](../elixir/helpdesk): the same
+resources, actions and policies, on ETS and on SQLite, with the tests of this example ported
+to ExUnit and its benchmarks run on both. What the twin found missing, or different, is in
+[GAPS.md](../GAPS.md).
+
+---
+
 ## Running Benchmarks & Tests
 
 Run unit and integration tests:

@@ -64,3 +64,70 @@ jobs:
         working-directory: examples/cybercab/frontend
         run: bun install --frozen-lockfile
       - run: cargo test --locked --all
+
+  # The Elixir twins of the examples (examples/elixir): each is the same app on Ash for Elixir,
+  # kept in step with its Rust example.
+  elixir:
+    name: Elixir (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [helpdesk, kanban, astro-helpdesk]
+    defaults:
+      run:
+        working-directory: examples/elixir/${{ matrix.project }}
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+          version-type: loose
+      - uses: actions/cache@v4
+        with:
+          path: |
+            examples/elixir/${{ matrix.project }}/deps
+            examples/elixir/${{ matrix.project }}/_build
+          key: elixir-${{ matrix.project }}-${{ runner.os }}-${{ hashFiles(format('examples/elixir/{0}/mix.lock', matrix.project)) }}
+          restore-keys: elixir-${{ matrix.project }}-${{ runner.os }}-
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+      - name: GraphQL schema is up to date
+        if: matrix.project == 'astro-helpdesk'
+        run: |
+          mix absinthe.schema.sdl --schema AstroHelpdesk.Schema priv/schema.graphql
+          git diff --exit-code priv/schema.graphql
+
+  # The two twins with no tests of their own (they're checked by their parity and benchmark
+  # drivers, which need Postgres and both servers) must at least build.
+  elixir-build:
+    name: Elixir build (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [cybercab, supportdesk]
+    defaults:
+      run:
+        working-directory: examples/elixir/${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+          version-type: loose
+      - uses: actions/cache@v4
+        with:
+          path: |
+            examples/elixir/${{ matrix.project }}/deps
+            examples/elixir/${{ matrix.project }}/_build
+          key: elixir-${{ matrix.project }}-${{ runner.os }}-${{ hashFiles(format('examples/elixir/{0}/mix.lock', matrix.project)) }}
+          restore-keys: elixir-${{ matrix.project }}-${{ runner.os }}-
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors

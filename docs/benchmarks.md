@@ -128,6 +128,22 @@ ash-rust/
 
 ---
 
+### Every benchmark, Rust and Elixir
+
+| Layer | Rust | Elixir |
+| :--- | :--- | :--- |
+| Core actions | `examples/helpdesk` (`examples/bench.rs`, Criterion) | `benches/ash_elixir_bench.exs` (no policies); `examples/elixir/helpdesk/bench/core.exs` (the desk's policies, ETS and SQLite) |
+| Core aggregates | Criterion `load_aggregates` | `examples/elixir/helpdesk/bench/core.exs` (ETS; AshSqlite has none) |
+| GraphQL | `crates/ash-graphql/examples/bench_graphql.rs` | `benches/ash_graphql_elixir_bench.exs` |
+| Postgres | `crates/ash-postgres/examples/bench_postgres.rs` | `benches/ash_postgres_elixir_bench.exs` |
+| Cybercab, over HTTP and WebSocket | `examples/benchmarks/cybercab` | the same driver, against `examples/elixir/cybercab` |
+| Supportdesk, through the generated clients | `examples/supportdesk/bench` | the same driver, against `examples/elixir/supportdesk` |
+
+The `benches/` Elixir scripts model resources without policies, where the Rust helpdesk runs
+its own: see [`examples/GAPS.md`](../examples/GAPS.md) for how much that moves the core figures.
+
+---
+
 ## 6. Running the Benchmarks
 
 ### 1. Criterion Statistical Regression Suite

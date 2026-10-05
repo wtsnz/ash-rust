@@ -38,6 +38,16 @@ This directory contains benchmarking suites to monitor `ash-rust` performance ov
      - Measures point writes, reads by ID, filtered/sorted queries, correlated aggregates, bulk ingestion, and `Ash.transaction` against PostgreSQL using `ash_postgres` + `Ecto` + `Postgrex`.
      - Run: `mise exec elixir erlang -- elixir benches/ash_postgres_elixir_bench.exs`
 
+5. **The Elixir twins' benchmarks**
+   - **Helpdesk with its policies**: `examples/elixir/helpdesk/bench/core.exs`
+     - The workloads of `examples/helpdesk/examples/bench.rs` on the full Elixir desk, with the
+       policies the Rust desk runs (the Benchee scripts above model resources with none), on ETS
+       and on SQLite, plus `load_aggregates` on ETS. AshSqlite serves no resource aggregates.
+     - Run: `cd examples/elixir/helpdesk && mise exec elixir erlang -- mix run bench/core.exs`
+   - **Cybercab**: `examples/benchmarks/cybercab` drives the Rust and Elixir servers with the same load.
+   - **Supportdesk**: `examples/supportdesk/bench` drives both desks through their real clients.
+   - Kanban and astro-helpdesk have twins ([`examples/GAPS.md`](../examples/GAPS.md)) but no benchmark.
+
 ---
 
 ## Performance Comparison: Rust (`ash-rust`) vs. Elixir (`Ash 3.0`)
