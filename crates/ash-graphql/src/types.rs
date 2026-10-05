@@ -339,12 +339,13 @@ pub fn parse_input_value(value: &GqlValue, ty: AttrType) -> Result<AshValue, asy
         // string, as AshGraphql takes a map (its `Json` and `JsonString` scalars both
         // parse a string), so a client written for AshGraphql works as it is.
         AttrType::Map => match value {
-            GqlValue::String(text) => {
-                let json: serde_json::Value =
-                    serde_json::from_str(text).map_err(|_| async_graphql::Error::new("expected a JSON object, or JSON text in a string"))?;
-                Ok(graphql_value_to_ash_value(&GqlValue::from_json(json)?))
-            }
-            other => Ok(graphql_value_to_ash_value(other)),
+            // The text must hold an object, as AshGraphql's map scalars cast it to a map.
+            GqlValue::String(text) => match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(json @ serde_json::Value::Object(_)) => Ok(graphql_value_to_ash_value(&GqlValue::from_json(json)?)),
+                _ => Err(async_graphql::Error::new("expected a JSON object, or JSON text in a string")),
+            },
+            GqlValue::Object(_) | GqlValue::Null => Ok(graphql_value_to_ash_value(value)),
+            _ => Err(async_graphql::Error::new("expected a JSON object, or JSON text in a string")),
         },
         // Cast as the type casts its JSON: each field, or the member given.
         AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => ash_core::input::value_input(ty, &value.clone().into_json()?).map_err(|e| async_graphql::Error::new(e.to_string())),

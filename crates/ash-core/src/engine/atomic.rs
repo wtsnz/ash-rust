@@ -36,18 +36,20 @@ pub(crate) struct AtomicPlan {
 /// failed one of them.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Guards {
-    /// The lock version attribute and the version the record must still have.
-    pub version: Option<(&'static str, i64)>,
+    /// Each lock version attribute and the version the record must still have.
+    pub versions: Vec<(&'static str, i64)>,
     /// The records the write policies let the actor change.
     pub policy: Option<Filter>,
 }
 
 impl Guards {
     pub(crate) fn filter(&self) -> Option<Filter> {
-        let version = self.version.map(|(field, expected)| Filter::eq(field, Value::Int(expected)));
-        match (version, self.policy.clone()) {
-            (Some(version), Some(policy)) => Some(Filter::and([version, policy])),
-            (version, policy) => version.or(policy),
+        let mut filters: Vec<Filter> = self.versions.iter().map(|(field, expected)| Filter::eq(*field, Value::Int(*expected))).collect();
+        filters.extend(self.policy.clone());
+        match filters.len() {
+            0 => None,
+            1 => filters.pop(),
+            _ => Some(Filter::and(filters)),
         }
     }
 
@@ -72,13 +74,13 @@ impl Guards {
             Ok(rows) => rows.into_iter().next(),
             Err(err) => return err,
         };
-        match (stored, self.version) {
-            (None, _) => Error::NotFound,
-            (Some(row), Some((field, expected))) if row.get(field).and_then(Value::as_int) != Some(expected) => {
+        match stored {
+            None => Error::NotFound,
+            Some(row) if self.versions.iter().any(|(field, expected)| row.get(*field).and_then(Value::as_int) != Some(*expected)) => {
                 Error::StaleRecord { resource: resource.name, id }
             }
-            (Some(_), _) if self.policy.is_some() => Error::Forbidden,
-            (Some(_), _) => Error::NotFound,
+            Some(_) if self.policy.is_some() => Error::Forbidden,
+            Some(_) => Error::NotFound,
         }
     }
 }
@@ -173,8 +175,8 @@ pub(crate) struct PlanInput<'a> {
     /// Values set outright: the accepted input, or what a changeset already changes.
     pub sets: FieldMap,
     pub arguments: &'a FieldMap,
-    /// The lock version the record must still have, and the record's id for the error.
-    pub expected_version: Option<(Value, i64)>,
+    /// The record's id, for the error, and each lock version it must still have, as read.
+    pub expected_versions: Option<(Value, Vec<(&'static str, i64)>)>,
     /// Whether the action's after-action and after-transaction changes are this plan's
     /// to run: not when a changeset already holds them.
     pub collect_hooks: bool,
@@ -209,17 +211,18 @@ pub(crate) fn plan_update(
             return Ok(Err("its relationships act on related records when it's deleted".into()));
         }
     }
-    let PlanInput { actor, tenant, mut sets, arguments, expected_version, collect_hooks, can_raise } = input;
+    let PlanInput { actor, tenant, mut sets, arguments, expected_versions, collect_hooks, can_raise } = input;
     let mut guards = Guards::default();
-    let lock = action.optimistic_lock();
+    let locks: Vec<&'static str> = action.optimistic_locks().collect();
     // The lock checks the version the record had when it was read: an update by id
     // hasn't read it, so reads it first, as Ash's optimistic lock can't run over a query.
-    if lock.is_some() && expected_version.is_none() {
+    if !locks.is_empty() && expected_versions.is_none() {
         return Ok(Err("its optimistic lock checks the version the record was read at".into()));
     }
+    let is_lock = |name: &str| locks.contains(&name);
     let updated_at = resource.timestamps.map(|(_, updated_at)| updated_at);
-    // The lock version and `updated_at` are the plan's to set, from the stored record.
-    sets.retain(|name, _| Some(name.as_str()) != lock && Some(name.as_str()) != updated_at);
+    // The lock versions and `updated_at` are the plan's to set, from the stored record.
+    sets.retain(|name, _| !is_lock(name) && Some(name.as_str()) != updated_at);
     validate_given(resource, &mut sets)?;
 
     let mut update = AtomicUpdate::default();
@@ -351,15 +354,17 @@ pub(crate) fn plan_update(
         return Err(Error::Forbidden);
     }
 
-    if let (Some(version), Some((id, expected))) = (lock, expected_version) {
-        if can_raise {
-            let resource_name = resource.name;
-            update.conditions.push(AtomicCondition::failing_with(
-                AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
-                move || Error::StaleRecord { resource: resource_name, id: id.clone() },
-            ));
-        } else {
-            guards.version = Some((version, expected));
+    if let Some((id, expected)) = expected_versions {
+        for (version, expected) in expected {
+            if can_raise {
+                let (resource_name, id) = (resource.name, id.clone());
+                update.conditions.push(AtomicCondition::failing_with(
+                    AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(expected))),
+                    move || Error::StaleRecord { resource: resource_name, id: id.clone() },
+                ));
+            } else {
+                guards.versions.push((version, expected));
+            }
         }
     }
 
@@ -375,7 +380,7 @@ pub(crate) fn plan_update(
         return Ok(Ok(AtomicPlan { update, guards, after_actions, after_transactions }));
     }
 
-    if let Some(version) = lock {
+    for &version in &locks {
         let bumped = AtomicExpr::Add(Box::new(AtomicExpr::field(version)), Box::new(AtomicExpr::value(1i64)));
         update.set(version, bumped);
     }
@@ -385,7 +390,7 @@ pub(crate) fn plan_update(
         let changed: Vec<AtomicExpr> = update
             .set
             .iter()
-            .filter(|(name, _)| Some(name.as_str()) != lock)
+            .filter(|(name, _)| !is_lock(name))
             .map(|(name, expr)| AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field(name.clone())), Box::new(expr.clone())))
             .collect();
         if !changed.is_empty() {

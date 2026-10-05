@@ -150,17 +150,34 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
     if !cascade.enter(resource, id.clone()) {
         return Ok(existing_fields.clone());
     }
-    let guard = super::lock::lock_guard(action, existing_fields);
+    let lock = super::lock::lock_of(action, existing_fields);
     if action.soft {
+        // The guarded write comes first, so a stale record archives nothing.
         let changes = soft_destroy_changes(resource, action, existing_fields, fields);
-        let stored = super::lock::update_guarded(ctx, resource, id.clone(), changes, guard).await?;
+        let stored = super::lock::update_guarded(ctx, resource, id.clone(), changes, lock).await?;
         cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
         return Ok(stored);
     }
+    // A stale record's related records stay: its lock is checked before they go.
+    if let Some(lock) = &lock
+        && cascades(resource, action)
+    {
+        super::lock::check_lock(ctx, resource, id.clone(), lock).await?;
+    }
     cascade_destroy_related(ctx, resource, action, id.clone(), existing_fields, cascade).await?;
     cascade_deletes(ctx, resource, id.clone(), existing_fields, cascade).await?;
-    super::lock::destroy_guarded(ctx, resource, id, guard).await?;
+    super::lock::destroy_guarded(ctx, resource, id, lock.as_ref()).await?;
     Ok(existing_fields.clone())
+}
+
+/// Whether a hard destroy through `action` acts on related records before the record
+/// goes: its `cascade_destroy`, or a relationship's `on_delete`.
+pub(crate) fn cascades(resource: &ResourceDef, action: &ActionDef) -> bool {
+    !action.cascade_destroy.is_empty()
+        || resource
+            .relationships
+            .iter()
+            .any(|rel| matches!(rel.kind, RelKind::HasMany | RelKind::HasOne) && rel.on_delete != OnDelete::Nothing)
 }
 
 /// What a soft destroy writes: the fields its changes set, a raised lock version, and a

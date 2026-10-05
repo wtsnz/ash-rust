@@ -190,6 +190,12 @@ pub trait SqlDialect: Send + Sync + 'static {
         "__ash_t.*"
     }
 
+    /// Whether a `DELETE` can join another table (`DELETE … USING`), as Postgres's can.
+    /// SQLite's can't, so an atomic delete selects its keys in a subquery.
+    fn deletes_using(&self) -> bool {
+        true
+    }
+
     /// Functions the data layer's statements call, created with the tables: on
     /// Postgres, the `ash_raise_error` an atomic update raises its errors through.
     fn database_functions(&self) -> &'static [&'static str] {
@@ -247,6 +253,10 @@ impl SqlDialect for SqliteDialect {
     // SQLite's RETURNING names only the updated table's columns, unqualified.
     fn returning_updated(&self) -> &'static str {
         "*"
+    }
+
+    fn deletes_using(&self) -> bool {
+        false
     }
 
     // A list is JSON text: one of its items equals the value.

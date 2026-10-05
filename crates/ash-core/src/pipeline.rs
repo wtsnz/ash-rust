@@ -597,12 +597,8 @@ pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
 /// Values an update sets before its action's changes run: the next lock version, where
 /// the action has an optimistic lock (as Ash's adds one to it), and a new `updated_at`.
 pub(crate) fn prepare_update_fields(def: &ResourceDef, action: &ActionDef, existing: &FieldMap, fields: &mut FieldMap) {
-    if let Some(version) = action.optimistic_lock() {
-        let current = match existing.get(version) {
-            Some(Value::Int(n)) => *n,
-            _ => 1,
-        };
-        fields.insert(version.to_string(), Value::Int(current + 1));
+    for version in action.optimistic_locks() {
+        fields.insert(version.to_string(), crate::engine::next_version(existing.get(version)));
     }
     if let Some((_created_at, updated_at)) = def.timestamps {
         fields.insert(

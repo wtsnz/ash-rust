@@ -167,7 +167,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
     let can = if action.soft { ctx.data.can_update_atomically(resource) } else { ctx.data.can_destroy_atomically(resource) };
-    let atomic = action.optimistic_lock().is_none() && can;
+    let atomic = !action.has_optimistic_lock() && can;
     if atomic {
         let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
             let plan = super::atomic::plan_update(
@@ -178,7 +178,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
                     tenant: ctx.tenant(),
                     sets: accepted,
                     arguments: &arguments,
-                    expected_version: None,
+                    expected_versions: None,
                     collect_hooks: true,
                     can_raise: ctx.data.can_raise_atomically(resource),
                 },
@@ -309,7 +309,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
         None => super::atomic::finding_read(resource, action)?,
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
-    if action.optimistic_lock().is_none() && ctx.data.can_update_atomically(resource) {
+    if !action.has_optimistic_lock() && ctx.data.can_update_atomically(resource) {
         let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
             let plan = super::atomic::plan_update(
                 resource,
@@ -319,7 +319,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
                     tenant: ctx.tenant(),
                     sets: accepted,
                     arguments: &arguments,
-                    expected_version: None,
+                    expected_versions: None,
                     collect_hooks: true,
                     can_raise: ctx.data.can_raise_atomically(resource),
                 },

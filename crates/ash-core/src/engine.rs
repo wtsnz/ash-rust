@@ -14,8 +14,8 @@ pub use lifecycle::{
     update, update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub(crate) use lifecycle::{destroy_dynamic_with, destroy_existing_returning};
-pub(crate) use lock::{destroy_guarded, lock_guard, update_guarded};
-pub(crate) use managed::{Cascade, cascade_destroy_related, persist_destroy};
+pub(crate) use lock::{check_lock, destroy_guarded, lock_of, next_version, update_guarded};
+pub(crate) use managed::{Cascade, cascade_destroy_related, cascades, persist_destroy};
 pub use managed::{handle_cascading_deletes, handle_managed_relationships};
 pub use pagination::{KeysetCursor, Page, build_keyset_filter, keyset_sort, keyset_values};
 pub use query::{Query, query};

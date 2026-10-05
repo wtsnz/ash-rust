@@ -425,12 +425,18 @@ impl Pagination {
 }
 
 impl ActionDef {
-    /// The attribute the action's optimistic lock checks, if it has one.
-    pub fn optimistic_lock(&self) -> Option<&'static str> {
-        self.changes.iter().find_map(|change| match change {
+    /// The attributes the action's optimistic locks check, in order: each, as an Ash
+    /// `optimistic_lock` change does, filters the write and adds one to its attribute.
+    pub fn optimistic_locks(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.changes.iter().filter_map(|change| match change {
             Change::OptimisticLock { field } => Some(*field),
             _ => None,
         })
+    }
+
+    /// Whether the action has an optimistic lock.
+    pub fn has_optimistic_lock(&self) -> bool {
+        self.optimistic_locks().next().is_some()
     }
 
     pub const fn create(name: &'static str) -> Self {

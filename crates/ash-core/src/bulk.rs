@@ -564,6 +564,18 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                     let mut outcomes = Vec::with_capacity(batch.len());
                     for row in batch {
                         let id = crate::value::required_pk(&row, pk)?;
+                        // A record changed since it was read is left out before anything
+                        // runs for it, as Ash's filter leaves a stale record out.
+                        if let Some(lock) = crate::engine::lock_of(action_def, &row)
+                            && let Err(err) = crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
+                        {
+                            match err {
+                                Error::StaleRecord { .. } => outcomes.push(Err(err)),
+                                err if scope.transactional() => return Err(err),
+                                err => outcomes.push(Err(err)),
+                            }
+                            continue;
+                        }
                         let destroyed = crate::engine::destroy_dynamic_with(
                             &ctx, &R::DEF, action_def, id, &row, &cascade,
                         )
@@ -619,6 +631,17 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                 let mut existing = Vec::with_capacity(batch.len());
                 let mut ids = Vec::with_capacity(batch.len());
                 for (id, fields) in parents {
+                    // A stale record is left out before its related records go.
+                    if let Some(lock) = crate::engine::lock_of(action_def, &fields)
+                        && let Err(err) = crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
+                    {
+                        match err {
+                            Error::StaleRecord { .. } => existing.push(Err(err)),
+                            err if scope.transactional() => return Err(err),
+                            err => existing.push(Err(err)),
+                        }
+                        continue;
+                    }
                     match crate::engine::handle_cascading_deletes(&ctx, &R::DEF, id.clone(), &fields).await {
                         Ok(()) => {
                             ids.push(id);
@@ -628,19 +651,23 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         Err(err) => existing.push(Err(err)),
                     }
                 }
-                match action_def.optimistic_lock() {
+                if action_def.has_optimistic_lock() {
                     // Each record as it was read, under the action's lock.
-                    Some(_) => {
-                        for row in existing.iter_mut() {
-                            let Ok(fields) = row else { continue };
-                            let id = crate::pipeline::pk_name(&R::DEF).and_then(|pk| crate::value::required_pk(fields, pk))?;
-                            let guard = crate::engine::lock_guard(action_def, fields);
-                            if let Err(err) = crate::engine::destroy_guarded(&ctx, &R::DEF, id, guard).await {
-                                *row = Err(err);
-                            }
+                    let cascades = crate::engine::cascades(&R::DEF, action_def);
+                    for row in existing.iter_mut() {
+                        let Ok(fields) = row else { continue };
+                        let id = crate::pipeline::pk_name(&R::DEF).and_then(|pk| crate::value::required_pk(fields, pk))?;
+                        let lock = crate::engine::lock_of(action_def, fields);
+                        match crate::engine::destroy_guarded(&ctx, &R::DEF, id, lock.as_ref()).await {
+                            Ok(()) => {}
+                            // Changed after its lock was checked and its related records
+                            // went: those must come back, so the batch fails.
+                            Err(err) if cascades && scope.transactional() => return Err(err),
+                            Err(err) => *row = Err(err),
                         }
                     }
-                    None => ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?,
+                } else {
+                    ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?;
                 }
                 finish_rows(&ctx, batch, existing, notify, scope.transactional()).await
             })
@@ -719,20 +746,17 @@ where
                         (id.clone(), changeset.changes(fields))
                     })
                     .collect();
-                let stored = match action_def.optimistic_lock() {
+                let stored = if action_def.has_optimistic_lock() {
                     // Each record as it was read, under the action's lock.
-                    Some(_) => {
-                        let guards: Vec<_> = batch
-                            .iter()
-                            .map(|(_, changeset)| changeset.existing().and_then(|existing| crate::engine::lock_guard(action_def, existing)))
-                            .collect();
-                        let mut stored = Vec::with_capacity(writes.len());
-                        for ((id, changes), guard) in writes.into_iter().zip(guards) {
-                            stored.push(crate::engine::update_guarded(&ctx, &R::DEF, id, changes, guard).await);
-                        }
-                        stored
+                    let locks: Vec<_> =
+                        batch.iter().map(|(_, changeset)| changeset.existing().and_then(|existing| crate::engine::lock_of(action_def, existing))).collect();
+                    let mut stored = Vec::with_capacity(writes.len());
+                    for ((id, changes), lock) in writes.into_iter().zip(locks) {
+                        stored.push(crate::engine::update_guarded(&ctx, &R::DEF, id, changes, lock).await);
                     }
-                    None => ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?,
+                    stored
+                } else {
+                    ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?
                 };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await
             })

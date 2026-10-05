@@ -518,6 +518,22 @@ impl DataLayer for Sqlite {
         true
     }
 
+    // A delete filtered as a query is one statement, as an update is, so an optimistic
+    // lock's guard holds as it deletes. Like an update, it checks no conditions.
+    fn can_destroy_atomically(&self, _resource: &ResourceDef) -> bool {
+        true
+    }
+
+    async fn destroy_atomic(&self, resource: &ResourceDef, query: &CompiledQuery, conditions: &[ash_core::AtomicCondition]) -> Result<Vec<FieldMap>> {
+        refuse_tenant_schema(resource, query.tenant.as_deref())?;
+        if !conditions.is_empty() {
+            return Err(Error::Invalid(format!("SQLite can't check a destroy of {}'s conditions in its statement", resource.name)));
+        }
+        let compiled = QueryCompiler::new(&SqliteDialect).compile_atomic_destroy(resource, query, conditions)?;
+        let rows = self.fetch_all_resource(&compiled, resource).await?;
+        rows.iter().map(|row| sql::row_to_fields(row, resource, &[], &[])).collect()
+    }
+
     /// SQLite can't raise an error from within a statement, as AshSqlite can't
     /// `expr_error`: an update runs as one statement only when nothing in it must fail.
     fn can_raise_atomically(&self, _resource: &ResourceDef) -> bool {
