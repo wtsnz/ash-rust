@@ -205,13 +205,11 @@ export type BerthBuildInput = BuildBerthInput;
 
 export interface RecodeBerthInput {
   code?: string | null;
-  version?: number | null;
 }
 
 export type BerthRecodeInput = RecodeBerthInput;
 
 export interface ClaimBerthInput {
-  version?: number | null;
 }
 
 export type BerthClaimInput = ClaimBerthInput;
@@ -483,37 +481,31 @@ export type ShipCommissionInput = CommissionShipInput;
 
 export interface AssignCaptainShipInput {
   captainId?: string | null;
-  version?: number | null;
 }
 
 export type ShipAssignCaptainInput = AssignCaptainShipInput;
 
 export interface DepartShipInput {
-  version?: number | null;
 }
 
 export type ShipDepartInput = DepartShipInput;
 
 export interface ArriveShipInput {
-  version?: number | null;
 }
 
 export type ShipArriveInput = ArriveShipInput;
 
 export interface BeginMaintenanceShipInput {
-  version?: number | null;
 }
 
 export type ShipBeginMaintenanceInput = BeginMaintenanceShipInput;
 
 export interface EndMaintenanceShipInput {
-  version?: number | null;
 }
 
 export type ShipEndMaintenanceInput = EndMaintenanceShipInput;
 
 export interface DecommissionShipInput {
-  version?: number | null;
 }
 
 export type ShipDecommissionInput = DecommissionShipInput;
@@ -593,31 +585,26 @@ export interface BookContractInput {
 export type ContractBookInput = BookContractInput;
 
 export interface LoadContractInput {
-  version?: number | null;
 }
 
 export type ContractLoadInput = LoadContractInput;
 
 export interface DispatchContractInput {
-  version?: number | null;
 }
 
 export type ContractDispatchInput = DispatchContractInput;
 
 export interface DeliverContractInput {
-  version?: number | null;
 }
 
 export type ContractDeliverInput = DeliverContractInput;
 
 export interface CloseContractInput {
-  version?: number | null;
 }
 
 export type ContractCloseInput = CloseContractInput;
 
 export interface CancelContractInput {
-  version?: number | null;
 }
 
 export type ContractCancelInput = CancelContractInput;
@@ -693,13 +680,11 @@ export type ContainerPackInput = PackContainerInput;
 
 export interface SealContainerInput {
   seal?: string | null;
-  version?: number | null;
 }
 
 export type ContainerSealInput = SealContainerInput;
 
 export interface ScrapContainerInput {
-  version?: number | null;
 }
 
 export type ContainerScrapInput = ScrapContainerInput;
@@ -778,45 +763,38 @@ export type VoyagePlanInput = PlanVoyageInput;
 
 export interface HoldBerthVoyageInput {
   reservationId?: string | null;
-  version?: number | null;
 }
 
 export type VoyageHoldBerthInput = HoldBerthVoyageInput;
 
 export interface ClearCustomsVoyageInput {
-  version?: number | null;
 }
 
 export type VoyageClearCustomsInput = ClearCustomsVoyageInput;
 
 export interface LaunchVoyageInput {
   departedAt?: string | null;
-  version?: number | null;
 }
 
 export type VoyageLaunchInput = LaunchVoyageInput;
 
 export interface ArriveVoyageInput {
   arrivedAt?: string | null;
-  version?: number | null;
 }
 
 export type VoyageArriveInput = ArriveVoyageInput;
 
 export interface CompleteVoyageInput {
-  version?: number | null;
 }
 
 export type VoyageCompleteInput = CompleteVoyageInput;
 
 export interface ScrubVoyageInput {
-  version?: number | null;
 }
 
 export type VoyageScrubInput = ScrubVoyageInput;
 
 export interface DiscardVoyageInput {
-  version?: number | null;
 }
 
 export type VoyageDiscardInput = DiscardVoyageInput;
@@ -1104,13 +1082,11 @@ export const BerthBuildInputSchema = BuildBerthInputSchema;
 
 export const RecodeBerthInputSchema = z.object({
   code: z.string().min(1).max(12).nullable().optional(),
-  version: z.number().int().nullable().optional(),
 });
 
 export const BerthRecodeInputSchema = RecodeBerthInputSchema;
 
 export const ClaimBerthInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const BerthClaimInputSchema = ClaimBerthInputSchema;
@@ -1244,37 +1220,31 @@ export const ShipCommissionInputSchema = CommissionShipInputSchema;
 
 export const AssignCaptainShipInputSchema = z.object({
   captainId: z.string().uuid().nullable().optional(),
-  version: z.number().int().nullable().optional(),
 });
 
 export const ShipAssignCaptainInputSchema = AssignCaptainShipInputSchema;
 
 export const DepartShipInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ShipDepartInputSchema = DepartShipInputSchema;
 
 export const ArriveShipInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ShipArriveInputSchema = ArriveShipInputSchema;
 
 export const BeginMaintenanceShipInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ShipBeginMaintenanceInputSchema = BeginMaintenanceShipInputSchema;
 
 export const EndMaintenanceShipInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ShipEndMaintenanceInputSchema = EndMaintenanceShipInputSchema;
 
 export const DecommissionShipInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ShipDecommissionInputSchema = DecommissionShipInputSchema;
@@ -1309,31 +1279,26 @@ export const BookContractInputSchema = z.object({
 export const ContractBookInputSchema = BookContractInputSchema;
 
 export const LoadContractInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContractLoadInputSchema = LoadContractInputSchema;
 
 export const DispatchContractInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContractDispatchInputSchema = DispatchContractInputSchema;
 
 export const DeliverContractInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContractDeliverInputSchema = DeliverContractInputSchema;
 
 export const CloseContractInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContractCloseInputSchema = CloseContractInputSchema;
 
 export const CancelContractInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContractCancelInputSchema = CancelContractInputSchema;
@@ -1370,13 +1335,11 @@ export const ContainerPackInputSchema = PackContainerInputSchema;
 
 export const SealContainerInputSchema = z.object({
   seal: z.string().nullable().optional(),
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContainerSealInputSchema = SealContainerInputSchema;
 
 export const ScrapContainerInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const ContainerScrapInputSchema = ScrapContainerInputSchema;
@@ -1415,45 +1378,38 @@ export const VoyagePlanInputSchema = PlanVoyageInputSchema;
 
 export const HoldBerthVoyageInputSchema = z.object({
   reservationId: z.string().uuid().nullable().optional(),
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageHoldBerthInputSchema = HoldBerthVoyageInputSchema;
 
 export const ClearCustomsVoyageInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageClearCustomsInputSchema = ClearCustomsVoyageInputSchema;
 
 export const LaunchVoyageInputSchema = z.object({
   departedAt: z.string().nullable().optional(),
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageLaunchInputSchema = LaunchVoyageInputSchema;
 
 export const ArriveVoyageInputSchema = z.object({
   arrivedAt: z.string().nullable().optional(),
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageArriveInputSchema = ArriveVoyageInputSchema;
 
 export const CompleteVoyageInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageCompleteInputSchema = CompleteVoyageInputSchema;
 
 export const ScrubVoyageInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageScrubInputSchema = ScrubVoyageInputSchema;
 
 export const DiscardVoyageInputSchema = z.object({
-  version: z.number().int().nullable().optional(),
 });
 
 export const VoyageDiscardInputSchema = DiscardVoyageInputSchema;
@@ -3238,10 +3194,10 @@ export class BerthClient {
     return payload.result;
   }
 
-  public async claim(id: string, input: ClaimBerthInput = {}, include?: BerthInclude): Promise<Berth> {
+  public async claim(id: string, _input: ClaimBerthInput = {}, include?: BerthInclude): Promise<Berth> {
     const fields = buildBerthSelectionSet(include);
-    const query = `mutation MutateBerth($id: ID!, $input: ClaimBerthInput) {
-      claimBerth(id: $id, input: $input) {
+    const query = `mutation MutateBerth($id: ID!) {
+      claimBerth(id: $id) {
         result {
           ${fields}
         }
@@ -3259,7 +3215,7 @@ export class BerthClient {
         result?: Berth | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.claimBerth;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3679,10 +3635,10 @@ export class ShipClient {
     return payload.result;
   }
 
-  public async depart(id: string, input: DepartShipInput = {}, include?: ShipInclude): Promise<Ship> {
+  public async depart(id: string, _input: DepartShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($id: ID!, $input: DepartShipInput) {
-      departShip(id: $id, input: $input) {
+    const query = `mutation MutateShip($id: ID!) {
+      departShip(id: $id) {
         result {
           ${fields}
         }
@@ -3700,7 +3656,7 @@ export class ShipClient {
         result?: Ship | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.departShip;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3710,10 +3666,10 @@ export class ShipClient {
     return payload.result;
   }
 
-  public async arrive(id: string, input: ArriveShipInput = {}, include?: ShipInclude): Promise<Ship> {
+  public async arrive(id: string, _input: ArriveShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($id: ID!, $input: ArriveShipInput) {
-      arriveShip(id: $id, input: $input) {
+    const query = `mutation MutateShip($id: ID!) {
+      arriveShip(id: $id) {
         result {
           ${fields}
         }
@@ -3731,7 +3687,7 @@ export class ShipClient {
         result?: Ship | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.arriveShip;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3741,10 +3697,10 @@ export class ShipClient {
     return payload.result;
   }
 
-  public async beginMaintenance(id: string, input: BeginMaintenanceShipInput = {}, include?: ShipInclude): Promise<Ship> {
+  public async beginMaintenance(id: string, _input: BeginMaintenanceShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($id: ID!, $input: BeginMaintenanceShipInput) {
-      beginMaintenanceShip(id: $id, input: $input) {
+    const query = `mutation MutateShip($id: ID!) {
+      beginMaintenanceShip(id: $id) {
         result {
           ${fields}
         }
@@ -3762,7 +3718,7 @@ export class ShipClient {
         result?: Ship | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.beginMaintenanceShip;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3772,10 +3728,10 @@ export class ShipClient {
     return payload.result;
   }
 
-  public async endMaintenance(id: string, input: EndMaintenanceShipInput = {}, include?: ShipInclude): Promise<Ship> {
+  public async endMaintenance(id: string, _input: EndMaintenanceShipInput = {}, include?: ShipInclude): Promise<Ship> {
     const fields = buildShipSelectionSet(include);
-    const query = `mutation MutateShip($id: ID!, $input: EndMaintenanceShipInput) {
-      endMaintenanceShip(id: $id, input: $input) {
+    const query = `mutation MutateShip($id: ID!) {
+      endMaintenanceShip(id: $id) {
         result {
           ${fields}
         }
@@ -3793,7 +3749,7 @@ export class ShipClient {
         result?: Ship | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.endMaintenanceShip;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3803,9 +3759,9 @@ export class ShipClient {
     return payload.result;
   }
 
-  public async decommission(id: string, input: DecommissionShipInput = {}): Promise<boolean> {
-    const query = `mutation MutateShip($id: ID!, $input: DecommissionShipInput) {
-      decommissionShip(id: $id, input: $input) {
+  public async decommission(id: string, _input: DecommissionShipInput = {}): Promise<boolean> {
+    const query = `mutation MutateShip($id: ID!) {
+      decommissionShip(id: $id) {
         errors {
           message
           shortMessage
@@ -3820,7 +3776,7 @@ export class ShipClient {
         result?: Ship | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.decommissionShip;
     if (payload.errors.length > 0) {
@@ -3888,10 +3844,10 @@ export class ContractClient {
     return payload.result;
   }
 
-  public async load(id: string, input: LoadContractInput = {}, include?: ContractInclude): Promise<Contract> {
+  public async load(id: string, _input: LoadContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($id: ID!, $input: LoadContractInput) {
-      loadContract(id: $id, input: $input) {
+    const query = `mutation MutateContract($id: ID!) {
+      loadContract(id: $id) {
         result {
           ${fields}
         }
@@ -3909,7 +3865,7 @@ export class ContractClient {
         result?: Contract | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.loadContract;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3919,10 +3875,10 @@ export class ContractClient {
     return payload.result;
   }
 
-  public async dispatch(id: string, input: DispatchContractInput = {}, include?: ContractInclude): Promise<Contract> {
+  public async dispatch(id: string, _input: DispatchContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($id: ID!, $input: DispatchContractInput) {
-      dispatchContract(id: $id, input: $input) {
+    const query = `mutation MutateContract($id: ID!) {
+      dispatchContract(id: $id) {
         result {
           ${fields}
         }
@@ -3940,7 +3896,7 @@ export class ContractClient {
         result?: Contract | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.dispatchContract;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3950,10 +3906,10 @@ export class ContractClient {
     return payload.result;
   }
 
-  public async deliver(id: string, input: DeliverContractInput = {}, include?: ContractInclude): Promise<Contract> {
+  public async deliver(id: string, _input: DeliverContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($id: ID!, $input: DeliverContractInput) {
-      deliverContract(id: $id, input: $input) {
+    const query = `mutation MutateContract($id: ID!) {
+      deliverContract(id: $id) {
         result {
           ${fields}
         }
@@ -3971,7 +3927,7 @@ export class ContractClient {
         result?: Contract | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.deliverContract;
     if (payload.errors.length > 0 || !payload.result) {
@@ -3981,10 +3937,10 @@ export class ContractClient {
     return payload.result;
   }
 
-  public async close(id: string, input: CloseContractInput = {}, include?: ContractInclude): Promise<Contract> {
+  public async close(id: string, _input: CloseContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($id: ID!, $input: CloseContractInput) {
-      closeContract(id: $id, input: $input) {
+    const query = `mutation MutateContract($id: ID!) {
+      closeContract(id: $id) {
         result {
           ${fields}
         }
@@ -4002,7 +3958,7 @@ export class ContractClient {
         result?: Contract | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.closeContract;
     if (payload.errors.length > 0 || !payload.result) {
@@ -4012,10 +3968,10 @@ export class ContractClient {
     return payload.result;
   }
 
-  public async cancel(id: string, input: CancelContractInput = {}, include?: ContractInclude): Promise<Contract> {
+  public async cancel(id: string, _input: CancelContractInput = {}, include?: ContractInclude): Promise<Contract> {
     const fields = buildContractSelectionSet(include);
-    const query = `mutation MutateContract($id: ID!, $input: CancelContractInput) {
-      cancelContract(id: $id, input: $input) {
+    const query = `mutation MutateContract($id: ID!) {
+      cancelContract(id: $id) {
         result {
           ${fields}
         }
@@ -4033,7 +3989,7 @@ export class ContractClient {
         result?: Contract | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.cancelContract;
     if (payload.errors.length > 0 || !payload.result) {
@@ -4132,9 +4088,9 @@ export class ContainerClient {
     return payload.result;
   }
 
-  public async scrap(id: string, input: ScrapContainerInput = {}): Promise<boolean> {
-    const query = `mutation MutateContainer($id: ID!, $input: ScrapContainerInput) {
-      scrapContainer(id: $id, input: $input) {
+  public async scrap(id: string, _input: ScrapContainerInput = {}): Promise<boolean> {
+    const query = `mutation MutateContainer($id: ID!) {
+      scrapContainer(id: $id) {
         errors {
           message
           shortMessage
@@ -4149,7 +4105,7 @@ export class ContainerClient {
         result?: Container | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.scrapContainer;
     if (payload.errors.length > 0) {
@@ -4248,10 +4204,10 @@ export class VoyageClient {
     return payload.result;
   }
 
-  public async clearCustoms(id: string, input: ClearCustomsVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
+  public async clearCustoms(id: string, _input: ClearCustomsVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($id: ID!, $input: ClearCustomsVoyageInput) {
-      clearCustomsVoyage(id: $id, input: $input) {
+    const query = `mutation MutateVoyage($id: ID!) {
+      clearCustomsVoyage(id: $id) {
         result {
           ${fields}
         }
@@ -4269,7 +4225,7 @@ export class VoyageClient {
         result?: Voyage | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.clearCustomsVoyage;
     if (payload.errors.length > 0 || !payload.result) {
@@ -4341,10 +4297,10 @@ export class VoyageClient {
     return payload.result;
   }
 
-  public async complete(id: string, input: CompleteVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
+  public async complete(id: string, _input: CompleteVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($id: ID!, $input: CompleteVoyageInput) {
-      completeVoyage(id: $id, input: $input) {
+    const query = `mutation MutateVoyage($id: ID!) {
+      completeVoyage(id: $id) {
         result {
           ${fields}
         }
@@ -4362,7 +4318,7 @@ export class VoyageClient {
         result?: Voyage | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.completeVoyage;
     if (payload.errors.length > 0 || !payload.result) {
@@ -4372,10 +4328,10 @@ export class VoyageClient {
     return payload.result;
   }
 
-  public async scrub(id: string, input: ScrubVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
+  public async scrub(id: string, _input: ScrubVoyageInput = {}, include?: VoyageInclude): Promise<Voyage> {
     const fields = buildVoyageSelectionSet(include);
-    const query = `mutation MutateVoyage($id: ID!, $input: ScrubVoyageInput) {
-      scrubVoyage(id: $id, input: $input) {
+    const query = `mutation MutateVoyage($id: ID!) {
+      scrubVoyage(id: $id) {
         result {
           ${fields}
         }
@@ -4393,7 +4349,7 @@ export class VoyageClient {
         result?: Voyage | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.scrubVoyage;
     if (payload.errors.length > 0 || !payload.result) {
@@ -4403,9 +4359,9 @@ export class VoyageClient {
     return payload.result;
   }
 
-  public async discard(id: string, input: DiscardVoyageInput = {}): Promise<boolean> {
-    const query = `mutation MutateVoyage($id: ID!, $input: DiscardVoyageInput) {
-      discardVoyage(id: $id, input: $input) {
+  public async discard(id: string, _input: DiscardVoyageInput = {}): Promise<boolean> {
+    const query = `mutation MutateVoyage($id: ID!) {
+      discardVoyage(id: $id) {
         errors {
           message
           shortMessage
@@ -4420,7 +4376,7 @@ export class VoyageClient {
         result?: Voyage | null;
         errors: AshUserError[];
       };
-    }>(query, { id, input });
+    }>(query, { id });
 
     const payload = data.discardVoyage;
     if (payload.errors.length > 0) {

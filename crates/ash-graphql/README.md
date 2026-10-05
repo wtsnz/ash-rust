@@ -55,6 +55,7 @@ Every Ash attribute maps to an appropriate GraphQL scalar, enum, or list:
 - `String` -> `String`
 - `Integer` -> `Int`
 - `Boolean` -> `Boolean`
+- `Map` -> `Json`, output as a JSON object. Input takes an object, or JSON text in a string as AshGraphql's `Json` and `JsonString` take it (AshGraphql's default is `JsonString`, which outputs text; see `examples/supportdesk/GAPS.md` row 30 for why this differs)
 - `AshEnum` attributes -> GraphQL enums named after the type, values upper-cased
 - Atoms with no enum type -> `String`
 - `Calculations` -> Dynamic computation evaluated via `ash_core::eval`

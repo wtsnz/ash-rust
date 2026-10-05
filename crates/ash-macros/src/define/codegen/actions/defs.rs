@@ -141,6 +141,10 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                         let field_str = field.to_string();
                         Ok(quote! { ::ash_core::Change::RelateActor { field: #field_str } })
                     }
+                    ChangeSpec::OptimisticLock { field } => {
+                        let field_str = field.to_string();
+                        Ok(quote! { ::ash_core::Change::OptimisticLock { field: #field_str } })
+                    }
                     ChangeSpec::AtomicUpdate { field, expr } => {
                         let field_str = field.to_string();
                         let expr_tokens = crate::define::codegen::calculations::calc_expr_to_tokens(expr);

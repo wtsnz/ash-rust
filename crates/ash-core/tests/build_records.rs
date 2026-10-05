@@ -14,7 +14,7 @@ resource! {
             id: Uuid [pk];
             name: String;
             plan: String = "free";
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         actions {
@@ -26,6 +26,7 @@ resource! {
             }
 
             update rename {
+                change optimistic_lock(version);
                 primary;
                 accept [name];
             }

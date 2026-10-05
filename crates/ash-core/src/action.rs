@@ -425,6 +425,20 @@ impl Pagination {
 }
 
 impl ActionDef {
+    /// The attributes the action's optimistic locks check, in order: each, as an Ash
+    /// `optimistic_lock` change does, filters the write and adds one to its attribute.
+    pub fn optimistic_locks(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.changes.iter().filter_map(|change| match change {
+            Change::OptimisticLock { field } => Some(*field),
+            _ => None,
+        })
+    }
+
+    /// Whether the action has an optimistic lock.
+    pub fn has_optimistic_lock(&self) -> bool {
+        self.optimistic_locks().next().is_some()
+    }
+
     pub const fn create(name: &'static str) -> Self {
         Self {
             name,
@@ -671,6 +685,12 @@ pub enum Change {
         field: &'static str,
         expr: &'static crate::expr::Expr,
     },
+    /// Ash's `optimistic_lock(:field)`: the action writes only if `field` still holds the
+    /// value it had when the record was read, else [`crate::Error::StaleRecord`], and
+    /// adds one to it.
+    OptimisticLock {
+        field: &'static str,
+    },
     BeforeAction(BeforeActionFn),
     AfterAction(AfterActionFn),
     AfterTransaction(AfterTransactionFn),
@@ -740,6 +760,7 @@ impl std::fmt::Debug for Change {
             Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
             Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
             Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),
+            Self::OptimisticLock { field } => f.debug_struct("OptimisticLock").field("field", field).finish(),
             Self::Custom(_) => write!(f, "Custom(<dyn CustomChange>)"),
             Self::Func(_) => write!(f, "Func(<fn>)"),
         }

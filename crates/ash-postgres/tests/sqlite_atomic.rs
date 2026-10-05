@@ -14,7 +14,7 @@ resource! {
         attributes {
             id: Uuid [pk];
             hits: i64 [default: 0];
-            version: i64 [version];
+            version: i64 [default: 1];
         }
 
         actions {
@@ -22,6 +22,7 @@ resource! {
             read read { primary; }
 
             update hit {
+                change optimistic_lock(version);
                 change atomic_update(hits, hits + 1);
             }
 
@@ -87,7 +88,7 @@ async fn what_must_raise_from_the_record_isnt_atomic() {
     let counter = Counter::create(&ctx).hits(3).await.unwrap();
     let by_id = |action: &str| {
         let action = Counter::DEF.action(action).unwrap();
-        ash_core::update_dynamic_via(&ctx, &Counter::DEF, None, action, counter.id, FieldMap::new(), None)
+        ash_core::update_dynamic_via(&ctx, &Counter::DEF, None, action, counter.id, FieldMap::new())
     };
     // By id, what it sets is the stored record's, which only the statement could check.
     let refused = by_id("capped_hit").await;
@@ -143,10 +144,10 @@ async fn write_policies_filter_the_statement() {
     let edit = Memo::DEF.action("edit").unwrap();
     let input = |text: &str| FieldMap::from([("text".to_string(), ash_core::Value::from(text))]);
 
-    let edited = ash_core::update_dynamic_via(&ctx, &Memo::DEF, None, edit, memo.id, input("b"), None).await.unwrap();
+    let edited = ash_core::update_dynamic_via(&ctx, &Memo::DEF, None, edit, memo.id, input("b")).await.unwrap();
     assert_eq!(edited.get("text"), Some(&ash_core::Value::from("b")));
     // A stranger's update changes nothing, and is refused as the policies refuse it.
     let stranger = ctx.with_actor(ash_core::Actor::new(Uuid::new_v4()));
-    let refused = ash_core::update_dynamic_via(&stranger, &Memo::DEF, None, edit, memo.id, input("c"), None).await;
+    let refused = ash_core::update_dynamic_via(&stranger, &Memo::DEF, None, edit, memo.id, input("c")).await;
     assert!(matches!(refused, Err(Error::Forbidden)), "{refused:?}");
 }

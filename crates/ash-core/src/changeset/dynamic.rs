@@ -182,7 +182,7 @@ impl DynamicChangeset {
             Some(existing) => {
                 let mut fields = existing.clone();
                 fields.extend(accepted.clone());
-                prepare_update_fields(resource, existing, &mut fields);
+                prepare_update_fields(resource, action, existing, &mut fields);
                 fields
             }
             None => {
@@ -245,7 +245,7 @@ impl DynamicChangeset {
         let mut fields = existing.clone();
         fields.extend(accepted.clone());
         fields.extend(forced);
-        prepare_update_fields(resource, &existing, &mut fields);
+        prepare_update_fields(resource, action, &existing, &mut fields);
         let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
@@ -336,7 +336,7 @@ impl DynamicChangeset {
         let (accepted, arguments) = split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted);
-        prepare_update_fields(resource, &existing, &mut fields);
+        prepare_update_fields(resource, action, &existing, &mut fields);
         crate::pipeline::apply_changes(&mut fields, action, None, &arguments)?;
         validate(resource, &mut fields)?;
         run_validations(resource, action, Some(&existing), &fields, &arguments)?;
@@ -505,10 +505,14 @@ impl DynamicChangeset {
             Err("it manages relationships".to_string())
         } else {
             let id = required_pk(existing, pk_name(self.resource)?)?;
-            let expected_version = self
-                .resource
-                .optimistic_lock_attribute()
-                .map(|version| (id, existing.get(version).and_then(Value::as_int).unwrap_or(1)));
+            // Each lock version as read. One that isn't a number (a null version) can't be
+            // added to in the statement; the guarded write checks it as it was read.
+            let versions: Option<Vec<(&'static str, i64)>> =
+                self.action.optimistic_locks().map(|version| existing.get(version).and_then(Value::as_int).map(|n| (version, n))).collect();
+            let Some(versions) = versions else {
+                return Ok(None);
+            };
+            let expected_versions = self.action.has_optimistic_lock().then_some((id, versions));
             plan_update(
                 self.resource,
                 self.action,
@@ -517,7 +521,7 @@ impl DynamicChangeset {
                     tenant: ctx.tenant(),
                     sets: self.changes(self.fields.clone()),
                     arguments: &self.arguments,
-                    expected_version,
+                    expected_versions,
                     collect_hooks: false,
                     can_raise: ctx.data.can_raise_atomically(self.resource),
                 },
@@ -756,7 +760,8 @@ impl DynamicChangeset {
             },
             ActionKind::Update => {
                 let changes = self.changes(fields);
-                ctx.data.update(self.resource, ctx.tenant.as_deref(), id, changes).await
+                let lock = self.existing.as_ref().and_then(|existing| crate::engine::lock_of(self.action, existing));
+                crate::engine::update_guarded(ctx, self.resource, id, changes, lock).await
             }
             ActionKind::Destroy => {
                 let existing = self.existing.clone().unwrap_or_else(|| fields.clone());

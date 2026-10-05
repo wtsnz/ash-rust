@@ -497,6 +497,8 @@ async fn main() -> ExitCode {
     for (name, who, input) in [
         ("routeTicket", &agent, route_input.clone()),
         ("routeTicket as a viewer", &viewer, route_input.clone()),
+        // A map argument as JSON text, as AshGraphql takes one (`JsonString`).
+        ("routeTicket, its comments as JSON text", &agent, json!({ "subject": "Printer on fire", "body": "Smoke", "priority": 3, "requesterEmail": "pat@example.com", "comments": ["{\"body\":\"Called it in\"}"] })),
         ("routeTicket, invalid", &agent, json!({ "subject": "x", "body": "y", "priority": 9, "requesterEmail": "a@b.c" })),
     ] {
         let r = an_id(desks[0].graphql(who, route_m, json!({ "input": input.clone() })).await);

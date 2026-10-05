@@ -70,7 +70,7 @@
       "name": "version",
       "sql_type": "BIGINT",
       "nullable": false,
-      "default": null,
+      "default": "1",
       "is_primary_key": false
     },
     {

@@ -3,7 +3,7 @@ use ash_core::destroy_dynamic_by_id;
 
 use crate::redact::redact_record;
 use crate::preload::{load_selected, preload, selected};
-use ash_core::update_dynamic_expecting;
+use ash_core::update_dynamic_via;
 use ash_core::{ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value};
 use async_graphql::dynamic::*;
 
@@ -64,11 +64,6 @@ fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str
     }
     for arg in action.arguments {
         fields.push((arg.name, arg.ty, !arg.allow_nil && arg.default.is_none()));
-    }
-    if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
-        && let Some(version) = resource.optimistic_lock_attribute()
-    {
-        fields.push((version, AttrType::Integer, false));
     }
     fields
 }
@@ -190,7 +185,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 let ash = &*ash;
 
                 let mut input = FieldMap::new();
-                let mut version = None;
                 if let Some(given) = ctx.args.get("input").filter(|value| !value.is_null()) {
                     let given = given.object()?;
                     let managed = managed_inputs(resource, action);
@@ -198,13 +192,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                         let Some(value) = given.get(&camel(name)) else {
                             continue;
                         };
-                        if Some(name) == resource.optimistic_lock_attribute()
-                            && action.kind != ActionKind::Create
-                            && !action.accept.contains(&name)
-                        {
-                            version = value.i64().ok();
-                            continue;
-                        }
                         let value = match managed.iter().find(|(argument, _)| *argument == name) {
                             Some((_, managed)) => managed.parse(value.as_value())?,
                             None if value.is_null() => Value::Null,
@@ -234,10 +221,10 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 let id = crate::types::parse_id(resource, id_arg.as_value())?;
 
                 // An update runs by id, as AshGraphql's does: as one statement where it can,
-                // the record's visibility, the action's validations and policies and the
-                // version all checked in it, else reading the record first.
+                // the record's visibility and the action's validations and policies checked
+                // in it, else (and always under an optimistic lock) reading the record first.
                 if action.kind == ActionKind::Update {
-                    return Ok(match update_dynamic_expecting(ash, resource, action, id, input, version).await {
+                    return Ok(match update_dynamic_via(ash, resource, None, action, id, input).await {
                         Ok(mut updated) => {
                             let fields = selected(ctx.ctx.field(), Some("result"));
                             load_selected(ash, resource, &fields, std::slice::from_mut(&mut updated)).await?;
@@ -252,7 +239,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 // A destroy runs by id too, as AshGraphql's bulk destroy does: as one
                 // statement where it can, else reading the record first. Either way an
                 // archived record or another tenant's is not found.
-                Ok(match destroy_dynamic_by_id(ash, resource, action, id, version).await {
+                Ok(match destroy_dynamic_by_id(ash, resource, action, id).await {
                     Ok(mut destroyed) => {
                         let fields = selected(ctx.ctx.field(), Some("result"));
                         load_selected(ash, resource, &fields, std::slice::from_mut(&mut destroyed)).await?;

@@ -226,11 +226,6 @@ pub fn input_fields(res: &ResourceDef, action: &ActionDef) -> Vec<(&'static str,
     for arg in action.arguments {
         fields.push((arg.name, arg.ty, !arg.allow_nil && arg.default.is_none()));
     }
-    if matches!(action.kind, ActionKind::Update | ActionKind::Destroy)
-        && let Some(version) = res.optimistic_lock_attribute()
-    {
-        fields.push((version, AttrType::Integer, false));
-    }
     fields
 }
 

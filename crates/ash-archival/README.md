@@ -43,7 +43,7 @@ resource! {
 
 1. Adds `archived_at: Option<UtcDateTimeUsec>` (as AshArchival's `utc_datetime_usec`) unless the resource declares it. Migrations pick it up like any attribute (`TIMESTAMPTZ` on Postgres, `TEXT` on SQLite).
 2. Adds `prepare filter(archived_at.is_nil())` to every read action except `exclude_read_actions`. `Post::query(&ctx)`, relationship loads, aggregates, and filters through a relationship all use the primary read, so they skip archived records.
-3. Makes every destroy action except `exclude_destroy_actions` a soft destroy that sets `archived_at`. Like an update, it raises the optimistic lock version and `updated_at`, and it writes only the columns it changes. The row stays, so `on_delete` cascades do not run.
+3. Makes every destroy action except `exclude_destroy_actions` a soft destroy that sets `archived_at`. Like an update, it raises `updated_at` (and the version, when the destroy action has `change optimistic_lock(version);`), and it writes only the columns it changes. The row stays, so `on_delete` cascades do not run.
 4. After archiving the record, destroys its `archive_related` relationships with their primary destroy action, which archives them when they use `#[archival]` too. Archived children are hidden from that lookup, so a cycle in the data ends.
 5. With `unarchive_action`, adds (or extends) an update action that clears `archived_at`.
 6. Registers `ArchiveDef` in the resource's extensions and adds `post.is_archived()`.
