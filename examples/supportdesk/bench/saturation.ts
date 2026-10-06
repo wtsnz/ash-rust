@@ -506,6 +506,8 @@ const report = () => {
       : "Postgres, both desks and the driver share one machine, and the heavy request spends much of its time in Postgres, which costs the same on both sides; the figures compare how the desks treat a small request while a large one fills them, not their capacity. Whether the load is ever beyond the driver or the database rather than the desk is for the `server` and `driver late` columns of the run's log to say.",
   );
   writeFileSync(`${dir}/report.md`, lines.join("\n") + "\n");
+  // The same run as charts: chart.html, to hover over, and chart.svg, to embed.
+  spawnSync(process.execPath, [`${here}chart.ts`, dir], { stdio: "inherit" });
   console.log(`\n${lines.join("\n")}\n\nWritten to ${dir}`);
 };
 

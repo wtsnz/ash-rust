@@ -264,6 +264,12 @@ capacities: Rust, at 1× (697/s), had the cheap stream at p50 106 ms and p99 169
 answered 675/s. Ash at 1× (266/s) had cheap p50 55 ms, p99 115 ms and 64 errors; at 3×
 (798/s) 119 heavy requests answered a second and 39% of the cheap requests failing.
 
+![Mixed saturation over Postgres: cheap and heavy request latency, answered and failed, memory, CPU and recovery, ash-rust and Ash](bench/results/saturation/2026-10-06-common/chart.svg)
+
+Every run is also drawn as `chart.html` (open it in a browser: hover for every value, a table
+view, light and dark) and `chart.svg` (the image above) beside its report; `bench/chart.ts`
+redraws them from a run's `results.jsonl`, and `saturation.ts` runs it at the end of a run.
+
 What this shows:
 
 - **Below its capacity, ash-rust keeps the cheap request quick whatever else it's doing**
@@ -322,6 +328,8 @@ p99 272 ms at 90% of its capacity, and p50 about 190 ms, p99 460–680 ms from 1
 Ash's is p50 4 ms, p99 17 ms at 100% of its capacity, and p50 about 8 ms, p99 37–47 ms from
 125% to 300%. After the heavy stream stopped, ash-rust's cheap p99 was back within twice its
 baseline in 0 to 4 s, Ash's in 0 to 14 s.
+
+![Mixed saturation, CPU-bound and in memory: cheap and heavy request latency, answered and failed, memory, CPU and recovery, ash-rust and Ash](bench/results/saturation/2026-10-06-astro-common/chart.svg)
 
 What this shows:
 

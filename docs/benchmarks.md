@@ -144,8 +144,13 @@ capacity. Ash pays in memory (up to 7 GB against under 150 MiB) and in recovery 
 against 0–4 s). The same shape holds in each desk's own multiples of
 capacity, and the supportdesk README has the detail.
 
+![Mixed saturation, CPU-bound and in memory](../examples/supportdesk/bench/results/saturation/2026-10-06-astro-common/chart.svg)
+
 The reports, manifests and every window are in
-[`examples/supportdesk/bench/results/saturation`](../examples/supportdesk/bench/results/saturation).
+[`examples/supportdesk/bench/results/saturation`](../examples/supportdesk/bench/results/saturation),
+each drawn as an interactive `chart.html` and a `chart.svg`:
+
+![Mixed saturation over Postgres](../examples/supportdesk/bench/results/saturation/2026-10-06-common/chart.svg)
 
 ---
 

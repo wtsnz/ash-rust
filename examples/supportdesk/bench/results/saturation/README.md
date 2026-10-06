@@ -12,6 +12,12 @@ window in `results.jsonl`.
 | `2026-10-06-astro-common` | the CPU-bound target (`--target astro`), the same heavy rates for both | `node bench/saturation.ts --target astro` |
 | `2026-10-06-astro-own` | the CPU-bound target, multiples of each desk's own capacity | `node bench/saturation.ts --target astro --basis own --levels 0.5,0.9,1,1.25,1.5,2,3` |
 
+Each directory also holds `chart.html` (open it in a browser: hover for every value, a table
+view, light and dark) and `chart.svg` (the same charts as one image, for a README), drawn by
+`node bench/chart.ts` from `results.jsonl`: per load step, the cheap and heavy requests'
+latency, answered a second and failures, then the server's memory and cores, then how the cheap
+stream recovers.
+
 All four ran on an Apple M4 Max with other applications open (the load average at the start is
 in each manifest), so use them as a baseline to compare a later run against on the same
 machine, not as capacity figures. The manifests name the commit they ran at, with uncommitted changes: the
