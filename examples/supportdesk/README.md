@@ -239,30 +239,59 @@ long a desk that queues can queue.
 ### Latest results
 
 The reports, manifests and every window of two runs are in
-[`bench/results/saturation`](bench/results/saturation). A run on 2026-10-06 (2 reps; medians; Apple M4 Max, 16 cores, with other applications
-open, load average 9–17 at the start), against the Elixir desk's `mix release`. Heavy
-capacity alone: **ash-rust 703/s, Ash 265/s**. Both desks were offered the same heavy rate:
+[`bench/results/saturation`](bench/results/saturation). A run on 2026-10-06 (2 reps, medians;
+Apple M4 Max, 16 cores; other applications open, load average 9–17 at the start), against the
+Elixir desk's `mix release`. Heavy capacity alone: **ash-rust 703/s, Ash 265/s**.
 
-| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir cheap errors | Elixir heavy answered/s |
-|---|---|---:|---|---:|---:|
-| none | 1 / 7.2 | - | 1.5 / 4.5 | 0 | - |
-| 66/s (0.25×) | 1.1 / 8.4 | 66 | 1.3 / 5 | 0 | 66 |
-| 133/s (0.5×) | 1.1 / 9.8 | 133 | 1.4 / 5.1 | 0 | 133 |
-| 265/s (1×) | 0.9 / 8.9 | 265 | 54 / 168 | 63 | 245 |
-| 398/s (1.5×) | 0.8 / 5.4 | 398 | 144 / 800 | 910 | 211 |
-| 531/s (2×) | 0.9 / 16 | 531 | 123 / 2,069 | 1,399 | 174 |
-| 796/s (3×) | 498 / 826 | 654 | 108 / 1,554 | 2,006 | 113 |
-| 1,062/s (4×) | 1,310 / 1,621 | 631 | 109 / 1,763 | 2,447 | 75 |
+**The same heavy load for both desks.** Each pair of rows is one load, with the same columns for
+each desk, so read down a column to compare them:
 
-Of the 5,000 cheap requests in each window, Rust answered every one without an error, at every step, though slowly past its capacity. Elixir's
-errors are 1% of them at 1×, 28% at 2× and 49% at 4×. Rust never refused a request;
-its 4× step had 2,211 heavy requests the driver held back.
+| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy answered/s | Peak memory |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | 1.0 ms | 7.2 ms | 0% | - | - | - | 15 MiB |
+|  | Elixir | 1.5 ms | 4.5 ms | 0% | - | - | - | 416 MiB |
+| 66/s (0.25×) | Rust | 1.1 ms | 8.4 ms | 0% | 17.8 ms | 0% | 66 | 34 MiB |
+|  | Elixir | 1.3 ms | 5.0 ms | 0% | 40.1 ms | 0% | 66 | 526 MiB |
+| 133/s (0.5×) | Rust | 1.1 ms | 9.8 ms | 0% | 15.7 ms | 0% | 133 | 62 MiB |
+|  | Elixir | 1.4 ms | 5.1 ms | 0% | 41.5 ms | 0% | 133 | 577 MiB |
+| 265/s (1×) | Rust | 0.9 ms | 8.9 ms | 0% | 15.7 ms | 0% | 265 | 92 MiB |
+|  | Elixir | 53.6 ms | 168 ms | 1% | 279 ms | 5% | 245 | 2.2 GiB |
+| 398/s (1.5×) | Rust | 0.8 ms | 5.4 ms | 0% | 16.1 ms | 0% | 398 | 102 MiB |
+|  | Elixir | 143 ms | 800 ms | 18% | 488 ms | 53% | 211 | 4.9 GiB |
+| 531/s (2×) | Rust | 0.9 ms | 16.4 ms | 0% | 16.7 ms | 0% | 531 | 140 MiB |
+|  | Elixir | 123 ms | 2,069 ms | 28% | 468 ms | 74% | 174 | 6.1 GiB |
+| 796/s (3×) | Rust | 498 ms | 826 ms | 0% | 1,593 ms | 0% | 654 | 3.3 GiB |
+|  | Elixir | 108 ms | 1,554 ms | 40% | 392 ms | 89% | 113 | 7.8 GiB |
+| 1,062/s (4×) | Rust | 1,310 ms | 1,621 ms | 0% | 3,957 ms | 0% | 631 | 6.2 GiB |
+|  | Elixir | 109 ms | 1,763 ms | 49% | 394 ms | 90% | 75 | 9.5 GiB |
 
-In each desk's own multiples (`--basis own`), the same shape appears at their own
-capacities: Rust, at 1× (697/s), had the cheap stream at p50 106 ms and p99 169 ms; at 1.25×
-(872/s) p50 756 ms, with the heavy request's p50 at 2.5 s, answering 645/s; at 3× it
-answered 675/s. Ash at 1× (266/s) had cheap p50 55 ms, p99 115 ms and 64 errors; at 3×
-(798/s) 119 heavy requests answered a second and 39% of the cheap requests failing.
+**Each desk at multiples of its own capacity** (`--basis own`), so each is at 100%, 125%, 200%
+of what it can do:
+
+| Heavy offered, × the desk's own capacity | | Offered | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy answered/s | Peak memory |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | - | 1.0 ms | 4.0 ms | 0% | - | - | - | 16 MiB |
+|  | Elixir | - | 1.5 ms | 6.5 ms | 0% | - | - | - | 414 MiB |
+| 0.5× | Rust | 349/s | 0.8 ms | 6.5 ms | 0% | 16.2 ms | 0% | 349 | 97 MiB |
+|  | Elixir | 133/s | 1.4 ms | 5.0 ms | 0% | 41.1 ms | 0% | 133 | 606 MiB |
+| 0.9× | Rust | 628/s | 1.1 ms | 18.5 ms | 0% | 17.7 ms | 0% | 628 | 175 MiB |
+|  | Elixir | 239/s | 2.4 ms | 64.2 ms | 0% | 53.9 ms | 0% | 236 | 1.4 GiB |
+| 1× | Rust | 697/s | 106 ms | 169 ms | 0% | 337 ms | 0% | 678 | 852 MiB |
+|  | Elixir | 266/s | 54.5 ms | 115 ms | 1% | 267 ms | 4% | 252 | 2.0 GiB |
+| 1.25× | Rust | 872/s | 757 ms | 1,274 ms | 0% | 2,493 ms | 0% | 645 | 4.4 GiB |
+|  | Elixir | 332/s | 126 ms | 409 ms | 11% | 496 ms | 35% | 227 | 3.6 GiB |
+| 1.5× | Rust | 1,046/s | 1,308 ms | 1,669 ms | 0% | 3,914 ms | 0% | 639 | 5.5 GiB |
+|  | Elixir | 399/s | 112 ms | 1,001 ms | 18% | 439 ms | 54% | 207 | 4.6 GiB |
+| 2× | Rust | 1,394/s | 1,462 ms | 1,660 ms | 0% | 4,247 ms | 0% | 654 | 5.9 GiB |
+|  | Elixir | 532/s | 109 ms | 1,270 ms | 26% | 412 ms | 74% | 169 | 6.0 GiB |
+| 3× | Rust | 2,092/s | 1,434 ms | 1,693 ms | 0% | 4,262 ms | 0% | 675 | 6.6 GiB |
+|  | Elixir | 798/s | 107 ms | 1,610 ms | 39% | 392 ms | 88% | 119 | 8.1 GiB |
+
+Reading the tables: each window has 5,000 cheap requests, and "failed" counts requests a desk
+answered with an error. Rust never answers one with an error: what it can't serve it queues,
+and past the driver's limit of 3,000 heavy requests in flight a request is *not sent* (2,211 at
+4×), which is the driver's limit and not counted as failed. So Rust's overload shows as latency,
+memory and a heavy "answered" below "offered", where Ash's shows as errors.
 
 ![Mixed saturation over Postgres: cheap and heavy request latency, answered and failed, memory, CPU and recovery, ash-rust and Ash](bench/results/saturation/2026-10-06-common/chart.svg)
 

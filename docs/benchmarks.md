@@ -94,26 +94,37 @@ and [GAPS.md](../examples/supportdesk/GAPS.md) lists where the two desks differ.
 capacity to several times it), each at a fixed rate whatever the desk answers. A run on
 2026-10-06 (2 reps, medians, other applications open on the machine; the load at its start is
 in the manifest) found the heavy request's capacity alone to be **ash-rust 703/s, Ash 265/s**.
-Offering both the same heavy rate:
+Offering both the same heavy rate (each pair of rows is one load, with the same columns for each
+desk):
 
-| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir cheap errors | Elixir heavy answered/s |
-|---|---|---:|---|---:|---:|
-| none | 1 / 7.2 | - | 1.5 / 4.5 | 0 | - |
-| 133/s (0.5× Ash's capacity) | 1.1 / 9.8 | 133 | 1.4 / 5.1 | 0 | 133 |
-| 265/s (1×) | 0.9 / 8.9 | 265 | 54 / 168 | 63 | 245 |
-| 398/s (1.5×) | 0.8 / 5.4 | 398 | 144 / 800 | 910 | 211 |
-| 531/s (2×) | 0.9 / 16 | 531 | 123 / 2,069 | 1,399 | 174 |
-| 796/s (3×) | 498 / 826 | 654 | 108 / 1,554 | 2,006 | 113 |
-| 1,062/s (4×) | 1,310 / 1,621 | 631 | 109 / 1,763 | 2,447 | 75 |
+| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy answered/s | Peak memory |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | 1.0 ms | 7.2 ms | 0% | - | - | - | 15 MiB |
+|  | Elixir | 1.5 ms | 4.5 ms | 0% | - | - | - | 416 MiB |
+| 66/s (0.25×) | Rust | 1.1 ms | 8.4 ms | 0% | 17.8 ms | 0% | 66 | 34 MiB |
+|  | Elixir | 1.3 ms | 5.0 ms | 0% | 40.1 ms | 0% | 66 | 526 MiB |
+| 133/s (0.5×) | Rust | 1.1 ms | 9.8 ms | 0% | 15.7 ms | 0% | 133 | 62 MiB |
+|  | Elixir | 1.4 ms | 5.1 ms | 0% | 41.5 ms | 0% | 133 | 577 MiB |
+| 265/s (1×) | Rust | 0.9 ms | 8.9 ms | 0% | 15.7 ms | 0% | 265 | 92 MiB |
+|  | Elixir | 53.6 ms | 168 ms | 1% | 279 ms | 5% | 245 | 2.2 GiB |
+| 398/s (1.5×) | Rust | 0.8 ms | 5.4 ms | 0% | 16.1 ms | 0% | 398 | 102 MiB |
+|  | Elixir | 143 ms | 800 ms | 18% | 488 ms | 53% | 211 | 4.9 GiB |
+| 531/s (2×) | Rust | 0.9 ms | 16.4 ms | 0% | 16.7 ms | 0% | 531 | 140 MiB |
+|  | Elixir | 123 ms | 2,069 ms | 28% | 468 ms | 74% | 174 | 6.1 GiB |
+| 796/s (3×) | Rust | 498 ms | 826 ms | 0% | 1,593 ms | 0% | 654 | 3.3 GiB |
+|  | Elixir | 108 ms | 1,554 ms | 40% | 392 ms | 89% | 113 | 7.8 GiB |
+| 1,062/s (4×) | Rust | 1,310 ms | 1,621 ms | 0% | 3,957 ms | 0% | 631 | 6.2 GiB |
+|  | Elixir | 109 ms | 1,763 ms | 49% | 394 ms | 90% | 75 | 9.5 GiB |
 
-Each window has 5,000 cheap requests; ash-rust answered all of them without an error at every
-step. Memory: ash-rust's server stayed under 150 MiB up to 2× and reached 6 GB at 4× as its
-queue grew; Ash's went from 0.4 GB to 2.3 GB at 1× and 9.7 GB at 4×. After the heavy stream
-stopped at 4×, ash-rust's cheap p99 was back within twice its baseline in 0 to 4 s; Ash's was
-not back within 15 s. Offered multiples of each desk's own capacity, the same shape appears at
-each one's capacity: ash-rust at 125% of its own had the cheap stream at p50 0.76 s, answering
-645 heavy requests a second; Ash at 300% of its own answered 119 and failed 39% of the cheap
-ones.
+Each window has 5,000 cheap requests. ash-rust never answers a request with an error: what it
+can't serve it queues (and past the driver's limit of 3,000 in flight a request is not sent, which
+isn't counted as failed), so its overload shows as latency and memory where Ash's shows as errors.
+
+After the heavy stream stopped at 4×, ash-rust's cheap p99 was back within twice its baseline in
+0 to 4 s; Ash's was not back within 15 s. Offered multiples of each desk's own capacity, the same
+shape appears at each one's capacity: ash-rust at 125% of its own had the cheap stream at p50
+0.76 s, answering 645 heavy requests a second; Ash at 300% of its own answered 119 and failed 39%
+of the cheap ones (the supportdesk README has that table).
 
 **Read this as a baseline.** The limit wasn't the pool or Postgres: doubling the pool changed
 nothing, and Postgres had 1.5 to 8 connections busy and used about 3 of 16 cores. Each server used
