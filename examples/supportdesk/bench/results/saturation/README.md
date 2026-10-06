@@ -20,7 +20,9 @@ stream recovers.
 
 | `2026-10-06-pool-matrix` | one 30 s test per pool policy at two heavy rates and two pool sizes, with Postgres sampled | `node bench/saturation.ts --fixture /tmp/fixture.json --matrix` |
 
-All five ran on an Apple M4 Max with other applications open (the load average at the start is
+| `2026-10-06-equal-limit` | the same wait limit (100, 250, 1,000 ms) for both desks, on 20 connections, at three heavy rates | `node bench/saturation.ts --fixture /tmp/fixture.json --matrix --pools 20 --limits 100,250,1000 --rates 400,800,1600` |
+
+All six ran on an Apple M4 Max with other applications open (the load average at the start is
 in each manifest), so use them as a baseline to compare a later run against on the same
 machine, not as capacity figures. The manifests name the commit they ran at, with uncommitted changes: the
 driver was committed after the runs.

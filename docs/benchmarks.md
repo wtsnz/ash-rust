@@ -137,10 +137,17 @@ default) and letting Ash's queue instead of shed, at 800 heavy requests a second
 A wait limit keeps ash-rust's cheap request quick (p99 116 ms against 1.7 s) at the same heavy
 throughput and about an eighth of the memory, at the cost of the 6% of cheap requests that fail. When
 both shed at about 100 ms, ash-rust answers about five times as many heavy requests. Making Ash
-queue is worse than its default, not like ash-rust's queue: 6 s cheap p99 and 23 GiB. See the
-supportdesk README for the matrix and its caveats.
+queue is worse than its default, not like ash-rust's queue: 6 s cheap p99 and 23 GiB. Given the
+*same* wait limit (Rust's `wait_timeout`; Ecto's `queue_target` at half, since it drops at twice it), the
+cheap request's median is the limit in both, but ash-rust's p99 stays within 20 ms of it while
+Ash's is 2 to 8 times it, heavy requests take about three times the limit in both, and ash-rust
+answers about 600 heavy requests a second at 800/s to Ash's 62 to 110. At 400/s, below ash-rust's
+capacity and above Ash's, ash-rust answers everything and Ash fails 13–15% of the cheap requests
+and about half the heavy. See the supportdesk README for the matrix and its caveats.
 
 ![Pool matrix](../examples/supportdesk/bench/results/saturation/2026-10-06-pool-matrix/chart.svg)
+
+![Equal wait limit](../examples/supportdesk/bench/results/saturation/2026-10-06-equal-limit/chart.svg)
 
 #### CPU-bound saturation (in memory, no database)
 

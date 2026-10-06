@@ -55,6 +55,11 @@ const options = {
    *  heavy rate to every desk (`supportdesk` target only). */
   matrix: args.includes("--matrix"),
   pools: flag("--pools", "20,40")!.split(",").map(Number),
+  /** Instead of each desk's own pool policy: the same wait limit for both, in milliseconds,
+   *  each at the first of `pools` connections. Rust's is `POOL_WAIT_MS`. Ecto has no hard limit:
+   *  under overload it drops what has waited past twice its `queue_target`, so Elixir is given
+   *  a `queue_target` of half the limit, and a short `queue_interval` so that engages at once. */
+  limits: flag("--limits")?.split(",").map(Number),
   rates: flag("--rates", "800,1600")!.split(",").map(Number),
   /** The Postgres container, to sample its CPU. */
   pgContainer: flag("--pg-container", "ash-bench-pg")!,
@@ -459,7 +464,20 @@ const main = async () => {
 // The matrix -------------------------------------------------------------------------
 
 type Arm = { side: Side; pool: number; label: string; env: Record<string, string> };
-const arms: Arm[] = options.pools.flatMap((pool) => [
+const equalLimitArms = (): Arm[] =>
+  (options.limits ?? []).flatMap((limit) => {
+    const pool = options.pools[0];
+    return [
+      { side: "rust", pool, label: `Rust, ${limit} ms wait limit`, env: { POOL_SIZE: String(pool), POOL_WAIT_MS: String(limit) } },
+      {
+        side: "elixir",
+        pool,
+        label: `Elixir, ${limit} ms (queue_target ${limit / 2})`,
+        env: { POOL_SIZE: String(pool), POOL_QUEUE_TARGET_MS: String(limit / 2), POOL_QUEUE_INTERVAL_MS: "100" },
+      },
+    ] as Arm[];
+  });
+const arms: Arm[] = options.limits ? equalLimitArms() : options.pools.flatMap((pool) => [
   { side: "rust", pool, label: "Rust, queues (no wait limit)", env: { POOL_SIZE: String(pool) } },
   { side: "elixir", pool, label: "Elixir, sheds (Ecto's default)", env: { POOL_SIZE: String(pool) } },
   { side: "rust", pool, label: "Rust, 100 ms wait limit", env: { POOL_SIZE: String(pool), POOL_WAIT_MS: "100" } },
@@ -469,7 +487,7 @@ const armResults: Array<{ arm: Arm; rate: number; window: Window }> = [];
 
 const matrix = async () => {
   if (astro) throw new Error("--matrix runs on the supportdesk target");
-  console.log(`Pool matrix: ${arms.length} configurations, a ${options.window / 1000} s test at each of ${options.rates.join(", ")} heavy requests a second`);
+  console.log(`${options.limits ? "Equal wait limit" : "Pool matrix"}: ${arms.length} configurations, a ${options.window / 1000} s test at each of ${options.rates.join(", ")} heavy requests a second`);
   console.log("Seeding each desk's template from the fixture");
   for (const side of sides) console.log(`  ${side}: seeded in ${await seedTemplate(options.pg, both[side], options.fixture!, log(side))} ms`);
   for (const arm of arms) {
@@ -498,21 +516,23 @@ const matrix = async () => {
 const matrixReport = () => {
   const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefined ? "-" : String(Math.round(v * 10 ** d) / 10 ** d));
   const lines = [
-    `# Pool matrix, ${manifest.started}`,
+    `# ${options.limits ? "Equal wait limit" : "Pool matrix"}, ${manifest.started}`,
     "",
     `ash-rust at \`${manifest.git.rev.slice(0, 10)}\`${manifest.git.dirty ? " (uncommitted changes)" : ""} against Ash (Elixir) on ${manifest.machine.cpu} (${manifest.machine.cores} cores), ${(manifest as any).postgres.split(" on ")[0]}. Machine load at the start: ${manifest.machine.loadAverageAtStart ?? "unknown"}.`,
     "",
-    `Each row is one ${options.window / 1000} s test (after ${options.warmup / 1000} s of warm-up) of the same two streams as the ramp: the cheap one, ${options.cheapRate}/s, and the heavy one at the rate named, the same for every configuration. Rust's pool either queues without limit (its default) or fails a statement that has waited 100 ms (\`PoolSettings::wait_timeout\`). Elixir's either sheds, as Ecto's \`queue_target\` of 50 ms does (the default), or has its \`queue_target\` and \`queue_interval\` set to 60 s, so it queues. Pool sizes are ${options.pools.join(" and ")}. One rep each: read the differences between configurations as indications, not as measured to the noise. Postgres columns are sampled during the window: its connections in use by the desk's database (of those open), and its container's CPU as a share of one core.`,
+    options.limits
+      ? `Each row is one ${options.window / 1000} s test (after ${options.warmup / 1000} s of warm-up) of the same two streams as the ramp: the cheap one, ${options.cheapRate}/s, and the heavy one at the rate named, the same for every configuration, on pools of ${options.pools[0]} connections. Both desks are given the same limit on how long a request waits for a connection: Rust's is \`PoolSettings::wait_timeout\`, which fails a statement that has waited that long. Ecto has no hard limit: once its pool has been slow for an interval it drops what has waited past twice its \`queue_target\`, so Elixir is given a \`queue_target\` of half the limit and a \`queue_interval\` of 100 ms. One rep each: read the differences as indications. Postgres columns are sampled during the window: its connections in use by the desk's database (of those open), and its container's CPU as a share of one core.`
+      : `Each row is one ${options.window / 1000} s test (after ${options.warmup / 1000} s of warm-up) of the same two streams as the ramp: the cheap one, ${options.cheapRate}/s, and the heavy one at the rate named, the same for every configuration. Rust's pool either queues without limit (its default) or fails a statement that has waited 100 ms (\`PoolSettings::wait_timeout\`). Elixir's either sheds, as Ecto's \`queue_target\` of 50 ms does (the default), or has its \`queue_target\` and \`queue_interval\` set to 60 s, so it queues. Pool sizes are ${options.pools.join(" and ")}. One rep each: read the differences between configurations as indications, not as measured to the noise. Postgres columns are sampled during the window: its connections in use by the desk's database (of those open), and its container's CPU as a share of one core.`,
     "",
-    "| Heavy offered | Configuration | Pool | Cheap p50 / p99 ms | Cheap errors | Heavy answered/s | Heavy errors | Heavy not sent | Heavy p50 ms | Server cores | Peak RSS MiB | PG active / open | PG container CPU % |",
-    "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|---:|",
+    "| Heavy offered | Configuration | Pool | Cheap p50 / p99 ms | Cheap errors | Heavy answered/s | Heavy p50 / p99 ms | Heavy errors | Heavy not sent | Server cores | Peak RSS MiB | PG active / open | PG container CPU % |",
+    "|---|---|---:|---|---:|---:|---|---:|---:|---:|---:|---|---:|",
   ];
   for (const rate of options.rates) {
     for (const { arm, window: win } of armResults.filter((r) => r.rate === rate)) {
       const c = win.cheap;
       const h = win.heavy!;
       lines.push(
-        `| ${rate}/s | ${arm.label} | ${arm.pool} | ${fmt(c.p50)} / ${fmt(c.p99All)} | ${c.failed} (${fmt((100 * c.failed) / (c.due || 1), 0)}%) | ${fmt(win.goodput, 0)} | ${h.failed} (${fmt((100 * h.failed) / (h.due || 1), 0)}%) | ${h.dropped} | ${fmt(h.p50)} | ${fmt(win.server.cores)} | ${fmt(win.server.maxRssMiB, 0)} | ${fmt(win.db?.active)} / ${fmt(win.db?.connections)} | ${fmt(win.db?.containerCpuPct, 0)} |`,
+        `| ${rate}/s | ${arm.label} | ${arm.pool} | ${fmt(c.p50)} / ${fmt(c.p99All)} | ${c.failed} (${fmt((100 * c.failed) / (c.due || 1), 0)}%) | ${fmt(win.goodput, 0)} | ${fmt(h.p50)} / ${fmt(h.p99All)} | ${h.failed} (${fmt((100 * h.failed) / (h.due || 1), 0)}%) | ${h.dropped} | ${fmt(win.server.cores)} | ${fmt(win.server.maxRssMiB, 0)} | ${fmt(win.db?.active)} / ${fmt(win.db?.connections)} | ${fmt(win.db?.containerCpuPct, 0)} |`,
       );
     }
   }

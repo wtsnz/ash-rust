@@ -491,19 +491,21 @@ type Arm = {
 };
 
 const matrixCols: Array<{ title: string; unit: string; value: (a: Arm) => number | null; fmt: (v: number) => string; max?: number }> = [
+  { title: "Cheap latency, p50", unit: "ms", value: (a) => a.cheap.p50, fmt: ms },
   { title: "Cheap latency, p99", unit: "ms, p99", value: (a) => a.cheap.p99All, fmt: ms },
   { title: "Cheap failed", unit: "% of requests due", value: (a) => (a.cheap.due ? (100 * a.cheap.failed) / a.cheap.due : 0), fmt: pct, max: 100 },
-  { title: "Heavy answered", unit: "a second", value: (a) => a.goodput, fmt: perSecond },
+  { title: "Heavy latency, p50", unit: "ms, of those answered", value: (a) => a.heavy?.p50 ?? null, fmt: ms },
+  { title: "Heavy latency, p99", unit: "ms, errors counted", value: (a) => a.heavy?.p99All ?? null, fmt: ms },
   { title: "Heavy failed", unit: "% of requests due", value: (a) => (a.heavy && a.heavy.due ? (100 * a.heavy.failed) / a.heavy.due : 0), fmt: pct, max: 100 },
+  { title: "Heavy answered", unit: "a second", value: (a) => a.goodput, fmt: perSecond },
   { title: "Memory, peak", unit: "resident", value: (a) => a.server.maxRssMiB, fmt: mem },
-  { title: "Postgres container", unit: "CPU, % of one core", value: (a) => a.db?.containerCpuPct ?? null, fmt: (v) => `${num(v)}%` },
 ];
 
 /** One heavy rate's bars: a row for each configuration, a column for each measure. */
 const matrixSvgFor = (arms: Arm[], rate: number, hover: boolean): string => {
   const rowH = 30;
-  const labelW = 250;
-  const colW = 158;
+  const labelW = 260;
+  const colW = 150;
   const top = 62;
   const pools = [...new Set(arms.map((a) => a.pool))];
   const rows: Array<Arm | { gap: number }> = pools.flatMap((pool) => [{ gap: pool }, ...arms.filter((a) => a.pool === pool)]);
@@ -542,7 +544,7 @@ const buildMatrix = (dir: string) => {
   const arms = readFileSync(`${dir}/results.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.kind === "arm") as Arm[];
   const rates = [...new Set(arms.map((a) => a.rate))].sort((a, b) => a - b);
   const o = manifest.options;
-  const heading = "Pool matrix: how each pool policy treats overload";
+  const heading = o.limits ? "Equal wait limit: ash-rust and Ash given the same limit on waiting for a connection" : "Pool matrix: how each pool policy treats overload";
   const sub = `${new Date(manifest.started).toISOString().slice(0, 10)}, one ${o.window / 1000} s test per configuration and rate. Cheap: one ticket by id, ${o.cheapRate}/s. Heavy: the 250 newest tickets with their relationships. ${manifest.machine.cpu}, ${manifest.machine.cores} cores.`;
   const sections = rates.map((rate) => {
     const here = arms.filter((a) => a.rate === rate);
@@ -584,7 +586,7 @@ const buildMatrix = (dir: string) => {
 <div class="legend">${legend}</div>
 ${sections.map((x) => `<svg class="m" viewBox="0 0 ${x.w} ${x.h}" role="img" aria-label="${esc(`${heading}, ${num(x.rate)} heavy requests a second`)}">${x.body}</svg><p class="note">${esc(notes(x.rate, x.here))}</p>`).join("\n")}
 <details><summary>Table view</summary>${sections.map((x) => `<h2>${num(x.rate)}/s</h2>${table(x.here)}`).join("")}</details>
-<p class="note">Rust either queues at its pool without limit (the default) or fails a statement that has waited 100 ms; Elixir either sheds, as Ecto's queue_target of 50 ms does (the default), or has queue_target set to 60 s so it queues. One rep each, on a laptop with other applications open: read the differences between configurations as indications. Heavy requests the driver would hold past its limit of ${o.maxInFlight} are not counted as failed.</p>
+<p class="note">${o.limits ? "Both desks are given the same limit on how long a request waits for a pool connection: Rust's wait_timeout fails a statement that has waited that long; Ecto drops what has waited past twice its queue_target once its pool has been slow, so Elixir's queue_target is half the limit." : "Rust either queues at its pool without limit (the default) or fails a statement that has waited 100 ms; Elixir either sheds, as Ecto's queue_target of 50 ms does (the default), or has queue_target set to 60 s so it queues."} One rep each, on a laptop with other applications open: read the differences between configurations as indications. Heavy requests the driver would hold past its limit of ${o.maxInFlight} are not counted as failed.</p>
 </div><script>document.querySelector('button.theme').addEventListener('click',()=>{const r=document.documentElement;const d=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=d?'light':'dark'})</script></body></html>`;
   const pad = 20;
   const gap = 24;

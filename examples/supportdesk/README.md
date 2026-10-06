@@ -417,3 +417,57 @@ Caveats: the Rust unbounded queue's latency is bounded here by the driver's limi
 requests in flight (it was holding 3,000 at 1.7 s: with no limit the wait would grow until
 requests timed out); one rep per cell; the wait limit surfaces as a pool error, not yet a
 typed overload error a server can answer with a 503.
+
+### Equal wait limit
+
+```bash
+node bench/saturation.ts --fixture /tmp/fixture.json --matrix --pools 20 --limits 100,250,1000 --rates 400,800,1600
+```
+
+`--limits` gives both desks the same limit on how long a request waits for a pool connection, on
+20 connections, at 400, 800 and 1,600 heavy requests a second (30 s each). Rust's is
+`PoolSettings::wait_timeout`. Ecto has no hard limit: once its pool has been slow for an
+interval it drops what has waited past *twice* its `queue_target`, so Elixir is given a
+`queue_target` of half the limit and a `queue_interval` of 100 ms.
+
+![Equal wait limit: cheap and heavy latency, failures, throughput and memory, ash-rust and Ash at the same limit on waiting for a connection](bench/results/saturation/2026-10-06-equal-limit/chart.svg)
+
+At 800 heavy requests a second (one rep, with other applications open: read the differences as
+indications):
+
+| Limit | | Cheap p50 / p99 | Cheap failed | Heavy p50 / p99 | Heavy answered/s | Heavy failed | Peak memory |
+|---|---|---|---:|---|---:|---:|---:|
+| 100 ms | Rust | 99 / 117 ms | 7% | 311 / 341 ms | 591 | 26% | 1.5 GiB |
+| | Elixir | 109 / 762 ms | 35% | 403 / 1,035 ms | 62 | 92% | 2.7 GiB |
+| 250 ms | Rust | 248 / 269 ms | 6.5% | 751 / 788 ms | 598 | 25% | 4.1 GiB |
+| | Elixir | 254 / 948 ms | 29% | 833 / 1,529 ms | 92 | 88% | 3.8 GiB |
+| 1,000 ms | Rust | 963 / 1,019 ms | 5% | 2,885 / 3,029 ms | 597 | 19% | 7.4 GiB |
+| | Elixir | 972 / 1,994 ms | 27% | 3,013 / 3,805 ms | 110 | 84% | 9.5 GiB |
+
+What this shows:
+
+- **The limit sets the cheap request's median in both**: p50 is the limit, to within 10%
+  (99 and 109 ms at 100 ms; 963 and 972 at 1,000), because the cheap request waits at the pool
+  until it's served or dropped.
+- **It doesn't set the tail in Elixir.** ash-rust's cheap p99 stays within about 20 ms of the
+  limit (117, 269, 1,019); Ash's is 2 to 8 times it (762, 948, 1,994). The pool wait is only part of what
+  a request spends in Ash, and the rest isn't bounded by the limit.
+- **Heavy requests take about three times the limit** in both (311 and 403 ms at 100 ms; 2,885
+  and 3,013 at 1,000), where cheap ones take one. That is consistent with a heavy request
+  waiting at the pool about three times, once for each query that follows another; the number of
+  queries per request wasn't measured.
+- **The same limit doesn't give the same outcome, because Ash saturates first.** At 400 heavy
+  requests a second, 57% of ash-rust's capacity and 1.5 times Ash's, ash-rust answers every
+  request (cheap p50 0.9 ms, no failures, 4.7 cores, 120–200 MiB) at any limit; Ash fails 13–15% of
+  the cheap and 50–56% of the heavy, answers 174–195 heavy requests a second, uses 9.4–9.9 cores
+  and 3.3–8.2 GiB. That is about 50 ms of server CPU per heavy request answered against about 12.
+  At 800/s ash-rust answers about 600 a second whatever the limit; Ash answers 62 to 110, more as
+  the limit grows (it drops fewer, but each costs the same CPU). At 1,600/s ash-rust answers 467 to 545
+  and Ash 12 to 16.
+- **A longer limit buys ash-rust fewer failures, at the price of latency and memory:** its cheap
+  failures fall from 7% to 5% and its heavy from 26% to 19% as the limit goes from 100 ms to 1 s, while
+  its cheap p50 goes from 99 ms to 963 ms and its memory from 1.5 to 7.4 GiB. A short limit is the
+  better trade for a latency-sensitive request.
+
+Caveats: one rep per cell; Ecto's is an approximation of a hard limit, and a `queue_interval` of
+100 ms is shorter than its 2 s default; the two desks, Postgres and the driver share a laptop.
