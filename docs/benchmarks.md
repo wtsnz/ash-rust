@@ -97,28 +97,29 @@ in the manifest) found the heavy request's capacity alone to be **ash-rust 703/s
 Offering both the same heavy rate (each pair of rows is one load, with the same columns for each
 desk):
 
-| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy answered/s | Peak memory |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| none | Rust | 1.0 ms | 7.2 ms | 0% | - | - | - | 15 MiB |
-|  | Elixir | 1.5 ms | 4.5 ms | 0% | - | - | - | 416 MiB |
-| 66/s (0.25×) | Rust | 1.1 ms | 8.4 ms | 0% | 17.8 ms | 0% | 66 | 34 MiB |
-|  | Elixir | 1.3 ms | 5.0 ms | 0% | 40.1 ms | 0% | 66 | 526 MiB |
-| 133/s (0.5×) | Rust | 1.1 ms | 9.8 ms | 0% | 15.7 ms | 0% | 133 | 62 MiB |
-|  | Elixir | 1.4 ms | 5.1 ms | 0% | 41.5 ms | 0% | 133 | 577 MiB |
-| 265/s (1×) | Rust | 0.9 ms | 8.9 ms | 0% | 15.7 ms | 0% | 265 | 92 MiB |
-|  | Elixir | 53.6 ms | 168 ms | 1% | 279 ms | 5% | 245 | 2.2 GiB |
-| 398/s (1.5×) | Rust | 0.8 ms | 5.4 ms | 0% | 16.1 ms | 0% | 398 | 102 MiB |
-|  | Elixir | 143 ms | 800 ms | 18% | 488 ms | 53% | 211 | 4.9 GiB |
-| 531/s (2×) | Rust | 0.9 ms | 16.4 ms | 0% | 16.7 ms | 0% | 531 | 140 MiB |
-|  | Elixir | 123 ms | 2,069 ms | 28% | 468 ms | 74% | 174 | 6.1 GiB |
-| 796/s (3×) | Rust | 498 ms | 826 ms | 0% | 1,593 ms | 0% | 654 | 3.3 GiB |
-|  | Elixir | 108 ms | 1,554 ms | 40% | 392 ms | 89% | 113 | 7.8 GiB |
-| 1,062/s (4×) | Rust | 1,310 ms | 1,621 ms | 0% | 3,957 ms | 0% | 631 | 6.2 GiB |
-|  | Elixir | 109 ms | 1,763 ms | 49% | 394 ms | 90% | 75 | 9.5 GiB |
+| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | 1.0 ms | 7.2 ms | 0% | - | - | - | - | 15 MiB | 0.1 |
+|  | Elixir | 1.5 ms | 4.5 ms | 0% | - | - | - | - | 416 MiB | 0.5 |
+| 66/s (0.25×) | Rust | 1.1 ms | 8.4 ms | 0% | 17.8 ms | 0% | 0% | 66 | 34 MiB | 0.6 |
+|  | Elixir | 1.3 ms | 5.0 ms | 0% | 40.1 ms | 0% | 0% | 66 | 526 MiB | 3.1 |
+| 133/s (0.5×) | Rust | 1.1 ms | 9.8 ms | 0% | 15.7 ms | 0% | 0% | 133 | 62 MiB | 1.3 |
+|  | Elixir | 1.4 ms | 5.1 ms | 0% | 41.5 ms | 0% | 0% | 133 | 577 MiB | 6.1 |
+| 265/s (1×) | Rust | 0.9 ms | 8.9 ms | 0% | 15.7 ms | 0% | 0% | 265 | 92 MiB | 2.9 |
+|  | Elixir | 53.6 ms | 168 ms | 1% | 279 ms | 5% | 0% | 245 | 2.2 GiB | 10.6 |
+| 398/s (1.5×) | Rust | 0.8 ms | 5.4 ms | 0% | 16.1 ms | 0% | 0% | 398 | 102 MiB | 4.5 |
+|  | Elixir | 143 ms | 800 ms | 18% | 488 ms | 53% | 0% | 211 | 4.9 GiB | 10.2 |
+| 531/s (2×) | Rust | 0.9 ms | 16.4 ms | 0% | 16.7 ms | 0% | 0% | 531 | 140 MiB | 6.4 |
+|  | Elixir | 123 ms | 2,069 ms | 28% | 468 ms | 74% | 0% | 174 | 6.1 GiB | 9.8 |
+| 796/s (3×) | Rust | 498 ms | 826 ms | 0% | 1,593 ms | 0% | 0% | 654 | 3.3 GiB | 8.6 |
+|  | Elixir | 108 ms | 1,554 ms | 40% | 392 ms | 89% | 0% | 113 | 7.8 GiB | 9.7 |
+| 1,062/s (4×) | Rust | 1,310 ms | 1,621 ms | 0% | 3,957 ms | 0% | 21% | 631 | 6.2 GiB | 8.4 |
+|  | Elixir | 109 ms | 1,763 ms | 49% | 394 ms | 90% | 5% | 75 | 9.5 GiB | 9.6 |
 
 Each window has 5,000 cheap requests. ash-rust never answers a request with an error: what it
-can't serve it queues (and past the driver's limit of 3,000 in flight a request is not sent, which
-isn't counted as failed), so its overload shows as latency and memory where Ash's shows as errors.
+can't serve it queues (and past the driver's limit of 3,000 in flight a request is *not sent*, a
+request the desk had no chance to serve), so its overload shows as latency, memory and not sent
+where Ash's shows as errors.
 
 After the heavy stream stopped at 4×, ash-rust's cheap p99 was back within twice its baseline in
 0 to 4 s; Ash's was not back within 15 s. Offered multiples of each desk's own capacity, the same
@@ -165,17 +166,29 @@ and about half the heavy. See the supportdesk README for the matrix and its cave
 `--target astro` runs the same ramp on the in-memory astro-helpdesk twins. The cheap request is
 `{ __typename }`; the heavy one filters, sorts and counts 5,000 tickets and answers a page of
 25, so it costs CPU and nothing else. Heavy capacity alone: **ash-rust 2,141/s, Ash 456/s**.
-Offering both the same heavy rate (2 reps, medians):
+Offering both the same heavy rate (2 reps, medians; each pair of rows is one load, with the same
+columns for each desk):
 
-| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir heavy answered/s |
-|---|---|---:|---|---:|
-| none | 0.9 / 3.7 | - | 0.8 / 3.8 | - |
-| 456/s (1× Ash's capacity) | 0.8 / 3.8 | 456 | 5.9 / 32 | 391 |
-| 911/s (2×) | 0.9 / 3.3 | 911 | 8 / 39 | 379 |
-| 1,822/s (4×) | 1.2 / 56 | 1,820 | 8.1 / 41 | 387 |
-| 3,644/s (8×) | 201 / 605 | 2,006 | 8.1 / 40 | 385 |
+| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | 0.9 ms | 3.7 ms | 0% | - | - | - | - | 18 MiB | 0.1 |
+|  | Elixir | 0.8 ms | 3.8 ms | 0% | - | - | - | - | 374 MiB | 0.2 |
+| 114/s (0.25×) | Rust | 0.8 ms | 4.8 ms | 0% | 5.5 ms | 0% | 0% | 114 | 25 MiB | 0.5 |
+|  | Elixir | 0.9 ms | 2.3 ms | 0% | 14.6 ms | 0% | 0% | 114 | 502 MiB | 2.9 |
+| 228/s (0.5×) | Rust | 1.0 ms | 4.7 ms | 0% | 5.0 ms | 0% | 0% | 228 | 81 MiB | 0.9 |
+|  | Elixir | 0.7 ms | 2.5 ms | 0% | 13.8 ms | 0% | 0% | 228 | 546 MiB | 5.8 |
+| 456/s (1×) | Rust | 0.8 ms | 3.8 ms | 0% | 4.7 ms | 0% | 0% | 456 | 84 MiB | 1.9 |
+|  | Elixir | 5.9 ms | 32.3 ms | 0% | 903 ms | 0% | 10% | 391 | 5.9 GiB | 13.6 |
+| 911/s (2×) | Rust | 0.9 ms | 3.2 ms | 0% | 4.3 ms | 0% | 0% | 911 | 91 MiB | 3.8 |
+|  | Elixir | 8.0 ms | 39.0 ms | 0% | 1,261 ms | 0% | 62% | 379 | 6.3 GiB | 13.5 |
+| 1,822/s (4×) | Rust | 1.2 ms | 56.2 ms | 0% | 6.2 ms | 0% | 0% | 1,820 | 110 MiB | 10.5 |
+|  | Elixir | 8.1 ms | 40.6 ms | 0% | 1,260 ms | 0% | 81% | 387 | 6.5 GiB | 13.7 |
+| 3,644/s (8×) | Rust | 201 ms | 605 ms | 0% | 215 ms | 0% | 49% | 2,006 | 134 MiB | 13.3 |
+|  | Elixir | 8.1 ms | 40.2 ms | 0% | 1,280 ms | 0% | 91% | 385 | 6.7 GiB | 13.5 |
 
-Nothing failed on either desk. Ash's cheap request settles at about 8 ms whatever it is
+No request failed on either desk, but the driver held back heavy requests it already had 500
+waiting on (*not sent*: 10% of Ash's at 1× and 91% at 8×; ash-rust's 0% until 8×, then 49%), so
+read *answered* as what each desk did. Ash's cheap request settles at about 8 ms whatever it is
 offered, because the BEAM gives it a slice however many heavy requests are runnable. ash-rust's
 is faster until it saturates (p99 56 ms at 85% of its capacity), then waits behind the heavy
 requests queued ahead of it (Tokio runs a task until it yields): about 200 ms, bounded here only

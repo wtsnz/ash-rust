@@ -246,52 +246,53 @@ Elixir desk's `mix release`. Heavy capacity alone: **ash-rust 703/s, Ash 265/s**
 **The same heavy load for both desks.** Each pair of rows is one load, with the same columns for
 each desk, so read down a column to compare them:
 
-| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy answered/s | Peak memory |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| none | Rust | 1.0 ms | 7.2 ms | 0% | - | - | - | 15 MiB |
-|  | Elixir | 1.5 ms | 4.5 ms | 0% | - | - | - | 416 MiB |
-| 66/s (0.25×) | Rust | 1.1 ms | 8.4 ms | 0% | 17.8 ms | 0% | 66 | 34 MiB |
-|  | Elixir | 1.3 ms | 5.0 ms | 0% | 40.1 ms | 0% | 66 | 526 MiB |
-| 133/s (0.5×) | Rust | 1.1 ms | 9.8 ms | 0% | 15.7 ms | 0% | 133 | 62 MiB |
-|  | Elixir | 1.4 ms | 5.1 ms | 0% | 41.5 ms | 0% | 133 | 577 MiB |
-| 265/s (1×) | Rust | 0.9 ms | 8.9 ms | 0% | 15.7 ms | 0% | 265 | 92 MiB |
-|  | Elixir | 53.6 ms | 168 ms | 1% | 279 ms | 5% | 245 | 2.2 GiB |
-| 398/s (1.5×) | Rust | 0.8 ms | 5.4 ms | 0% | 16.1 ms | 0% | 398 | 102 MiB |
-|  | Elixir | 143 ms | 800 ms | 18% | 488 ms | 53% | 211 | 4.9 GiB |
-| 531/s (2×) | Rust | 0.9 ms | 16.4 ms | 0% | 16.7 ms | 0% | 531 | 140 MiB |
-|  | Elixir | 123 ms | 2,069 ms | 28% | 468 ms | 74% | 174 | 6.1 GiB |
-| 796/s (3×) | Rust | 498 ms | 826 ms | 0% | 1,593 ms | 0% | 654 | 3.3 GiB |
-|  | Elixir | 108 ms | 1,554 ms | 40% | 392 ms | 89% | 113 | 7.8 GiB |
-| 1,062/s (4×) | Rust | 1,310 ms | 1,621 ms | 0% | 3,957 ms | 0% | 631 | 6.2 GiB |
-|  | Elixir | 109 ms | 1,763 ms | 49% | 394 ms | 90% | 75 | 9.5 GiB |
+| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | 1.0 ms | 7.2 ms | 0% | - | - | - | - | 15 MiB | 0.1 |
+|  | Elixir | 1.5 ms | 4.5 ms | 0% | - | - | - | - | 416 MiB | 0.5 |
+| 66/s (0.25×) | Rust | 1.1 ms | 8.4 ms | 0% | 17.8 ms | 0% | 0% | 66 | 34 MiB | 0.6 |
+|  | Elixir | 1.3 ms | 5.0 ms | 0% | 40.1 ms | 0% | 0% | 66 | 526 MiB | 3.1 |
+| 133/s (0.5×) | Rust | 1.1 ms | 9.8 ms | 0% | 15.7 ms | 0% | 0% | 133 | 62 MiB | 1.3 |
+|  | Elixir | 1.4 ms | 5.1 ms | 0% | 41.5 ms | 0% | 0% | 133 | 577 MiB | 6.1 |
+| 265/s (1×) | Rust | 0.9 ms | 8.9 ms | 0% | 15.7 ms | 0% | 0% | 265 | 92 MiB | 2.9 |
+|  | Elixir | 53.6 ms | 168 ms | 1% | 279 ms | 5% | 0% | 245 | 2.2 GiB | 10.6 |
+| 398/s (1.5×) | Rust | 0.8 ms | 5.4 ms | 0% | 16.1 ms | 0% | 0% | 398 | 102 MiB | 4.5 |
+|  | Elixir | 143 ms | 800 ms | 18% | 488 ms | 53% | 0% | 211 | 4.9 GiB | 10.2 |
+| 531/s (2×) | Rust | 0.9 ms | 16.4 ms | 0% | 16.7 ms | 0% | 0% | 531 | 140 MiB | 6.4 |
+|  | Elixir | 123 ms | 2,069 ms | 28% | 468 ms | 74% | 0% | 174 | 6.1 GiB | 9.8 |
+| 796/s (3×) | Rust | 498 ms | 826 ms | 0% | 1,593 ms | 0% | 0% | 654 | 3.3 GiB | 8.6 |
+|  | Elixir | 108 ms | 1,554 ms | 40% | 392 ms | 89% | 0% | 113 | 7.8 GiB | 9.7 |
+| 1,062/s (4×) | Rust | 1,310 ms | 1,621 ms | 0% | 3,957 ms | 0% | 21% | 631 | 6.2 GiB | 8.4 |
+|  | Elixir | 109 ms | 1,763 ms | 49% | 394 ms | 90% | 5% | 75 | 9.5 GiB | 9.6 |
 
 **Each desk at multiples of its own capacity** (`--basis own`), so each is at 100%, 125%, 200%
 of what it can do:
 
-| Heavy offered, × the desk's own capacity | | Offered | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy answered/s | Peak memory |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| none | Rust | - | 1.0 ms | 4.0 ms | 0% | - | - | - | 16 MiB |
-|  | Elixir | - | 1.5 ms | 6.5 ms | 0% | - | - | - | 414 MiB |
-| 0.5× | Rust | 349/s | 0.8 ms | 6.5 ms | 0% | 16.2 ms | 0% | 349 | 97 MiB |
-|  | Elixir | 133/s | 1.4 ms | 5.0 ms | 0% | 41.1 ms | 0% | 133 | 606 MiB |
-| 0.9× | Rust | 628/s | 1.1 ms | 18.5 ms | 0% | 17.7 ms | 0% | 628 | 175 MiB |
-|  | Elixir | 239/s | 2.4 ms | 64.2 ms | 0% | 53.9 ms | 0% | 236 | 1.4 GiB |
-| 1× | Rust | 697/s | 106 ms | 169 ms | 0% | 337 ms | 0% | 678 | 852 MiB |
-|  | Elixir | 266/s | 54.5 ms | 115 ms | 1% | 267 ms | 4% | 252 | 2.0 GiB |
-| 1.25× | Rust | 872/s | 757 ms | 1,274 ms | 0% | 2,493 ms | 0% | 645 | 4.4 GiB |
-|  | Elixir | 332/s | 126 ms | 409 ms | 11% | 496 ms | 35% | 227 | 3.6 GiB |
-| 1.5× | Rust | 1,046/s | 1,308 ms | 1,669 ms | 0% | 3,914 ms | 0% | 639 | 5.5 GiB |
-|  | Elixir | 399/s | 112 ms | 1,001 ms | 18% | 439 ms | 54% | 207 | 4.6 GiB |
-| 2× | Rust | 1,394/s | 1,462 ms | 1,660 ms | 0% | 4,247 ms | 0% | 654 | 5.9 GiB |
-|  | Elixir | 532/s | 109 ms | 1,270 ms | 26% | 412 ms | 74% | 169 | 6.0 GiB |
-| 3× | Rust | 2,092/s | 1,434 ms | 1,693 ms | 0% | 4,262 ms | 0% | 675 | 6.6 GiB |
-|  | Elixir | 798/s | 107 ms | 1,610 ms | 39% | 392 ms | 88% | 119 | 8.1 GiB |
+| Heavy offered, × the desk's own capacity | | Offered | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | - | 1.0 ms | 4.0 ms | 0% | - | - | - | - | 16 MiB | 0.1 |
+|  | Elixir | - | 1.5 ms | 6.5 ms | 0% | - | - | - | - | 414 MiB | 0.5 |
+| 0.5× | Rust | 349/s | 0.8 ms | 6.5 ms | 0% | 16.2 ms | 0% | 0% | 349 | 97 MiB | 3.9 |
+|  | Elixir | 133/s | 1.4 ms | 5.0 ms | 0% | 41.1 ms | 0% | 0% | 133 | 606 MiB | 5.9 |
+| 0.9× | Rust | 628/s | 1.1 ms | 18.5 ms | 0% | 17.7 ms | 0% | 0% | 628 | 175 MiB | 7.8 |
+|  | Elixir | 239/s | 2.4 ms | 64.2 ms | 0% | 53.9 ms | 0% | 0% | 236 | 1.4 GiB | 10.4 |
+| 1× | Rust | 697/s | 106 ms | 169 ms | 0% | 337 ms | 0% | 0% | 678 | 852 MiB | 8.8 |
+|  | Elixir | 266/s | 54.5 ms | 115 ms | 1% | 267 ms | 4% | 0% | 252 | 2.0 GiB | 10.7 |
+| 1.25× | Rust | 872/s | 757 ms | 1,274 ms | 0% | 2,493 ms | 0% | 0% | 645 | 4.4 GiB | 8.7 |
+|  | Elixir | 332/s | 126 ms | 409 ms | 11% | 496 ms | 35% | 0% | 227 | 3.6 GiB | 10.3 |
+| 1.5× | Rust | 1,046/s | 1,308 ms | 1,669 ms | 0% | 3,914 ms | 0% | 20% | 639 | 5.5 GiB | 8.5 |
+|  | Elixir | 399/s | 112 ms | 1,001 ms | 18% | 439 ms | 54% | 0% | 207 | 4.6 GiB | 10.0 |
+| 2× | Rust | 1,394/s | 1,462 ms | 1,660 ms | 0% | 4,247 ms | 0% | 43% | 654 | 5.9 GiB | 8.3 |
+|  | Elixir | 532/s | 109 ms | 1,270 ms | 26% | 412 ms | 74% | 0% | 169 | 6.0 GiB | 9.7 |
+| 3× | Rust | 2,092/s | 1,434 ms | 1,693 ms | 0% | 4,262 ms | 0% | 68% | 675 | 6.6 GiB | 8.6 |
+|  | Elixir | 798/s | 107 ms | 1,610 ms | 39% | 392 ms | 88% | 0% | 119 | 8.1 GiB | 9.8 |
 
-Reading the tables: each window has 5,000 cheap requests, and "failed" counts requests a desk
-answered with an error. Rust never answers one with an error: what it can't serve it queues,
-and past the driver's limit of 3,000 heavy requests in flight a request is *not sent* (2,211 at
-4×), which is the driver's limit and not counted as failed. So Rust's overload shows as latency,
-memory and a heavy "answered" below "offered", where Ash's shows as errors.
+Reading the tables: each window has 5,000 cheap requests. *Failed* counts requests a desk
+answered with an error or that were still unanswered after 10 s. *Not sent* counts heavy requests
+the driver held back because it already had 3,000 waiting on that desk: the desk had no chance
+to serve them, so count them against it, and it bounds how long a queue can grow. Rust never
+answers a request with an error. What it can't serve it queues, so its overload shows as
+latency, memory and *not sent*, where Ash's shows as errors.
 
 ![Mixed saturation over Postgres: cheap and heavy request latency, answered and failed, memory, CPU and recovery, ash-rust and Ash](bench/results/saturation/2026-10-06-common/chart.svg)
 
@@ -342,24 +343,54 @@ requests unanswered here (`--max-in-flight`), because Ash's memory grows with ev
 in flight.
 
 A run on 2026-10-06 (2 reps, medians, other applications open). Heavy capacity alone:
-**ash-rust 2,141/s, Ash 456/s**, 4.7 times. Offering both the same heavy rate:
+**ash-rust 2,141/s, Ash 456/s**, 4.7 times. Offering both the same heavy rate (each pair of rows is
+one load, with the same columns for each desk):
 
-| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir heavy answered/s |
-|---|---|---:|---|---:|
-| none | 0.9 / 3.7 | - | 0.8 / 3.8 | - |
-| 228/s (0.5× Ash's capacity) | 1 / 4.7 | 228 | 0.7 / 2.5 | 228 |
-| 456/s (1×) | 0.8 / 3.8 | 456 | 5.9 / 32 | 391 |
-| 911/s (2×) | 0.9 / 3.3 | 911 | 8 / 39 | 379 |
-| 1,822/s (4×) | 1.2 / 56 | 1,820 | 8.1 / 41 | 387 |
-| 3,644/s (8×) | 201 / 605 | 2,006 | 8.1 / 40 | 385 |
+| Heavy offered | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | 0.9 ms | 3.7 ms | 0% | - | - | - | - | 18 MiB | 0.1 |
+|  | Elixir | 0.8 ms | 3.8 ms | 0% | - | - | - | - | 374 MiB | 0.2 |
+| 114/s (0.25×) | Rust | 0.8 ms | 4.8 ms | 0% | 5.5 ms | 0% | 0% | 114 | 25 MiB | 0.5 |
+|  | Elixir | 0.9 ms | 2.3 ms | 0% | 14.6 ms | 0% | 0% | 114 | 502 MiB | 2.9 |
+| 228/s (0.5×) | Rust | 1.0 ms | 4.7 ms | 0% | 5.0 ms | 0% | 0% | 228 | 81 MiB | 0.9 |
+|  | Elixir | 0.7 ms | 2.5 ms | 0% | 13.8 ms | 0% | 0% | 228 | 546 MiB | 5.8 |
+| 456/s (1×) | Rust | 0.8 ms | 3.8 ms | 0% | 4.7 ms | 0% | 0% | 456 | 84 MiB | 1.9 |
+|  | Elixir | 5.9 ms | 32.3 ms | 0% | 903 ms | 0% | 10% | 391 | 5.9 GiB | 13.6 |
+| 911/s (2×) | Rust | 0.9 ms | 3.2 ms | 0% | 4.3 ms | 0% | 0% | 911 | 91 MiB | 3.8 |
+|  | Elixir | 8.0 ms | 39.0 ms | 0% | 1,261 ms | 0% | 62% | 379 | 6.3 GiB | 13.5 |
+| 1,822/s (4×) | Rust | 1.2 ms | 56.2 ms | 0% | 6.2 ms | 0% | 0% | 1,820 | 110 MiB | 10.5 |
+|  | Elixir | 8.1 ms | 40.6 ms | 0% | 1,260 ms | 0% | 81% | 387 | 6.5 GiB | 13.7 |
+| 3,644/s (8×) | Rust | 201 ms | 605 ms | 0% | 215 ms | 0% | 49% | 2,006 | 134 MiB | 13.3 |
+|  | Elixir | 8.1 ms | 40.2 ms | 0% | 1,280 ms | 0% | 91% | 385 | 6.7 GiB | 13.5 |
 
-No request failed or timed out on either desk. Cores busy: Ash 13.6 of 16 from 1×; ash-rust
-1.9 at 1×, 10.5 at 4×, 13.3 at 8×. Memory: ash-rust under 150 MiB throughout; Ash up to
-about 7 GB (0.4 GB idle). In each desk's own multiples, ash-rust's cheap request is p50 99 ms,
-p99 272 ms at 90% of its capacity, and p50 about 190 ms, p99 460–680 ms from 125% to 300%;
-Ash's is p50 4 ms, p99 17 ms at 100% of its capacity, and p50 about 8 ms, p99 37–47 ms from
-125% to 300%. After the heavy stream stopped, ash-rust's cheap p99 was back within twice its
-baseline in 0 to 4 s, Ash's in 0 to 14 s.
+In each desk's own multiples of its capacity (`--basis own`):
+
+| Heavy offered, × the desk's own capacity | | Offered | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| none | Rust | - | 0.6 ms | 2.7 ms | 0% | - | - | - | - | 18 MiB | 0.0 |
+|  | Elixir | - | 0.7 ms | 3.7 ms | 0% | - | - | - | - | 363 MiB | 0.2 |
+| 0.5× | Rust | 1,082/s | 0.7 ms | 7.2 ms | 0% | 4.7 ms | 0% | 0% | 1,082 | 98 MiB | 5.0 |
+|  | Elixir | 229/s | 0.8 ms | 5.0 ms | 0% | 13.6 ms | 0% | 0% | 229 | 632 MiB | 5.9 |
+| 0.9× | Rust | 1,947/s | 98.6 ms | 272 ms | 0% | 101 ms | 0% | <1% | 1,922 | 128 MiB | 11.1 |
+|  | Elixir | 413/s | 0.7 ms | 9.9 ms | 0% | 15.1 ms | 0% | 0% | 403 | 1.4 GiB | 11.8 |
+| 1× | Rust | 2,163/s | 102 ms | 434 ms | 0% | 105 ms | 0% | 5% | 2,038 | 132 MiB | 11.8 |
+|  | Elixir | 459/s | 4.1 ms | 17.5 ms | 0% | 618 ms | 0% | 6% | 419 | 3.5 GiB | 13.5 |
+| 1.25× | Rust | 2,704/s | 176 ms | 558 ms | 0% | 185 ms | 0% | 20% | 2,176 | 141 MiB | 13.1 |
+|  | Elixir | 573/s | 7.6 ms | 37.5 ms | 0% | 1,242 ms | 0% | 33% | 396 | 6.0 GiB | 13.7 |
+| 1.5× | Rust | 3,245/s | 195 ms | 462 ms | 0% | 202 ms | 0% | 35% | 2,183 | 144 MiB | 13.3 |
+|  | Elixir | 688/s | 7.7 ms | 46.6 ms | 0% | 1,327 ms | 0% | 50% | 363 | 6.1 GiB | 13.1 |
+| 2× | Rust | 4,327/s | 181 ms | 484 ms | 0% | 205 ms | 0% | 54% | 2,165 | 144 MiB | 12.9 |
+|  | Elixir | 917/s | 8.0 ms | 42.1 ms | 0% | 1,334 ms | 0% | 63% | 368 | 6.2 GiB | 13.1 |
+| 3× | Rust | 6,490/s | 190 ms | 682 ms | 0% | 197 ms | 0% | 70% | 2,149 | 144 MiB | 12.9 |
+|  | Elixir | 1,376/s | 8.0 ms | 36.9 ms | 0% | 1,297 ms | 0% | 76% | 376 | 6.3 GiB | 13.5 |
+
+Reading the tables: the cheap stream is 500 requests a second, and nothing failed or timed out on
+either desk. *Not sent* counts heavy requests the driver held back because it already had 500
+waiting on that desk (the limit this target uses), so a high figure means the desk was holding
+that many unanswered: Ash's is 10% at 1× and 91% at 8×, ash-rust's 0% until 8×, where it is 49%.
+Those requests are not served, so Ash's *answered* is the better measure of what it did. After the
+heavy stream stopped, ash-rust's cheap p99 was back within twice its baseline in 0 to 4 s, Ash's
+in 0 to 14 s.
 
 ![Mixed saturation, CPU-bound and in memory: cheap and heavy request latency, answered and failed, memory, CPU and recovery, ash-rust and Ash](bench/results/saturation/2026-10-06-astro-common/chart.svg)
 
