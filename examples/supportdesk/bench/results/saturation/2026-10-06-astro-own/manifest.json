@@ -1,0 +1,54 @@
+{
+  "started": "2026-10-06T01:28:57.599Z",
+  "target": "astro",
+  "git": {
+    "rev": "67ec225b4df406a9df532431c0401aca0ff05f9c",
+    "dirty": true
+  },
+  "binaries": {
+    "rust": {
+      "path": "/Users/will/projects/ash-rust/target/release/astro-helpdesk-server",
+      "sha256": "150ef3d855b20858"
+    },
+    "elixir": {
+      "release": "/Users/will/projects/ash-rust/examples/elixir/astro-helpdesk/_build/prod/rel/astro_helpdesk/bin/astro_helpdesk",
+      "version": "17.0.5 0.1.0"
+    }
+  },
+  "machine": {
+    "cpu": "Apple M4 Max",
+    "cores": 16,
+    "memoryGiB": 128,
+    "os": "Darwin 25.6.0",
+    "loadAverageAtStart": "11.75 14.78 11.71"
+  },
+  "node": "v22.22.3",
+  "options": {
+    "target": "astro",
+    "tickets": 5000,
+    "pg": "postgres://postgres:postgres@127.0.0.1:55434",
+    "threads": 6,
+    "cheapThreads": 2,
+    "cheapRate": 500,
+    "levels": [
+      0.5,
+      0.9,
+      1,
+      1.25,
+      1.5,
+      2,
+      3
+    ],
+    "basis": "own",
+    "warmup": 2000,
+    "window": 10000,
+    "settle": 4000,
+    "recovery": 15000,
+    "calibrateClients": 24,
+    "calibrateWindow": 6000,
+    "timeout": 10000,
+    "maxInFlight": 500,
+    "reps": 2,
+    "maxRssGiB": 20
+  }
+}

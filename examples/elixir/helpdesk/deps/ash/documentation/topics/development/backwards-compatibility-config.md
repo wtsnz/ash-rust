@@ -1,0 +1,352 @@
+<!--
+SPDX-FileCopyrightText: 2019 ash contributors <https://github.com/ash-project/ash/graphs/contributors>
+
+SPDX-License-Identifier: MIT
+-->
+
+# Backwards Compatibility Config
+
+All of these configurations are potentially breaking changes when applied
+to your application. However, we *highly* encourage setting as many of
+them as possible. In 4.0, some will be removed entirely, and any that remain
+will have their defaults changed to the new value.
+
+The ash installer automatically sets all of these.
+
+## allow_forbidden_field_for_relationships_by_default
+
+```elixir
+config :ash, allow_forbidden_field_for_relationships_by_default: true
+```
+
+### Old Behavior
+
+Loaded relationships that produced a `Forbidden` error would fail the entire
+request. i.e in `Ash.load(post, [:comments, :author])`, if `author` returned
+a `Forbidden` error, the entire request would fail with a forbidden error.
+
+### New Behavior
+
+Now the relationships that produced a forbidden error are instead populated
+with `%Ash.ForbiddenField{}`.
+
+## include_embedded_source_by_default?
+
+```elixir
+config :ash, include_embedded_source_by_default?: false
+```
+
+### Old Behavior
+
+When working with embedded types, the `__source__` constraint is populated with
+the original changeset. This can be very costly in terms of memory when working with
+large sets of embedded resources.
+
+### New Behavior
+
+Now, the source is only included when you say `constraints: [include_source?: true]` on
+the embedded resource's usage.
+
+## show_keysets_for_all_actions?
+
+```elixir
+config :ash, show_keysets_for_all_actions?: false
+```
+
+### Old Behavior
+
+For all actions, the records would be returned with `__metadata__.keyset` populated
+with a keyset computed for the `sort` that was used to produce those records. This
+is expensive as it requires loading all things that are used by the sort.
+
+### New Behavior
+
+Only when actually performing keyset pagination will the `__metadata__.keyset` be
+computed.
+
+## default_page_type
+
+```elixir
+config :ash, default_page_type: :keyset
+```
+
+### Old Behavior
+
+When an action supports both `offset` and `keyset` pagination, and a page is requested
+with only `limit` set (i.e., `page: [limit: 10]`), Ash defaulted to offset pagination
+and returned an `%Ash.Page.Offset{}`.
+
+### New Behavior
+
+With the current default configuration, Ash will now return an `%Ash.Page.Keyset{}` when the pagination
+type is ambiguous (only `limit` is provided).
+
+For detailed pagination behavior documentation, see the [pagination guide](/documentation/topics/advanced/pagination.livemd#default-pagination-behavior-when-both-types-are-supported).
+
+## policies.no_filter_static_forbidden_reads?
+
+```elixir
+config :ash, policies: [no_filter_static_forbidden_reads?: false]
+```
+
+### Old Behavior
+
+On read action policies, we can often tell statically that they cannot pass, for example:
+
+```elixir
+policy action_type(:read) do
+  authorize_if actor_attribute_equals(:active, true)
+end
+```
+
+In these cases, you would get an `Ash.Error.Forbidden`, despite the fact that the
+default `access_type` for a policy is `:filter`. If you instead had:
+
+```elixir
+policy action_type(:read) do
+  authorize_if expr(private == false)
+end
+```
+
+You would get a filter. This made it difficult to predict when you would get a forbidden
+error and when the query results would  be filtered.
+
+
+### New Behavior
+
+Now, we always filter the query even if we know statically that the request would be
+forbidden. For example the following policy:
+
+```elixir
+policy action_type(:read) do
+  authorize_if actor_attribute_equals(:active, true)
+end
+```
+
+would yield `filter: false`. This makes the behavior consistent and predictable.
+You can always annotate that a given policy should result in a forbidden error
+by setting `access_type :strict` in the policy.
+
+## keep_read_action_loads_when_loading?
+
+```elixir
+config :ash, keep_read_action_loads_when_loading?: false
+```
+
+### Old Behavior
+
+If you had an action with a preparation, or a global preparation that loaded data, i.e
+
+```elixir
+prepare build(load: :comments)
+```
+
+this would be applied when using `Ash.load`, because we build a query for the primary
+read action as a basis for loading data. This could be expensive because now you are always
+loading `:comments` even if you only intended to load something else, and could also be
+unpredictable because it could "overwrite" the already loaded `comments` on the data you
+passed in.
+
+### New Behavior
+
+When using `Ash.load` *only* the explicitly provided load statement is applied.
+
+## default_actions_require_atomic?
+
+```elixir
+config :ash, default_actions_require_atomic?: true
+```
+
+### Old Behavior
+
+When building actions like so: `defaults [:read, create: :*, update: :*]` the default
+action is generated with `require_atomic? false`. This could make it difficult to spot
+actions that cannot safely be done asynchronously.
+
+### New Behavior
+
+The default generated actions are generated with `require_atomic? true`
+
+## read_action_after_action_hooks_in_order?
+
+```elixir
+config :ash, read_action_after_action_hooks_in_order?: true
+```
+
+### Old Behavior
+
+In 3.0, we modified hooks on changesets to always be added in order instead of in
+reverse order. This was missed for `Ash.Query`. Meaning if you had something like this:
+
+```elixir
+read :read do
+  prepare fn query, _ ->
+    Ash.Query.after_action(query, fn query, results ->
+      IO.puts("hook 1")
+      {:ok, results}
+    end)
+  end
+
+  prepare fn query, _ ->
+    Ash.Query.after_action(query, fn query, results ->
+      IO.puts("hook 2")
+      {:ok, results}
+    end)
+  end
+end
+```
+
+running that action would print `hook 2` before `hook 1`.
+
+### New Behavior
+
+Read action hooks are now run in the order they were added
+
+## bulk_actions_default_to_errors?
+
+```elixir
+config :ash, bulk_actions_default_to_errors?: true
+```
+
+### Old Behavior
+
+Bulk action options defaulted to `return_errors?: false`, and `stop_on_error?: false`,
+which was often a footgun for users unfamiliar to bulk actions, wondering "why did I not
+get an error even though nothing was created?"
+
+### New Behavior
+
+Now, `return_errors?` and `stop_on_error?` default to `true`
+
+
+## match_v4_uuids?
+
+```elixir
+config :ash, Ash.Type.UUIDv7, match_v4_uuids?: true
+```
+
+### Old Behavior
+
+Incorrectly allowed non UUIDv7's to be loaded.
+
+### New Behavior
+
+Configuring the variable allows UUIDv4's to be loaded.
+
+
+## redact_sensitive_values_in_errors?
+
+```elixir
+config :ash, redact_sensitive_values_in_errors?: true
+```
+
+### Old Behavior
+
+Built-in validations would include the actual field value in error structs even when
+the field was marked `sensitive?: true`. This could leak sensitive data (e.g. passwords,
+tokens) through error messages.
+
+### New Behavior
+
+When a field is marked `sensitive?: true`, its value in validation error structs is
+replaced with a redacted placeholder. This applies to both
+the non-atomic (`validate/3`) and atomic (`atomic/3`) code paths across all built-in
+validations.
+
+## default_string_length_count
+
+```elixir
+config :ash, default_string_length_count: :codepoints
+```
+
+Unlike the other settings in this guide, this one is **required**. Compiling any
+resource fails until it is set to one of `:codepoints` or `:mixed`.
+
+This was added to resolve a [DoS security
+issue](https://github.com/ash-project/ash/security/advisories/GHSA-cwjv-574p-59f6)
+that allowed external interfaces to write arbitrarily large
+strings into limited length strings, as well as to fix an
+inconsistency in how length was applied in Elixir vs the data
+layer.
+
+### Old Behavior
+
+The `min_length` and `max_length` constraints on `:string` and `:ci_string`, the
+`string_length` validation, and the `string_length/1` expression function all counted
+graphemes (`String.length/1`) when evaluated in Elixir. A single grapheme can be made
+up of an unbounded number of codepoints (a base character followed by many combining
+marks), so `max_length` placed no effective limit on the size of a value. Meanwhile,
+SQL data layers counted codepoints, so atomic and non-atomic validation disagreed.
+
+To keep this behavior, set the value to `:mixed`:
+
+```elixir
+config :ash, default_string_length_count: :mixed
+```
+
+### New Behavior
+
+With `:codepoints`, length is counted in codepoints everywhere, matching SQL data
+layers and bounding the size of a value. This is what the installer configures for
+new applications.
+
+Individual attributes and validations can still choose a unit with the `length_count`
+constraint or the `count` validation option, using `:graphemes`, `:codepoints`, or
+`:bytes`. Data layers cannot count graphemes, so when `:graphemes` is chosen explicitly
+for an attribute or validation, the length constraints only apply to literal values and
+are not atomic when the value is an expression.
+
+Extensions may also read this configuration, via `Ash.Type.String.default_length_count/0`,
+to decide how to count string length.
+
+## many_to_many_destroy_destination_on_match?
+
+```elixir
+config :ash, many_to_many_destroy_destination_on_match?: true
+```
+
+### Old Behavior
+
+When using `on_match: {:destroy, :action_name}` (2-tuple form) with a `many_to_many`
+relationship, only the join record was destroyed using the given action. The
+destination record was left intact, making it effectively the same as `:unrelate`.
+
+### New Behavior
+
+The 2-tuple `{:destroy, :action_name}` for `many_to_many` now destroys both
+the destination record (using the given action) and the join record (using the
+primary destroy action on the join resource). This makes the 2-tuple behavior
+consistent with the `:destroy` shorthand and the explicit 3-tuple
+`{:destroy, :dest_action, :join_action}`.
+
+## infer_generic_action_reactors?
+
+```elixir
+config :ash, infer_generic_action_reactors?: false
+```
+
+### Old Behavior
+
+A generic action's `run` option accepted a `Reactor` module directly, i.e
+`run MyReactor`. To support this, Ash had to check whether every `run` module
+was a Reactor, which made each resource depend at compile time on all of the
+modules used in its generic actions. Changing any of those modules recompiled
+the resource, and everything that depends on it at compile time.
+
+### New Behavior
+
+`run` modules are always treated as `Ash.Resource.Actions.Implementation`s, and
+resources no longer take a compile-time dependency on them. Ash no longer checks
+whether a `run` module is a Reactor, so passing one directly fails at runtime,
+since it doesn't implement `run/3`. Reactors must be wrapped with `reactor/2`
+(see `Ash.Resource.Actions.Implementation.Builtins.reactor/2`):
+
+```elixir
+run reactor(MyReactor)
+```
+
+Options given to `reactor/2` are passed to `Reactor.run/4`. Because the resource doesn't
+depend on the Reactor at compile time, Ash also doesn't verify at compile time
+that the action has an argument for each of the Reactor's inputs.
+`reactor/2` works with either setting, so you can migrate
+before enabling it.

@@ -471,7 +471,7 @@ const report = () => {
     "",
     "## Scenarios",
     "",
-    ...scenarios.filter((s) => wanted(s.name)).map((s) => `- **${s.name}**${s.rate ? ` (${s.rate}/s)` : ""}: ${s.what}`),
+    ...scenarios.filter((s) => s.tier !== "saturation" && wanted(s.name)).map((s) => `- **${s.name}**${s.rate ? ` (${s.rate}/s)` : ""}: ${s.what}`),
     `- **events** (${eventRate}/s, ${subscribers} subscribers): \`ticketUpdated\` delivered to every subscriber of the org while its hot tickets are viewed over GraphQL; latency is from each view's send to each delivery`,
     "",
     "Postgres, both desks and the driver share one machine. The figures compare the desks with each other; they're not capacity numbers.",

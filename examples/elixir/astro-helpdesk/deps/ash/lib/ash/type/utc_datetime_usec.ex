@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2019 ash contributors <https://github.com/ash-project/ash/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT
+
+defmodule Ash.Type.UtcDatetimeUsec do
+  @moduledoc """
+  Represents a utc datetime with `microsecond` precision. A wrapper around `:datetime` for backwards compatibility.
+
+  A builtin type that can be referenced via `:utc_datetime_usec`
+  """
+  use Ash.Type.NewType, subtype_of: :datetime, constraints: [precision: :microsecond]
+
+  # A microsecond UTC datetime is still a UTC datetime to expression functions
+  # that declared `:utc_datetime`.
+  @impl Ash.Type
+  def acts_as(_constraints), do: :utc_datetime
+end

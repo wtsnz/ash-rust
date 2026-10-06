@@ -1,0 +1,1240 @@
+# SPDX-FileCopyrightText: 2019 ash contributors <https://github.com/ash-project/ash/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT
+
+defmodule Ash.Actions.Helpers do
+  @moduledoc false
+  require Logger
+
+  @keep_read_action_loads_when_loading? Application.compile_env(
+                                          :ash,
+                                          :keep_read_action_loads_when_loading?,
+                                          true
+                                        )
+
+  @spec keep_read_action_loads_when_loading? :: boolean()
+  def keep_read_action_loads_when_loading?, do: @keep_read_action_loads_when_loading?
+
+  def split_and_run_simple(batch, action, opts, changes, all_changes, context_key, callback) do
+    {batch, must_be_simple} =
+      Enum.reduce(batch, {[], []}, fn changeset, {batch, must_be_simple} ->
+        # Note: We don't check after_transaction here because bulk operations
+        # handle after_transaction hooks in process_results via run_after_transactions.
+        # Only around_transaction and around_action require the simple path since
+        # they need to wrap the entire operation.
+        if changeset.around_transaction in [[], nil] and
+             changeset.around_action in [[], nil] do
+          changeset =
+            if changeset.valid? do
+              Ash.Changeset.run_before_transaction_hooks(changeset)
+            else
+              changeset
+            end
+
+          {[changeset | batch], must_be_simple}
+        else
+          {batch, [%{changeset | __validated_for_action__: action.name} | must_be_simple]}
+        end
+      end)
+
+    batch = batch |> Enum.reverse()
+    must_be_simple = must_be_simple |> Enum.reverse()
+
+    context =
+      case {batch, must_be_simple} do
+        {[cs | _], _} -> cs.context
+        {_, [cs | _]} -> cs.context
+        {_, _} -> %{}
+      end
+
+    context =
+      struct(
+        Ash.Resource.Change.Context,
+        %{
+          bulk?: true,
+          source_context: context,
+          actor: opts[:actor],
+          tenant: opts[:tenant],
+          tracer: opts[:tracer],
+          authorize?: opts[:authorize?]
+        }
+      )
+
+    must_be_simple_results =
+      Enum.flat_map(must_be_simple, fn changeset ->
+        changeset =
+          all_changes
+          |> Enum.flat_map(fn
+            {%{change: {mod, change_opts}} = change, change_index} ->
+              index = changeset.context |> Map.get(context_key) |> Map.get(:index)
+
+              applicable = changes[change_index]
+
+              if applicable == :all || (applicable && index in applicable) do
+                change_opts =
+                  Ash.Actions.Helpers.templated_opts(
+                    change_opts,
+                    opts[:actor],
+                    changeset.to_tenant,
+                    changeset.arguments,
+                    changeset.context,
+                    changeset
+                  )
+
+                if Ash.Resource.Change.batch_callbacks?(mod, [changeset], change_opts, context) do
+                  [%{change | change: {mod, change_opts}}]
+                else
+                  []
+                end
+              else
+                []
+              end
+
+            _ ->
+              []
+          end)
+          |> Enum.reduce(changeset, fn %{change: {mod, change_opts}}, changeset ->
+            changeset =
+              if mod.has_after_batch?() do
+                Ash.Changeset.after_action(changeset, fn changeset, result ->
+                  case Ash.Resource.Change.after_batch(
+                         mod,
+                         [{changeset, result}],
+                         change_opts,
+                         context
+                       ) do
+                    :ok ->
+                      {:ok, result}
+
+                    enumerable ->
+                      Enum.reduce_while(
+                        enumerable,
+                        {{:ok, result}, []},
+                        fn
+                          %Ash.Notifier.Notification{} = notification, {res, notifications} ->
+                            {:cont, {res, [notification | notifications]}}
+
+                          {:error, error}, {_res, notifications} ->
+                            {:halt, {{:error, error}, notifications}}
+
+                          {:ok, result}, {_res, notifications} ->
+                            {:cont, {{:ok, result}, notifications}}
+                        end
+                      )
+                  end
+                  |> case do
+                    {{:ok, res}, notifications} -> {:ok, res, notifications}
+                    {other, _} -> other
+                  end
+                end)
+              else
+                changeset
+              end
+
+            if mod.has_before_batch?() do
+              Ash.Changeset.before_action(changeset, fn changeset ->
+                Ash.Resource.Change.before_batch(mod, [changeset], change_opts, context)
+                |> Enum.reduce(
+                  {changeset, []},
+                  fn
+                    %Ash.Notifier.Notification{} = notification, {changeset, notifications} ->
+                      {changeset, [notification | notifications]}
+
+                    changeset, {_, notifications} ->
+                      {changeset, notifications}
+                  end
+                )
+              end)
+            else
+              changeset
+            end
+          end)
+
+        callback.(changeset)
+      end)
+
+    {batch, must_be_simple_results}
+  end
+
+  def rollback_if_in_transaction(
+        {:error, %Ash.Error.Changes.StaleRecord{} = error},
+        _resource,
+        _changeset
+      ) do
+    {:error, error}
+  end
+
+  def rollback_if_in_transaction({:error, error}, resource, changeset) do
+    error = Ash.Error.to_ash_error(error)
+
+    if Ash.DataLayer.in_transaction?(resource) do
+      case changeset do
+        %Ash.Changeset{} = changeset ->
+          Ash.DataLayer.rollback(resource, Ash.Changeset.add_error(changeset, error))
+
+        %Ash.Query{} = query ->
+          Ash.DataLayer.rollback(resource, Ash.Query.add_error(query, error))
+
+        %Ash.ActionInput{} = action_input ->
+          Ash.DataLayer.rollback(resource, Ash.ActionInput.add_error(action_input, error))
+
+        _ ->
+          Ash.DataLayer.rollback(resource, Ash.Error.to_error_class(error))
+      end
+    else
+      {:error, error}
+    end
+  end
+
+  def rollback_if_in_transaction({:error, :no_rollback, error}, _, _changeset) do
+    {:error, error}
+  end
+
+  def rollback_if_in_transaction(success, _, _), do: success
+
+  def validate_calculation_load!(%Ash.Query{}, module) do
+    raise """
+    `#{inspect(module)}.load/3` returned a query.
+
+    Returning a query from the `load/3` callback of a calculation is now deprecated.
+    Instead, return the load statement itself, i.e instead of `Ash.Query.load(query, [...])`,
+    just return `[...]`. This is so that Ash can examine the requirements of just this single
+    calculation to ensure that all required values are present
+    """
+  end
+
+  def validate_calculation_load!(other, _), do: List.wrap(other)
+
+  defp set_skip_unknown_opts(opts, %{action: %{skip_unknown_inputs: skip_unknown_inputs}}) do
+    Keyword.update(
+      opts,
+      :skip_unknown_inputs,
+      skip_unknown_inputs,
+      &Enum.concat(List.wrap(&1), skip_unknown_inputs)
+    )
+  end
+
+  defp set_skip_unknown_opts(opts, _query_or_changeset) do
+    opts
+  end
+
+  def maybe_embedded_domain(resource) do
+    if Ash.Resource.Info.embedded?(resource) do
+      Ash.EmbeddableType.ShadowDomain
+    end
+  end
+
+  def apply_scope_to_opts(opts) do
+    if scope = opts[:scope] do
+      actor = Ash.Scope.ToOpts.get_actor(scope)
+      tenant = Ash.Scope.ToOpts.get_tenant(scope)
+      context = Ash.Scope.ToOpts.get_context(scope)
+      authorize? = Ash.Scope.ToOpts.get_authorize?(scope)
+
+      opts
+      |> set_when_ok(:actor, actor, fn l, _r -> l end)
+      |> set_when_ok(:tenant, tenant, fn l, _r -> l end)
+      |> set_when_ok(:authorize?, authorize?, fn l, _r -> l end)
+      |> set_when_ok(
+        :context,
+        context,
+        &Ash.Helpers.deep_merge_maps(&2, &1)
+      )
+      |> Keyword.delete(:scope)
+    else
+      opts
+    end
+  end
+
+  def set_context_and_get_opts(domain, query_or_changeset, opts) do
+    opts = apply_scope_to_opts(opts)
+
+    opts = set_skip_unknown_opts(opts, query_or_changeset)
+    query_or_changeset = Ash.Subject.set_context(query_or_changeset, opts[:context] || %{})
+
+    domain =
+      Ash.Resource.Info.domain(query_or_changeset.resource) || opts[:domain] || domain ||
+        query_or_changeset.domain || maybe_embedded_domain(query_or_changeset.resource)
+
+    opts =
+      case query_or_changeset.context do
+        %{
+          private: %{
+            actor: actor
+          }
+        } ->
+          Keyword.put_new(opts, :actor, actor)
+
+        _ ->
+          opts
+      end
+
+    opts =
+      if tenant = query_or_changeset.tenant do
+        Keyword.put_new(opts, :tenant, tenant)
+      else
+        opts
+      end
+
+    opts =
+      if as_of = Map.get(query_or_changeset, :as_of) do
+        Keyword.put_new(opts, :as_of, as_of)
+      else
+        opts
+      end
+
+    opts =
+      case query_or_changeset.context do
+        %{
+          private: %{
+            authorize?: authorize?
+          }
+        }
+        when not is_nil(authorize?) ->
+          Keyword.put_new(opts, :authorize?, authorize?)
+
+        _ ->
+          opts
+      end
+
+    opts =
+      case query_or_changeset.context do
+        %{
+          private: %{
+            tracer: tracer
+          }
+        } ->
+          do_add_tracer(opts, tracer)
+
+        _ ->
+          opts
+      end
+
+    opts = set_opts(opts, domain, query_or_changeset)
+
+    query_or_changeset = add_context(query_or_changeset, opts)
+
+    query_or_changeset = %{query_or_changeset | domain: domain}
+
+    {query_or_changeset, opts}
+  end
+
+  @doc false
+  # Stamp an explicit point-in-time `as_of` onto a written record's metadata, so a later
+  # `Ash.load/3` of that record reuses the same instant (parity with how tenant is
+  # stamped — see `Ash.load/3`). Only a concrete `DateTime` is stamped: a `:now`/`nil`
+  # write is anchored at the *data layer's* clock, which core never observes, so stamping
+  # a (slightly earlier) core `now()` could place `as_of` before the row's validity and
+  # make the reload miss it. Those are left for `load` to default to the current instant.
+  # A range is concrete in the same way, and stamps the instant it begins at.
+  def put_write_as_of(metadata, resource, %Ash.Range{} = as_of),
+    do: put_write_as_of(metadata, resource, Ash.Temporal.resolve_write_as_of(as_of))
+
+  def put_write_as_of(metadata, resource, %DateTime{} = as_of) do
+    if Ash.Resource.Info.temporal?(resource) do
+      Map.put_new(metadata, :as_of, as_of)
+    else
+      metadata
+    end
+  end
+
+  def put_write_as_of(metadata, _resource, _as_of), do: metadata
+
+  @doc false
+  def unscope_write_read_as_of(%Ash.Query{} = query, %Ash.Range{}) do
+    context =
+      query.context
+      |> Map.delete(:as_of)
+      |> Map.update(:shared, %{}, &Map.delete(&1, :as_of))
+
+    %{query | as_of: nil, context: context}
+  end
+
+  def unscope_write_read_as_of(query, _as_of), do: query
+
+  @doc false
+  # Stamp `tenant`/`as_of` onto each record's metadata, but only walk the list when there is
+  # actually something to stamp — so a plain (non-tenant, non-temporal) result isn't
+  # remapped for nothing.
+  def stamp_record_metadata(records, resource, opts) do
+    tenant = opts[:tenant]
+    as_of = Ash.Temporal.resolve_write_as_of(opts[:as_of])
+    stamp_as_of? = match?(%DateTime{}, as_of) and Ash.Resource.Info.temporal?(resource)
+
+    if is_nil(tenant) and not stamp_as_of? do
+      records
+    else
+      Enum.map(records, fn record ->
+        metadata =
+          if tenant, do: Map.put(record.__metadata__, :tenant, tenant), else: record.__metadata__
+
+        %{record | __metadata__: put_write_as_of(metadata, resource, as_of)}
+      end)
+    end
+  end
+
+  @doc false
+  def set_when_ok(opts, key, value, merger \\ fn _l, r -> r end)
+
+  def set_when_ok(opts, key, {:ok, value}, merger) do
+    Keyword.update(opts, key, value, &merger.(&1, value))
+  end
+
+  def set_when_ok(opts, _, _, _), do: opts
+
+  def set_opts(opts, domain, query_or_changeset \\ nil) do
+    opts
+    |> add_actor(query_or_changeset, domain)
+    |> add_authorize?(query_or_changeset, domain)
+    |> add_tracer()
+  end
+
+  def add_context(query_or_changeset, opts) do
+    private_context = Map.new(Keyword.take(opts, [:actor, :authorize?, :tracer]))
+
+    case query_or_changeset do
+      %Ash.ActionInput{} ->
+        query_or_changeset
+        |> Ash.ActionInput.set_context(%{private: private_context})
+        |> Ash.ActionInput.set_tenant(query_or_changeset.tenant || opts[:tenant])
+        |> set_subject_as_of(query_or_changeset.as_of || opts[:as_of])
+
+      %Ash.Query{} ->
+        query_or_changeset
+        |> Ash.Query.set_context(%{private: private_context})
+        |> Ash.Query.set_tenant(query_or_changeset.tenant || opts[:tenant])
+        |> set_subject_as_of(query_or_changeset.as_of || opts[:as_of])
+
+      %Ash.Changeset{} ->
+        query_or_changeset
+        |> Ash.Changeset.set_context(%{
+          private: private_context
+        })
+        |> Ash.Changeset.set_tenant(query_or_changeset.tenant || opts[:tenant])
+        |> set_subject_as_of(query_or_changeset.as_of || opts[:as_of])
+    end
+  end
+
+  # `as_of` is threaded like `tenant`. For reads this is the single point it's set on the
+  # query, so we resolve `:now` (and the temporal default — a temporal resource with no
+  # `as_of` reads as current-state) to a concrete `DateTime` here; it's then never
+  # re-evaluated downstream, so every consumer (the `@> as_of` filter, `now()`/`ago()`
+  # anchoring, related loads, aggregates, subqueries) threads the exact same instant.
+  # Writes are left as-is — the data layer resolves the write's `as_of` once at execution.
+  defp set_subject_as_of(%Ash.Query{} = query, as_of) do
+    case resolve_query_as_of(query, as_of) do
+      nil -> query
+      resolved -> Ash.Query.as_of(query, resolved)
+    end
+  end
+
+  defp set_subject_as_of(subject, nil), do: subject
+
+  defp set_subject_as_of(%Ash.Changeset{} = changeset, as_of),
+    do: Ash.Changeset.as_of(changeset, as_of)
+
+  defp set_subject_as_of(%Ash.ActionInput{} = input, as_of),
+    do: Ash.ActionInput.set_as_of(input, as_of)
+
+  defp resolve_query_as_of(_query, :now), do: DateTime.utc_now()
+  defp resolve_query_as_of(_query, %DateTime{} = as_of), do: as_of
+
+  # Passed through so `Ash.Query.as_of/2` refuses it by name, as it does for the setter.
+  defp resolve_query_as_of(_query, %Ash.Range{} = as_of), do: as_of
+
+  defp resolve_query_as_of(query, nil) do
+    if Ash.Resource.Info.temporal?(query.resource), do: DateTime.utc_now()
+  end
+
+  defp add_actor(opts, query_or_changeset, domain) do
+    if !domain do
+      raise Ash.Error.Framework.AssumptionFailed,
+        message: "Could not determine domain for action."
+    end
+
+    if !skip_requiring_actor?(query_or_changeset) && !internal?(query_or_changeset) &&
+         !Keyword.has_key?(opts, :actor) &&
+         Ash.Domain.Info.require_actor?(domain) do
+      raise Ash.Error.to_error_class(
+              Ash.Error.Forbidden.DomainRequiresActor.exception(domain: domain)
+            )
+    end
+
+    opts
+  end
+
+  defp internal?(%{context: %{private: %{internal?: true}}}), do: true
+  defp internal?(_), do: false
+
+  defp skip_requiring_actor?(%{context: %{private: %{require_actor?: false}}}), do: true
+  defp skip_requiring_actor?(_), do: false
+
+  defp add_authorize?(opts, query_or_changeset, domain) do
+    if !domain do
+      raise Ash.Error.Framework.AssumptionFailed,
+        message: "Could not determine domain for action."
+    end
+
+    case Ash.Domain.Info.authorize(domain) do
+      :always ->
+        if opts[:authorize?] == false && internal?(query_or_changeset) do
+          opts
+        else
+          if opts[:authorize?] == false do
+            raise Ash.Error.Forbidden.DomainRequiresAuthorization, domain: domain
+          end
+
+          Keyword.put(opts, :authorize?, true)
+        end
+
+      :by_default ->
+        Keyword.put_new(opts, :authorize?, true)
+
+      :when_requested ->
+        if Keyword.has_key?(opts, :actor) do
+          Keyword.put_new(opts, :authorize?, true)
+        else
+          Keyword.put(opts, :authorize?, opts[:authorize?] || Keyword.has_key?(opts, :actor))
+        end
+    end
+  end
+
+  defp add_tracer(opts) do
+    case Application.get_env(:ash, :tracer) do
+      nil ->
+        opts
+
+      tracer ->
+        do_add_tracer(opts, tracer)
+    end
+  end
+
+  defp do_add_tracer(opts, tracer) do
+    tracer = List.wrap(tracer)
+
+    Keyword.update(opts, :tracer, tracer, fn existing_tracer ->
+      if is_list(existing_tracer) do
+        Enum.uniq(tracer ++ existing_tracer)
+      else
+        if is_nil(existing_tracer) do
+          tracer
+        else
+          Enum.uniq(tracer ++ existing_tracer)
+        end
+      end
+    end)
+  end
+
+  @doc false
+  def queue_notifications(notifications) do
+    case List.wrap(notifications) do
+      [] ->
+        :ok
+
+      notifications ->
+        case Process.get(:ash_notifications) do
+          nil -> Process.put(:ash_notifications, notifications)
+          current -> Process.put(:ash_notifications, [current, notifications])
+        end
+
+        :ok
+    end
+  end
+
+  @doc false
+  # Anything queued during a transaction that was rolled back never happened,
+  # so the queue is reset to what it was before that transaction started.
+  def restore_queued_notifications(nil), do: Process.delete(:ash_notifications)
+  def restore_queued_notifications(queued), do: Process.put(:ash_notifications, queued)
+
+  @doc false
+  def peek_queued_notifications do
+    :ash_notifications |> Process.get([]) |> List.flatten()
+  end
+
+  @doc false
+  def take_queued_notifications do
+    case Process.delete(:ash_notifications) do
+      nil -> []
+      notifications -> List.flatten(notifications)
+    end
+  end
+
+  @doc false
+  def notify({:ok, record, instructions}, changeset, opts) do
+    resource_notification = resource_notification(changeset, record, opts)
+
+    cond do
+      opts[:return_notifications?] ->
+        {:ok, record,
+         Map.update(
+           instructions,
+           :notifications,
+           [resource_notification],
+           &[resource_notification | &1]
+         )}
+
+      resource_notification.for == [] ->
+        {:ok, record, instructions}
+
+      Process.get(:ash_started_transaction?) ->
+        queue_notifications([resource_notification])
+
+        {:ok, record, instructions}
+
+      true ->
+        unsent_notifications = Ash.Notifier.notify([resource_notification])
+
+        warn_missed!(changeset.resource, changeset.action, %{
+          resource_notifications: unsent_notifications
+        })
+
+        {:ok, record, instructions}
+    end
+  end
+
+  def notify(other, _changeset, _opts), do: other
+
+  @doc false
+  def resource_notification(changeset, result, opts) do
+    # This gives notifications a view of what actually changed
+    changeset =
+      Enum.reduce(changeset.atomics, changeset, fn {key, value}, changeset ->
+        %{changeset | attributes: Map.put(changeset.attributes, key, value)}
+      end)
+
+    %Ash.Notifier.Notification{
+      resource: changeset.resource,
+      domain: changeset.domain,
+      actor: changeset.context[:private][:actor],
+      action: changeset.action,
+      for: Ash.Resource.Info.notifiers(changeset.resource) ++ changeset.action.notifiers,
+      data: result,
+      changeset: changeset,
+      metadata: opts[:notification_metadata] || %{}
+    }
+  end
+
+  def warn_missed!(resource, action, result) do
+    case Map.get(result, :resource_notifications, Map.get(result, :notifications, [])) do
+      empty when empty in [nil, []] ->
+        :ok
+
+      missed ->
+        case Application.get_env(:ash, :missed_notifications, :warn) do
+          :ignore ->
+            :ok
+
+          :raise ->
+            raise """
+            Missed #{Enum.count(missed)} notifications in action #{inspect(resource)}.#{action.name}.
+
+            This happens when the resources are in a transaction, and you did not pass
+            `return_notifications?: true`. If you are in a changeset hook, you can
+            return the notifications. If not, you can send the notifications using
+            `Ash.Notifier.notify/1` once your resources are out of a transaction.
+
+            To ignore these in all cases:
+
+            config :ash, :missed_notifications, :ignore
+
+            To turn this into warnings:
+
+            config :ash, :missed_notifications, :warn
+            """
+
+          :warn ->
+            {:current_stacktrace, stacktrace} = Process.info(self(), :current_stacktrace)
+
+            Logger.warning("""
+            Missed #{Enum.count(missed)} notifications in action #{inspect(resource)}.#{action.name}.
+
+            This happens when the resources are in a transaction, and you did not pass
+            `return_notifications?: true`. If you are in a changeset hook, you can
+            return the notifications. If not, you can send the notifications using
+            `Ash.Notifier.notify/1` once your resources are out of a transaction.
+
+            #{Exception.format_stacktrace(stacktrace)}
+
+            While you should likely leave this setting on, you can ignore these or turn them into errors.
+
+            To ignore these in all cases:
+
+            config :ash, :missed_notifications, :ignore
+
+            To turn this into raised errors:
+
+            config :ash, :missed_notifications, :raise
+            """)
+        end
+    end
+  end
+
+  def process_errors(changeset, [error]) do
+    %{changeset | errors: []}
+    |> Ash.Changeset.add_error(error)
+    |> Map.get(:errors)
+    |> case do
+      [error] ->
+        error
+
+      errors ->
+        errors
+    end
+  end
+
+  def process_errors(changeset, errors) when is_list(errors) do
+    %{changeset | errors: []}
+    |> Ash.Changeset.add_error(errors)
+    |> Map.get(:errors)
+  end
+
+  def process_errors(changeset, error), do: process_errors(changeset, [error])
+
+  def templated_opts({:templated, opts}, _actor, _tenant, _arguments, _context, _changeset),
+    do: opts
+
+  def templated_opts(opts, actor, tenant, arguments, context, changeset) do
+    Ash.Expr.fill_template(
+      opts,
+      actor: actor,
+      tenant: tenant,
+      args: arguments,
+      context: context,
+      changeset: changeset
+    )
+  end
+
+  def load_runtime_types({:ok, results}, query, attributes?) do
+    load_runtime_types(results, query, attributes?)
+  end
+
+  def load_runtime_types({:error, error}, _query, _attributes?) do
+    {:error, error}
+  end
+
+  def load_runtime_types(results, query, attributes?) when is_list(results) do
+    attributes = runtime_attributes(query, attributes?)
+    calcs = runtime_calculations(query)
+
+    if Enum.empty?(attributes) && Enum.empty?(calcs) do
+      {:ok, results}
+    else
+      Enum.reduce_while(results, {:ok, []}, fn result, {:ok, results} ->
+        case do_load_runtime_types(result, attributes, calcs) do
+          {:ok, result} ->
+            {:cont, {:ok, [result | results]}}
+
+          {:error, error} ->
+            {:halt, {:error, error}}
+        end
+      end)
+      |> case do
+        {:ok, results} -> {:ok, Enum.reverse(results)}
+        {:error, error} -> {:error, error}
+      end
+    end
+  end
+
+  def load_runtime_types(nil, _, _attributes?), do: {:ok, nil}
+
+  def load_runtime_types(result, query, attributes?) do
+    do_load_runtime_types(
+      result,
+      runtime_attributes(query, attributes?),
+      runtime_calculations(query)
+    )
+  end
+
+  defp runtime_attributes(query, true) do
+    case query.select do
+      nil ->
+        Ash.Resource.Info.attributes(query.resource)
+
+      select ->
+        Enum.map(select, &Ash.Resource.Info.attribute(query.resource, &1))
+    end
+    |> Enum.reject(fn %{type: type, constraints: constraints} ->
+      Ash.Type.cast_in_query?(type, constraints)
+    end)
+  end
+
+  defp runtime_attributes(_, _), do: []
+
+  defp runtime_calculations(query) do
+    query.calculations
+    |> Kernel.||(%{})
+    |> Enum.filter(fn {_name, calc} ->
+      calc.type
+    end)
+    |> Enum.reject(fn {_name, calc} ->
+      constraints = Map.get(calc, :constraints, [])
+
+      if function_exported?(Ash.Type, :cast_in_query?, 2) do
+        Ash.Type.cast_in_query?(calc.type, constraints)
+      else
+        Ash.Type.cast_in_query?(calc.type)
+      end
+    end)
+  end
+
+  defp do_load_runtime_types(record, select, calculations) do
+    select
+    |> Enum.reduce_while({:ok, record}, fn attr, {:ok, record} ->
+      case Map.get(record, attr.name) do
+        nil ->
+          {:cont, {:ok, record}}
+
+        %Ash.NotLoaded{} ->
+          {:cont, {:ok, record}}
+
+        %Ash.ForbiddenField{} ->
+          {:cont, {:ok, record}}
+
+        value ->
+          case Ash.Type.cast_stored(
+                 attr.type,
+                 value,
+                 attr.constraints
+               ) do
+            {:ok, value} ->
+              {:cont, {:ok, Map.put(record, attr.name, value)}}
+
+            :error ->
+              {:halt, {:error, message: "is invalid", field: attr.name}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, record} ->
+        Enum.reduce_while(calculations, {:ok, record}, fn {name, calc}, {:ok, record} ->
+          case calc.load do
+            nil ->
+              case Map.get(record.calculations || %{}, calc.name) do
+                nil ->
+                  {:cont, {:ok, record}}
+
+                value ->
+                  case Ash.Type.cast_stored(
+                         calc.type,
+                         value,
+                         Map.get(calc, :constraints, [])
+                       ) do
+                    {:ok, value} ->
+                      {:cont,
+                       {:ok, Map.update!(record, :calculations, &Map.put(&1, name, value))}}
+
+                    :error ->
+                      {:halt, {:error, message: "is invalid", field: calc.name}}
+                  end
+              end
+
+            load ->
+              case Map.get(record, load) do
+                nil ->
+                  {:cont, {:ok, record}}
+
+                value ->
+                  case Ash.Type.cast_stored(
+                         calc.type,
+                         value,
+                         Map.get(calc, :constraints, [])
+                       ) do
+                    {:ok, casted} ->
+                      {:cont, {:ok, Map.put(record, load, casted)}}
+
+                    :error ->
+                      {:halt, {:error, message: "is invalid", field: calc.name}}
+                  end
+              end
+          end
+        end)
+
+      other ->
+        other
+    end
+  end
+
+  def apply_opts_load(%Ash.Changeset{} = changeset, opts) do
+    if opts[:load] do
+      Ash.Changeset.load(changeset, opts[:load])
+    else
+      changeset
+    end
+  end
+
+  def apply_opts_load(%Ash.Query{} = query, opts) do
+    if opts[:load] do
+      Ash.Query.load(query, opts[:load], Keyword.take(opts, [:strict?]))
+    else
+      query
+    end
+  end
+
+  def apply_opts_load(%Ash.ActionInput{} = input, opts) do
+    if opts[:load] do
+      Ash.ActionInput.load(input, opts[:load])
+    else
+      input
+    end
+  end
+
+  @doc false
+  # A write over a range spans every version it overlaps, so calculations, aggregates and
+  # relationships have no single instant to be answered at, and none can be loaded.
+  def refuse_load_over_range(%Ash.Changeset{as_of: %Ash.Range{} = as_of, load: load} = changeset)
+      when load not in [nil, []] do
+    Ash.Changeset.add_error(
+      changeset,
+      Ash.Error.Framework.LoadOverRange.exception(
+        resource: changeset.resource,
+        as_of: as_of,
+        load: load
+      )
+    )
+  end
+
+  def refuse_load_over_range(changeset), do: changeset
+
+  @doc false
+  # Only an atomic write updates each version a range overlaps from its own values, so a bulk
+  # write over a range that has fallen back to streaming is refused.
+  def refuse_stream_over_range(resource, action, %Ash.Range{} = as_of) do
+    {:error,
+     Ash.Error.to_error_class(
+       Ash.Error.Framework.NotAtomicOverRange.exception(
+         resource: resource,
+         action: action.name,
+         as_of: as_of
+       )
+     )}
+  end
+
+  def refuse_stream_over_range(_resource, _action, _as_of), do: :ok
+
+  def load({:ok, result, instructions}, changeset, domain, opts) do
+    notifier_query = notifier_query_for(changeset)
+
+    if changeset.load in [nil, []] && is_nil(notifier_query) do
+      {:ok, result, instructions}
+    else
+      query =
+        changeset.resource
+        |> Ash.Query.load(changeset.load)
+        |> merge_notifier_calculations(notifier_query)
+        |> Ash.Query.set_context(changeset.context)
+        |> select_selected(result)
+
+      case Ash.load(result, query, Keyword.put(opts, :domain, domain)) do
+        {:ok, result} ->
+          {:ok, result, instructions}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    end
+  end
+
+  def load({:ok, result}, changeset, domain, opts) do
+    notifier_query = notifier_query_for(changeset)
+
+    if changeset.load in [nil, []] && is_nil(notifier_query) do
+      {:ok, result, %{}}
+    else
+      query =
+        changeset.resource
+        |> Ash.Query.load(changeset.load)
+        |> merge_notifier_calculations(notifier_query)
+        |> Ash.Query.set_context(changeset.context)
+        |> select_selected(result)
+
+      case Ash.load(result, query, Keyword.put(opts, :domain, domain)) do
+        {:ok, result} ->
+          {:ok, result, %{}}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    end
+  end
+
+  def load(other, _, _, _), do: other
+
+  defp notifier_query_for(%Ash.Changeset{} = changeset) do
+    Ash.Notifier.notifier_calculation_query(
+      changeset.resource,
+      changeset.action,
+      changeset.context
+    )
+  end
+
+  defp notifier_query_for(_), do: nil
+
+  @doc false
+  def merge_notifier_calculations(query, nil), do: query
+
+  def merge_notifier_calculations(query, notifier_query) do
+    Map.update!(query, :calculations, fn calcs ->
+      Map.merge(calcs, notifier_query.calculations)
+    end)
+  end
+
+  defp select_selected(query, []), do: query
+
+  defp select_selected(query, result) do
+    sample =
+      case result do
+        [first | _] -> first
+        other -> other
+      end
+
+    select =
+      query.resource
+      |> Ash.Resource.Info.attributes()
+      |> Enum.filter(&Ash.Resource.selected?(sample, &1.name))
+      |> Enum.map(& &1.name)
+
+    Ash.Query.ensure_selected(query, select)
+  end
+
+  def restrict_field_access(result, %Ash.Query{
+        context: %{private: %{loading_relationship?: true}}
+      }) do
+    result
+  end
+
+  def restrict_field_access({:ok, record, instructions}, query_or_changeset) do
+    {:ok, restrict_field_access(record, query_or_changeset), instructions}
+  end
+
+  def restrict_field_access({:ok, record}, query_or_changeset) do
+    {:ok, restrict_field_access(record, query_or_changeset)}
+  end
+
+  def restrict_field_access({:error, error}, _), do: {:error, error}
+
+  def restrict_field_access(records, query_or_changeset) when is_list(records) do
+    Enum.map(records, &restrict_field_access(&1, query_or_changeset))
+  end
+
+  def restrict_field_access(%struct{results: results} = page, query_or_changeset)
+      when struct in [Ash.Page.Keyset, Ash.Page.Offset] do
+    %{page | results: restrict_field_access(results, query_or_changeset)}
+  end
+
+  def restrict_field_access(%Ash.NotLoaded{} = not_loaded, _query_or_changeset) do
+    not_loaded
+  end
+
+  def restrict_field_access(%Ash.ForbiddenField{} = forbidden_field, _query_or_changeset) do
+    forbidden_field
+  end
+
+  def restrict_field_access(%_{} = record, query_or_changeset) do
+    embedded? = Ash.Resource.Info.embedded?(query_or_changeset.resource)
+
+    if internal?(query_or_changeset) ||
+         (embedded? && !query_or_changeset.context[:private][:cleaning_up_field_auth?]) do
+      record
+    else
+      record.calculations
+      |> Enum.reduce(record, fn
+        {{:__ash_fields_are_visible__, fields}, value}, record ->
+          if value do
+            record
+          else
+            Enum.reduce(fields, record, fn field, record ->
+              type =
+                case Ash.Resource.Info.field(query_or_changeset.resource, field) do
+                  %Ash.Resource.Aggregate{} -> :aggregate
+                  %Ash.Resource.Attribute{} -> :attribute
+                  %Ash.Resource.Calculation{} -> :calculation
+                end
+
+              forbidden_field =
+                if embedded? && type == :attribute do
+                  %Ash.ForbiddenField{
+                    field: field,
+                    type: type,
+                    original_value: Map.get(record, field)
+                  }
+                else
+                  %Ash.ForbiddenField{field: field, type: type}
+                end
+
+              record
+              |> Map.put(field, forbidden_field)
+              |> replace_dynamic_loads(field, type, query_or_changeset)
+            end)
+          end
+          |> Map.update!(
+            :calculations,
+            &Map.delete(&1, {:__ash_fields_are_visible__, fields})
+          )
+
+        _, record ->
+          record
+      end)
+    end
+  end
+
+  defp replace_dynamic_loads(record, _, :aggregate, _), do: record
+
+  defp replace_dynamic_loads(record, field, type, %Ash.Changeset{} = changeset)
+       when type in [:attribute, :calculation] do
+    query =
+      changeset.resource
+      |> Ash.Query.new()
+      |> Ash.Query.load(changeset.load)
+
+    replace_dynamic_loads(record, field, type, query)
+  end
+
+  defp replace_dynamic_loads(record, field, type, query)
+       when type in [:attribute, :calculation] do
+    Enum.reduce(
+      query.calculations,
+      record,
+      fn
+        {key, %{module: Ash.Resource.Calculation.LoadAttribute, opts: opts, load: load}},
+        record ->
+          if type == :attribute && opts[:attribute] == field do
+            if load do
+              Map.put(record, load, %Ash.ForbiddenField{field: load, type: type})
+            else
+              Map.update!(
+                record,
+                :calculations,
+                &Map.put(&1, key, %Ash.ForbiddenField{field: field, type: type})
+              )
+            end
+          else
+            record
+          end
+
+        {key, %{calc_name: calc_name, load: load}}, record ->
+          if calc_name == field and type == :calculation do
+            if load do
+              Map.put(record, load, %Ash.ForbiddenField{field: load, type: type})
+            else
+              Map.update!(
+                record,
+                :calculations,
+                &Map.put(&1, key, %Ash.ForbiddenField{field: field, type: type})
+              )
+            end
+          else
+            record
+          end
+
+        _, record ->
+          record
+      end
+    )
+  end
+
+  def select({:ok, results, instructions}, query) do
+    {:ok, select(results, query), instructions}
+  end
+
+  def select({:ok, results}, query) do
+    {:ok, select(results, query)}
+  end
+
+  def select({:error, error}, _query) do
+    {:error, error}
+  end
+
+  def select(nil, _), do: nil
+
+  def select(result, %{select: nil}) do
+    result
+  end
+
+  def select(result, nil) do
+    result
+  end
+
+  def select(%resource{} = result, %{select: select, resource: resource} = query) do
+    select_mask = select_mask(query)
+
+    result
+    |> Map.merge(select_mask)
+    |> Ash.Resource.put_metadata(:selected, select)
+  end
+
+  def select(:ok, _query), do: :ok
+
+  def select(results, %{select: select} = query) do
+    if Enumerable.impl_for(results) do
+      select_mask = select_mask(query)
+
+      Enum.map(results, fn result ->
+        result
+        |> Map.merge(select_mask)
+        |> Ash.Resource.put_metadata(:selected, select)
+      end)
+    else
+      results
+    end
+  end
+
+  defp select_mask(%{select: select, resource: resource}) do
+    resource
+    |> Ash.Resource.Info.attributes()
+    |> Enum.reject(fn attribute ->
+      if is_nil(select) do
+        attribute.select_by_default?
+      else
+        attribute.always_select? || attribute.primary_key? || attribute.name in select
+      end
+    end)
+    |> Map.new(fn attribute ->
+      {attribute.name,
+       %Ash.NotLoaded{field: attribute.name, type: :attribute, resource: resource}}
+    end)
+  end
+
+  @doc """
+  Extracts multitenancy mode from changeset/query context.
+
+  Returns the multitenancy setting (`:bypass`, `:bypass_all`, `:allow_global`)
+  from the shared private context, or `nil` if not set.
+  """
+  @spec get_multitenancy_from_context(Ash.Changeset.t() | Ash.Query.t() | map()) ::
+          :bypass | :bypass_all | :allow_global | nil
+  def get_multitenancy_from_context(%{
+        context: %{shared: %{private: %{multitenancy: multitenancy}}}
+      }) do
+    multitenancy
+  end
+
+  def get_multitenancy_from_context(_), do: nil
+
+  @doc """
+  Validates that a changeset has a tenant when required by the resource.
+
+  Returns `:ok` if tenant is present or not required, otherwise returns
+  an error tuple with a descriptive message.
+  """
+  @spec validate_changeset_multitenancy(Ash.Changeset.t()) :: :ok | {:error, String.t()}
+  def validate_changeset_multitenancy(changeset) do
+    if Ash.Resource.Info.multitenancy_strategy(changeset.resource) &&
+         not Ash.Resource.Info.multitenancy_global?(changeset.resource) &&
+         is_nil(changeset.tenant) do
+      {:error, "#{inspect(changeset.resource)} changesets require a tenant to be specified"}
+    else
+      :ok
+    end
+  end
+
+  @doc false
+  @spec authorizers?(Ash.Resource.t() | Ash.Query.t() | Ash.Changeset.t() | [Ash.Changeset.t()]) ::
+          boolean()
+  def authorizers?(resource) when is_atom(resource),
+    do: Ash.Resource.Info.authorizers(resource) != []
+
+  def authorizers?(%{resource: resource}), do: authorizers?(resource)
+  def authorizers?([%{resource: resource} | _]), do: authorizers?(resource)
+  def authorizers?(_), do: true
+end

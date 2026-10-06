@@ -15,6 +15,10 @@ export const binaries: Record<Side, string> = {
   elixir: `${repo}examples/elixir/supportdesk/_build/prod/rel/supportdesk/bin/supportdesk`,
 };
 
+/** Environment the desks are started with, over the process's own: the saturation benchmark
+ *  sets the pool's size and queue here, and clears it between configurations. */
+export const extraEnv: Record<string, string> = {};
+
 export type Desk = {
   side: Side;
   port: number;
@@ -49,7 +53,7 @@ const recreate = (pg: string, db: string, template?: string) => {
   psql(pg, template ? `CREATE DATABASE "${db}" TEMPLATE "${template}"` : `CREATE DATABASE "${db}"`);
 };
 
-const listener = (port: number): number | undefined => {
+export const listener = (port: number): number | undefined => {
   const out = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
   const pid = Number(out.stdout.trim().split("\n")[0]);
   return Number.isFinite(pid) && pid > 0 ? pid : undefined;
@@ -62,6 +66,7 @@ export const start = async (pg: string, desk: Desk, db: string, log: string, fix
     ...process.env,
     DATABASE_URL: `${pg}/${db}`,
     PORT: String(desk.port),
+    ...extraEnv,
     ...(fixture ? { FIXTURE: fixture } : {}),
     // One release node at a time, with no distribution: nothing else to reach it.
     RELEASE_DISTRIBUTION: "none",

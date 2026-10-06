@@ -78,17 +78,18 @@ const as = (base: string, who: Who) => ({
   customFetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(base + String(input), init),
 });
 
-export const post = async (base: string, path: string, who: Who, body: unknown): Promise<{ status: number; body: any }> => {
+export const post = async (base: string, path: string, who: Who, body: unknown, signal?: AbortSignal): Promise<{ status: number; body: any }> => {
   const response = await fetch(base + path, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers(who) },
     body: JSON.stringify(body),
+    signal,
   });
   return { status: response.status, body: await response.json() };
 };
 
-export const graphql = async (base: string, who: Who, query: string, variables: object = {}) =>
-  (await post(base, "/graphql", who, { query, variables })).body;
+export const graphql = async (base: string, who: Who, query: string, variables: object = {}, signal?: AbortSignal) =>
+  (await post(base, "/graphql", who, { query, variables }, signal)).body;
 
 /** A GraphQL answer failed: no data, or an error but a redacted field's. */
 const gqlFailed = (body: any, mutation?: string): boolean =>
@@ -99,16 +100,19 @@ const gqlFailed = (body: any, mutation?: string): boolean =>
 /** What one request answered: whether it succeeded, and what's compared of it. */
 export type Outcome = { ok: boolean; body: unknown };
 
-export type Op = (base: string, r: Rng, w: World) => Promise<Outcome>;
+/** `signal` aborts a request the driver has given up on (the saturation scenarios set one). */
+export type Op = (base: string, r: Rng, w: World, signal?: AbortSignal) => Promise<Outcome>;
 
 export type Scenario = {
   name: string;
   /** Reads run closed loop, many clients each asking again as soon as answered. Writes
    *  run open loop, at a fixed rate, so both desks do the same work. */
-  tier: "read" | "write";
+  tier: "read" | "write" | "saturation";
   what: string;
   ops: Partial<Record<Transport, Op>>;
-  /** Writes: requests a second (each op may make several). */
+  /** Saturation: the scenarios `saturation.ts` runs together, a stream of each class of
+   *  request at once, which `bench.ts` doesn't run. Writes: requests a second (each op may
+   *  make several). */
   rate?: number;
 };
 
@@ -147,6 +151,31 @@ const gqlOutcome = (body: any, mutation?: string): Outcome => ({
   ok: !gqlFailed(body, mutation),
   body: { data: body?.data ?? null, errors: (body?.errors ?? []).map((e: any) => e.path).sort() },
 });
+
+const SAT_CHEAP_GQL = `query T($id: ID!) { getTicket(id: $id) { id subject status priority } }`;
+
+const SAT_HEAVY_GQL = `query {
+  listTickets(first: 250, sort: [{ field: INSERTED_AT, order: DESC }, { field: ID }]) {
+    count
+    results {
+      id subject body status priority confidential requesterEmail assigneeId authorId viewCount
+      commentCount publicCommentCount hasInternalNotes weight subjectLength
+      assignee { name email }
+      author { name }
+      tags(sort: [{ field: NAME }]) { name }
+      comments(sort: [{ field: INSERTED_AT, order: DESC }, { field: ID }], limit: 5) { body internal authorId }
+    }
+  }
+}`;
+
+const nobody: Who = { org: "", role: "viewer", id: "" };
+
+const SAT_CPU_HEAVY_GQL = `query {
+  listTickets(first: 25, sort: [{ field: TITLE, order: DESC }], filter: { title: { contains: "a" } }) {
+    count
+    results { id title status priority }
+  }
+}`;
 
 export const scenarios: Scenario[] = [
   {
@@ -350,6 +379,56 @@ export const scenarios: Scenario[] = [
         const org = r.pick(w.orgs);
         const result = await post(base, "/api/bulk", { org: org.slug, role: "admin", id: org.admin }, { count: 100, assigneeId: org.agents[0] });
         return { ok: result.status === 200 && result.body.destroyed === 100, body: result.body };
+      },
+    },
+  },
+  // Saturation: what `saturation.ts` runs, a stream of each at once ----------------------
+  {
+    name: "sat-cheap",
+    tier: "saturation",
+    what: "one ticket by id over GraphQL, as a viewer of any org: a small request that should stay quick whatever else the desk is doing",
+    ops: {
+      graphql: async (base, r, w, signal) => {
+        const org = r.pick(w.orgs);
+        const who: Who = { org: org.slug, role: "viewer", id: org.viewer };
+        const body = await graphql(base, who, SAT_CHEAP_GQL, { id: r.pick(org.readable) }, signal);
+        return { ok: !gqlFailed(body) && !!body.data.getTicket, body };
+      },
+    },
+  },
+  {
+    name: "sat-heavy",
+    tier: "saturation",
+    what: "the 250 newest tickets of an org with their assignee, author, tags, aggregates and five comments each, as its admin: a large page the desk must read, shape and serialize",
+    ops: {
+      graphql: async (base, r, w, signal) => {
+        const org = r.pick(w.orgs);
+        const who: Who = { org: org.slug, role: "admin", id: org.admin };
+        const body = await graphql(base, who, SAT_HEAVY_GQL, {}, signal);
+        return { ok: !gqlFailed(body) && (body.data.listTickets?.results?.length ?? 0) > 0, body };
+      },
+    },
+  },
+  // CPU-bound saturation, on the in-memory astro-helpdesk twins (`--target astro`) --------
+  {
+    name: "sat-cpu-cheap",
+    tier: "saturation",
+    what: "`{ __typename }` over GraphQL: the smallest request the GraphQL layer answers, with no data, so what it measures is how soon a worker gets to it",
+    ops: {
+      graphql: async (base, _r, _w, signal) => {
+        const body = await graphql(base, nobody, "query { __typename }", {}, signal);
+        return { ok: body?.data?.__typename === "RootQueryType", body };
+      },
+    },
+  },
+  {
+    name: "sat-cpu-heavy",
+    tier: "saturation",
+    what: "tickets whose title contains a letter, sorted by title, 25 of them with the count: the desk filters, sorts and counts every ticket it holds in memory, and answers a small page",
+    ops: {
+      graphql: async (base, _r, _w, signal) => {
+        const body = await graphql(base, nobody, SAT_CPU_HEAVY_GQL, {}, signal);
+        return { ok: (body?.data?.listTickets?.count ?? 0) > 0 && !body.errors, body };
       },
     },
   },

@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mixed saturation (over Postgres)</title>
+<style>
+.viz-root, svg.viz {
+  color-scheme: light;
+  --surface: #fcfcfb; --page: #f9f9f7; --ink: #0b0b0b; --sec: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --s1: #2a78d6; --s2: #eb6834; --ring: rgba(11,11,11,0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root, svg.viz {
+    color-scheme: dark;
+    --surface: #1a1a19; --page: #0d0d0d; --ink: #ffffff; --sec: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --s1: #3987e5; --s2: #d95926; --ring: rgba(255,255,255,0.10);
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --surface: #1a1a19; --page: #0d0d0d; --ink: #ffffff; --sec: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --s1: #3987e5; --s2: #d95926; --ring: rgba(255,255,255,0.10);
+}
+svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.ptitle { fill: var(--ink); font-size: 13px; font-weight: 600; }
+.punit, .tick2 { fill: var(--muted); font-size: 10.5px; }
+.tick { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.end { fill: var(--sec); font-size: 11px; }
+.grid { stroke: var(--grid); stroke-width: 1; }
+.axis { stroke: var(--axis); stroke-width: 1; }
+.ref { stroke: var(--muted); stroke-width: 1; opacity: .7; }
+.cross { stroke: var(--muted); stroke-width: 1; }
+.line { stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.s1.line { stroke: var(--s1); } .s2.line { stroke: var(--s2); }
+.dot { stroke: var(--surface); stroke-width: 2; }
+.dot.s1 { fill: var(--s1); } .dot.s2 { fill: var(--s2); }
+.surface { fill: var(--surface); }
+.sectiontitle { fill: var(--ink); font-size: 15px; font-weight: 600; }
+.maintitle { fill: var(--ink); font-size: 20px; font-weight: 600; }
+.sub { fill: var(--sec); font-size: 12px; }
+
+body { margin: 0; background: var(--page, #f9f9f7); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+:root { --page-fallback: #f9f9f7; }
+.viz-root { background: var(--page); color: var(--ink); padding: 28px clamp(16px, 4vw, 48px) 48px; min-height: 100vh; box-sizing: border-box; }
+h1 { font-size: 24px; margin: 0 0 6px; font-weight: 600; }
+h2 { font-size: 16px; margin: 30px 0 10px; font-weight: 600; }
+.lede { color: var(--sec); max-width: 82ch; line-height: 1.5; margin: 0 0 14px; font-size: 14px; }
+.legend { display: flex; gap: 20px; align-items: center; color: var(--sec); font-size: 13px; margin: 14px 0 4px; flex-wrap: wrap; }
+.key { display: inline-flex; gap: 8px; align-items: center; }
+.key i { display: inline-block; width: 18px; height: 0; border-top: 2px solid; border-radius: 2px; }
+.key.k1 i { border-color: var(--s1); } .key.k2 i { border-color: var(--s2); }
+.kpis { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 0; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px 18px; min-width: 190px; }
+.tile .label { color: var(--sec); font-size: 12.5px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 4px; }
+.tile .value small { font-size: 12.5px; font-weight: 400; color: var(--sec); margin-left: 4px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; position: relative; padding: 6px 4px 0; }
+.panel svg { width: 100%; height: auto; display: block; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--ring); box-shadow: 0 4px 16px rgba(0,0,0,.18); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--sec); white-space: nowrap; z-index: 2; }
+.tip b { color: var(--ink); font-size: 13px; font-weight: 600; margin-right: 6px; }
+.tip .row { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.tip .line { display: inline-block; width: 14px; border-top: 2px solid; }
+.tip .head { color: var(--ink); font-weight: 600; margin-bottom: 2px; }
+details { margin-top: 28px; }
+summary { cursor: pointer; font-size: 14px; color: var(--ink); }
+table { border-collapse: collapse; margin-top: 12px; font-size: 12.5px; background: var(--surface); }
+th, td { border: 1px solid var(--grid); padding: 4px 10px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+th { color: var(--sec); font-weight: 500; }
+td:first-child, th:first-child { text-align: left; }
+.note { color: var(--sec); font-size: 12.5px; line-height: 1.5; max-width: 90ch; margin-top: 18px; }
+button.theme { position: fixed; top: 14px; right: 18px; background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+</style></head>
+<body><div class="viz-root">
+<button class="theme" type="button">Light / dark</button>
+<h1>Mixed saturation (over Postgres)</h1>
+<p class="lede">2026-10-06, 2 reps, medians. Cheap: one ticket by id, 500/s. Heavy: the 250 newest tickets with their relationships. Both desks are offered the same heavy rate. Apple M4 Max, 16 cores.</p>
+<div class="legend"><span class="key k1"><i></i>ash-rust</span><span class="key k2"><i></i>Ash (Elixir)</span></div>
+<div class="kpis">
+<div class="tile"><div class="label">Heavy capacity alone, ash-rust</div><div class="value">703<small>a second</small></div></div>
+<div class="tile"><div class="label">Heavy capacity alone, Ash</div><div class="value">265<small>a second</small></div></div>
+<div class="tile"><div class="label">Cheap p99 at the top step, ash-rust</div><div class="value">1,621 ms<small></small></div></div>
+<div class="tile"><div class="label">Cheap p99 at the top step, Ash</div><div class="value">1,763 ms<small></small></div></div>
+</div>
+<h2>Cheap request</h2><div class="grid"><figure class="panel" data-id="cheap-p50" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Cheap request: latency, median (ms), ash-rust and Ash"><text class="ptitle" x="12" y="16">Cheap: latency, median</text>
+<text class="punit" x="12" y="31">ms</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0.1</text>
+<line class="grid" x1="52" x2="342" y1="166.4" y2="166.4"/>
+<text class="tick" x="44" y="169.9" text-anchor="end">1</text>
+<line class="grid" x1="52" x2="342" y1="134.8" y2="134.8"/>
+<text class="tick" x="44" y="138.3" text-anchor="end">10</text>
+<line class="grid" x1="52" x2="342" y1="103.2" y2="103.2"/>
+<text class="tick" x="44" y="106.7" text-anchor="end">100</text>
+<line class="grid" x1="52" x2="342" y1="71.6" y2="71.6"/>
+<text class="tick" x="44" y="75.1" text-anchor="end">1,000</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">10,000</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,165 124.5,165.2 197,167.4 239.4,170 269.5,168 311.9,81.2 342,67.9"/>
+<circle class="dot s1" cx="52" cy="165" r="4"><title>ash-rust: 1.11 ms at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="165.2" r="4"><title>ash-rust: 1.09 ms at 133</title></circle>
+<circle class="dot s1" cx="197" cy="167.4" r="4"><title>ash-rust: 0.93 ms at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="170" r="4"><title>ash-rust: 0.77 ms at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="168" r="4"><title>ash-rust: 0.89 ms at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="81.2" r="4"><title>ash-rust: 498 ms at 796</title></circle>
+<circle class="dot s1" cx="342" cy="67.9" r="4"><title>ash-rust: 1,310 ms at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,162.7 124.5,161.3 197,111.8 239.4,98.2 269.5,100.4 311.9,102.1 342,102"/>
+<circle class="dot s2" cx="52" cy="162.7" r="4"><title>Ash (Elixir): 1.31 ms at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="161.3" r="4"><title>Ash (Elixir): 1.44 ms at 133</title></circle>
+<circle class="dot s2" cx="197" cy="111.8" r="4"><title>Ash (Elixir): 53.6 ms at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="98.2" r="4"><title>Ash (Elixir): 143 ms at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="100.4" r="4"><title>Ash (Elixir): 123 ms at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="102.1" r="4"><title>Ash (Elixir): 108 ms at 796</title></circle>
+<circle class="dot s2" cx="342" cy="102" r="4"><title>Ash (Elixir): 109 ms at 1,062</title></circle>
+<text class="end" x="348" y="71.4">Rust</text>
+<text class="end" x="348" y="105.5">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="cheap-p99" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Cheap request: latency, p99 (ms, a failure counted at the latency it gave up at), ash-rust and Ash"><text class="ptitle" x="12" y="16">Cheap: latency, p99</text>
+<text class="punit" x="12" y="31">ms, a failure counted at the latency it gave up at</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">1</text>
+<line class="grid" x1="52" x2="342" y1="158.5" y2="158.5"/>
+<text class="tick" x="44" y="162" text-anchor="end">10</text>
+<line class="grid" x1="52" x2="342" y1="119" y2="119"/>
+<text class="tick" x="44" y="122.5" text-anchor="end">100</text>
+<line class="grid" x1="52" x2="342" y1="79.5" y2="79.5"/>
+<text class="tick" x="44" y="83" text-anchor="end">1,000</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">10,000</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,161.4 124.5,158.9 197,160.5 239.4,168.9 269.5,150 311.9,82.8 342,71.2"/>
+<circle class="dot s1" cx="52" cy="161.4" r="4"><title>ash-rust: 8.43 ms at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="158.9" r="4"><title>ash-rust: 9.78 ms at 133</title></circle>
+<circle class="dot s1" cx="197" cy="160.5" r="4"><title>ash-rust: 8.92 ms at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="168.9" r="4"><title>ash-rust: 5.45 ms at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="150" r="4"><title>ash-rust: 16.4 ms at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="82.8" r="4"><title>ash-rust: 826 ms at 796</title></circle>
+<circle class="dot s1" cx="342" cy="71.2" r="4"><title>ash-rust: 1,621 ms at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,170.2 124.5,170.1 197,110.1 239.4,83.3 269.5,67 311.9,71.9 342,69.8"/>
+<circle class="dot s2" cx="52" cy="170.2" r="4"><title>Ash (Elixir): 5.05 ms at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="170.1" r="4"><title>Ash (Elixir): 5.10 ms at 133</title></circle>
+<circle class="dot s2" cx="197" cy="110.1" r="4"><title>Ash (Elixir): 168 ms at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="83.3" r="4"><title>Ash (Elixir): 800 ms at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="67" r="4"><title>Ash (Elixir): 2,069 ms at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="71.9" r="4"><title>Ash (Elixir): 1,554 ms at 796</title></circle>
+<circle class="dot s2" cx="342" cy="69.8" r="4"><title>Ash (Elixir): 1,763 ms at 1,062</title></circle>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="cheap-answered" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Cheap request: answered (a second, of 500 offered; the lines coincide when neither desk fails), ash-rust and Ash"><text class="ptitle" x="12" y="16">Cheap: answered</text>
+<text class="punit" x="12" y="31">a second, of 500 offered; the lines coincide when neither desk fails</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0</text>
+<line class="grid" x1="52" x2="342" y1="145.3" y2="145.3"/>
+<text class="tick" x="44" y="148.8" text-anchor="end">200</text>
+<line class="grid" x1="52" x2="342" y1="92.7" y2="92.7"/>
+<text class="tick" x="44" y="96.2" text-anchor="end">400</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">600</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<line class="ref" x1="52" x2="342" y1="66.3" y2="66.3"/>
+<text class="tick2" x="352" y="60.3">offered</text>
+<polyline class="line s1" fill="none" points="52,66.3 124.5,66.3 197,66.3 239.4,66.3 269.5,66.3 311.9,66.3 342,66.3"/>
+<circle class="dot s1" cx="52" cy="66.3" r="4"><title>ash-rust: 500/s at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="66.3" r="4"><title>ash-rust: 500/s at 133</title></circle>
+<circle class="dot s1" cx="197" cy="66.3" r="4"><title>ash-rust: 500/s at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="66.3" r="4"><title>ash-rust: 500/s at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="66.3" r="4"><title>ash-rust: 500/s at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="66.3" r="4"><title>ash-rust: 500/s at 796</title></circle>
+<circle class="dot s1" cx="342" cy="66.3" r="4"><title>ash-rust: 500/s at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,66.3 124.5,66.3 197,68 239.4,90.3 269.5,103.2 311.9,119.1 342,130.8"/>
+<circle class="dot s2" cx="52" cy="66.3" r="4"><title>Ash (Elixir): 500/s at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="66.3" r="4"><title>Ash (Elixir): 500/s at 133</title></circle>
+<circle class="dot s2" cx="197" cy="68" r="4"><title>Ash (Elixir): 494/s at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="90.3" r="4"><title>Ash (Elixir): 409/s at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="103.2" r="4"><title>Ash (Elixir): 360/s at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="119.1" r="4"><title>Ash (Elixir): 299/s at 796</title></circle>
+<circle class="dot s2" cx="342" cy="130.8" r="4"><title>Ash (Elixir): 255/s at 1,062</title></circle>
+<text class="end" x="348" y="69.8">Rust</text>
+<text class="end" x="348" y="134.3">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="cheap-failed" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Cheap request: failed (% of requests due), ash-rust and Ash"><text class="ptitle" x="12" y="16">Cheap: failed</text>
+<text class="punit" x="12" y="31">% of requests due</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0</text>
+<line class="grid" x1="52" x2="342" y1="158.5" y2="158.5"/>
+<text class="tick" x="44" y="162" text-anchor="end">25</text>
+<line class="grid" x1="52" x2="342" y1="119" y2="119"/>
+<text class="tick" x="44" y="122.5" text-anchor="end">50</text>
+<line class="grid" x1="52" x2="342" y1="79.5" y2="79.5"/>
+<text class="tick" x="44" y="83" text-anchor="end">75</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">100</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,198 124.5,198 197,198 239.4,198 269.5,198 311.9,198 342,198"/>
+<circle class="dot s1" cx="52" cy="198" r="4"><title>ash-rust: 0.0% at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="198" r="4"><title>ash-rust: 0.0% at 133</title></circle>
+<circle class="dot s1" cx="197" cy="198" r="4"><title>ash-rust: 0.0% at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="198" r="4"><title>ash-rust: 0.0% at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="198" r="4"><title>ash-rust: 0.0% at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="198" r="4"><title>ash-rust: 0.0% at 796</title></circle>
+<circle class="dot s1" cx="342" cy="198" r="4"><title>ash-rust: 0.0% at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,198 124.5,198 197,196 239.4,169.3 269.5,153.8 311.9,134.6 342,120.7"/>
+<circle class="dot s2" cx="52" cy="198" r="4"><title>Ash (Elixir): 0.0% at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="198" r="4"><title>Ash (Elixir): 0.0% at 133</title></circle>
+<circle class="dot s2" cx="197" cy="196" r="4"><title>Ash (Elixir): 1.3% at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="169.3" r="4"><title>Ash (Elixir): 18% at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="153.8" r="4"><title>Ash (Elixir): 28% at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="134.6" r="4"><title>Ash (Elixir): 40% at 796</title></circle>
+<circle class="dot s2" cx="342" cy="120.7" r="4"><title>Ash (Elixir): 49% at 1,062</title></circle>
+<text class="end" x="348" y="201.5">Rust</text>
+<text class="end" x="348" y="124.2">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure></div>
+<h2>Heavy request</h2><div class="grid"><figure class="panel" data-id="heavy-answered" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Heavy request: answered (a second), ash-rust and Ash"><text class="ptitle" x="12" y="16">Heavy: answered</text>
+<text class="punit" x="12" y="31">a second</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0</text>
+<line class="grid" x1="52" x2="342" y1="145.3" y2="145.3"/>
+<text class="tick" x="44" y="148.8" text-anchor="end">500</text>
+<line class="grid" x1="52" x2="342" y1="92.7" y2="92.7"/>
+<text class="tick" x="44" y="96.2" text-anchor="end">1,000</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">1,500</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="ref" fill="none" points="52,191 124.5,184 197,170 239.4,156.1 269.5,142.1 311.9,114.1 342,86.2"/>
+<text class="tick2" x="352" y="89.7">offered</text>
+<polyline class="line s1" fill="none" points="52,191 124.5,184 197,170.1 239.4,156.1 269.5,142.1 311.9,129.1 342,131.5"/>
+<circle class="dot s1" cx="52" cy="191" r="4"><title>ash-rust: 66/s at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="184" r="4"><title>ash-rust: 133/s at 133</title></circle>
+<circle class="dot s1" cx="197" cy="170.1" r="4"><title>ash-rust: 265/s at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="156.1" r="4"><title>ash-rust: 398/s at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="142.1" r="4"><title>ash-rust: 531/s at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="129.1" r="4"><title>ash-rust: 654/s at 796</title></circle>
+<circle class="dot s1" cx="342" cy="131.5" r="4"><title>ash-rust: 631/s at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,191 124.5,184 197,172.2 239.4,175.8 269.5,179.7 311.9,186.1 342,190.1"/>
+<circle class="dot s2" cx="52" cy="191" r="4"><title>Ash (Elixir): 66/s at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="184" r="4"><title>Ash (Elixir): 133/s at 133</title></circle>
+<circle class="dot s2" cx="197" cy="172.2" r="4"><title>Ash (Elixir): 245/s at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="175.8" r="4"><title>Ash (Elixir): 211/s at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="179.7" r="4"><title>Ash (Elixir): 174/s at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="186.1" r="4"><title>Ash (Elixir): 113/s at 796</title></circle>
+<circle class="dot s2" cx="342" cy="190.1" r="4"><title>Ash (Elixir): 75/s at 1,062</title></circle>
+<text class="end" x="348" y="135">Rust</text>
+<text class="end" x="348" y="193.6">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="heavy-p50" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Heavy request: latency, median (ms, of those answered), ash-rust and Ash"><text class="ptitle" x="12" y="16">Heavy: latency, median</text>
+<text class="punit" x="12" y="31">ms, of those answered</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">10</text>
+<line class="grid" x1="52" x2="342" y1="145.3" y2="145.3"/>
+<text class="tick" x="44" y="148.8" text-anchor="end">100</text>
+<line class="grid" x1="52" x2="342" y1="92.7" y2="92.7"/>
+<text class="tick" x="44" y="96.2" text-anchor="end">1,000</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">10,000</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,184.8 124.5,187.7 197,187.7 239.4,187.1 269.5,186.2 311.9,82 342,61.2"/>
+<circle class="dot s1" cx="52" cy="184.8" r="4"><title>ash-rust: 17.8 ms at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="187.7" r="4"><title>ash-rust: 15.7 ms at 133</title></circle>
+<circle class="dot s1" cx="197" cy="187.7" r="4"><title>ash-rust: 15.7 ms at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="187.1" r="4"><title>ash-rust: 16.1 ms at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="186.2" r="4"><title>ash-rust: 16.7 ms at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="82" r="4"><title>ash-rust: 1,593 ms at 796</title></circle>
+<circle class="dot s1" cx="342" cy="61.2" r="4"><title>ash-rust: 3,957 ms at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,166.3 124.5,165.4 197,121.9 239.4,109.1 269.5,110 311.9,114.1 342,114"/>
+<circle class="dot s2" cx="52" cy="166.3" r="4"><title>Ash (Elixir): 40.1 ms at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="165.4" r="4"><title>Ash (Elixir): 41.5 ms at 133</title></circle>
+<circle class="dot s2" cx="197" cy="121.9" r="4"><title>Ash (Elixir): 279 ms at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="109.1" r="4"><title>Ash (Elixir): 488 ms at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="110" r="4"><title>Ash (Elixir): 468 ms at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="114.1" r="4"><title>Ash (Elixir): 392 ms at 796</title></circle>
+<circle class="dot s2" cx="342" cy="114" r="4"><title>Ash (Elixir): 394 ms at 1,062</title></circle>
+<text class="end" x="348" y="64.7">Rust</text>
+<text class="end" x="348" y="117.5">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="heavy-failed" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Heavy request: failed (% of requests due), ash-rust and Ash"><text class="ptitle" x="12" y="16">Heavy: failed</text>
+<text class="punit" x="12" y="31">% of requests due</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0</text>
+<line class="grid" x1="52" x2="342" y1="158.5" y2="158.5"/>
+<text class="tick" x="44" y="162" text-anchor="end">25</text>
+<line class="grid" x1="52" x2="342" y1="119" y2="119"/>
+<text class="tick" x="44" y="122.5" text-anchor="end">50</text>
+<line class="grid" x1="52" x2="342" y1="79.5" y2="79.5"/>
+<text class="tick" x="44" y="83" text-anchor="end">75</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">100</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,198 124.5,198 197,198 239.4,198 269.5,198 311.9,198 342,198"/>
+<circle class="dot s1" cx="52" cy="198" r="4"><title>ash-rust: 0.0% at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="198" r="4"><title>ash-rust: 0.0% at 133</title></circle>
+<circle class="dot s1" cx="197" cy="198" r="4"><title>ash-rust: 0.0% at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="198" r="4"><title>ash-rust: 0.0% at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="198" r="4"><title>ash-rust: 0.0% at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="198" r="4"><title>ash-rust: 0.0% at 796</title></circle>
+<circle class="dot s1" cx="342" cy="198" r="4"><title>ash-rust: 0.0% at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,198 124.5,198 197,190.2 239.4,113.6 269.5,81 311.9,56.9 342,56"/>
+<circle class="dot s2" cx="52" cy="198" r="4"><title>Ash (Elixir): 0.0% at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="198" r="4"><title>Ash (Elixir): 0.0% at 133</title></circle>
+<circle class="dot s2" cx="197" cy="190.2" r="4"><title>Ash (Elixir): 5.0% at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="113.6" r="4"><title>Ash (Elixir): 53% at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="81" r="4"><title>Ash (Elixir): 74% at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="56.9" r="4"><title>Ash (Elixir): 89% at 796</title></circle>
+<circle class="dot s2" cx="342" cy="56" r="4"><title>Ash (Elixir): 90% at 1,062</title></circle>
+<text class="end" x="348" y="201.5">Rust</text>
+<text class="end" x="348" y="59.5">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="heavy-notsent" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Heavy request: not sent, the driver's limit (% of requests due, no desk's refusal), ash-rust and Ash"><text class="ptitle" x="12" y="16">Heavy: not sent, the driver's limit</text>
+<text class="punit" x="12" y="31">% of requests due, no desk's refusal</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0</text>
+<line class="grid" x1="52" x2="342" y1="158.5" y2="158.5"/>
+<text class="tick" x="44" y="162" text-anchor="end">25</text>
+<line class="grid" x1="52" x2="342" y1="119" y2="119"/>
+<text class="tick" x="44" y="122.5" text-anchor="end">50</text>
+<line class="grid" x1="52" x2="342" y1="79.5" y2="79.5"/>
+<text class="tick" x="44" y="83" text-anchor="end">75</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">100</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,198 124.5,198 197,198 239.4,198 269.5,198 311.9,198 342,165.2"/>
+<circle class="dot s1" cx="52" cy="198" r="4"><title>ash-rust: 0.0% at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="198" r="4"><title>ash-rust: 0.0% at 133</title></circle>
+<circle class="dot s1" cx="197" cy="198" r="4"><title>ash-rust: 0.0% at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="198" r="4"><title>ash-rust: 0.0% at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="198" r="4"><title>ash-rust: 0.0% at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="198" r="4"><title>ash-rust: 0.0% at 796</title></circle>
+<circle class="dot s1" cx="342" cy="165.2" r="4"><title>ash-rust: 21% at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,198 124.5,198 197,198 239.4,198 269.5,198 311.9,198 342,189.5"/>
+<circle class="dot s2" cx="52" cy="198" r="4"><title>Ash (Elixir): 0.0% at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="198" r="4"><title>Ash (Elixir): 0.0% at 133</title></circle>
+<circle class="dot s2" cx="197" cy="198" r="4"><title>Ash (Elixir): 0.0% at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="198" r="4"><title>Ash (Elixir): 0.0% at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="198" r="4"><title>Ash (Elixir): 0.0% at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="198" r="4"><title>Ash (Elixir): 0.0% at 796</title></circle>
+<circle class="dot s2" cx="342" cy="189.5" r="4"><title>Ash (Elixir): 5.4% at 1,062</title></circle>
+<text class="end" x="348" y="168.7">Rust</text>
+<text class="end" x="348" y="193">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure></div>
+<h2>Server</h2><div class="grid"><figure class="panel" data-id="memory" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Server: memory, peak resident (MiB), ash-rust and Ash"><text class="ptitle" x="12" y="16">Server: memory, peak resident</text>
+<text class="punit" x="12" y="31">MiB</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">10</text>
+<line class="grid" x1="52" x2="342" y1="145.3" y2="145.3"/>
+<text class="tick" x="44" y="148.8" text-anchor="end">100</text>
+<line class="grid" x1="52" x2="342" y1="92.7" y2="92.7"/>
+<text class="tick" x="44" y="96.2" text-anchor="end">1,000</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">10,000</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<polyline class="line s1" fill="none" points="52,170.3 124.5,156.5 197,147.4 239.4,144.9 269.5,137.6 311.9,64.5 342,50.6"/>
+<circle class="dot s1" cx="52" cy="170.3" r="4"><title>ash-rust: 34 MiB at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="156.5" r="4"><title>ash-rust: 62 MiB at 133</title></circle>
+<circle class="dot s1" cx="197" cy="147.4" r="4"><title>ash-rust: 92 MiB at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="144.9" r="4"><title>ash-rust: 102 MiB at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="137.6" r="4"><title>ash-rust: 140 MiB at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="64.5" r="4"><title>ash-rust: 3.3 GiB at 796</title></circle>
+<circle class="dot s1" cx="342" cy="50.6" r="4"><title>ash-rust: 6.2 GiB at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,107.4 124.5,105.2 197,73.8 239.4,55.9 269.5,50.6 311.9,45.1 342,40.6"/>
+<circle class="dot s2" cx="52" cy="107.4" r="4"><title>Ash (Elixir): 526 MiB at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="105.2" r="4"><title>Ash (Elixir): 577 MiB at 133</title></circle>
+<circle class="dot s2" cx="197" cy="73.8" r="4"><title>Ash (Elixir): 2.2 GiB at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="55.9" r="4"><title>Ash (Elixir): 4.9 GiB at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="50.6" r="4"><title>Ash (Elixir): 6.1 GiB at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="45.1" r="4"><title>Ash (Elixir): 7.8 GiB at 796</title></circle>
+<circle class="dot s2" cx="342" cy="40.6" r="4"><title>Ash (Elixir): 9.5 GiB at 1,062</title></circle>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure><figure class="panel" data-id="cores" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="Server: CPU, cores busy (of 16), ash-rust and Ash"><text class="ptitle" x="12" y="16">Server: CPU, cores busy</text>
+<text class="punit" x="12" y="31">of 16</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">0</text>
+<line class="grid" x1="52" x2="342" y1="158.5" y2="158.5"/>
+<text class="tick" x="44" y="162" text-anchor="end">5</text>
+<line class="grid" x1="52" x2="342" y1="119" y2="119"/>
+<text class="tick" x="44" y="122.5" text-anchor="end">10</text>
+<line class="grid" x1="52" x2="342" y1="79.5" y2="79.5"/>
+<text class="tick" x="44" y="83" text-anchor="end">15</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">20</text>
+<text class="tick" x="52" y="213" text-anchor="middle">66</text>
+<text class="tick2" x="52" y="225" text-anchor="middle">0.25×</text>
+<text class="tick" x="124.5" y="213" text-anchor="middle">133</text>
+<text class="tick2" x="124.5" y="225" text-anchor="middle">0.5×</text>
+<text class="tick" x="197" y="213" text-anchor="middle">265</text>
+<text class="tick2" x="197" y="225" text-anchor="middle">1×</text>
+<text class="tick" x="239.4" y="213" text-anchor="middle">398</text>
+<text class="tick2" x="239.4" y="225" text-anchor="middle">1.5×</text>
+<text class="tick" x="269.5" y="213" text-anchor="middle">531</text>
+<text class="tick2" x="269.5" y="225" text-anchor="middle">2×</text>
+<text class="tick" x="311.9" y="213" text-anchor="middle">796</text>
+<text class="tick2" x="311.9" y="225" text-anchor="middle">3×</text>
+<text class="tick" x="342" y="213" text-anchor="middle">1,062</text>
+<text class="tick2" x="342" y="225" text-anchor="middle">4×</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">heavy requests offered a second (× the slower desk's capacity)</text>
+<line class="ref" x1="52" x2="342" y1="71.6" y2="71.6"/>
+<text class="tick2" x="352" y="65.6">16 cores</text>
+<polyline class="line s1" fill="none" points="52,193.2 124.5,187.5 197,175.4 239.4,162.1 269.5,147.5 311.9,129.9 342,131.9"/>
+<circle class="dot s1" cx="52" cy="193.2" r="4"><title>ash-rust: 0.6 cores at 66</title></circle>
+<circle class="dot s1" cx="124.5" cy="187.5" r="4"><title>ash-rust: 1.3 cores at 133</title></circle>
+<circle class="dot s1" cx="197" cy="175.4" r="4"><title>ash-rust: 2.9 cores at 265</title></circle>
+<circle class="dot s1" cx="239.4" cy="162.1" r="4"><title>ash-rust: 4.5 cores at 398</title></circle>
+<circle class="dot s1" cx="269.5" cy="147.5" r="4"><title>ash-rust: 6.4 cores at 531</title></circle>
+<circle class="dot s1" cx="311.9" cy="129.9" r="4"><title>ash-rust: 8.6 cores at 796</title></circle>
+<circle class="dot s1" cx="342" cy="131.9" r="4"><title>ash-rust: 8.4 cores at 1,062</title></circle>
+<polyline class="line s2" fill="none" points="52,173.7 124.5,150.1 197,114.2 239.4,117.1 269.5,120.3 311.9,121.6 342,122.5"/>
+<circle class="dot s2" cx="52" cy="173.7" r="4"><title>Ash (Elixir): 3.1 cores at 66</title></circle>
+<circle class="dot s2" cx="124.5" cy="150.1" r="4"><title>Ash (Elixir): 6.1 cores at 133</title></circle>
+<circle class="dot s2" cx="197" cy="114.2" r="4"><title>Ash (Elixir): 10.6 cores at 265</title></circle>
+<circle class="dot s2" cx="239.4" cy="117.1" r="4"><title>Ash (Elixir): 10.2 cores at 398</title></circle>
+<circle class="dot s2" cx="269.5" cy="120.3" r="4"><title>Ash (Elixir): 9.8 cores at 531</title></circle>
+<circle class="dot s2" cx="311.9" cy="121.6" r="4"><title>Ash (Elixir): 9.7 cores at 796</title></circle>
+<circle class="dot s2" cx="342" cy="122.5" r="4"><title>Ash (Elixir): 9.6 cores at 1,062</title></circle>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure></div>
+<h2>After the heavy stream stops</h2><div class="grid"><figure class="panel" data-id="recovery" style="margin:0"><svg viewBox="0 0 400 244" role="img" aria-label="After the heavy stream stops: cheap latency p99, each second (ms), ash-rust and Ash"><text class="ptitle" x="12" y="16">After: cheap latency p99, each second</text>
+<text class="punit" x="12" y="31">ms</text>
+<line class="axis" x1="52" x2="342" y1="198" y2="198"/>
+<text class="tick" x="44" y="201.5" text-anchor="end">1</text>
+<line class="grid" x1="52" x2="342" y1="119" y2="119"/>
+<text class="tick" x="44" y="122.5" text-anchor="end">10</text>
+<line class="grid" x1="52" x2="342" y1="40" y2="40"/>
+<text class="tick" x="44" y="43.5" text-anchor="end">100</text>
+<text class="tick" x="52" y="213" text-anchor="middle">1</text>
+<text class="tick" x="93.4" y="213" text-anchor="middle">3</text>
+<text class="tick" x="134.9" y="213" text-anchor="middle">5</text>
+<text class="tick" x="176.3" y="213" text-anchor="middle">7</text>
+<text class="tick" x="217.7" y="213" text-anchor="middle">9</text>
+<text class="tick" x="259.1" y="213" text-anchor="middle">11</text>
+<text class="tick" x="300.6" y="213" text-anchor="middle">13</text>
+<text class="tick" x="342" y="213" text-anchor="middle">15</text>
+<text class="tick2" x="197" y="240" text-anchor="middle">seconds since the heavy stream stopped</text>
+<polyline class="line s1" fill="none" points="52,149.7 72.7,144.5 93.4,122.5 114.1,106.3 134.9,145.5 155.6,144.7 176.3,150.7 197,146.4 217.7,155.4 238.4,153.7 259.1,141.6 279.9,141 300.6,127.2 321.3,157 342,142.9"/>
+<circle class="dot s1" cx="52" cy="149.7" r="4"><title>ash-rust: 4.09 ms at 1</title></circle>
+<circle class="dot s1" cx="72.7" cy="144.5" r="4"><title>ash-rust: 4.76 ms at 2</title></circle>
+<circle class="dot s1" cx="93.4" cy="122.5" r="4"><title>ash-rust: 9.02 ms at 3</title></circle>
+<circle class="dot s1" cx="114.1" cy="106.3" r="4"><title>ash-rust: 14.5 ms at 4</title></circle>
+<circle class="dot s1" cx="134.9" cy="145.5" r="4"><title>ash-rust: 4.63 ms at 5</title></circle>
+<circle class="dot s1" cx="155.6" cy="144.7" r="4"><title>ash-rust: 4.73 ms at 6</title></circle>
+<circle class="dot s1" cx="176.3" cy="150.7" r="4"><title>ash-rust: 3.98 ms at 7</title></circle>
+<circle class="dot s1" cx="197" cy="146.4" r="4"><title>ash-rust: 4.49 ms at 8</title></circle>
+<circle class="dot s1" cx="217.7" cy="155.4" r="4"><title>ash-rust: 3.47 ms at 9</title></circle>
+<circle class="dot s1" cx="238.4" cy="153.7" r="4"><title>ash-rust: 3.64 ms at 10</title></circle>
+<circle class="dot s1" cx="259.1" cy="141.6" r="4"><title>ash-rust: 5.18 ms at 11</title></circle>
+<circle class="dot s1" cx="279.9" cy="141" r="4"><title>ash-rust: 5.26 ms at 12</title></circle>
+<circle class="dot s1" cx="300.6" cy="127.2" r="4"><title>ash-rust: 7.87 ms at 13</title></circle>
+<circle class="dot s1" cx="321.3" cy="157" r="4"><title>ash-rust: 3.30 ms at 14</title></circle>
+<circle class="dot s1" cx="342" cy="142.9" r="4"><title>ash-rust: 4.99 ms at 15</title></circle>
+<polyline class="line s2" fill="none" points="52,150.8 72.7,150.7 93.4,150.7 114.1,151 134.9,152.1 155.6,82.8 176.3,150.4 197,135.4 217.7,113.8 238.4,142.5 259.1,148.4 279.9,135.9 300.6,151.5 321.3,144.4 342,112.8"/>
+<circle class="dot s2" cx="52" cy="150.8" r="4"><title>Ash (Elixir): 3.96 ms at 1</title></circle>
+<circle class="dot s2" cx="72.7" cy="150.7" r="4"><title>Ash (Elixir): 3.97 ms at 2</title></circle>
+<circle class="dot s2" cx="93.4" cy="150.7" r="4"><title>Ash (Elixir): 3.98 ms at 3</title></circle>
+<circle class="dot s2" cx="114.1" cy="151" r="4"><title>Ash (Elixir): 3.94 ms at 4</title></circle>
+<circle class="dot s2" cx="134.9" cy="152.1" r="4"><title>Ash (Elixir): 3.81 ms at 5</title></circle>
+<circle class="dot s2" cx="155.6" cy="82.8" r="4"><title>Ash (Elixir): 28.7 ms at 6</title></circle>
+<circle class="dot s2" cx="176.3" cy="150.4" r="4"><title>Ash (Elixir): 4.01 ms at 7</title></circle>
+<circle class="dot s2" cx="197" cy="135.4" r="4"><title>Ash (Elixir): 6.21 ms at 8</title></circle>
+<circle class="dot s2" cx="217.7" cy="113.8" r="4"><title>Ash (Elixir): 11.6 ms at 9</title></circle>
+<circle class="dot s2" cx="238.4" cy="142.5" r="4"><title>Ash (Elixir): 5.04 ms at 10</title></circle>
+<circle class="dot s2" cx="259.1" cy="148.4" r="4"><title>Ash (Elixir): 4.24 ms at 11</title></circle>
+<circle class="dot s2" cx="279.9" cy="135.9" r="4"><title>Ash (Elixir): 6.11 ms at 12</title></circle>
+<circle class="dot s2" cx="300.6" cy="151.5" r="4"><title>Ash (Elixir): 3.88 ms at 13</title></circle>
+<circle class="dot s2" cx="321.3" cy="144.4" r="4"><title>Ash (Elixir): 4.78 ms at 14</title></circle>
+<circle class="dot s2" cx="342" cy="112.8" r="4"><title>Ash (Elixir): 12.0 ms at 15</title></circle>
+<text class="end" x="348" y="146.4">Rust</text>
+<text class="end" x="348" y="116.3">Elixir</text>
+<line class="cross" x1="0" x2="0" y1="40" y2="198" visibility="hidden"/><rect class="hit" x="52" y="40" width="290" height="158" fill="transparent"/></svg><div class="tip" hidden></div></figure></div>
+<details><summary>Table view</summary><table><tr><th>heavy requests offered a second (× the slower desk's capacity)</th><th>Cheap latency, median, Rust</th><th>Cheap latency, median, Elixir</th><th>Cheap latency, p99, Rust</th><th>Cheap latency, p99, Elixir</th><th>Cheap answered, Rust</th><th>Cheap answered, Elixir</th><th>Cheap failed, Rust</th><th>Cheap failed, Elixir</th><th>Heavy answered, Rust</th><th>Heavy answered, Elixir</th><th>Heavy latency, median, Rust</th><th>Heavy latency, median, Elixir</th><th>Heavy failed, Rust</th><th>Heavy failed, Elixir</th><th>Heavy not sent, the driver's limit, Rust</th><th>Heavy not sent, the driver's limit, Elixir</th><th>Server memory, peak resident, Rust</th><th>Server memory, peak resident, Elixir</th><th>Server CPU, cores busy, Rust</th><th>Server CPU, cores busy, Elixir</th></tr><tr><td>66 (0.25×)</td><td>1.11 ms</td><td>1.31 ms</td><td>8.43 ms</td><td>5.05 ms</td><td>500/s</td><td>500/s</td><td>0.0%</td><td>0.0%</td><td>66/s</td><td>66/s</td><td>17.8 ms</td><td>40.1 ms</td><td>0.0%</td><td>0.0%</td><td>0.0%</td><td>0.0%</td><td>34 MiB</td><td>526 MiB</td><td>0.6 cores</td><td>3.1 cores</td></tr><tr><td>133 (0.5×)</td><td>1.09 ms</td><td>1.44 ms</td><td>9.78 ms</td><td>5.10 ms</td><td>500/s</td><td>500/s</td><td>0.0%</td><td>0.0%</td><td>133/s</td><td>133/s</td><td>15.7 ms</td><td>41.5 ms</td><td>0.0%</td><td>0.0%</td><td>0.0%</td><td>0.0%</td><td>62 MiB</td><td>577 MiB</td><td>1.3 cores</td><td>6.1 cores</td></tr><tr><td>265 (1×)</td><td>0.93 ms</td><td>53.6 ms</td><td>8.92 ms</td><td>168 ms</td><td>500/s</td><td>494/s</td><td>0.0%</td><td>1.3%</td><td>265/s</td><td>245/s</td><td>15.7 ms</td><td>279 ms</td><td>0.0%</td><td>5.0%</td><td>0.0%</td><td>0.0%</td><td>92 MiB</td><td>2.2 GiB</td><td>2.9 cores</td><td>10.6 cores</td></tr><tr><td>398 (1.5×)</td><td>0.77 ms</td><td>143 ms</td><td>5.45 ms</td><td>800 ms</td><td>500/s</td><td>409/s</td><td>0.0%</td><td>18%</td><td>398/s</td><td>211/s</td><td>16.1 ms</td><td>488 ms</td><td>0.0%</td><td>53%</td><td>0.0%</td><td>0.0%</td><td>102 MiB</td><td>4.9 GiB</td><td>4.5 cores</td><td>10.2 cores</td></tr><tr><td>531 (2×)</td><td>0.89 ms</td><td>123 ms</td><td>16.4 ms</td><td>2,069 ms</td><td>500/s</td><td>360/s</td><td>0.0%</td><td>28%</td><td>531/s</td><td>174/s</td><td>16.7 ms</td><td>468 ms</td><td>0.0%</td><td>74%</td><td>0.0%</td><td>0.0%</td><td>140 MiB</td><td>6.1 GiB</td><td>6.4 cores</td><td>9.8 cores</td></tr><tr><td>796 (3×)</td><td>498 ms</td><td>108 ms</td><td>826 ms</td><td>1,554 ms</td><td>500/s</td><td>299/s</td><td>0.0%</td><td>40%</td><td>654/s</td><td>113/s</td><td>1,593 ms</td><td>392 ms</td><td>0.0%</td><td>89%</td><td>0.0%</td><td>0.0%</td><td>3.3 GiB</td><td>7.8 GiB</td><td>8.6 cores</td><td>9.7 cores</td></tr><tr><td>1,062 (4×)</td><td>1,310 ms</td><td>109 ms</td><td>1,621 ms</td><td>1,763 ms</td><td>500/s</td><td>255/s</td><td>0.0%</td><td>49%</td><td>631/s</td><td>75/s</td><td>3,957 ms</td><td>394 ms</td><td>0.0%</td><td>90%</td><td>21%</td><td>5.4%</td><td>6.2 GiB</td><td>9.5 GiB</td><td>8.4 cores</td><td>9.6 cores</td></tr></table><table><tr><th>Second after the heavy stream stops</th><th>Rust cheap p99</th><th>Elixir cheap p99</th></tr><tr><td>1</td><td>4.09 ms</td><td>3.96 ms</td></tr><tr><td>2</td><td>4.76 ms</td><td>3.97 ms</td></tr><tr><td>3</td><td>9.02 ms</td><td>3.98 ms</td></tr><tr><td>4</td><td>14.5 ms</td><td>3.94 ms</td></tr><tr><td>5</td><td>4.63 ms</td><td>3.81 ms</td></tr><tr><td>6</td><td>4.73 ms</td><td>28.7 ms</td></tr><tr><td>7</td><td>3.98 ms</td><td>4.01 ms</td></tr><tr><td>8</td><td>4.49 ms</td><td>6.21 ms</td></tr><tr><td>9</td><td>3.47 ms</td><td>11.6 ms</td></tr><tr><td>10</td><td>3.64 ms</td><td>5.04 ms</td></tr><tr><td>11</td><td>5.18 ms</td><td>4.24 ms</td></tr><tr><td>12</td><td>5.26 ms</td><td>6.11 ms</td></tr><tr><td>13</td><td>7.87 ms</td><td>3.88 ms</td></tr><tr><td>14</td><td>3.30 ms</td><td>4.78 ms</td></tr><tr><td>15</td><td>4.99 ms</td><td>12.0 ms</td></tr></table></details>
+<p class="note">Latency counts from when a request was due, so a desk that falls behind is charged for the wait. Heavy requests the driver would hold past its limit of 3000 are not sent; that limit, not a desk, is what the “not sent” chart shows, and it bounds how long a desk that queues can queue. Postgres, both desks and the driver share one machine. Run on a laptop with other applications open: read it as a baseline.</p>
+</div>
+<script type="application/json" id="data">{"cheap-p50":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["1.11 ms","1.09 ms","0.93 ms","0.77 ms","0.89 ms","498 ms","1,310 ms"]},{"name":"Ash (Elixir)","text":["1.31 ms","1.44 ms","53.6 ms","143 ms","123 ms","108 ms","109 ms"]}]},"cheap-p99":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["8.43 ms","9.78 ms","8.92 ms","5.45 ms","16.4 ms","826 ms","1,621 ms"]},{"name":"Ash (Elixir)","text":["5.05 ms","5.10 ms","168 ms","800 ms","2,069 ms","1,554 ms","1,763 ms"]}]},"cheap-answered":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["500/s","500/s","500/s","500/s","500/s","500/s","500/s"]},{"name":"Ash (Elixir)","text":["500/s","500/s","494/s","409/s","360/s","299/s","255/s"]}]},"cheap-failed":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","0.0%"]},{"name":"Ash (Elixir)","text":["0.0%","0.0%","1.3%","18%","28%","40%","49%"]}]},"heavy-answered":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["66/s","133/s","265/s","398/s","531/s","654/s","631/s"]},{"name":"Ash (Elixir)","text":["66/s","133/s","245/s","211/s","174/s","113/s","75/s"]}]},"heavy-p50":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["17.8 ms","15.7 ms","15.7 ms","16.1 ms","16.7 ms","1,593 ms","3,957 ms"]},{"name":"Ash (Elixir)","text":["40.1 ms","41.5 ms","279 ms","488 ms","468 ms","392 ms","394 ms"]}]},"heavy-failed":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","0.0%"]},{"name":"Ash (Elixir)","text":["0.0%","0.0%","5.0%","53%","74%","89%","90%"]}]},"heavy-notsent":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","21%"]},{"name":"Ash (Elixir)","text":["0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","5.4%"]}]},"memory":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["34 MiB","62 MiB","92 MiB","102 MiB","140 MiB","3.3 GiB","6.2 GiB"]},{"name":"Ash (Elixir)","text":["526 MiB","577 MiB","2.2 GiB","4.9 GiB","6.1 GiB","7.8 GiB","9.5 GiB"]}]},"cores":{"px":[52,124.5,197,239.4,269.5,311.9,342],"xTitle2":["66 heavy/s (0.25×)","133 heavy/s (0.5×)","265 heavy/s (1×)","398 heavy/s (1.5×)","531 heavy/s (2×)","796 heavy/s (3×)","1,062 heavy/s (4×)"],"series":[{"name":"ash-rust","text":["0.6 cores","1.3 cores","2.9 cores","4.5 cores","6.4 cores","8.6 cores","8.4 cores"]},{"name":"Ash (Elixir)","text":["3.1 cores","6.1 cores","10.6 cores","10.2 cores","9.8 cores","9.7 cores","9.6 cores"]}]},"recovery":{"px":[52,72.7,93.4,114.1,134.9,155.6,176.3,197,217.7,238.4,259.1,279.9,300.6,321.3,342],"xTitle2":["1 s after","2 s after","3 s after","4 s after","5 s after","6 s after","7 s after","8 s after","9 s after","10 s after","11 s after","12 s after","13 s after","14 s after","15 s after"],"series":[{"name":"ash-rust","text":["4.09 ms","4.76 ms","9.02 ms","14.5 ms","4.63 ms","4.73 ms","3.98 ms","4.49 ms","3.47 ms","3.64 ms","5.18 ms","5.26 ms","7.87 ms","3.30 ms","4.99 ms"]},{"name":"Ash (Elixir)","text":["3.96 ms","3.97 ms","3.98 ms","3.94 ms","3.81 ms","28.7 ms","4.01 ms","6.21 ms","11.6 ms","5.04 ms","4.24 ms","6.11 ms","3.88 ms","4.78 ms","12.0 ms"]}]}}</script>
+<script>
+const panels = JSON.parse(document.getElementById('data').textContent);
+for (const fig of document.querySelectorAll('.panel')) {
+  const p = panels[fig.dataset.id];
+  const svg = fig.querySelector('svg');
+  const tip = fig.querySelector('.tip');
+  const cross = svg.querySelector('.cross');
+  const hit = svg.querySelector('.hit');
+  const show = (e) => {
+    const box = svg.getBoundingClientRect();
+    const scale = 400 / box.width;
+    const x = (e.clientX - box.left) * scale;
+    let best = 0;
+    p.px.forEach((v, i) => { if (Math.abs(v - x) < Math.abs(p.px[best] - x)) best = i; });
+    cross.setAttribute('x1', p.px[best]); cross.setAttribute('x2', p.px[best]); cross.setAttribute('visibility', 'visible');
+    tip.replaceChildren();
+    const head = document.createElement('div'); head.className = 'head'; head.textContent = p.xTitle2[best]; tip.append(head);
+    p.series.forEach((s, k) => {
+      const row = document.createElement('div'); row.className = 'row';
+      const key = document.createElement('span'); key.className = 'line'; key.style.borderColor = 'var(--s' + (k + 1) + ')';
+      const v = document.createElement('b'); v.textContent = s.text[best];
+      const n = document.createElement('span'); n.textContent = s.name;
+      row.append(key, v, n); tip.append(row);
+    });
+    tip.hidden = false;
+    const fb = fig.getBoundingClientRect();
+    let left = e.clientX - fb.left + 14;
+    if (left + tip.offsetWidth > fb.width - 4) left = e.clientX - fb.left - tip.offsetWidth - 14;
+    tip.style.left = left + 'px'; tip.style.top = (e.clientY - fb.top + 14) + 'px';
+  };
+  const hide = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); };
+  hit.addEventListener('pointermove', show); hit.addEventListener('pointerleave', hide);
+}
+document.querySelector('button.theme').addEventListener('click', () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+});
+</script>
+</body></html>

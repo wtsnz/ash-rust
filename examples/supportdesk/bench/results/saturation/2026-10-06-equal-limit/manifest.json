@@ -1,0 +1,75 @@
+{
+  "started": "2026-10-06T03:21:47.982Z",
+  "target": "supportdesk",
+  "git": {
+    "rev": "eacd3d110d8532b5600d36bc3af109457c9a2309",
+    "dirty": true
+  },
+  "binaries": {
+    "rust": {
+      "path": "/Users/will/projects/ash-rust/target/release/supportdesk",
+      "sha256": "f48c15d68f4ffac2"
+    },
+    "elixir": {
+      "release": "/Users/will/projects/ash-rust/examples/elixir/supportdesk/_build/prod/rel/supportdesk/bin/supportdesk",
+      "version": "17.0.5 0.1.0"
+    }
+  },
+  "machine": {
+    "cpu": "Apple M4 Max",
+    "cores": 16,
+    "memoryGiB": 128,
+    "os": "Darwin 25.6.0",
+    "loadAverageAtStart": "6.21 10.46 13.58"
+  },
+  "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+  "fixture": {
+    "path": "/tmp/fixture.json",
+    "sha256": "4045961e447953a2"
+  },
+  "node": "v22.22.3",
+  "options": {
+    "target": "supportdesk",
+    "tickets": 5000,
+    "fixture": "/tmp/fixture.json",
+    "matrix": true,
+    "pools": [
+      20
+    ],
+    "limits": [
+      100,
+      250,
+      1000
+    ],
+    "rates": [
+      400,
+      800,
+      1600
+    ],
+    "pgContainer": "ash-bench-pg",
+    "pg": "postgres://postgres:postgres@127.0.0.1:55434",
+    "threads": 6,
+    "cheapThreads": 2,
+    "cheapRate": 500,
+    "levels": [
+      0.25,
+      0.5,
+      1,
+      1.5,
+      2,
+      3,
+      4
+    ],
+    "basis": "common",
+    "warmup": 3000,
+    "window": 30000,
+    "settle": 4000,
+    "recovery": 15000,
+    "calibrateClients": 24,
+    "calibrateWindow": 6000,
+    "timeout": 10000,
+    "maxInFlight": 3000,
+    "reps": 1,
+    "maxRssGiB": 20
+  }
+}

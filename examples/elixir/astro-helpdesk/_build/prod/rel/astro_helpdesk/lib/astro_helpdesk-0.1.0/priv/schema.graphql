@@ -1,0 +1,530 @@
+schema {
+  subscription: RootSubscriptionType
+  mutation: RootMutationType
+  query: RootQueryType
+}
+
+enum TicketStatus {
+  CLOSED
+  IN_PROGRESS
+  OPEN
+  RESOLVED
+}
+
+type representative_destroyed_result {
+  destroyed: ID
+}
+
+type representative_updated_result {
+  updated: Representative
+}
+
+type representative_created_result {
+  created: Representative
+}
+
+"The result of the :create_representative mutation"
+type CreateRepresentativeResult {
+  "The successful result of the mutation"
+  result: Representative
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input CreateRepresentativeInput {
+  name: String!
+  email: String!
+  role: String!
+}
+
+enum RepresentativeSortField {
+  ID
+  NAME
+  EMAIL
+  ROLE
+}
+
+"A keyset page of :representative"
+type KeysetPageOfRepresentative {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [Representative!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input RepresentativeFilterRole {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+}
+
+input RepresentativeFilterEmail {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+}
+
+input RepresentativeFilterName {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+}
+
+input RepresentativeFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input RepresentativeFilterInput {
+  and: [RepresentativeFilterInput!]
+  or: [RepresentativeFilterInput!]
+  not: [RepresentativeFilterInput!]
+  id: RepresentativeFilterId
+  name: RepresentativeFilterName
+  email: RepresentativeFilterEmail
+  role: RepresentativeFilterRole
+}
+
+input RepresentativeSortInput {
+  order: SortOrder
+  field: RepresentativeSortField!
+}
+
+type Representative {
+  id: ID!
+  name: String!
+  email: String!
+  role: String!
+}
+
+type ticket_destroyed_result {
+  destroyed: ID
+}
+
+type ticket_updated_result {
+  updated: Ticket
+}
+
+type ticket_created_result {
+  created: Ticket
+}
+
+"The result of the :close_ticket mutation"
+type CloseTicketResult {
+  "The record that was successfully deleted"
+  result: Ticket
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+"The result of the :update_details_ticket mutation"
+type UpdateDetailsTicketResult {
+  "The successful result of the mutation"
+  result: Ticket
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input UpdateDetailsTicketInput {
+  title: String
+  description: String
+  priority: Int
+}
+
+"The result of the :change_status_ticket mutation"
+type ChangeStatusTicketResult {
+  "The successful result of the mutation"
+  result: Ticket
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input ChangeStatusTicketInput {
+  status: TicketStatus
+}
+
+"The result of the :open_ticket mutation"
+type OpenTicketResult {
+  "The successful result of the mutation"
+  result: Ticket
+
+  "Any errors generated, if the mutation failed"
+  errors: [MutationError!]!
+}
+
+input OpenTicketInput {
+  title: String!
+  description: String
+  status: TicketStatus!
+  priority: Int!
+  estimate: Float
+  dueOn: Date
+  attachment: String
+  requesterEmail: String
+  authorId: ID
+}
+
+enum TicketSortField {
+  ID
+  TITLE
+  DESCRIPTION
+  STATUS
+  PRIORITY
+  ESTIMATE
+  DUE_ON
+  ATTACHMENT
+  REQUESTER_EMAIL
+  AUTHOR_ID
+}
+
+"A keyset page of :ticket"
+type KeysetPageOfTicket {
+  "Total count on all pages"
+  count: Int
+
+  "The records contained in the page"
+  results: [Ticket!]
+
+  "The first keyset in the results"
+  startKeyset: String
+
+  "The last keyset in the results"
+  endKeyset: String
+}
+
+input TicketFilterAuthorId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TicketFilterRequesterEmail {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+}
+
+input TicketFilterDueOn {
+  isNil: Boolean
+  eq: Date
+  notEq: Date
+  in: [Date]
+  lessThan: Date
+  greaterThan: Date
+  lessThanOrEqual: Date
+  greaterThanOrEqual: Date
+  isDistinctFrom: Date
+  isNotDistinctFrom: Date
+}
+
+input TicketFilterEstimate {
+  isNil: Boolean
+  eq: Float
+  notEq: Float
+  in: [Float]
+  lessThan: Float
+  greaterThan: Float
+  lessThanOrEqual: Float
+  greaterThanOrEqual: Float
+  isDistinctFrom: Float
+  isNotDistinctFrom: Float
+}
+
+input TicketFilterPriority {
+  isNil: Boolean
+  eq: Int
+  notEq: Int
+  in: [Int!]
+  lessThan: Int
+  greaterThan: Int
+  lessThanOrEqual: Int
+  greaterThanOrEqual: Int
+  isDistinctFrom: Int
+  isNotDistinctFrom: Int
+}
+
+input TicketFilterStatus {
+  isNil: Boolean
+  eq: TicketStatus
+  notEq: TicketStatus
+  in: [TicketStatus!]
+  lessThan: TicketStatus
+  greaterThan: TicketStatus
+  lessThanOrEqual: TicketStatus
+  greaterThanOrEqual: TicketStatus
+  isDistinctFrom: TicketStatus
+  isNotDistinctFrom: TicketStatus
+}
+
+input TicketFilterDescription {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+}
+
+input TicketFilterTitle {
+  isNil: Boolean
+  eq: String
+  notEq: String
+  in: [String!]
+  lessThan: String
+  greaterThan: String
+  lessThanOrEqual: String
+  greaterThanOrEqual: String
+  contains: String
+  isDistinctFrom: String
+  isNotDistinctFrom: String
+  stringEndsWith: String
+  stringStartsWith: String
+}
+
+input TicketFilterId {
+  isNil: Boolean
+  eq: ID
+  notEq: ID
+  in: [ID!]
+  lessThan: ID
+  greaterThan: ID
+  lessThanOrEqual: ID
+  greaterThanOrEqual: ID
+  isDistinctFrom: ID
+  isNotDistinctFrom: ID
+}
+
+input TicketFilterInput {
+  and: [TicketFilterInput!]
+  or: [TicketFilterInput!]
+  not: [TicketFilterInput!]
+  id: TicketFilterId
+  title: TicketFilterTitle
+  description: TicketFilterDescription
+  status: TicketFilterStatus
+  priority: TicketFilterPriority
+  estimate: TicketFilterEstimate
+  dueOn: TicketFilterDueOn
+  requesterEmail: TicketFilterRequesterEmail
+  authorId: TicketFilterAuthorId
+  author: RepresentativeFilterInput
+}
+
+input TicketSortInput {
+  order: SortOrder
+  field: TicketSortField!
+}
+
+type Ticket {
+  id: ID!
+  title: String!
+  description: String
+  status: TicketStatus!
+  priority: Int!
+  estimate: Float
+  dueOn: Date
+  attachment: String
+  requesterEmail: String
+  authorId: ID
+  author: Representative
+}
+
+enum SortOrder {
+  DESC
+  DESC_NULLS_FIRST
+  DESC_NULLS_LAST
+  ASC
+  ASC_NULLS_FIRST
+  ASC_NULLS_LAST
+}
+
+"An error generated by a failed mutation"
+type MutationError {
+  "The human readable error message"
+  message: String
+
+  "A shorter error message, with vars not replaced"
+  shortMessage: String
+
+  "Replacements for the short message"
+  vars: Json
+
+  "An error code for the given error"
+  code: String
+
+  "The field or fields that produced the error"
+  fields: [String!]
+
+  "The path to the field that produced the error"
+  path: [String!]
+}
+
+type RootQueryType {
+  getTicket(
+    "The id of the record"
+    id: ID!
+  ): Ticket
+  listTickets(
+    "How to sort the records in the response"
+    sort: [TicketSortInput]
+
+    "A filter to limit the results"
+    filter: TicketFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfTicket
+  getRepresentative(
+    "The id of the record"
+    id: ID!
+  ): Representative
+  listRepresentatives(
+    "How to sort the records in the response"
+    sort: [RepresentativeSortInput]
+
+    "A filter to limit the results"
+    filter: RepresentativeFilterInput
+
+    "The number of records to return from the beginning. Maximum 250"
+    first: Int
+
+    "Show records before the specified keyset."
+    before: String
+
+    "Show records after the specified keyset."
+    after: String
+
+    "The number of records to return to the end. Maximum 250"
+    last: Int
+  ): KeysetPageOfRepresentative
+}
+
+type RootMutationType {
+  openTicket(input: OpenTicketInput!): OpenTicketResult!
+  changeStatusTicket(id: ID!, input: ChangeStatusTicketInput): ChangeStatusTicketResult!
+  updateDetailsTicket(id: ID!, input: UpdateDetailsTicketInput): UpdateDetailsTicketResult!
+  closeTicket(id: ID!): CloseTicketResult!
+  createRepresentative(input: CreateRepresentativeInput!): CreateRepresentativeResult!
+}
+
+type RootSubscriptionType {
+  ticketCreated(
+    "A filter to limit the results"
+    filter: TicketFilterInput
+  ): ticket_created_result
+  ticketUpdated(
+    "A filter to limit the results"
+    filter: TicketFilterInput
+  ): ticket_updated_result
+  ticketDestroyed(
+    "A filter to limit the results"
+    filter: TicketFilterInput
+  ): ticket_destroyed_result
+  representativeCreated(
+    "A filter to limit the results"
+    filter: RepresentativeFilterInput
+  ): representative_created_result
+  representativeUpdated(
+    "A filter to limit the results"
+    filter: RepresentativeFilterInput
+  ): representative_updated_result
+  representativeDestroyed(
+    "A filter to limit the results"
+    filter: RepresentativeFilterInput
+  ): representative_destroyed_result
+}
+
+"""
+The `Json` scalar type represents arbitrary json string data, represented as UTF-8
+character sequences. The Json type is most often used to represent a free-form
+human-readable json string.
+"""
+scalar Json
+
+"""
+The `Date` scalar type represents a date. The Date appears in a JSON
+response as an ISO8601 formatted string, without a time component.
+"""
+scalar Date

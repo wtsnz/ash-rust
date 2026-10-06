@@ -1,0 +1,362 @@
+<!--
+SPDX-FileCopyrightText: 2020 Zach Daniel
+
+SPDX-License-Identifier: MIT
+-->
+
+# Change Log
+
+All notable changes to this project will be documented in this file.
+See [Conventional Commits](Https://conventionalcommits.org) for commit guidelines.
+
+<!-- changelog -->
+
+## [v0.2.19](https://github.com/ash-project/ash_sqlite/compare/v0.2.18...v0.2.19) (2026-09-05)
+
+
+
+
+### Improvements:
+
+* support new string length functions by Zach Daniel
+
+* allow write transactions per resource via `write_transactions?` (#223) by Conor Sinclair
+
+## [v0.2.18](https://github.com/ash-project/ash_sqlite/compare/v0.2.17...v0.2.18) (2026-08-30)
+
+
+
+
+### Bug Fixes:
+
+* quote json_extract path segments to prevent JSON path traversal (CVE-2026-77846) by Zach Daniel
+
+* use recursive comparison for json objects by Zach Daniel
+
+* JSON-encode map literals wherever they appear in an expression (#222) by Alan McCann
+
+* Handle is_distinct_from / is_not_distinct_from in the map-comparison path (#220) by Alan McCann
+
+* don't match tenant attributes by default by Zach Daniel
+
+* dedup index keys in migrations by Zach Daniel
+
+### Improvements:
+
+* Implement list_expr/6: render list literals as json_array(...) (#221) by Alan McCann
+
+* Support ecto_libsql (libSQL) as an alternative adapter (#212) by Alan McCann
+
+* Use SQLite IN for large scalar list filters (#214) by Will Townsend
+
+## [v0.2.17](https://github.com/ash-project/ash_sqlite/compare/v0.2.16...v0.2.17) (2026-04-22)
+
+
+
+
+### Bug Fixes:
+
+* ensure atomic updates properly update all fields by Zach Daniel
+
+## [v0.2.16](https://github.com/ash-project/ash_sqlite/compare/v0.2.15...v0.2.16) (2026-03-05)
+
+
+
+
+### Bug Fixes:
+
+* bulk_create with upsert now updates update_timestamp fields by Michael Bärtschi
+
+* bulk_create with upsert now updates update_timestamp fields (#207) by Michael Bärtschi
+
+* Handle nil default values in migration generator by Zach Daniel
+
+* don't double count renaming & adding attributes by Zach Daniel
+
+### Improvements:
+
+* support positional name argument in `generate_migrations` by Zach Daniel
+
+* read touch_update_defaults? from options instead of changeset context (#208) by Michael Bärtschi
+
+* support `nils_distinct?` in identities by Zach Daniel
+
+## [v0.2.15](https://github.com/ash-project/ash_sqlite/compare/v0.2.14...v0.2.15) (2026-01-30)
+
+
+
+
+### Bug Fixes:
+
+* handle map comparisons via json encoding. by Zach Daniel
+
+* use custom string_length implementation for SQLite by Zach Daniel
+
+* only migrate/rollback one repo at a time (#199) by ydo-kollins
+
+* missing case in to_ecto (#198) by spicychickensauce
+
+* ensure we always clean dev migrations by Zach Daniel
+
+### Improvements:
+
+* raise clearer error on unsupported foreign key drops in SQLite migrations by Zach Daniel
+
+* update to use bulk refs from latest ash by Zach Daniel
+
+## [v0.2.14](https://github.com/ash-project/ash_sqlite/compare/v0.2.13...v0.2.14) (2025-11-05)
+
+
+
+
+### Bug Fixes:
+
+* Get rid of deprecation warnings (#188) by Jonatan Männchen
+
+* ignore unkown option in generate_migrations task #180 (#181) by Abdessabour Moutik
+
+## [v0.2.13](https://github.com/ash-project/ash_sqlite/compare/v0.2.12...v0.2.13) (2025-08-31)
+
+
+
+
+### Bug Fixes:
+
+* generate_migrations --dev duplicating migration files (#173) by Georges Dubus
+
+* override default implementation of string trim test by Zach Daniel
+
+## [v0.2.12](https://github.com/ash-project/ash_sqlite/compare/v0.2.11...v0.2.12) (2025-07-22)
+
+
+
+
+### Bug Fixes:
+
+* Reverse migrations order when reverting dev migrations (#167) by Kenneth Kostrešević
+
+* update ecto & ecto_sql by Zach Daniel
+
+### Improvements:
+
+* make rollback more reliable by using `--to` instead of `-n` by Zach Daniel
+
+## [v0.2.11](https://github.com/ash-project/ash_sqlite/compare/v0.2.10...v0.2.11) (2025-06-16)
+
+
+
+
+### Improvements:
+
+* support update_query and destroy_query by Zach Daniel
+
+## [v0.2.10](https://github.com/ash-project/ash_sqlite/compare/v0.2.9...v0.2.10) (2025-06-15)
+
+
+
+
+### Bug Fixes:
+
+* properly apply filters on destroy & update by Zach Daniel
+
+## [v0.2.9](https://github.com/ash-project/ash_sqlite/compare/v0.2.8...v0.2.9) (2025-05-30)
+
+
+
+
+### Bug Fixes:
+
+* properly fetch options in installer
+
+### Improvements:
+
+* strict table support (#157)
+
+* support new PendingCodegen error
+
+## [v0.2.8](https://github.com/ash-project/ash_sqlite/compare/v0.2.7...v0.2.8) (2025-05-29)
+
+
+
+
+### Bug Fixes:
+
+* properly fetch options in installer
+
+### Improvements:
+
+* --dev codegen flag (#154)
+
+## [v0.2.7](https://github.com/ash-project/ash_sqlite/compare/v0.2.6...v0.2.7) (2025-05-26)
+
+
+
+
+### Bug Fixes:
+
+* various fixes around parameterized type data shape change
+
+* Remove unused `:inflex` dependency
+
+* Fix leftover reference to `Inflex` after it was moved to Igniter instead
+
+### Improvements:
+
+* Fix igniter deprecation warning. (#152)
+
+## [v0.2.6](https://github.com/ash-project/ash_sqlite/compare/v0.2.5...v0.2.6) (2025-04-29)
+
+
+
+
+### Bug Fixes:
+
+* ensure upsert_fields honor update_defaults
+
+* ensure all upsert_fields are accounted for
+
+## [v0.2.5](https://github.com/ash-project/ash_sqlite/compare/v0.2.4...v0.2.5) (2025-03-11)
+
+
+
+
+### Bug Fixes:
+
+* Handle empty upsert fields (#135)
+
+## [v0.2.4](https://github.com/ash-project/ash_sqlite/compare/v0.2.3...v0.2.4) (2025-02-25)
+
+
+
+
+### Bug Fixes:
+
+* remove list literal usage for `in` in ash_sqlite
+
+## [v0.2.3](https://github.com/ash-project/ash_sqlite/compare/v0.2.2...v0.2.3) (2025-01-26)
+
+
+
+
+### Bug Fixes:
+
+* use `AshSql` for running aggregate queries
+
+### Improvements:
+
+* update ash version for better aggregate support validation
+
+## [v0.2.2](https://github.com/ash-project/ash_sqlite/compare/v0.2.1...v0.2.2) (2025-01-22)
+
+
+
+
+### Bug Fixes:
+
+* Remove a postgresql specific configuration from `ash_sqlite.install` (#103)
+
+### Improvements:
+
+* add installer for sqlite
+
+* make igniter optional
+
+* improve dry_run logic and fix priv path setup
+
+* honor repo configs and add snapshot configs
+
+## [v0.2.1](https://github.com/ash-project/ash_sqlite/compare/v0.2.0...v0.2.1) (2024-10-09)
+
+
+
+
+### Bug Fixes:
+
+* don't raise error on codegen with no domains
+
+* installer: use correct module name in the `DataCase` moduledocs. (#82)
+
+### Improvements:
+
+* add `--repo` option to installer, warn on clashing existing repo
+
+* modify mix task aliases according to installer
+
+## [v0.2.0](https://github.com/ash-project/ash_sqlite/compare/v0.1.3...v0.2.0) (2024-09-10)
+
+
+
+
+### Features:
+
+* add igniter-based AshSqlite.Install mix task (#66)
+
+### Improvements:
+
+* fix warnings from latest igniter updates
+
+## [v0.1.3](https://github.com/ash-project/ash_sqlite/compare/v0.1.2...v0.1.3) (2024-05-31)
+
+
+
+
+### Bug Fixes:
+
+* use `Ecto.ParameterizedType.init/2`
+
+* handle new/old ecto parameterized type format
+
+## [v0.1.2](https://github.com/ash-project/ash_sqlite/compare/v0.1.2-rc.1...v0.1.2) (2024-05-11)
+
+
+
+
+## [v0.1.2-rc.1](https://github.com/ash-project/ash_sqlite/compare/v0.1.2-rc.0...v0.1.2-rc.1) (2024-05-06)
+
+
+
+
+### Bug Fixes:
+
+* properly scope deletes to the records in question
+
+* update ash_sqlite to get `ilike` behavior fix
+
+### Improvements:
+
+* support `contains` function
+
+## [v0.1.2-rc.0](https://github.com/ash-project/ash_sqlite/compare/v0.1.1...v0.1.2-rc.0) (2024-04-15)
+
+
+
+
+### Bug Fixes:
+
+* reenable mix tasks that we need to call
+
+### Improvements:
+
+* support `mix ash.rollback`
+
+* support Ash 3.0, leverage `ash_sql` package
+
+* fix datetime migration type discovery
+
+## [v0.1.1](https://github.com/ash-project/ash_sqlite/compare/v0.1.0...v0.1.1) (2023-10-12)
+
+
+
+
+### Improvements:
+
+* add `SqliteMigrationDefault`
+
+* support query aggregates
+
+## [v0.1.0](https://github.com/ash-project/ash_sqlite/compare/v0.1.0...v0.1.0) (2023-10-12)
+
+
+### Improvements:
+
+* Port and adjust `AshPostgres` to `AshSqlite`

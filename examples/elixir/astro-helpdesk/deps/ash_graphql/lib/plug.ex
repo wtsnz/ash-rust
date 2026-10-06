@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2020 ash_graphql contributors <https://github.com/ash-project/ash_graphql/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT
+
+defmodule AshGraphql.Plug do
+  @moduledoc """
+  Automatically set up the GraphQL `actor` and `tenant`.
+
+  Adding this plug to your pipeline will automatically set the `actor` and
+  `tenant` if they were previously put there by `Ash.PlugHelpers.set_actor/2` or
+  `Ash.PlugHelpers.set_tenant/2`.
+  """
+
+  @behaviour Plug
+  alias Ash.PlugHelpers
+  alias Plug.Conn
+
+  def init(opts), do: opts
+
+  def call(conn, _opts) do
+    actor = PlugHelpers.get_actor(conn)
+    tenant = PlugHelpers.get_tenant(conn)
+    context = PlugHelpers.get_context(conn)
+
+    absinthe = Map.get(conn.private, :absinthe, %{})
+
+    context =
+      absinthe
+      |> Map.get(:context, %{})
+      |> Map.merge(%{actor: actor, tenant: tenant, context: context})
+
+    absinthe = Map.put(absinthe, :context, context)
+    Conn.put_private(conn, :absinthe, absinthe)
+  end
+end

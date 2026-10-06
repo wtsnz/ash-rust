@@ -1,0 +1,486 @@
+# SPDX-FileCopyrightText: 2019 ash contributors <https://github.com/ash-project/ash/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT
+
+defmodule Ash.Actions.Action do
+  @moduledoc false
+
+  require Ash.Tracer
+
+  def run(_domain, %{valid?: false, errors: errors}, _opts) do
+    {:error, Ash.Error.to_error_class(errors)}
+  end
+
+  def run(domain, input, opts) do
+    {input, opts} = Ash.Actions.Helpers.set_context_and_get_opts(domain, input, opts)
+    input = Ash.Actions.Helpers.apply_opts_load(input, opts)
+
+    if input.valid? do
+      run_with_lifecycle(domain, input, opts)
+    else
+      {:error, Ash.Error.to_error_class(input.errors)}
+    end
+  rescue
+    e ->
+      error =
+        e
+        |> Ash.Error.to_ash_error(__STACKTRACE__)
+        |> then(&handle_run_errors(input, &1))
+
+      reraise Ash.Error.to_error_class(error,
+                stacktrace: __STACKTRACE__,
+                bread_crumbs: [
+                  "Exception raised in: #{inspect(input.resource)}.#{input.action.name}"
+                ]
+              ),
+              __STACKTRACE__
+  end
+
+  defp run_with_lifecycle(domain, input, opts) do
+    context =
+      %Ash.Resource.Actions.Implementation.Context{
+        actor: opts[:actor],
+        tenant: opts[:tenant],
+        as_of: opts[:as_of],
+        tracer: opts[:tracer],
+        source_context: input.context,
+        authorize?: opts[:authorize?],
+        domain: opts[:domain]
+      }
+
+    {module, run_opts} = input.action.run
+
+    Ash.Tracer.span :action,
+                    fn ->
+                      Ash.Domain.Info.span_name(
+                        domain,
+                        input.resource,
+                        input.action.name
+                      )
+                    end,
+                    opts[:tracer] do
+      metadata = fn ->
+        %{
+          domain: domain,
+          resource: input.resource,
+          resource_short_name: Ash.Resource.Info.short_name(input.resource),
+          actor: opts[:actor],
+          tenant: opts[:tenant],
+          action: input.action.name,
+          authorize?: opts[:authorize?]
+        }
+      end
+
+      Ash.Tracer.set_metadata(opts[:tracer], :action, metadata)
+
+      Ash.Tracer.telemetry_span [:ash, Ash.Domain.Info.short_name(domain), :action],
+                                metadata do
+        # Run around_transaction hooks if any exist, or proceed directly
+        result =
+          Ash.ActionInput.run_around_transaction_hooks(input, fn input ->
+            if input.action.transaction? do
+              run_with_transaction(domain, input, module, run_opts, context, opts)
+            else
+              run_without_transaction(domain, input, module, run_opts, context, opts)
+            end
+          end)
+
+        result = maybe_load(result, input, domain, opts)
+
+        case result do
+          {:error, error} ->
+            error =
+              input
+              |> handle_run_errors(error)
+              |> Ash.Error.to_error_class(
+                bread_crumbs:
+                  "Error returned from: #{inspect(input.resource)}.#{input.action.name}"
+              )
+
+            if opts[:tracer] do
+              stacktrace =
+                case error do
+                  %{stacktrace: %{stacktrace: stacktrace}} ->
+                    stacktrace || []
+
+                  _ ->
+                    {:current_stacktrace, stacktrace} =
+                      Process.info(self(), :current_stacktrace)
+
+                    stacktrace
+                end
+
+              Ash.Tracer.set_handled_error(opts[:tracer], Ash.Error.to_error_class(error),
+                stacktrace: stacktrace
+              )
+            end
+
+            {:error, error}
+
+          other ->
+            other
+        end
+      end
+    end
+  end
+
+  defp validate_allow_nil(nil, %{action: %{allow_nil?: false}} = input, _in_transaction?) do
+    {:error,
+     Ash.Error.Framework.InvalidReturnType.exception(
+       message: """
+       Generic action #{inspect(input.resource)}.#{input.action.name} returned nil, \
+       but allow_nil? is set to false. Either return a value or set `allow_nil? true` \
+       on the action.
+       """
+     )}
+  end
+
+  defp validate_allow_nil(_result, _input, _in_transaction?), do: :ok
+
+  defp handle_run_errors(%{handle_errors: nil}, error), do: error
+
+  defp handle_run_errors(input, error) do
+    input
+    |> Ash.ActionInput.add_error(error)
+    |> Map.fetch!(:errors)
+  end
+
+  defp maybe_load(:ok, _input, _domain, _opts), do: :ok
+  defp maybe_load({:ok, nil}, _input, _domain, _opts), do: {:ok, nil}
+
+  defp maybe_load({:ok, result}, input, domain, opts) do
+    constraints = input.action.constraints || []
+    returns = input.action.returns
+
+    if returns && Ash.Type.can_load?(returns, constraints) do
+      context = %{
+        actor: opts[:actor],
+        domain: domain,
+        tenant: opts[:tenant],
+        authorize?: opts[:authorize?],
+        tracer: opts[:tracer]
+      }
+
+      case returns do
+        {:array, _} ->
+          Ash.Type.load(returns, result, input.load, constraints, context)
+
+        _ ->
+          case Ash.Type.load(returns, [result], input.load, constraints, context) do
+            {:ok, [result]} -> {:ok, result}
+            {:error, error} -> {:error, error}
+          end
+      end
+    else
+      {:ok, result}
+    end
+  end
+
+  defp maybe_load(other, _input, _domain, _opts), do: other
+
+  defp run_with_transaction(domain, input, module, run_opts, context, opts) do
+    # Run before_transaction hooks first
+    case Ash.ActionInput.run_before_transaction_hooks(input) do
+      {:ok, input} ->
+        notify? = !Process.put(:ash_started_transaction?, true)
+        queued_notifications = Process.get(:ash_notifications)
+
+        try do
+          resources =
+            input.action.touches_resources
+            |> Enum.reject(&Ash.DataLayer.in_transaction?/1)
+            |> Enum.concat([input.resource])
+            |> Enum.uniq()
+
+          resources
+          |> Ash.DataLayer.transaction(
+            fn ->
+              case authorize(domain, opts[:actor], input) do
+                :ok ->
+                  case run_with_hooks(module, input, run_opts, context, true) do
+                    {:ok, result, notifications} ->
+                      {:ok, result, notifications}
+
+                    {:error, error} ->
+                      Ash.DataLayer.rollback(resources, error)
+                  end
+
+                {:error, error} ->
+                  Ash.DataLayer.rollback(resources, error)
+              end
+            end,
+            nil,
+            %{
+              type: :generic,
+              metadata: %{
+                resource: input.resource,
+                action: input.action.name,
+                input: input,
+                actor: opts[:actor]
+              },
+              tenant: input.tenant,
+              data_layer_context: input.context[:data_layer] || %{}
+            },
+            rollback_on_error?: false
+          )
+          |> case do
+            {:ok, {:ok, result, notifications}} ->
+              notifications =
+                if notify? && !opts[:return_notifications?] do
+                  Enum.concat(
+                    notifications || [],
+                    Ash.Actions.Helpers.take_queued_notifications()
+                  )
+                else
+                  notifications || []
+                end
+
+              remaining = Ash.Notifier.notify(notifications)
+
+              Ash.Actions.Helpers.warn_missed!(input.resource, input.action, %{
+                resource_notifications: remaining
+              })
+
+              final_result =
+                if input.action.returns do
+                  {:ok, result}
+                else
+                  :ok
+                end
+
+              # Run after_transaction hooks
+              Ash.ActionInput.run_after_transaction_hooks(final_result, input)
+
+            {:error, error} ->
+              Ash.Actions.Helpers.restore_queued_notifications(queued_notifications)
+              error_result = {:error, Ash.Error.to_ash_error(error)}
+              # Run after_transaction hooks even on error
+              Ash.ActionInput.run_after_transaction_hooks(error_result, input)
+          end
+        rescue
+          error ->
+            if notify?, do: Ash.Actions.Helpers.restore_queued_notifications(queued_notifications)
+            reraise error, __STACKTRACE__
+        after
+          if notify? do
+            Process.delete(:ash_started_transaction?)
+          end
+        end
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  defp run_without_transaction(domain, input, module, run_opts, context, opts) do
+    # Run before_transaction hooks even for non-transactional actions
+    case Ash.ActionInput.run_before_transaction_hooks(input) do
+      {:ok, input} ->
+        result =
+          case authorize(domain, opts[:actor], input) do
+            :ok ->
+              case run_with_hooks(module, input, run_opts, context, false) do
+                {:ok, result, notifications} ->
+                  remaining = Ash.Notifier.notify(notifications)
+
+                  Ash.Actions.Helpers.warn_missed!(input.resource, input.action, %{
+                    resource_notifications: remaining
+                  })
+
+                  if input.action.returns do
+                    {:ok, result}
+                  else
+                    :ok
+                  end
+
+                {:error, error} ->
+                  {:error, error}
+              end
+
+            {:error, error} ->
+              {:error, error}
+          end
+
+        # Run after_transaction hooks
+        Ash.ActionInput.run_after_transaction_hooks(result, input)
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  @infer_generic_action_reactors? Application.compile_env(
+                                    :ash,
+                                    :infer_generic_action_reactors?,
+                                    true
+                                  )
+
+  defp call_run_function(module, input, run_opts, context) do
+    if @infer_generic_action_reactors? and Ash.Resource.Actions.RunReactor.reactor?(module) do
+      Ash.Resource.Actions.RunReactor.run(input, Keyword.put(run_opts, :reactor, module), context)
+    else
+      Ash.Resource.Actions.Implementation.run(module, input, run_opts, context)
+    end
+  end
+
+  defp raise_invalid_generic_action_return!(input, other) do
+    ok_or_ok_tuple = if input.action.returns, do: "{:ok, result}", else: ":ok"
+
+    raise Ash.Error.Framework.InvalidReturnType,
+      message: """
+      Invalid return from generic action #{input.resource}.#{input.action.name}.
+
+      Expected #{ok_or_ok_tuple} or {:error, error}, got:
+
+      #{inspect(other)}
+      """
+  end
+
+  defp authorize(_domain, _actor, %{context: %{private: %{authorize?: false}}}) do
+    :ok
+  end
+
+  defp authorize(domain, actor, input) do
+    input.resource
+    |> Ash.Resource.Info.authorizers()
+    |> Enum.reduce_while(
+      :ok,
+      fn authorizer, :ok ->
+        authorizer_state =
+          Ash.Authorizer.initial_state(
+            authorizer,
+            actor,
+            input.resource,
+            input.action,
+            input.domain
+          )
+
+        context = %{
+          domain: domain,
+          action_input: input,
+          query: nil,
+          changeset: nil
+        }
+
+        case Ash.Authorizer.strict_check(authorizer, authorizer_state, context) do
+          {:error, %{class: :forbidden} = e} when is_exception(e) ->
+            {:halt, {:error, e}}
+
+          {:error, error} ->
+            {:halt, {:error, error}}
+
+          {:authorized, _} ->
+            {:cont, :ok}
+
+          {:filter, _authorizer, filter} ->
+            raise """
+            Cannot use filter checks with generic actions
+
+            Received #{inspect(filter)} when authorizing #{inspect(input.resource)}.#{input.action.name}
+            """
+
+          {:filter, filter} ->
+            raise """
+            Cannot use filter checks with generic actions
+
+            Received #{inspect(filter)} when authorizing #{inspect(input.resource)}.#{input.action.name}
+            """
+
+          {:continue, _state} ->
+            raise """
+            Cannot use runtime checks with generic actions
+
+            Must use only simple checks or other checks that can be resolved without returning results #{inspect(input.resource)}.#{input.action.name}
+            """
+
+          {:filter_and_continue, filter, _} ->
+            raise """
+            Cannot use filter checks with generic actions
+
+            Received #{inspect(filter)} when authorizing #{inspect(input.resource)}.#{input.action.name}
+            """
+        end
+      end
+    )
+  end
+
+  defp run_with_hooks(module, input, run_opts, context, in_transaction?) do
+    # Run before_action hooks
+    case Ash.ActionInput.run_before_actions(input) do
+      {:error, error} ->
+        if in_transaction? do
+          Ash.DataLayer.rollback([input.resource], error)
+        else
+          {:error, error}
+        end
+
+      {input, %{notifications: before_action_notifications}} ->
+        # Run the actual action
+        case call_run_function(module, input, run_opts, context) do
+          :ok when is_nil(input.action.returns) ->
+            # Run after_action hooks
+            case Ash.ActionInput.run_after_actions(nil, input, before_action_notifications) do
+              {:ok, result, _input, %{notifications: all_notifications}} ->
+                {:ok, result, all_notifications}
+
+              {:error, error} ->
+                if in_transaction? do
+                  Ash.DataLayer.rollback([input.resource], error)
+                else
+                  {:error, error}
+                end
+            end
+
+          {:ok, result} ->
+            if input.action.returns do
+              with :ok <- validate_allow_nil(result, input, in_transaction?),
+                   {:ok, result, _input, %{notifications: all_notifications}} <-
+                     Ash.ActionInput.run_after_actions(
+                       result,
+                       input,
+                       before_action_notifications
+                     ) do
+                {:ok, result, all_notifications}
+              else
+                {:error, error} ->
+                  if in_transaction? do
+                    Ash.DataLayer.rollback([input.resource], error)
+                  else
+                    {:error, error}
+                  end
+              end
+            else
+              raise_invalid_generic_action_return!(input, {:ok, result})
+            end
+
+          {:ok, result, notifications} ->
+            with :ok <- validate_allow_nil(result, input, in_transaction?),
+                 {:ok, result, _input, %{notifications: all_notifications}} <-
+                   Ash.ActionInput.run_after_actions(
+                     result,
+                     input,
+                     before_action_notifications ++ notifications
+                   ) do
+              {:ok, result, all_notifications}
+            else
+              {:error, error} ->
+                if in_transaction? do
+                  Ash.DataLayer.rollback([input.resource], error)
+                else
+                  {:error, error}
+                end
+            end
+
+          {:error, error} ->
+            if in_transaction? do
+              Ash.DataLayer.rollback([input.resource], error)
+            else
+              {:error, error}
+            end
+
+          other ->
+            raise_invalid_generic_action_return!(input, other)
+        end
+    end
+  end
+end

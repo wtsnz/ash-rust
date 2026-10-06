@@ -1,0 +1,57 @@
+{
+  "started": "2026-10-06T00:19:50.673Z",
+  "git": {
+    "rev": "373729b15bcf7ee386ebf7131d8f7ca397d6f2eb",
+    "dirty": true
+  },
+  "binaries": {
+    "rust": {
+      "path": "/Users/will/projects/ash-rust/target/release/supportdesk",
+      "sha256": "c9d7353f2103da01"
+    },
+    "elixir": {
+      "release": "/Users/will/projects/ash-rust/examples/elixir/supportdesk/_build/prod/rel/supportdesk/bin/supportdesk",
+      "version": "17.0.5 0.1.0"
+    }
+  },
+  "machine": {
+    "cpu": "Apple M4 Max",
+    "cores": 16,
+    "memoryGiB": 128,
+    "os": "Darwin 25.6.0",
+    "loadAverageAtStart": "11.21 17.04 15.75"
+  },
+  "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+  "node": "v22.22.3",
+  "fixture": {
+    "path": "/tmp/fixture.json",
+    "sha256": "4045961e447953a2"
+  },
+  "options": {
+    "fixture": "/tmp/fixture.json",
+    "pg": "postgres://postgres:postgres@127.0.0.1:55434",
+    "threads": 6,
+    "cheapThreads": 2,
+    "cheapRate": 500,
+    "levels": [
+      0.5,
+      0.9,
+      1,
+      1.25,
+      1.5,
+      2,
+      3
+    ],
+    "basis": "own",
+    "warmup": 2000,
+    "window": 10000,
+    "settle": 4000,
+    "recovery": 15000,
+    "calibrateClients": 24,
+    "calibrateWindow": 6000,
+    "timeout": 10000,
+    "maxInFlight": 3000,
+    "reps": 2,
+    "maxRssGiB": 20
+  }
+}
