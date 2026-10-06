@@ -139,17 +139,18 @@ Adding a wait limit to ash-rust's pool (`ash_postgres::PoolSettings::wait_timeou
 default) and letting Ash's queue instead of shed, at 800 heavy requests a second for 30 s
 (one rep each):
 
-| Configuration | Cheap p99 | Cheap failed | Heavy answered/s | Peak memory |
-|---|---:|---:|---:|---:|
-| ash-rust, queues (default) | 1.7 s | 0% | 632 | 6.5 GiB |
-| ash-rust, 100 ms wait limit | 116 ms | 6% | 628 | 0.83 GiB |
-| Ash, sheds (default) | 0.9 s | 33% | 117 | 7.4 GiB |
-| Ash, `queue_target` 60 s | 6.1 s | 0% | 86 | 22.7 GiB |
+| Configuration (20 connections) | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy p99 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rust, queues (no wait limit) | 1,454 ms | 1,747 ms | 0% | 4,436 ms | 4,844 ms | 0% | 11% | 632 | 6.5 GiB | 8.5 |
+| Elixir, sheds (Ecto's default) | 109 ms | 906 ms | 33% | 423 ms | 1,775 ms | 86% | 0% | 117 | 7.4 GiB | 9.7 |
+| Rust, 100 ms wait limit | 99.4 ms | 116 ms | 6% | 311 ms | 338 ms | 22% | 0% | 628 | 853 MiB | 8.4 |
+| Elixir, queues (queue_target 60 s) | 3,843 ms | 6,062 ms | 0% | 9,448 ms | 10,013 ms | 36% | 61% | 86 | 22.7 GiB | 10.5 |
 
 A wait limit keeps ash-rust's cheap request quick (p99 116 ms against 1.7 s) at the same heavy
 throughput and about an eighth of the memory, at the cost of the 6% of cheap requests that fail. When
 both shed at about 100 ms, ash-rust answers about five times as many heavy requests. Making Ash
-queue is worse than its default, not like ash-rust's queue: 6 s cheap p99 and 23 GiB. Given the
+queue is worse than its default, not like ash-rust's queue: 6 s cheap p99, 23 GiB, and 61% of its
+heavy requests held back by the driver, which already had 3,000 waiting on it. Given the
 *same* wait limit (Rust's `wait_timeout`; Ecto's `queue_target` at half, since it drops at twice it), the
 cheap request's median is the limit in both, but ash-rust's p99 stays within 20 ms of it while
 Ash's is 2 to 8 times it, heavy requests take about three times the limit in both, and ash-rust

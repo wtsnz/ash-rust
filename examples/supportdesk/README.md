@@ -443,12 +443,12 @@ and `POOL_TIMEOUT_MS`. Four configurations, at each size:
 At 800 heavy requests a second (one rep, 30 s each, with other applications open and a load
 average of 16 at the start, so read the differences as indications):
 
-| Configuration (pool 20) | Cheap p99 | Cheap failed | Heavy answered/s | Heavy failed | Peak memory |
-|---|---:|---:|---:|---:|---:|
-| Rust, queues | 1.7 s | 0% | 632 | 0% | 6.5 GiB |
-| Rust, 100 ms wait limit | 116 ms | 6% | 628 | 22% | 0.83 GiB |
-| Elixir, sheds (default) | 0.9 s | 33% | 117 | 86% | 7.4 GiB |
-| Elixir, queues | 6.1 s | 0% | 86 | 36% | 22.7 GiB |
+| Configuration (pool 20) | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy p99 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Rust, queues (no wait limit) | 1,454 ms | 1,747 ms | 0% | 4,436 ms | 4,844 ms | 0% | 11% | 632 | 6.5 GiB | 8.5 |
+| Elixir, sheds (Ecto's default) | 109 ms | 906 ms | 33% | 423 ms | 1,775 ms | 86% | 0% | 117 | 7.4 GiB | 9.7 |
+| Rust, 100 ms wait limit | 99.4 ms | 116 ms | 6% | 311 ms | 338 ms | 22% | 0% | 628 | 853 MiB | 8.4 |
+| Elixir, queues (queue_target 60 s) | 3,843 ms | 6,062 ms | 0% | 9,448 ms | 10,013 ms | 36% | 61% | 86 | 22.7 GiB | 10.5 |
 
 What this shows:
 
@@ -466,7 +466,8 @@ What this shows:
   a statement at checkout, so a heavy request that has already used CPU can fail partway;
   that is a likely cause and not one measured here.
 - **Making Ash queue doesn't make it behave like ash-rust's queue; it's worse.** With the
-  queue target at 60 s Ash answered 72 to 86 heavy requests a second, its cheap p99 was 6 s,
+  queue target at 60 s Ash answered 72 to 86 heavy requests a second (and 61% of its heavy
+  requests were *not sent*: the driver already had 3,000 waiting on it), its cheap p99 was 6 s,
   and its memory reached 23 GiB, past the 20 GiB guard that stopped both of those
   configurations from running at 1,600/s. The shedding is what keeps Ash afloat.
 - **Ecto's maintainers advise against this.** José Valim: *"You should avoid tweaking
@@ -495,14 +496,14 @@ interval it drops what has waited past *twice* its `queue_target`, so Elixir is 
 At 800 heavy requests a second (one rep, with other applications open: read the differences as
 indications):
 
-| Limit | | Cheap p50 / p99 | Cheap failed | Heavy p50 / p99 | Heavy answered/s | Heavy failed | Peak memory |
-|---|---|---|---:|---|---:|---:|---:|
-| 100 ms | Rust | 99 / 117 ms | 7% | 311 / 341 ms | 591 | 26% | 1.5 GiB |
-| | Elixir | 109 / 762 ms | 35% | 403 / 1,035 ms | 62 | 92% | 2.7 GiB |
-| 250 ms | Rust | 248 / 269 ms | 6.5% | 751 / 788 ms | 598 | 25% | 4.1 GiB |
-| | Elixir | 254 / 948 ms | 29% | 833 / 1,529 ms | 92 | 88% | 3.8 GiB |
-| 1,000 ms | Rust | 963 / 1,019 ms | 5% | 2,885 / 3,029 ms | 597 | 19% | 7.4 GiB |
-| | Elixir | 972 / 1,994 ms | 27% | 3,013 / 3,805 ms | 110 | 84% | 9.5 GiB |
+| Limit | | Cheap p50 | Cheap p99 | Cheap failed | Heavy p50 | Heavy p99 | Heavy failed | Heavy not sent | Heavy answered/s | Peak memory | Cores busy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 ms | Rust | 99.5 ms | 117 ms | 7% | 311 ms | 341 ms | 26% | 0% | 591 | 1.5 GiB | 8.0 |
+|  | Elixir | 109 ms | 762 ms | 35% | 403 ms | 1,035 ms | 92% | 0% | 62 | 2.7 GiB | 8.4 |
+| 250 ms | Rust | 248 ms | 269 ms | 6% | 751 ms | 788 ms | 25% | 0% | 598 | 4.1 GiB | 8.3 |
+|  | Elixir | 254 ms | 948 ms | 29% | 833 ms | 1,529 ms | 88% | 0% | 92 | 3.8 GiB | 9.0 |
+| 1,000 ms | Rust | 963 ms | 1,019 ms | 5% | 2,885 ms | 3,029 ms | 19% | 0% | 596 | 7.4 GiB | 8.3 |
+|  | Elixir | 972 ms | 1,994 ms | 27% | 3,013 ms | 3,805 ms | 84% | 0% | 110 | 9.5 GiB | 9.6 |
 
 What this shows:
 
