@@ -2,6 +2,7 @@
 // while expensive ones fill them up. See README.md.
 //
 //   node examples/supportdesk/bench/saturation.ts --fixture /tmp/fixture.json
+//   node examples/supportdesk/bench/saturation.ts --target astro      # CPU-bound, in memory
 //
 // Two streams of requests arrive at once, each at a fixed rate whatever the desk's answers:
 //
@@ -27,7 +28,8 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 
 import { binaries, desks, fresh, psql, seedTemplate, stop, usage, type Desk, type Side } from "./desks.ts";
-import { rng, scenarios, world } from "./scenarios.ts";
+import { astroBinaries, astroDesks, probeAstro, seedTickets, startAstro } from "./astro.ts";
+import { rng, scenarios, world, type World } from "./scenarios.ts";
 import { median } from "./stats.ts";
 import type { Job, JobResult } from "./worker.ts";
 
@@ -40,6 +42,12 @@ const flag = (name: string, fallback?: string): string | undefined => {
 };
 const quick = args.includes("--quick");
 const options = {
+  /** `supportdesk`: the desks over Postgres, the heavy request a large page of tickets with
+   *  their relationships. `astro`: the in-memory astro-helpdesk twins, no database, the
+   *  heavy request a sort, filter and count over every ticket: CPU and nothing else. */
+  target: flag("--target", "supportdesk")!,
+  /** `astro`: tickets each desk holds. */
+  tickets: Number(flag("--tickets", "5000")),
   fixture: flag("--fixture"),
   pg: flag("--pg", "postgres://postgres:postgres@127.0.0.1:55434")!,
   threads: Number(flag("--threads", "6")),
@@ -47,7 +55,7 @@ const options = {
   cheapThreads: Number(flag("--cheap-threads", "2")),
   cheapRate: Number(flag("--cheap-rate", quick ? "200" : "500")),
   /** The heavy rate at each step, as a multiple of a capacity (see `basis`). */
-  levels: flag("--levels", quick ? "0.5,1,2" : "0.25,0.5,1,1.5,2,3,4")!.split(",").map(Number),
+  levels: flag("--levels", quick ? "0.5,1,2" : flag("--target", "supportdesk") === "astro" ? "0.25,0.5,1,2,4,8" : "0.25,0.5,1,1.5,2,3,4")!.split(",").map(Number),
   /** `common`: every desk is offered the same heavy rate, multiples of the slower desk's
    *  capacity, so what's compared is how each handles the same load. `own`: multiples of
    *  its own, so what's compared is how each handles being at 100%, 200% of what it can do. */
@@ -63,13 +71,15 @@ const options = {
   /** Heavy requests the driver holds unanswered at most, so it can't be the one to run out.
    *  A desk that queues rather than refuses holds that many at its worst, so this bounds how
    *  long its queue can grow: past it, requests are counted as not sent, never as errors. */
-  maxInFlight: Number(flag("--max-in-flight", "3000")),
+  maxInFlight: Number(flag("--max-in-flight", flag("--target", "supportdesk") === "astro" ? "500" : "3000")),
   reps: Number(flag("--reps", quick ? "1" : "2")),
   /** Stop ramping a desk whose server passes this resident memory, so a runaway can't take the machine. */
   maxRssGiB: Number(flag("--max-rss-gib", "20")),
 };
-if (!options.fixture) {
-  console.error("usage: node saturation.ts --fixture fixture.json [--quick] [--reps 2] [--basis common|own] [--levels 0.5,1,2]");
+if (!["supportdesk", "astro"].includes(options.target)) throw new Error("--target is supportdesk or astro");
+const astro = options.target === "astro";
+if (!astro && !options.fixture) {
+  console.error("usage: node saturation.ts --fixture fixture.json [--target supportdesk|astro] [--quick] [--reps 2] [--basis common|own] [--levels 0.5,1,2]");
   process.exit(2);
 }
 if (!["common", "own"].includes(options.basis)) throw new Error("--basis is common or own");
@@ -85,11 +95,17 @@ const sh = (cmd: string, cwd = repo) => spawnSync("bash", ["-c", cmd], { cwd, en
 const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
 const manifest = {
   started: new Date().toISOString(),
+  target: options.target,
   git: { rev: sh("git rev-parse HEAD"), dirty: sh("git status --porcelain").length > 0 },
-  binaries: {
-    rust: { path: binaries.rust, sha256: hash(binaries.rust) },
-    elixir: { release: binaries.elixir, version: sh("cat examples/elixir/supportdesk/_build/prod/rel/supportdesk/releases/start_erl.data") },
-  },
+  binaries: astro
+    ? {
+        rust: { path: astroBinaries.rust, sha256: hash(astroBinaries.rust) },
+        elixir: { release: astroBinaries.elixir, version: sh("cat examples/elixir/astro-helpdesk/_build/prod/rel/astro_helpdesk/releases/start_erl.data") },
+      }
+    : {
+        rust: { path: binaries.rust, sha256: hash(binaries.rust) },
+        elixir: { release: binaries.elixir, version: sh("cat examples/elixir/supportdesk/_build/prod/rel/supportdesk/releases/start_erl.data") },
+      },
   machine: {
     cpu: cpus()[0].model,
     cores: cpus().length,
@@ -97,22 +113,28 @@ const manifest = {
     os: sh("uname -sr"),
     loadAverageAtStart: sh("uptime").split("load averages:")[1]?.trim(),
   },
-  postgres: psql(options.pg, "SELECT version()"),
+  ...(astro ? {} : { postgres: psql(options.pg, "SELECT version()"), fixture: { path: options.fixture, sha256: hash(options.fixture!) } }),
   node: process.version,
-  fixture: { path: options.fixture, sha256: hash(options.fixture) },
   options,
 };
 writeFileSync(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2));
 const record = (entry: object) => appendFileSync(`${dir}/results.jsonl`, JSON.stringify(entry) + "\n");
 const log = (side: Side) => `${dir}/${side}.log`;
 
-const fixture = JSON.parse(readFileSync(options.fixture, "utf8"));
-const w = world(fixture);
-const both = desks();
+const w: World = astro ? { orgs: [] } : world(JSON.parse(readFileSync(options.fixture!, "utf8")));
+const both = astro ? astroDesks() : desks();
 const sides: Side[] = ["rust", "elixir"];
 const order = (rep: number): Side[] => (rep % 2 === 0 ? sides : [...sides].reverse());
-const cheap = scenarios.find((s) => s.name === "sat-cheap")!;
-const heavy = scenarios.find((s) => s.name === "sat-heavy")!;
+const cheap = scenarios.find((s) => s.name === (astro ? "sat-cpu-cheap" : "sat-cheap"))!;
+const heavy = scenarios.find((s) => s.name === (astro ? "sat-cpu-heavy" : "sat-heavy"))!;
+
+/** Starts `side` as it is to be measured: the supportdesk desk on a fresh copy of the seeded
+ *  database, the astro desk restarted and seeded with the tickets. */
+const freshDesk = async (side: Side) => {
+  if (!astro) return fresh(options.pg, both[side], log(side));
+  await startAstro(both[side], log(side));
+  await seedTickets(both[side], options.tickets);
+};
 
 // Load threads -----------------------------------------------------------------------
 
@@ -290,6 +312,7 @@ const canonical = (value: unknown): string =>
 
 /** Whether both desks answer the two requests alike: what's timed is the same work. */
 const probe = async (): Promise<string | null> => {
+  if (astro) return probeAstro(both);
   for (const scenario of [cheap, heavy]) {
     const op = scenario.ops.graphql!;
     for (let i = 0; i < 10; i++) {
@@ -333,19 +356,21 @@ const recoveredAfter = (baselineP99: number | null, seconds: NonNullable<Window[
 
 const main = async () => {
   console.log(`Run ${dir}`);
-  console.log("Seeding each desk's template from the fixture");
-  for (const side of sides) console.log(`  ${side}: seeded in ${await seedTemplate(options.pg, both[side], options.fixture!, log(side))} ms`);
-  for (const side of sides) await fresh(options.pg, both[side], log(side));
+  if (!astro) {
+    console.log("Seeding each desk's template from the fixture");
+    for (const side of sides) console.log(`  ${side}: seeded in ${await seedTemplate(options.pg, both[side], options.fixture!, log(side))} ms`);
+  }
+  for (const side of sides) await freshDesk(side);
   const differs = await probe();
   if (differs) throw new Error(`the desks answer differently:\n${differs}`);
-  console.log("Both desks answer the two requests alike");
+  console.log("Both desks answer the heavy request alike");
 
   for (let rep = 0; rep < options.reps; rep++) {
     console.log(`\nRep ${rep + 1} of ${options.reps}`);
     const capacities = {} as Record<Side, number>;
     console.log("  Capacity for the heavy request alone, closed loop, %d clients", options.calibrateClients);
     for (const side of order(rep)) {
-      await fresh(options.pg, both[side], log(side));
+      await freshDesk(side);
       capacities[side] = await capacity(both[side]);
       console.log(`    ${side.padEnd(6)} ${capacities[side]}/s`);
       record({ kind: "capacity", rep, side, perSecond: capacities[side] });
@@ -353,7 +378,7 @@ const main = async () => {
     const slower = Math.min(...sides.map((s) => capacities[s]));
     for (const side of order(rep)) {
       console.log(`  ${side}: the cheap stream at ${options.cheapRate}/s, the heavy one ramped${options.basis === "common" ? ` in multiples of ${slower}/s` : ` in multiples of its own ${capacities[side]}/s`}`);
-      await fresh(options.pg, both[side], log(side));
+      await freshDesk(side);
       const desk = both[side];
       // The cheap stream alone first: what to compare it with.
       await run(desk, 0, 3000);
@@ -401,11 +426,11 @@ const report = () => {
   const fmt = (v: number | null, digits = 1) => (v === null ? "-" : String(Math.round(v * 10 ** digits) / 10 ** digits));
   const caps = (side: Side) => median(steps.filter((s) => s.side === side).map((s) => s.capacity));
   const lines = [
-    `# Mixed saturation, ${manifest.started}`,
+    `# Mixed saturation${astro ? ", CPU-bound" : ""}, ${manifest.started}`,
     "",
-    `ash-rust at \`${manifest.git.rev.slice(0, 10)}\`${manifest.git.dirty ? " (uncommitted changes)" : ""} against Ash (Elixir) on ${manifest.machine.cpu} (${manifest.machine.cores} cores), ${manifest.postgres.split(" on ")[0]}. Machine load at the start: ${manifest.machine.loadAverageAtStart ?? "unknown"}.`,
+    `ash-rust at \`${manifest.git.rev.slice(0, 10)}\`${manifest.git.dirty ? " (uncommitted changes)" : ""} against Ash (Elixir) on ${manifest.machine.cpu} (${manifest.machine.cores} cores), ${astro ? "in memory, no database" : (manifest as any).postgres.split(" on ")[0]}. Machine load at the start: ${manifest.machine.loadAverageAtStart ?? "unknown"}.`,
     "",
-    `A cheap stream (one ticket by id, ${options.cheapRate}/s) and a heavy one (the 250 newest tickets of an org, with relationships and aggregates) arrive together, each at a fixed rate; the heavy one is ramped in ${options.window / 1000} s steps, with ${options.settle / 1000} s of the cheap stream alone between, then stops and the cheap stream is watched. ${options.reps} reps; each figure is the median over reps. Latency is from when a request was due; one unanswered after ${options.timeout / 1000} s is given up on and counted as a failure at that latency. The driver holds at most ${options.maxInFlight} heavy requests unanswered; one due past that is *not sent*, which is the driver's limit and no desk's refusal, and a desk that queues rather than refuses can't queue more than that.`,
+    `A cheap stream (${astro ? "`{ __typename }` over GraphQL" : "one ticket by id"}, ${options.cheapRate}/s) and a heavy one (${astro ? `a sort, filter and count over ${options.tickets} tickets in memory, answering a page of 25` : "the 250 newest tickets of an org, with relationships and aggregates"}) arrive together, each at a fixed rate; the heavy one is ramped in ${options.window / 1000} s steps, with ${options.settle / 1000} s of the cheap stream alone between, then stops and the cheap stream is watched. ${options.reps} reps; each figure is the median over reps. Latency is from when a request was due; one unanswered after ${options.timeout / 1000} s is given up on and counted as a failure at that latency. The driver holds at most ${options.maxInFlight} heavy requests unanswered; one due past that is *not sent*, which is the driver's limit and no desk's refusal, and a desk that queues rather than refuses can't queue more than that.`,
     "",
     `Heavy capacity (closed loop, ${options.calibrateClients} clients, the request alone): **ash-rust ${fmt(caps("rust"), 0)}/s, Ash ${fmt(caps("elixir"), 0)}/s**. ` +
       (options.basis === "common"
@@ -476,7 +501,9 @@ const report = () => {
   }
   lines.push(
     "",
-    "Postgres, both desks and the driver share one machine, and the heavy request spends much of its time in Postgres, which costs the same on both sides; the figures compare how the desks treat a small request while a large one fills them, not their capacity. Whether the load is ever beyond the driver or the database rather than the desk is for the `server` and `driver late` columns of the run's log to say.",
+    astro
+      ? "Neither desk has a database, so the heavy request costs the desk CPU and nothing else, and the cheap one costs it almost nothing: the cheap stream's latency is how soon a worker gets to it. The desks and the driver share one machine; the `server` columns say how much of it the desk used."
+      : "Postgres, both desks and the driver share one machine, and the heavy request spends much of its time in Postgres, which costs the same on both sides; the figures compare how the desks treat a small request while a large one fills them, not their capacity. Whether the load is ever beyond the driver or the database rather than the desk is for the `server` and `driver late` columns of the run's log to say.",
   );
   writeFileSync(`${dir}/report.md`, lines.join("\n") + "\n");
   console.log(`\n${lines.join("\n")}\n\nWritten to ${dir}`);

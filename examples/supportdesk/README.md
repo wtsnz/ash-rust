@@ -283,9 +283,66 @@ What this shows:
 What it doesn't show: whether a preemptive scheduler matters. Neither server was CPU-bound
 (Rust used 8–9 of the 16 cores past capacity, Ash about 10), and the heavy request waits on
 Postgres, so the limit was the pool and the database, and the difference between the desks
-is how each treats a full pool: Rust's has no wait limit, Ash's sheds. A request that
-takes CPU and no database (a password hash, a large in-memory selection) would test the
-scheduler, and isn't here yet. The cheap p99 and the heavy request's time also include the
-driver and Postgres, which share the machine. Treat the figures as a baseline to compare a
-later change against, and the machine's load, noted in each run's `manifest.json`, as
-the largest source of noise.
+is how each treats a full pool: Rust's has no wait limit, Ash's sheds. The next section takes
+the database out. Treat the figures as a baseline to compare a later change against, and the
+machine's load, noted in each run's `manifest.json`, as the largest source of noise.
+
+### CPU-bound saturation (no database)
+
+```bash
+node bench/saturation.ts --target astro                 # about 10 minutes
+node bench/saturation.ts --target astro --basis own
+```
+
+`--target astro` runs the same ramp against the in-memory astro-helpdesk twins, in ash-rust
+and in Ash (build `cargo build --release -p astro-helpdesk` and `MIX_ENV=prod mix release` in
+`examples/elixir/astro-helpdesk`; no Postgres, no fixture). The cheap request is
+`{ __typename }`, which costs almost nothing, so its latency is how soon a worker gets to
+it. The heavy one filters, sorts and counts 5,000 tickets in memory and answers a page of
+25, so what it costs a desk is CPU and nothing else. The driver holds at most 500 heavy
+requests unanswered here (`--max-in-flight`), because Ash's memory grows with every request
+in flight.
+
+A run on 2026-10-06 (2 reps, medians, other applications open). Heavy capacity alone:
+**ash-rust 2,141/s, Ash 456/s**, 4.7 times. Offering both the same heavy rate:
+
+| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir heavy answered/s |
+|---|---|---:|---|---:|
+| none | 0.9 / 3.7 | - | 0.8 / 3.8 | - |
+| 228/s (0.5× Ash's capacity) | 1 / 4.7 | 228 | 0.7 / 2.5 | 228 |
+| 456/s (1×) | 0.8 / 3.8 | 456 | 5.9 / 32 | 391 |
+| 911/s (2×) | 0.9 / 3.3 | 911 | 8 / 39 | 379 |
+| 1,822/s (4×) | 1.2 / 56 | 1,820 | 8.1 / 41 | 387 |
+| 3,644/s (8×) | 201 / 605 | 2,006 | 8.1 / 40 | 385 |
+
+No request failed or timed out on either desk. Cores busy: Ash 13.6 of 16 from 1×; ash-rust
+1.9 at 1×, 10.5 at 4×, 13.3 at 8×. Memory: ash-rust under 150 MiB throughout; Ash up to
+about 7 GB (0.4 GB idle). In each desk's own multiples, ash-rust's cheap request is p50 99 ms,
+p99 272 ms at 90% of its capacity, and p50 about 190 ms, p99 460–680 ms from 125% to 300%;
+Ash's is p50 4 ms, p99 17 ms at 100% of its capacity, and p50 about 8 ms, p99 37–47 ms from
+125% to 300%. After the heavy stream stopped, ash-rust's cheap p99 was back within twice its
+baseline in 0 to 4 s, Ash's in 0 to 14 s.
+
+What this shows:
+
+- **Once CPU is the limit, Ash keeps the cheap request quick and ash-rust doesn't.** Ash's
+  cheap p50 settles at about 8 ms, p99 about 40 ms, and stays there however much heavy work
+  is offered, up to 8 times its capacity. ash-rust's is flat and faster until it saturates
+  (p99 under 10 ms to half its capacity, 56 ms at 85%), then jumps to about 100 ms at 90%
+  and about 200 ms (p99 about 0.5 s) past it. That is the BEAM's preemption: the cheap request gets a slice however many heavy
+  ones are runnable. Tokio runs a task until it yields, so a cheap task waits behind the
+  heavy ones queued ahead of it. The driver's limit of 500 heavy requests in flight bounds
+  that queue, and 500 requests take about 230 ms to clear at ash-rust's capacity of
+  2,141/s, which is the 200 ms seen: with no limit the wait would keep growing until
+  requests timed out.
+- **ash-rust's saturation point is far later.** At the load that saturates Ash (456/s),
+  ash-rust is at 20% of its capacity and its cheap p99 is 4 ms. It stays ahead of Ash's
+  saturated tail up to about 80% of its own capacity (p99 56 ms at 85%, against Ash's 40),
+  and behind it past that.
+- **Ash degrades more gently**: its heavy throughput holds at 80–90% of its capacity, where
+  ash-rust's holds at all of it, and neither refuses anything. What Ash pays is memory (up
+  to 7 GB against 150 MiB), and up to 14 s to recover.
+
+So the remark was right about what happens past saturation, and what it describes can be
+bought in ash-rust without a preemptive scheduler: keep heavy requests from queuing ahead of
+cheap ones with a limit on admission, or run them on a runtime or pool of their own.

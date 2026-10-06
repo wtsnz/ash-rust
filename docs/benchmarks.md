@@ -30,7 +30,12 @@ Ash's capacity for a large read, and keeps a small request quick, with no errors
 nothing is refused. Ash starts shedding at 100% of its capacity: its connection pool drops
 requests that have waited about 100 ms, so a small request that succeeds waits a steady
 ~110 ms and many fail (28% at twice its capacity), and what it answers falls as the load
-grows. Both draw on one Postgres pool; no scheduler was the limit.
+grows. Both draw on one Postgres pool; no scheduler was the limit. Take the database out and make
+the load CPU, and the BEAM's preemption shows: Ash holds the small request at about 8 ms (p99
+~40 ms) however much heavy work is offered, while ash-rust, whose capacity is 4.7 times higher,
+is faster until it saturates (about 85% of its capacity) and then lets the small request wait
+behind the heavy ones (about 200 ms, p99 about 0.5 s). Keeping heavy work from queuing ahead of light work (an admission
+limit, or a runtime of its own) is how ash-rust gets the same isolation.
 
 The gap is smaller than in-memory micro-benchmarks suggest because, once a request crosses HTTP
 and PostgreSQL, much of its time is spent in the database and the network, which cost the same
@@ -110,12 +115,36 @@ each one's capacity: ash-rust at 125% of its own had the cheap stream at p50 0.7
 645 heavy requests a second; Ash at 300% of its own answered 119 and failed 39% of the cheap
 ones.
 
-**Read this as a baseline, not a verdict on schedulers.** Neither server was CPU-bound
-(ash-rust used 8–9 of 16 cores past its capacity, Ash about 10), and the heavy request waits
-on Postgres, so what limited both was the 20-connection pool and the database they share. The
-difference between the desks is how each treats a full pool: ash-rust's has no wait limit,
-Ash's sheds. Whether a preemptive scheduler would matter needs a heavy request that takes CPU
-and no database, which isn't measured yet. The reports, manifests and every window are in
+**Read this as a baseline.** Neither server was CPU-bound (ash-rust used 8–9 of 16 cores past
+its capacity, Ash about 10), and the heavy request waits on Postgres, so what limited both was
+the 20-connection pool and the database they share. The difference between the desks is how
+each treats a full pool: ash-rust's has no wait limit, Ash's sheds.
+
+#### CPU-bound saturation (in memory, no database)
+
+`--target astro` runs the same ramp on the in-memory astro-helpdesk twins. The cheap request is
+`{ __typename }`; the heavy one filters, sorts and counts 5,000 tickets and answers a page of
+25, so it costs CPU and nothing else. Heavy capacity alone: **ash-rust 2,141/s, Ash 456/s**.
+Offering both the same heavy rate (2 reps, medians):
+
+| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir heavy answered/s |
+|---|---|---:|---|---:|
+| none | 0.9 / 3.7 | - | 0.8 / 3.8 | - |
+| 456/s (1× Ash's capacity) | 0.8 / 3.8 | 456 | 5.9 / 32 | 391 |
+| 911/s (2×) | 0.9 / 3.3 | 911 | 8 / 39 | 379 |
+| 1,822/s (4×) | 1.2 / 56 | 1,820 | 8.1 / 41 | 387 |
+| 3,644/s (8×) | 201 / 605 | 2,006 | 8.1 / 40 | 385 |
+
+Nothing failed on either desk. Ash's cheap request settles at about 8 ms whatever it is
+offered, because the BEAM gives it a slice however many heavy requests are runnable. ash-rust's
+is faster until it saturates (p99 56 ms at 85% of its capacity), then waits behind the heavy
+requests queued ahead of it (Tokio runs a task until it yields): about 200 ms, bounded here only
+by the driver's limit of 500 heavy requests in flight, which take about 230 ms to clear at its
+capacity. Ash pays in memory (up to 7 GB against under 150 MiB) and in recovery time (0–14 s
+against 0–4 s). The same shape holds in each desk's own multiples of
+capacity, and the supportdesk README has the detail.
+
+The reports, manifests and every window are in
 [`examples/supportdesk/bench/results/saturation`](../examples/supportdesk/bench/results/saturation).
 
 ---

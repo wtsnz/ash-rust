@@ -49,7 +49,7 @@ const recreate = (pg: string, db: string, template?: string) => {
   psql(pg, template ? `CREATE DATABASE "${db}" TEMPLATE "${template}"` : `CREATE DATABASE "${db}"`);
 };
 
-const listener = (port: number): number | undefined => {
+export const listener = (port: number): number | undefined => {
   const out = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
   const pid = Number(out.stdout.trim().split("\n")[0]);
   return Number.isFinite(pid) && pid > 0 ? pid : undefined;

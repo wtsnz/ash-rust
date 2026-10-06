@@ -168,6 +168,15 @@ const SAT_HEAVY_GQL = `query {
   }
 }`;
 
+const nobody: Who = { org: "", role: "viewer", id: "" };
+
+const SAT_CPU_HEAVY_GQL = `query {
+  listTickets(first: 25, sort: [{ field: TITLE, order: DESC }], filter: { title: { contains: "a" } }) {
+    count
+    results { id title status priority }
+  }
+}`;
+
 export const scenarios: Scenario[] = [
   {
     name: "inbox",
@@ -397,6 +406,29 @@ export const scenarios: Scenario[] = [
         const who: Who = { org: org.slug, role: "admin", id: org.admin };
         const body = await graphql(base, who, SAT_HEAVY_GQL, {}, signal);
         return { ok: !gqlFailed(body) && (body.data.listTickets?.results?.length ?? 0) > 0, body };
+      },
+    },
+  },
+  // CPU-bound saturation, on the in-memory astro-helpdesk twins (`--target astro`) --------
+  {
+    name: "sat-cpu-cheap",
+    tier: "saturation",
+    what: "`{ __typename }` over GraphQL: the smallest request the GraphQL layer answers, with no data, so what it measures is how soon a worker gets to it",
+    ops: {
+      graphql: async (base, _r, _w, signal) => {
+        const body = await graphql(base, nobody, "query { __typename }", {}, signal);
+        return { ok: body?.data?.__typename === "RootQueryType", body };
+      },
+    },
+  },
+  {
+    name: "sat-cpu-heavy",
+    tier: "saturation",
+    what: "tickets whose title contains a letter, sorted by title, 25 of them with the count: the desk filters, sorts and counts every ticket it holds in memory, and answers a small page",
+    ops: {
+      graphql: async (base, _r, _w, signal) => {
+        const body = await graphql(base, nobody, SAT_CPU_HEAVY_GQL, {}, signal);
+        return { ok: (body?.data?.listTickets?.count ?? 0) > 0 && !body.errors, body };
       },
     },
   },
