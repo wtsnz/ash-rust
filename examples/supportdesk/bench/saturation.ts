@@ -27,7 +27,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 
-import { binaries, desks, fresh, psql, seedTemplate, stop, usage, type Desk, type Side } from "./desks.ts";
+import { binaries, desks, extraEnv, fresh, psql, seedTemplate, stop, usage, type Desk, type Side } from "./desks.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { astroBinaries, astroDesks, probeAstro, seedTickets, startAstro } from "./astro.ts";
 import { rng, scenarios, world, type World } from "./scenarios.ts";
 import { median } from "./stats.ts";
@@ -49,6 +51,13 @@ const options = {
   /** `astro`: tickets each desk holds. */
   tickets: Number(flag("--tickets", "5000")),
   fixture: flag("--fixture"),
+  /** Instead of the ramp: each pool configuration, one 30 s test at each of `rates`, the same
+   *  heavy rate to every desk (`supportdesk` target only). */
+  matrix: args.includes("--matrix"),
+  pools: flag("--pools", "20,40")!.split(",").map(Number),
+  rates: flag("--rates", "800,1600")!.split(",").map(Number),
+  /** The Postgres container, to sample its CPU. */
+  pgContainer: flag("--pg-container", "ash-bench-pg")!,
   pg: flag("--pg", "postgres://postgres:postgres@127.0.0.1:55434")!,
   threads: Number(flag("--threads", "6")),
   /** Of the driver's threads, those that send the cheap stream; the rest send the heavy one. */
@@ -60,8 +69,8 @@ const options = {
    *  capacity, so what's compared is how each handles the same load. `own`: multiples of
    *  its own, so what's compared is how each handles being at 100%, 200% of what it can do. */
   basis: flag("--basis", "common")!,
-  warmup: Number(flag("--warmup", quick ? "1000" : "2000")),
-  window: Number(flag("--window", quick ? "4000" : "10000")),
+  warmup: Number(flag("--warmup", quick ? "1000" : args.includes("--matrix") ? "3000" : "2000")),
+  window: Number(flag("--window", args.includes("--matrix") ? (quick ? "5000" : "30000") : quick ? "4000" : "10000")),
   /** A pause between steps, the cheap stream running, for what's queued to drain. */
   settle: Number(flag("--settle", quick ? "1500" : "4000")),
   recovery: Number(flag("--recovery", quick ? "6000" : "15000")),
@@ -72,7 +81,7 @@ const options = {
    *  A desk that queues rather than refuses holds that many at its worst, so this bounds how
    *  long its queue can grow: past it, requests are counted as not sent, never as errors. */
   maxInFlight: Number(flag("--max-in-flight", flag("--target", "supportdesk") === "astro" ? "500" : "3000")),
-  reps: Number(flag("--reps", quick ? "1" : "2")),
+  reps: Number(flag("--reps", quick || args.includes("--matrix") ? "1" : "2")),
   /** Stop ramping a desk whose server passes this resident memory, so a runaway can't take the machine. */
   maxRssGiB: Number(flag("--max-rss-gib", "20")),
 };
@@ -192,6 +201,8 @@ type Window = {
   /** Heavy requests answered successfully, finished inside the window, a second. */
   goodput: number;
   server: { cores: number | null; maxRssMiB: number | null };
+  /** Postgres while the window ran (matrix runs): connections in use, and the container's CPU. */
+  db?: { active: number | null; connections: number | null; containerCpuPct: number | null } | null;
   /** The cheap stream by second of the window: [p99 of everything due in it, failures]. */
   seconds?: Array<{ p50: number | null; p99: number | null; failed: number }>;
 };
@@ -215,6 +226,31 @@ const stream = (results: JobResult[]): Stream => {
     unfinished: sum((r) => r.unfinished),
     late: sum((r) => r.late),
   };
+};
+
+const exec = promisify(execFile);
+const mean = (values: number[]): number | null => (values.length ? Math.round((values.reduce((t, v) => t + v, 0) / values.length) * 10) / 10 : null);
+
+/** Until `until`: how many connections Postgres has in use by this desk's database, and how
+ *  busy its container is, to tell a pool that's too small from a database that's out of CPU. */
+const sampleDb = async (desk: Desk, until: number) => {
+  const active: number[] = [];
+  const connections: number[] = [];
+  const cpu: number[] = [];
+  while (Date.now() < until) {
+    try {
+      const sql = "select count(*) filter (where state = 'active'), count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()";
+      const { stdout } = await exec("psql", [`${options.pg}/${desk.db}`, "-qAt", "-c", sql]);
+      const [a, c] = stdout.trim().split("|").map(Number);
+      active.push(a);
+      connections.push(c);
+    } catch {}
+    try {
+      const { stdout } = await exec("docker", ["stats", "--no-stream", "--format", "{{.CPUPerc}}", options.pgContainer]);
+      cpu.push(parseFloat(stdout));
+    } catch {}
+  }
+  return { active: mean(active), connections: mean(connections), containerCpuPct: mean(cpu) };
 };
 
 /** One window: the cheap stream, and the heavy one at `heavyRate` a second (none: 0). */
@@ -252,17 +288,25 @@ const run = async (desk: Desk, heavyRate: number, window = options.window, secon
     }
     after = usage(desk.pid);
   })();
+  const dbSampling = options.matrix
+    ? (async () => {
+        while (Date.now() < from) await sleep(10);
+        return sampleDb(desk, until);
+      })()
+    : Promise.resolve(null);
   const [cheapResults, heavyResults] = await Promise.all([
     Promise.all(cheapJobs.map((job, i) => runJob(cheapThreads[i], job))),
     Promise.all(heavyJobs.map((job, i) => runJob(heavyThreads[i], job))),
   ]);
   await sampling;
+  const db = await dbSampling;
   const timeline = cheapResults.flatMap((r) => r.timeline ?? []);
   return {
     offered: heavyRate,
     cheap: stream(cheapResults),
     heavy: heavyRate ? stream(heavyResults) : null,
     goodput: round(heavyResults.reduce((t, r) => t + r.completed, 0) / (window / 1000), 1) ?? 0,
+    db,
     server: {
       cores: before && after ? round((after.cpu - before.cpu) / (window / 1000)) : null,
       maxRssMiB: maxRss ? Math.round(maxRss / 1024) : null,
@@ -412,6 +456,70 @@ const main = async () => {
   report();
 };
 
+// The matrix -------------------------------------------------------------------------
+
+type Arm = { side: Side; pool: number; label: string; env: Record<string, string> };
+const arms: Arm[] = options.pools.flatMap((pool) => [
+  { side: "rust", pool, label: "Rust, queues (no wait limit)", env: { POOL_SIZE: String(pool) } },
+  { side: "elixir", pool, label: "Elixir, sheds (Ecto's default)", env: { POOL_SIZE: String(pool) } },
+  { side: "rust", pool, label: "Rust, 100 ms wait limit", env: { POOL_SIZE: String(pool), POOL_WAIT_MS: "100" } },
+  { side: "elixir", pool, label: "Elixir, queues (queue_target 60 s)", env: { POOL_SIZE: String(pool), POOL_QUEUE_TARGET_MS: "60000", POOL_QUEUE_INTERVAL_MS: "60000" } },
+]);
+const armResults: Array<{ arm: Arm; rate: number; window: Window }> = [];
+
+const matrix = async () => {
+  if (astro) throw new Error("--matrix runs on the supportdesk target");
+  console.log(`Pool matrix: ${arms.length} configurations, a ${options.window / 1000} s test at each of ${options.rates.join(", ")} heavy requests a second`);
+  console.log("Seeding each desk's template from the fixture");
+  for (const side of sides) console.log(`  ${side}: seeded in ${await seedTemplate(options.pg, both[side], options.fixture!, log(side))} ms`);
+  for (const arm of arms) {
+    console.log(`\n${arm.label}, ${arm.pool} connections`);
+    for (const key of Object.keys(extraEnv)) delete extraEnv[key];
+    Object.assign(extraEnv, arm.env);
+    await fresh(options.pg, both[arm.side], log(arm.side));
+    const desk = both[arm.side];
+    for (const rate of options.rates) {
+      const win = await run(desk, rate);
+      armResults.push({ arm, rate, window: win });
+      record({ kind: "arm", label: arm.label, side: arm.side, pool: arm.pool, env: arm.env, rate, ...win });
+      line(arm.side, `${rate}/s`, win);
+      console.log(`           postgres: ${win.db?.active ?? "-"} of ${win.db?.connections ?? "-"} connections active, container ${win.db?.containerCpuPct ?? "-"}% CPU`);
+      if ((win.server.maxRssMiB ?? 0) > options.maxRssGiB * 1024) {
+        console.log(`    past ${options.maxRssGiB} GiB resident, so this configuration stops here`);
+        break;
+      }
+      // What was queued drains, the cheap stream running.
+      await run(desk, 0, options.settle);
+    }
+  }
+  matrixReport();
+};
+
+const matrixReport = () => {
+  const fmt = (v: number | null | undefined, d = 1) => (v === null || v === undefined ? "-" : String(Math.round(v * 10 ** d) / 10 ** d));
+  const lines = [
+    `# Pool matrix, ${manifest.started}`,
+    "",
+    `ash-rust at \`${manifest.git.rev.slice(0, 10)}\`${manifest.git.dirty ? " (uncommitted changes)" : ""} against Ash (Elixir) on ${manifest.machine.cpu} (${manifest.machine.cores} cores), ${(manifest as any).postgres.split(" on ")[0]}. Machine load at the start: ${manifest.machine.loadAverageAtStart ?? "unknown"}.`,
+    "",
+    `Each row is one ${options.window / 1000} s test (after ${options.warmup / 1000} s of warm-up) of the same two streams as the ramp: the cheap one, ${options.cheapRate}/s, and the heavy one at the rate named, the same for every configuration. Rust's pool either queues without limit (its default) or fails a statement that has waited 100 ms (\`PoolSettings::wait_timeout\`). Elixir's either sheds, as Ecto's \`queue_target\` of 50 ms does (the default), or has its \`queue_target\` and \`queue_interval\` set to 60 s, so it queues. Pool sizes are ${options.pools.join(" and ")}. One rep each: read the differences between configurations as indications, not as measured to the noise. Postgres columns are sampled during the window: its connections in use by the desk's database (of those open), and its container's CPU as a share of one core.`,
+    "",
+    "| Heavy offered | Configuration | Pool | Cheap p50 / p99 ms | Cheap errors | Heavy answered/s | Heavy errors | Heavy not sent | Heavy p50 ms | Server cores | Peak RSS MiB | PG active / open | PG container CPU % |",
+    "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|---:|",
+  ];
+  for (const rate of options.rates) {
+    for (const { arm, window: win } of armResults.filter((r) => r.rate === rate)) {
+      const c = win.cheap;
+      const h = win.heavy!;
+      lines.push(
+        `| ${rate}/s | ${arm.label} | ${arm.pool} | ${fmt(c.p50)} / ${fmt(c.p99All)} | ${c.failed} (${fmt((100 * c.failed) / (c.due || 1), 0)}%) | ${fmt(win.goodput, 0)} | ${h.failed} (${fmt((100 * h.failed) / (h.due || 1), 0)}%) | ${h.dropped} | ${fmt(h.p50)} | ${fmt(win.server.cores)} | ${fmt(win.server.maxRssMiB, 0)} | ${fmt(win.db?.active)} / ${fmt(win.db?.connections)} | ${fmt(win.db?.containerCpuPct, 0)} |`,
+      );
+    }
+  }
+  writeFileSync(`${dir}/report.md`, lines.join("\n") + "\n");
+  console.log(`\n${lines.join("\n")}\n\nWritten to ${dir}`);
+};
+
 // The report -------------------------------------------------------------------------
 
 const report = () => {
@@ -512,7 +620,7 @@ const report = () => {
 };
 
 try {
-  await main();
+  await (options.matrix ? matrix() : main());
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

@@ -1,0 +1,747 @@
+<!--
+SPDX-FileCopyrightText: 2020 Zach Daniel
+
+SPDX-License-Identifier: MIT
+-->
+
+# Change Log
+
+All notable changes to this project will be documented in this file.
+See [Conventional Commits](Https://conventionalcommits.org) for commit guidelines.
+
+<!-- changelog -->
+
+## [v1.12.0](https://github.com/ash-project/ash_graphql/compare/v1.11.0...v1.12.0) (2026-09-18)
+
+
+
+
+### Features:
+
+* apply filter_handlers rules consistently to attributes (#469) by [@nallwhy](https://github.com/nallwhy) [(#469)](https://github.com/ash-project/ash_graphql/pull/469)
+
+* allow filter_handlers for public aggregates (#465) by [@nallwhy](https://github.com/nallwhy) [(#465)](https://github.com/ash-project/ash_graphql/pull/465)
+
+* allow filter_handlers for public calculations (#464) by [@nallwhy](https://github.com/nallwhy) [(#464)](https://github.com/ash-project/ash_graphql/pull/464)
+
+### Improvements:
+
+* compile escape the socket -> domains in installer by [@zachdaniel](https://github.com/zachdaniel)
+
+### Bug Fixes:
+
+* reject zero and negative page sizes with a rendered error (#476) by grempe [(#476)](https://github.com/ash-project/ash_graphql/pull/476)
+
+* accept null and list-shaped boolean filter combinators (#475) by grempe [(#475)](https://github.com/ash-project/ash_graphql/pull/475)
+
+## [v1.11.0](https://github.com/ash-project/ash_graphql/compare/v1.10.1...v1.11.0) (2026-08-30)
+
+
+
+
+### Features:
+
+* add deprecation support for GraphQL queries, mutations, and subscriptions (#463) by charlieaten [(#463)](https://github.com/ash-project/ash_graphql/pull/463)
+
+### Bug Fixes:
+
+* enforce tenant on every subscription notification, not just the batch head (CVE-2026-80223) by [@zachdaniel](https://github.com/zachdaniel)
+
+* isolate the batch_resolved process key so re-entrant publishes don't cross topics (CVE-2026-82367) by [@zachdaniel](https://github.com/zachdaniel)
+
+* apply the subscription authorization filter to the whole batch, not just the first notification (CVE-2026-81643) by [@zachdaniel](https://github.com/zachdaniel)
+
+* return a graphql error for unknown relay node types instead of raising (CVE-2026-81633) by [@zachdaniel](https://github.com/zachdaniel)
+
+* apply query complexity limit to first/last pagination arguments (CVE-2026-81636) by [@zachdaniel](https://github.com/zachdaniel)
+
+* don't crash complexity analysis on a null limit argument by [@zachdaniel](https://github.com/zachdaniel)
+
+* don't re-attach a redacted error path after the error handler runs (CVE-2026-78693) by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v1.10.1](https://github.com/ash-project/ash_graphql/compare/v1.10.0...v1.10.1) (2026-08-17)
+
+
+
+
+### Bug Fixes:
+
+* handle empty domains list by [@zachdaniel](https://github.com/zachdaniel)
+
+* support calculations in identities used by graphql queries (#461) by [@maennchen](https://github.com/maennchen) [(#461)](https://github.com/ash-project/ash_graphql/pull/461)
+
+* don't raise building error paths for maps without field constraints (#460) by puyo [(#460)](https://github.com/ash-project/ash_graphql/pull/460)
+
+* discover map types in non-resources by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v1.10.0](https://github.com/ash-project/ash_graphql/compare/v1.9.4...v1.10.0) (2026-07-21)
+
+
+
+
+### Features:
+
+* Add custom mutation result names (#456) by jaylynntautu [(#456)](https://github.com/ash-project/ash_graphql/pull/456)
+
+* Add filter handlers, primarily for relay id filtering (#448) by ESmithByui [(#448)](https://github.com/ash-project/ash_graphql/pull/448)
+
+### Bug Fixes:
+
+* fix loads on unnested unions on generic actions by [@zachdaniel](https://github.com/zachdaniel)
+
+* preserve remaining GraphQL filters (#449) by Alan Heywood [(#449)](https://github.com/ash-project/ash_graphql/pull/449)
+
+* traverse struct NewType fields so nested enums get registered in the schema (#444) by skanderm [(#444)](https://github.com/ash-project/ash_graphql/pull/444)
+
+* Surface aggregate field DSL errors instead of crashing (#433) by jaylynntautu [(#433)](https://github.com/ash-project/ash_graphql/pull/433)
+
+* use pattern matching in resolve_array_element_segment #431 by Daniel Gollings [(#431)](https://github.com/ash-project/ash_graphql/pull/431)
+
+* handle trailing question marks in predicate names by [@zachdaniel](https://github.com/zachdaniel)
+
+### Improvements:
+
+* Expose relationship read action arguments as GraphQL defaults (#455) by [@jechol](https://github.com/jechol) [(#455)](https://github.com/ash-project/ash_graphql/pull/455)
+
+* add default_types and default_input_types to schema (#454) by CaydenLords [(#454)](https://github.com/ash-project/ash_graphql/pull/454)
+
+* raise when using reserved type name (#453) by colenelson0 [(#453)](https://github.com/ash-project/ash_graphql/pull/453)
+
+* Improve warning when embedded GraphQL input has no fields (#437) by RhettPoole [(#437)](https://github.com/ash-project/ash_graphql/pull/437)
+
+* support query/mutation grouping by [@zachdaniel](https://github.com/zachdaniel) [(#423)](https://github.com/ash-project/ash_graphql/pull/423)
+
+## [v1.9.4](https://github.com/ash-project/ash_graphql/compare/v1.9.3...v1.9.4) (2026-04-12)
+
+
+
+
+### Bug Fixes:
+
+* Add missing usage_rules files to hex package by [@Munksgaard](https://github.com/Munksgaard) [(#429)](https://github.com/ash-project/ash_graphql/pull/429)
+
+* stabilize field ordering in embedded type inputs (#427) by Arjan Scherpenisse [(#427)](https://github.com/ash-project/ash_graphql/pull/427)
+
+* deduplicate structurally identical types in blueprint (#426) by biantaishabi2 [(#426)](https://github.com/ash-project/ash_graphql/pull/426)
+
+* scope AshTypes module to schema for multi-schema support (#424) by biantaishabi2 [(#424)](https://github.com/ash-project/ash_graphql/pull/424)
+
+## [v1.9.3](https://github.com/ash-project/ash_graphql/compare/v1.9.2...v1.9.3) (2026-03-23)
+
+
+
+
+### Improvements:
+
+* support field?: false calculations in graphql by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v1.9.2](https://github.com/ash-project/ash_graphql/compare/v1.9.1...v1.9.2) (2026-03-22)
+
+
+
+
+### Bug Fixes:
+
+* Load read_action handling generic actions. (#421) by joshampton [(#421)](https://github.com/ash-project/ash_graphql/pull/421)
+
+## [v1.9.1](https://github.com/ash-project/ash_graphql/compare/v1.9.0...v1.9.1) (2026-03-22)
+
+
+
+
+### Bug Fixes:
+
+* Add support for generating types only used in metadata (#420) by Mike Wilson [(#420)](https://github.com/ash-project/ash_graphql/pull/420)
+
+* add missing description field to fake attrs for generic actions returning union types (#419) by Justin Mills [(#419)](https://github.com/ash-project/ash_graphql/pull/419)
+
+### Improvements:
+
+* support Ash's new public? action option by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v1.9.0](https://github.com/ash-project/ash_graphql/compare/v1.8.5...v1.9.0) (2026-03-15)
+
+
+
+
+### Features:
+
+* include builtin predicate functions in GraphQL filter schema (#413) by [@nallwhy](https://github.com/nallwhy) [(#413)](https://github.com/ash-project/ash_graphql/pull/413)
+
+* support per-field operator allowlists in filterable_fields (#407) by [@nallwhy](https://github.com/nallwhy) [(#407)](https://github.com/ash-project/ash_graphql/pull/407)
+
+### Bug Fixes:
+
+* resolve NewType subtype_of matching for filter args (#412) by [@nallwhy](https://github.com/nallwhy) [(#412)](https://github.com/ash-project/ash_graphql/pull/412)
+
+* use default_limit instead of max_page_size when first/last/limit not provided (#408) by [@nallwhy](https://github.com/nallwhy) [(#408)](https://github.com/ash-project/ash_graphql/pull/408)
+
+* map fields on error propagation correctly (#399) by lincolnhuls [(#399)](https://github.com/ash-project/ash_graphql/pull/399)
+
+* pass opts to for_action for generic actions by [@barnabasJ](https://github.com/barnabasJ) [(#396)](https://github.com/ash-project/ash_graphql/pull/396)
+
+### Improvements:
+
+* validate cross-field dependencies in graphql DSL options at compile time (#416) by [@nallwhy](https://github.com/nallwhy) [(#416)](https://github.com/ash-project/ash_graphql/pull/416)
+
+* validate field references in graphql DSL options at compile time (#415) by [@nallwhy](https://github.com/nallwhy) [(#415)](https://github.com/ash-project/ash_graphql/pull/415)
+
+* raise at compile time when related resource's domain is missing from schema (#414) by [@nallwhy](https://github.com/nallwhy) [(#414)](https://github.com/ash-project/ash_graphql/pull/414)
+
+* Split up usage rules (#404) by [@mylanconnolly](https://github.com/mylanconnolly) [(#404)](https://github.com/ash-project/ash_graphql/pull/404)
+
+## [v1.8.5](https://github.com/ash-project/ash_graphql/compare/v1.8.4...v1.8.5) (2025-12-08)
+
+
+
+
+### Bug Fixes:
+
+* filter evaluation for subscriptions by JVMartyns
+
+* clear out managed relationship requirements process variable once it's been used by Jesse Williams
+
+* subscriptions: prevent resource recompilation when endpoint changes by [@barnabasJ](https://github.com/barnabasJ) [(#385)](https://github.com/ash-project/ash_graphql/pull/385)
+
+### Improvements:
+
+* Add GraphQL tracer integration for AppSignal monitoring by [@lukegalea](https://github.com/lukegalea)
+
+## [v1.8.4](https://github.com/ash-project/ash_graphql/compare/v1.8.3...v1.8.4) (2025-11-05)
+
+
+
+
+### Bug Fixes:
+
+* suppress embedded type warning in arrays when building unions by [@zachdaniel](https://github.com/zachdaniel)
+
+* like/ilike not showing up on string calculations (#369) by Jesse Williams
+
+* structs, maps and typedstructs becoming orphans if only referenced in unions (#364) by olivermt
+
+## [v1.8.3](https://github.com/ash-project/ash_graphql/compare/v1.8.2...v1.8.3) (2025-08-21)
+
+
+
+
+### Bug Fixes:
+
+* Fix generated SDL stability (#355) by [@serpent213](https://github.com/serpent213)
+
+* only resolve notifications for the same tenant (#353) by [@barnabasJ](https://github.com/barnabasJ)
+
+### Improvements:
+
+* Add support for relay_id_translation on GraphQL subscriptions (#349) by Mike Wilson
+
+## [v1.8.2](https://github.com/ash-project/ash_graphql/compare/v1.8.1...v1.8.2) (2025-08-07)
+
+
+
+
+### Improvements:
+
+* Add support for relay_id_translation on GraphQL subscriptions (#349) by Mike Wilson
+
+## [v1.8.1](https://github.com/ash-project/ash_graphql/compare/v1.8.0...v1.8.1) (2025-07-29)
+
+
+
+
+### Bug Fixes:
+
+* apply destroy loads on initial query (#346) by Daniel Gollings
+
+## [v1.8.0](https://github.com/ash-project/ash_graphql/compare/v1.7.17...v1.8.0) (2025-07-17)
+
+
+
+
+### Features:
+
+* add domain-level pubsub configuration for subscriptions (#341) by [@barnabasJ](https://github.com/barnabasJ)
+
+## [v1.7.17](https://github.com/ash-project/ash_graphql/compare/v1.7.16...v1.7.17) (2025-07-02)
+
+
+
+
+### Bug Fixes:
+
+* fix :none relationship pagination strategy, and improve tests for it (#337) by Jesse Williams
+
+## [v1.7.16](https://github.com/ash-project/ash_graphql/compare/v1.7.15...v1.7.16) (2025-07-02)
+
+
+
+
+### Bug Fixes:
+
+* Add sorting of managed inputs to output stable graphql schema (#334) by olivermt
+
+## [v1.7.15](https://github.com/ash-project/ash_graphql/compare/v1.7.14...v1.7.15) (2025-06-18)
+
+
+
+
+### Bug Fixes:
+
+* Fix nil constraint to non_null mapping for complex subtypes used in :array definitions (#329) by olivermt
+
+### Improvements:
+
+* Add sortable_fields option (#331) by [@jechol](https://github.com/jechol)
+
+* add a verifier for argument types option by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v1.7.14](https://github.com/ash-project/ash_graphql/compare/v1.7.13...v1.7.14) (2025-06-10)
+
+
+
+
+### Bug Fixes:
+
+* handling of attribute with array type in middleware for field function (#327) by [@jichon](https://github.com/jichon)
+
+## [v1.7.13](https://github.com/ash-project/ash_graphql/compare/v1.7.12...v1.7.13) (2025-05-30)
+
+
+
+
+### Bug Fixes:
+
+* properly unwrap constraints & type for list newtypes
+
+### Improvements:
+
+* add limit to pagination metadata (#323)
+
+* support new codegen patterns
+
+* make pagination metadata more robust for offeset pagination (#320)
+
+## [v1.7.12](https://github.com/ash-project/ash_graphql/compare/v1.7.11...v1.7.12) (2025-05-22)
+
+
+
+
+### Bug Fixes:
+
+* change default playground interface (#319)
+
+## [v1.7.11](https://github.com/ash-project/ash_graphql/compare/v1.7.10...v1.7.11) (2025-05-20)
+
+
+
+
+### Improvements:
+
+* Add meta option for adding custom resolution context (#317)
+
+## [v1.7.10](https://github.com/ash-project/ash_graphql/compare/v1.7.9...v1.7.10) (2025-05-15)
+
+
+
+
+### Bug Fixes:
+
+* refactor internal `AshGraphql.Resource.mutation/6` (#312)
+
+* refactor internal `AshGraphql.Resource.mutation_fields/5` (#311)
+
+* define shared mutations options (#310)
+
+* Support for returning relay encoded id when subscribing to destroy events (#307)
+
+### Improvements:
+
+* add `args` option to mutations (#314)
+
+## [v1.7.9](https://github.com/ash-project/ash_graphql/compare/v1.7.8...v1.7.9) (2025-04-29)
+
+
+
+
+### Bug Fixes:
+
+* properly expand lazy nested types
+
+* handle invalid query error different formats (#301)
+
+### Improvements:
+
+* add `authorize_update_destroy_with_error?` config
+
+* use more descriptions from resources
+
+## [v1.7.8](https://github.com/ash-project/ash_graphql/compare/v1.7.7...v1.7.8) (2025-04-15)
+
+
+
+
+### Bug Fixes:
+
+* Add domain to Ash.for_read, as it might not be set on the resource, but only by set_domain middleware (for `use Ash.Resource domain: nil`). (#300)
+
+## [v1.7.7](https://github.com/ash-project/ash_graphql/compare/v1.7.6...v1.7.7) (2025-04-09)
+
+
+
+
+### Bug Fixes:
+
+* more fixes for compilation loops
+
+### Improvements:
+
+* allows :logger handlers to know the original exception (#297)
+
+## [v1.7.6](https://github.com/ash-project/ash_graphql/compare/v1.7.5...v1.7.6) (2025-03-21)
+
+
+
+
+### Bug Fixes:
+
+* allow for calculations & args in filter and use filter/sort_input
+
+## [v1.7.5](https://github.com/ash-project/ash_graphql/compare/v1.7.4...v1.7.5) (2025-03-20)
+
+
+
+
+### Bug Fixes:
+
+* logic error in union type resolution
+
+* resolve arrays of unions and unions of arrays properly
+
+* properly extract item constraints when resolving union results
+
+## [v1.7.4](https://github.com/ash-project/ash_graphql/compare/v1.7.3...v1.7.4) (2025-03-18)
+
+
+
+
+### Bug Fixes:
+
+* properly construct nested type maps
+
+* apply action verifier to domains as well as resources
+
+* Properly non_null() inner items in list when constraint is supplied for arrays in NewType of :map (#286)
+
+## [v1.7.3](https://github.com/ash-project/ash_graphql/compare/v1.7.2...v1.7.3) (2025-03-04)
+
+
+
+
+### Bug Fixes:
+
+* fully traverse nested map & union types
+
+## [v1.7.2](https://github.com/ash-project/ash_graphql/compare/v1.7.1...v1.7.2) (2025-02-27)
+
+
+
+
+### Bug Fixes:
+
+* add `use Absinthe.Phoenix.Socket` in endpoints in installer
+
+## [v1.7.1](https://github.com/ash-project/ash_graphql/compare/v1.7.0...v1.7.1) (2025-02-27)
+
+
+
+
+### Bug Fixes:
+
+* properly add absinthe_phoenix dependency in installer
+
+## [v1.7.0](https://github.com/ash-project/ash_graphql/compare/v1.6.0...v1.7.0) (2025-02-25)
+
+
+
+
+### Features:
+
+* subscription installer (#266)
+
+### Improvements:
+
+* don't require object unless there is a reason
+
+* add `auto_generate_sdl_file?` option to graphql schema
+
+## [v1.6.0](https://github.com/ash-project/ash_graphql/compare/v1.5.1...v1.6.0) (2025-02-11)
+
+
+
+
+### Features:
+
+* Type and Query complexity callbacks (#273)
+
+* Type and Query complexity callbacks
+
+### Bug Fixes:
+
+* handle actions with no return
+
+## [v1.5.1](https://github.com/ash-project/ash_graphql/compare/v1.5.0...v1.5.1) (2025-01-27)
+
+
+
+
+### Bug Fixes:
+
+* make manage relationship fields nullable when not always required
+
+* default error handling (#261)
+
+## [v1.5.0](https://github.com/ash-project/ash_graphql/compare/v1.4.7...v1.5.0) (2025-01-10)
+
+
+
+
+### Features:
+
+* errors: carry action name in context (#257)
+
+### Improvements:
+
+* error handling in resources (#253)
+
+## [v1.4.7](https://github.com/ash-project/ash_graphql/compare/v1.4.6...v1.4.7) (2024-12-20)
+
+
+
+
+### Improvements:
+
+* add `modify_resolution` for generic actions
+
+* make igniter optional
+
+## [v1.4.6](https://github.com/ash-project/ash_graphql/compare/v1.4.5...v1.4.6) (2024-12-11)
+
+
+
+
+### Bug Fixes:
+
+* fix docs & return type for generic actions
+
+## [v1.4.5](https://github.com/ash-project/ash_graphql/compare/v1.4.4...v1.4.5) (2024-12-11)
+
+### Improvements:
+
+- support `error_location` option on generic actions
+
+- add description to update and destroy mutations (#250)
+
+## [v1.4.4](https://github.com/ash-project/ash_graphql/compare/v1.4.3...v1.4.4) (2024-12-02)
+
+### Bug Fixes:
+
+- don't assume required pagination in actions means relationships are paginated
+
+- define `subscription` to handle case where no subscriptions exist
+
+- load relationships and calculations in fragments (#246)
+
+## [v1.4.3](https://github.com/ash-project/ash_graphql/compare/v1.4.2...v1.4.3) (2024-11-14)
+
+### Improvements:
+
+- Implement `AshGraphql.Error` for AshAuthentication errors. (#237)
+
+- Support generic actions without a return type. (#238)
+
+## [v1.4.2](https://github.com/ash-project/ash_graphql/compare/v1.4.1...v1.4.2) (2024-11-05)
+
+### Bug Fixes:
+
+- call `for_read` before adding calculations
+
+- load fields after building query for action
+
+## [v1.4.1](https://github.com/ash-project/ash_graphql/compare/v1.4.0...v1.4.1) (2024-10-21)
+
+### Bug Fixes:
+
+- honor argument_names configuration for read & generic actions
+
+### Improvements:
+
+- remove unused data in subscription batcher (#227)
+
+## [v1.4.0](https://github.com/ash-project/ash_graphql/compare/v1.3.4...v1.4.0) (2024-10-09)
+
+### Features:
+
+- Add absinthe dependency and plugin in formatter of installer (#222)
+
+- subscription dsl (#97)
+
+### Bug Fixes:
+
+- dyalizer and igniter deprecations (#224)
+
+- don't generate result types for generic mutations
+
+- detect generated types properly in generic actions
+
+### Improvements:
+
+- add error handling tooling for custom queries
+
+- add `AshGraphql.load_fields/3` helper, and test showing its usage
+
+- implement a subscription notification batcher (#217)
+
+## [v1.3.4](https://github.com/ash-project/ash_graphql/compare/v1.3.3...v1.3.4) (2024-09-10)
+
+### Bug Fixes:
+
+- add UUIDv7 to map the type to :id
+
+### Improvements:
+
+- update to latest igniter functions & dependency
+
+## [v1.3.3](https://github.com/ash-project/ash_graphql/compare/v1.3.2...v1.3.3) (2024-08-26)
+
+### Bug Fixes:
+
+- append new domain to list when extending
+
+## [v1.3.2](https://github.com/ash-project/ash_graphql/compare/v1.3.1...v1.3.2) (2024-08-16)
+
+### Bug Fixes:
+
+- match on action in error message properly
+
+### Improvements:
+
+- add schema codegen features & guide
+
+- support new struct types in type generation
+
+- support new struct fields constraint
+
+- Set up GraphQL schema file in the web module namespace (#205)
+
+## [v1.3.1](https://github.com/ash-project/ash_graphql/compare/v1.3.0...v1.3.1) (2024-08-02)
+
+### Bug Fixes:
+
+- use `.has_expression?/0` instead of `function_exported?/3`
+
+- error handling list of atoms (#204)
+
+- error handling list of atoms
+
+## [v1.3.0](https://github.com/ash-project/ash_graphql/compare/v1.2.1...v1.3.0) (2024-08-01)
+
+### Features:
+
+- `Ash.Type.File` compatibility (#202)
+
+### Bug Fixes:
+
+- try to resolve compilation issues w/ `Code.ensure_compiled!`
+
+## [v1.2.1](https://github.com/ash-project/ash_graphql/compare/v1.2.0...v1.2.1) (2024-07-18)
+
+### Bug Fixes:
+
+- upgrade ash dependency for bulk action bug fix
+
+- use checked constraints (#187)
+
+- don't assume `filter` is non-nil for gets
+
+- properly interpolate action in conflict messages
+
+- add resource query to action struct (#178)
+
+### Improvements:
+
+- add extension installation code
+
+- add igniter-backed installer
+
+- add `nullable_fields?` for easily marking fields as nullable
+
+- only define `managed_relationship` mutations when necessary
+
+## [v1.2.0](https://github.com/ash-project/ash_graphql/compare/v1.1.1...v1.2.0) (2024-06-17)
+
+### Features:
+
+- argument_input_types (#176)
+
+- argument_input_types
+
+### Bug Fixes:
+
+- better type handling around empty types
+
+- don't generate empty input objects for embeds
+
+## [v1.1.1](https://github.com/ash-project/ash_graphql/compare/v1.1.0...v1.1.1) (2024-06-02)
+
+### Features:
+
+- relationship pagination (#166)
+
+### Bug Fixes:
+
+- honor read_action for update/destroy mutations
+
+## [v1.1.0](https://github.com/ash-project/ash_graphql/compare/v1.0.1...v1.1.0) (2024-05-24)
+
+### Features:
+
+- [AshGraphql.Domain] support queries/mutations on the domain
+
+## [v1.0.1](https://github.com/ash-project/ash_graphql/compare/v1.0.0...v1.0.1) (2024-05-23)
+
+### Features:
+
+- allow passing custom descriptions to queries and mutations (#138)
+
+### Bug Fixes:
+
+- don't deduplicate argument types by argument name (#162)
+
+- use Ash.EmbeddableType.ShadowDomain (#156)
+
+- accepted attributes don't have to be `public?`
+
+### Improvements:
+
+- deduplicate map types across domains (#164)
+
+- Implement AshGraphql.Error for Ash.Error.Query.ReadActionRequiresActor (#154)
+
+- make mutation result errors list non-nullable (#144)
+
+- make mutation result errors list non-nullable
+
+## [v1.0.0](https://github.com/ash-project/ash_graphql/compare/v1.0.0-rc.4...v0.28.0) (2024-04-27)
+
+The changelog is being restarted. See `/documentation/1.0-CHANGELOG.md` for previous changelogs.
+
+### Breaking Changes:
+
+- [AshGraphql.Resource] `managed_relationship` arguments automatically get rich types derived for them
+- [AshGraphql.Type] No longer automagically derive types. Only types defined in `Ash.Type.NewType` that implement `AshGrahql.Type` will get types derived for them.
+
+### Improvements:
+
+- [AshGraphql.Resolver] Bulk actions are automatically used for create/update/destroy actions. This means far fewer queries made in general.
+- [AshGraphql.Type] add `graphql_define_type?/1` callback for graphql types
+- [AshGrapqhl.Resource] support generic actions with no return type

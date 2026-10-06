@@ -286,12 +286,15 @@ What this shows:
 - **Neither desk isolates the cheap request from the heavy ones.** Both draw on one
   20-connection Postgres pool and one database, and they share the machine.
 
-What it doesn't show: whether a preemptive scheduler matters. Neither server was CPU-bound
-(Rust used 8–9 of the 16 cores past capacity, Ash about 10), and the heavy request waits on
-Postgres, so the limit was the pool and the database, and the difference between the desks
-is how each treats a full pool: Rust's has no wait limit, Ash's sheds. The next section takes
-the database out. Treat the figures as a baseline to compare a later change against, and the
-machine's load, noted in each run's `manifest.json`, as the largest source of noise.
+What it doesn't show: whether a preemptive scheduler matters, and what limited it. It wasn't
+the pool or Postgres: doubling the pool changed nothing, and Postgres had only 1.5 to 8 of its
+connections busy and its container used about 3 of the 16 cores (see the pool matrix below).
+Each server used 8–10 cores, Postgres 3, and the driver and the other applications on the
+laptop the rest, which is consistent with the machine as a whole being full. The difference
+between the desks is how each treats a full pool: Rust's has no wait limit, Ash's sheds. The
+next section takes the database out, and the one after varies the pool's policy. Treat the
+figures as a baseline to compare a later change against, and the machine's load, noted in
+each run's `manifest.json`, as the largest source of noise.
 
 ### CPU-bound saturation (no database)
 
@@ -354,3 +357,63 @@ What this shows:
 So the remark was right about what happens past saturation, and what it describes can be
 bought in ash-rust without a preemptive scheduler: keep heavy requests from queuing ahead of
 cheap ones with a limit on admission, or run them on a runtime or pool of their own.
+
+### Pool policy (a matrix)
+
+```bash
+node bench/saturation.ts --fixture /tmp/fixture.json --matrix        # about 15 minutes
+```
+
+`--matrix` runs one 30-second test per configuration at each of two heavy rates (`--rates`,
+800 and 1,600 a second, the same for every desk), against pools of 20 and 40 connections
+(`--pools`), and samples Postgres during each (its connections in use and its container's CPU).
+The desks read their pool from the environment: `POOL_SIZE`, and for Rust `POOL_WAIT_MS`, a new
+`ash_postgres::PoolSettings::wait_timeout` that fails a statement that has waited that long
+(the default is still no limit); for Elixir `POOL_QUEUE_TARGET_MS`, `POOL_QUEUE_INTERVAL_MS`
+and `POOL_TIMEOUT_MS`. Four configurations, at each size:
+
+- **Rust, queues**: the default. A statement waits for a connection as long as it takes.
+- **Rust, 100 ms wait limit**: sheds as Ecto does by default.
+- **Elixir, sheds**: Ecto's default, a `queue_target` of 50 ms (doubled once the pool has
+  been slow for an interval), past which requests are dropped.
+- **Elixir, queues**: `queue_target` and `queue_interval` at 60 s, so it no longer drops.
+
+![Pool matrix: cheap latency and failures, heavy answered and failed, memory and Postgres CPU, for each pool policy at 800 and 1,600 heavy requests a second](bench/results/saturation/2026-10-06-pool-matrix/chart.svg)
+
+At 800 heavy requests a second (one rep, 30 s each, with other applications open and a load
+average of 16 at the start, so read the differences as indications):
+
+| Configuration (pool 20) | Cheap p99 | Cheap failed | Heavy answered/s | Heavy failed | Peak memory |
+|---|---:|---:|---:|---:|---:|
+| Rust, queues | 1.7 s | 0% | 632 | 0% | 6.5 GiB |
+| Rust, 100 ms wait limit | 116 ms | 6% | 628 | 22% | 0.83 GiB |
+| Elixir, sheds (default) | 0.9 s | 33% | 117 | 86% | 7.4 GiB |
+| Elixir, queues | 6.1 s | 0% | 86 | 36% | 22.7 GiB |
+
+What this shows:
+
+- **The pool wasn't the limit, and neither was Postgres.** Pools of 20 and 40 gave the same
+  results for every configuration (Rust queueing answered 632 and 625 heavy requests a
+  second; Ash shedding, 117 and 116). Postgres had 1.5 to 8 connections active of 20 to 40 and
+  its container used 240–420% CPU, 2.4 to 4.2 of 16 cores.
+- **A wait limit is what keeps ash-rust's cheap request quick.** At 100 ms, the cheap p99
+  is 116 ms against 1.7 s for the unbounded queue, with the same heavy throughput and about an
+  eighth of the memory. The cost is the requests that fail: 6% of the cheap ones at 800/s,
+  22% at 1,600/s, where heavy throughput also falls (489 to 554 a second against 685 to 696).
+- **When both shed at about 100 ms, ash-rust answers about five times as many heavy
+  requests** (628 to 689 a second against 116 to 117), with 4–6% of the cheap requests
+  failing against 33–34%. Ash answers far fewer than its 265 a second alone. Its pool drops
+  a statement at checkout, so a heavy request that has already used CPU can fail partway;
+  that is a likely cause and not one measured here.
+- **Making Ash queue doesn't make it behave like ash-rust's queue; it's worse.** With the
+  queue target at 60 s Ash answered 72 to 86 heavy requests a second, its cheap p99 was 6 s,
+  and its memory reached 23 GiB, past the 20 GiB guard that stopped both of those
+  configurations from running at 1,600/s. The shedding is what keeps Ash afloat.
+- **Ecto's maintainers advise against this.** José Valim: *"You should avoid tweaking
+  `queue_target` and `queue_interval` because increasing them mostly means your users have to
+  wait longer."* This is what that looks like under overload.
+
+Caveats: the Rust unbounded queue's latency is bounded here by the driver's limit of 3,000
+requests in flight (it was holding 3,000 at 1.7 s: with no limit the wait would grow until
+requests timed out); one rep per cell; the wait limit surfaces as a pool error, not yet a
+typed overload error a server can answer with a 503.

@@ -476,6 +476,140 @@ ${cells}
 `;
 };
 
+// A pool matrix: each configuration's one test at each heavy rate -------------------------
+
+type Arm = {
+  label: string;
+  side: Side;
+  pool: number;
+  rate: number;
+  cheap: Stream;
+  heavy: Stream | null;
+  goodput: number;
+  server: { cores: number | null; maxRssMiB: number | null };
+  db?: { active: number | null; connections: number | null; containerCpuPct: number | null } | null;
+};
+
+const matrixCols: Array<{ title: string; unit: string; value: (a: Arm) => number | null; fmt: (v: number) => string; max?: number }> = [
+  { title: "Cheap latency, p99", unit: "ms, p99", value: (a) => a.cheap.p99All, fmt: ms },
+  { title: "Cheap failed", unit: "% of requests due", value: (a) => (a.cheap.due ? (100 * a.cheap.failed) / a.cheap.due : 0), fmt: pct, max: 100 },
+  { title: "Heavy answered", unit: "a second", value: (a) => a.goodput, fmt: perSecond },
+  { title: "Heavy failed", unit: "% of requests due", value: (a) => (a.heavy && a.heavy.due ? (100 * a.heavy.failed) / a.heavy.due : 0), fmt: pct, max: 100 },
+  { title: "Memory, peak", unit: "resident", value: (a) => a.server.maxRssMiB, fmt: mem },
+  { title: "Postgres container", unit: "CPU, % of one core", value: (a) => a.db?.containerCpuPct ?? null, fmt: (v) => `${num(v)}%` },
+];
+
+/** One heavy rate's bars: a row for each configuration, a column for each measure. */
+const matrixSvgFor = (arms: Arm[], rate: number, hover: boolean): string => {
+  const rowH = 30;
+  const labelW = 250;
+  const colW = 158;
+  const top = 62;
+  const pools = [...new Set(arms.map((a) => a.pool))];
+  const rows: Array<Arm | { gap: number }> = pools.flatMap((pool) => [{ gap: pool }, ...arms.filter((a) => a.pool === pool)]);
+  const height = top + rows.length * rowH + 18;
+  const width = labelW + matrixCols.length * colW + 16;
+  const out: string[] = [`<text class="sectiontitle" x="8" y="20">${num(rate)} heavy requests a second offered</text>`];
+  matrixCols.forEach((col, c) => {
+    const x0 = labelW + c * colW;
+    out.push(`<text class="ptitle" x="${x0}" y="40">${esc(col.title)}</text><text class="punit" x="${x0}" y="54">${esc(col.unit)}</text>`);
+    const max = col.max ?? Math.max(...arms.map((a) => col.value(a) ?? 0), 1e-9);
+    let y = top;
+    for (const row of rows) {
+      if ("gap" in row) {
+        if (c === 0) out.push(`<text class="sec" x="8" y="${y + 20}" style="font-size:12px;font-weight:600;fill:var(--ink)">${row.gap} connections</text>`);
+      } else {
+        const v = col.value(row);
+        const barMax = colW - 66;
+        if (c === 0) {
+          out.push(`<rect x="8" y="${y + 9}" width="12" height="12" rx="2" style="fill:var(--${row.side === "rust" ? "s1" : "s2"})"/><text class="sec" x="28" y="${y + 19.5}" style="font-size:12px;fill:var(--sec)">${esc(row.label)}</text>`);
+        }
+        if (v !== null) {
+          const w = Math.max(2, (v / max) * barMax);
+          const tip = `${row.label}, ${row.pool} connections, ${num(rate)}/s: ${col.title.toLowerCase()} ${col.fmt(v)}`;
+          out.push(`<g><title>${esc(tip)}</title><path d="M${x0},${y + 4} h${Math.max(0, w - 4)} a4,4 0 0 1 4,4 v10 a4,4 0 0 1 -4,4 h-${Math.max(0, w - 4)} z" style="fill:var(--${row.side === "rust" ? "s1" : "s2"})"/><text class="tick" x="${x0 + w + 6}" y="${y + 17.5}" style="font-size:11px;fill:var(--sec)">${esc(col.fmt(v))}</text></g>`);
+        }
+      }
+      y += rowH;
+    }
+  });
+  // Configurations that didn't run at this rate.
+  return `<g>${out.join("\n")}</g><!--h:${height}w:${width}-->`;
+};
+
+const buildMatrix = (dir: string) => {
+  const manifest = JSON.parse(readFileSync(`${dir}/manifest.json`, "utf8"));
+  const arms = readFileSync(`${dir}/results.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.kind === "arm") as Arm[];
+  const rates = [...new Set(arms.map((a) => a.rate))].sort((a, b) => a - b);
+  const o = manifest.options;
+  const heading = "Pool matrix: how each pool policy treats overload";
+  const sub = `${new Date(manifest.started).toISOString().slice(0, 10)}, one ${o.window / 1000} s test per configuration and rate. Cheap: one ticket by id, ${o.cheapRate}/s. Heavy: the 250 newest tickets with their relationships. ${manifest.machine.cpu}, ${manifest.machine.cores} cores.`;
+  const sections = rates.map((rate) => {
+    const here = arms.filter((a) => a.rate === rate);
+    const body = matrixSvgFor(here, rate, true);
+    const [, h, w] = body.match(/<!--h:(\d+)w:(\d+)-->/)!.map(Number) as unknown as number[];
+    return { rate, body: body.replace(/<!--.*?-->/, ""), h, w, here };
+  });
+  // A configuration the memory guard stopped is said so in the image, where it's missing.
+  for (const x of sections) {
+    const names = new Set(x.here.map((a) => `${a.label}|${a.pool}`));
+    const gone = [...new Set(arms.map((a) => `${a.label}|${a.pool}`))].filter((n) => !names.has(n)).map((n) => n.replace("|", ", ") + " connections");
+    if (gone.length) {
+      x.body += `<text class="punit" x="8" y="${x.h + 6}">Not run at ${num(x.rate)}/s: ${esc(gone.join("; "))}, past ${o.maxRssGiB} GiB resident at the lower rate.</text>`;
+      x.h += 18;
+    }
+  }
+  const missing = (rate: number, here: Arm[]) => {
+    const names = new Set(here.map((a) => `${a.label}|${a.pool}`));
+    const all = [...new Set(arms.map((a) => `${a.label}|${a.pool}`))];
+    return all.filter((x) => !names.has(x)).map((x) => x.replace("|", ", ") + " connections");
+  };
+  const notes = (rate: number, here: Arm[]) => {
+    const m = missing(rate, here);
+    return m.length ? `Not run at ${num(rate)}/s: ${m.join("; ")}, which had passed ${o.maxRssGiB} GiB resident at the lower rate.` : "";
+  };
+  const legend = `<span class="key k1"><i></i>ash-rust</span><span class="key k2"><i></i>Ash (Elixir)</span>`;
+  const table = (here: Arm[]) =>
+    `<table><tr><th>Configuration</th><th>Pool</th>${matrixCols.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr>${here
+      .map((a) => `<tr><td>${esc(a.label)}</td><td>${a.pool}</td>${matrixCols.map((c) => `<td>${c.value(a) === null ? "-" : esc(c.fmt(c.value(a)!))}</td>`).join("")}</tr>`)
+      .join("")}</table>`;
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(heading)}</title>
+<style>${CSS}${HTML_CSS}svg.m{width:100%;height:auto;display:block;background:var(--surface);border:1px solid var(--ring);border-radius:12px;margin-top:14px}</style></head>
+<body><div class="viz-root">
+<button class="theme" type="button">Light / dark</button>
+<h1>${esc(heading)}</h1>
+<p class="lede">${esc(sub)}</p>
+<div class="legend">${legend}</div>
+${sections.map((x) => `<svg class="m" viewBox="0 0 ${x.w} ${x.h}" role="img" aria-label="${esc(`${heading}, ${num(x.rate)} heavy requests a second`)}">${x.body}</svg><p class="note">${esc(notes(x.rate, x.here))}</p>`).join("\n")}
+<details><summary>Table view</summary>${sections.map((x) => `<h2>${num(x.rate)}/s</h2>${table(x.here)}`).join("")}</details>
+<p class="note">Rust either queues at its pool without limit (the default) or fails a statement that has waited 100 ms; Elixir either sheds, as Ecto's queue_target of 50 ms does (the default), or has queue_target set to 60 s so it queues. One rep each, on a laptop with other applications open: read the differences between configurations as indications. Heavy requests the driver would hold past its limit of ${o.maxInFlight} are not counted as failed.</p>
+</div><script>document.querySelector('button.theme').addEventListener('click',()=>{const r=document.documentElement;const d=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=d?'light':'dark'})</script></body></html>`;
+  const pad = 20;
+  const gap = 24;
+  const width = Math.max(...sections.map((x) => x.w)) + pad * 2;
+  let y = 96;
+  const groups = sections
+    .map((x) => {
+      const g = `<g transform="translate(${pad} ${y})"><rect class="surface" width="${x.w}" height="${x.h}" rx="12"/>${x.body}</g>`;
+      y += x.h + gap;
+      return g;
+    })
+    .join("\n");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" class="viz" viewBox="0 0 ${width} ${y}" width="${width}" height="${y}" role="img" aria-label="${esc(heading)}">
+<style>${CSS}svg.viz{background:var(--page)}</style>
+<rect width="${width}" height="${y}" fill="var(--page)"/>
+<text class="maintitle" x="${pad}" y="32">${esc(heading)}</text>
+<text class="sub" x="${pad}" y="52">${esc(sub.slice(0, 200))}</text>
+<rect x="${pad}" y="68" width="12" height="12" rx="2" style="fill:var(--s1)"/><text class="sub" x="${pad + 18}" y="78">ash-rust</text>
+<rect x="${pad + 90}" y="68" width="12" height="12" rx="2" style="fill:var(--s2)"/><text class="sub" x="${pad + 108}" y="78">Ash (Elixir)</text>
+${groups}
+</svg>
+`;
+  return { html, svg };
+};
+
 // Run -----------------------------------------------------------------------------------
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -488,6 +622,13 @@ const dirs = given.length
       .map((d) => `${root}/${d.name}`);
 for (const dir of dirs) {
   if (!existsSync(`${dir}/results.jsonl`)) continue;
+  if (JSON.parse(readFileSync(`${dir}/manifest.json`, "utf8")).options.matrix) {
+    const { html, svg } = buildMatrix(dir);
+    writeFileSync(`${dir}/chart.html`, html);
+    writeFileSync(`${dir}/chart.svg`, svg);
+    console.log(`${dir}/chart.html, chart.svg`);
+    continue;
+  }
   const run = load(dir);
   writeFileSync(`${dir}/chart.html`, buildHtml(run));
   writeFileSync(`${dir}/chart.svg`, buildSvg(run));

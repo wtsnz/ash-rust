@@ -30,7 +30,7 @@ Ash's capacity for a large read, and keeps a small request quick, with no errors
 nothing is refused. Ash starts shedding at 100% of its capacity: its connection pool drops
 requests that have waited about 100 ms, so a small request that succeeds waits a steady
 ~110 ms and many fail (28% at twice its capacity), and what it answers falls as the load
-grows. Both draw on one Postgres pool; no scheduler was the limit. Take the database out and make
+grows. Neither the pool nor Postgres was the limit (doubling the pool changed nothing), and no scheduler was. Take the database out and make
 the load CPU, and the BEAM's preemption shows: Ash holds the small request at about 8 ms (p99
 ~40 ms) however much heavy work is offered, while ash-rust, whose capacity is 4.7 times higher,
 is faster until it saturates (about 85% of its capacity) and then lets the small request wait
@@ -115,10 +115,32 @@ each one's capacity: ash-rust at 125% of its own had the cheap stream at p50 0.7
 645 heavy requests a second; Ash at 300% of its own answered 119 and failed 39% of the cheap
 ones.
 
-**Read this as a baseline.** Neither server was CPU-bound (ash-rust used 8–9 of 16 cores past
-its capacity, Ash about 10), and the heavy request waits on Postgres, so what limited both was
-the 20-connection pool and the database they share. The difference between the desks is how
-each treats a full pool: ash-rust's has no wait limit, Ash's sheds.
+**Read this as a baseline.** The limit wasn't the pool or Postgres: doubling the pool changed
+nothing, and Postgres had 1.5 to 8 connections busy and used about 3 of 16 cores. Each server used
+8–10 cores, which with Postgres and the driver is consistent with the laptop as a whole being
+full. The difference between the desks is how each treats a full pool: ash-rust's has no wait
+limit, Ash's sheds.
+
+#### Pool policy
+
+Adding a wait limit to ash-rust's pool (`ash_postgres::PoolSettings::wait_timeout`, off by
+default) and letting Ash's queue instead of shed, at 800 heavy requests a second for 30 s
+(one rep each):
+
+| Configuration | Cheap p99 | Cheap failed | Heavy answered/s | Peak memory |
+|---|---:|---:|---:|---:|
+| ash-rust, queues (default) | 1.7 s | 0% | 632 | 6.5 GiB |
+| ash-rust, 100 ms wait limit | 116 ms | 6% | 628 | 0.83 GiB |
+| Ash, sheds (default) | 0.9 s | 33% | 117 | 7.4 GiB |
+| Ash, `queue_target` 60 s | 6.1 s | 0% | 86 | 22.7 GiB |
+
+A wait limit keeps ash-rust's cheap request quick (p99 116 ms against 1.7 s) at the same heavy
+throughput and about an eighth of the memory, at the cost of the 6% of cheap requests that fail. When
+both shed at about 100 ms, ash-rust answers about five times as many heavy requests. Making Ash
+queue is worse than its default, not like ash-rust's queue: 6 s cheap p99 and 23 GiB. See the
+supportdesk README for the matrix and its caveats.
+
+![Pool matrix](../examples/supportdesk/bench/results/saturation/2026-10-06-pool-matrix/chart.svg)
 
 #### CPU-bound saturation (in memory, no database)
 

@@ -16,7 +16,14 @@ use supportdesk::server::router;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required")?;
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4000);
-    let db = ash_postgres::Postgres::connect(&url).await?;
+    // The pool's size, and how long a statement waits for a connection before it fails (no
+    // limit by default), from the environment: what the saturation benchmark varies.
+    let mut pool = ash_postgres::PoolSettings::default();
+    if let Some(size) = std::env::var("POOL_SIZE").ok().and_then(|v| v.parse().ok()) {
+        pool.size = size;
+    }
+    pool.wait_timeout = std::env::var("POOL_WAIT_MS").ok().and_then(|v| v.parse().ok()).map(std::time::Duration::from_millis);
+    let db = ash_postgres::Postgres::connect_with_pool(url.parse()?, pool).await?;
     let resources: Vec<&ash_core::ResourceDef> = supportdesk::DESK_DEF.resources.to_vec();
     db.install(&resources).await?;
 
