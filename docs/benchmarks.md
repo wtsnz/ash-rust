@@ -1,11 +1,13 @@
 # Performance Benchmarks: ash-rust vs. Ash Elixir
 
-How `ash-rust` compares with [Ash](https://ash-hq.org/) in Elixir. There are two kinds of
+How `ash-rust` compares with [Ash](https://ash-hq.org/) in Elixir. There are three kinds of
 comparison, and they answer different questions:
 
 - **End to end** (the [supportdesk](../examples/supportdesk/README.md#benchmark) twin): the same
   application in both, served over HTTP from PostgreSQL, driven through the APIs real clients
   use (AshTypescript RPC, GraphQL, JSON). This is what an application sees.
+- **Under saturation** (the supportdesk twin again): what each desk does to a small request
+  while large ones fill it, and what it does with load beyond its capacity.
 - **Framework overhead** (the `helpdesk` micro-benchmarks): single actions and GraphQL
   queries against the in-memory data layers, with no database or network. These isolate the
   framework's own cost, so their ratios are far larger than an application will see.
@@ -21,6 +23,14 @@ End to end, ash-rust is **about 1.1–2.5x ahead** of Ash:
   GraphQL and `bulk`) are within noise.
 - **Server CPU:** about 3.5–10x less per operation.
 - **Memory:** the Rust desk peaked at 15–27 MiB across the scenarios, against 373–504 MiB for Ash.
+
+Under saturation the two desks fail differently (section 2, below). ash-rust has about 2.6x
+Ash's capacity for a large read, and keeps a small request quick, with no errors, up to about
+90% of it; past that it queues, so every request waits, memory grows with the queue, and
+nothing is refused. Ash starts shedding at 100% of its capacity: its connection pool drops
+requests that have waited about 100 ms, so a small request that succeeds waits a steady
+~110 ms and many fail (28% at twice its capacity), and what it answers falls as the load
+grows. Both draw on one Postgres pool; no scheduler was the limit.
 
 The gap is smaller than in-memory micro-benchmarks suggest because, once a request crosses HTTP
 and PostgreSQL, much of its time is spent in the database and the network, which cost the same
@@ -71,6 +81,42 @@ rep gives and is not reported.
 
 The supportdesk README explains the scenarios and how the driver keeps the comparison fair,
 and [GAPS.md](../examples/supportdesk/GAPS.md) lists where the two desks differ.
+
+### Under saturation (supportdesk)
+
+`bench/saturation.ts` sends a cheap stream (one ticket by id, 500 a second) and a heavy one
+(the 250 newest tickets of an org with relationships and aggregates, ramped from a quarter of
+capacity to several times it), each at a fixed rate whatever the desk answers. A run on
+2026-10-06 (2 reps, medians, other applications open on the machine; the load at its start is
+in the manifest) found the heavy request's capacity alone to be **ash-rust 703/s, Ash 265/s**.
+Offering both the same heavy rate:
+
+| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir cheap errors | Elixir heavy answered/s |
+|---|---|---:|---|---:|---:|
+| none | 1 / 7.2 | - | 1.5 / 4.5 | 0 | - |
+| 133/s (0.5× Ash's capacity) | 1.1 / 9.8 | 133 | 1.4 / 5.1 | 0 | 133 |
+| 265/s (1×) | 0.9 / 8.9 | 265 | 54 / 168 | 63 | 245 |
+| 398/s (1.5×) | 0.8 / 5.4 | 398 | 144 / 800 | 910 | 211 |
+| 531/s (2×) | 0.9 / 16 | 531 | 123 / 2,069 | 1,399 | 174 |
+| 796/s (3×) | 498 / 826 | 654 | 108 / 1,554 | 2,006 | 113 |
+| 1,062/s (4×) | 1,310 / 1,621 | 631 | 109 / 1,763 | 2,447 | 75 |
+
+Each window has 5,000 cheap requests; ash-rust answered all of them without an error at every
+step. Memory: ash-rust's server stayed under 150 MiB up to 2× and reached 6 GB at 4× as its
+queue grew; Ash's went from 0.4 GB to 2.3 GB at 1× and 9.7 GB at 4×. After the heavy stream
+stopped at 4×, ash-rust's cheap p99 was back within twice its baseline in 0 to 4 s; Ash's was
+not back within 15 s. Offered multiples of each desk's own capacity, the same shape appears at
+each one's capacity: ash-rust at 125% of its own had the cheap stream at p50 0.76 s, answering
+645 heavy requests a second; Ash at 300% of its own answered 119 and failed 39% of the cheap
+ones.
+
+**Read this as a baseline, not a verdict on schedulers.** Neither server was CPU-bound
+(ash-rust used 8–9 of 16 cores past its capacity, Ash about 10), and the heavy request waits
+on Postgres, so what limited both was the 20-connection pool and the database they share. The
+difference between the desks is how each treats a full pool: ash-rust's has no wait limit,
+Ash's sheds. Whether a preemptive scheduler would matter needs a heavy request that takes CPU
+and no database, which isn't measured yet. The reports, manifests and every window are in
+[`examples/supportdesk/bench/results/saturation`](../examples/supportdesk/bench/results/saturation).
 
 ---
 
@@ -146,7 +192,8 @@ ash-rust/
 │   └── README.md               # Documentation root index
 └── examples/
     ├── supportdesk/
-    │   ├── bench/              # End-to-end driver (bench.ts) and scenarios
+    │   ├── bench/              # End-to-end driver (bench.ts), saturation driver (saturation.ts), scenarios
+    │   │   └── results/        # Saturation reports and raw windows
     │   └── README.md           # Scenarios, method, latest results
     ├── elixir/supportdesk/     # The Ash (Elixir) twin
     └── helpdesk/
@@ -169,6 +216,11 @@ cargo build --release -p supportdesk --bins
 cd examples/supportdesk
 node bench/bench.ts --fixture /tmp/fixture.json            # about 8–10 minutes
 node bench/bench.ts --fixture /tmp/fixture.json --quick    # one short rep of each
+```
+
+```bash
+node bench/saturation.ts --fixture /tmp/fixture.json                # mixed saturation, about 12 minutes
+node bench/saturation.ts --fixture /tmp/fixture.json --basis own    # a ramp in each desk's own multiples
 ```
 
 Generate the fixture first with `target/release/fixture --out /tmp/fixture.json`. The

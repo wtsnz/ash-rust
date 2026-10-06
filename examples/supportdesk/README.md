@@ -208,3 +208,84 @@ every update delivered once to every subscriber. The only failures were expected
 reps), and one `events` request on the Elixir desk. No request was sent late or left
 unanswered. `detail` over GraphQL varied most between reps on both desks (Rust 7476 to
 about 4700/s, Elixir about 2000 to 1212/s), so read that row as the noisiest.
+
+## Mixed saturation
+
+`bench/saturation.ts` asks what a desk does to a small request while large ones fill it.
+Two streams arrive at once, each at a fixed rate whatever the desk answers (open loop):
+
+- **cheap**: one ticket by id over GraphQL, as a viewer, 500 a second;
+- **heavy**: the 250 newest tickets of an org with their assignee, author, tags,
+  aggregates and five comments each, as its admin, ramped in 10 s steps from a quarter of
+  the desks' capacity to several times it.
+
+```bash
+node bench/saturation.ts --fixture /tmp/fixture.json                 # about 12 minutes
+node bench/saturation.ts --fixture /tmp/fixture.json --basis own     # a ramp in each desk's own multiples
+node bench/saturation.ts --fixture /tmp/fixture.json --quick         # one short rep
+```
+
+It needs what `bench.ts` does, and takes `--levels`, `--cheap-rate`, `--timeout` and
+`--max-in-flight`. It first measures each desk's capacity for the heavy request alone
+(closed loop, 24 clients), then offers both desks, on a fresh copy of the data, either the
+same heavy rates, multiples of the slower desk's capacity (`--basis common`, the default),
+or multiples of their own (`--basis own`). After the last step the heavy stream stops and
+the cheap one is watched until its p99 is back within twice its baseline. Latency counts
+from when a request was due; one unanswered after 10 s is given up on, as a client would.
+The driver holds at most 3,000 heavy requests unanswered, so a request due past that is
+reported as *not sent*: the driver's limit, never a desk's refusal, and a bound on how
+long a desk that queues can queue.
+
+### Latest results
+
+The reports, manifests and every window of two runs are in
+[`bench/results/saturation`](bench/results/saturation). A run on 2026-10-06 (2 reps; medians; Apple M4 Max, 16 cores, with other applications
+open, load average 9–17 at the start), against the Elixir desk's `mix release`. Heavy
+capacity alone: **ash-rust 703/s, Ash 265/s**. Both desks were offered the same heavy rate:
+
+| Heavy offered | Rust cheap p50 / p99 ms | Rust heavy answered/s | Elixir cheap p50 / p99 ms | Elixir cheap errors | Elixir heavy answered/s |
+|---|---|---:|---|---:|---:|
+| none | 1 / 7.2 | - | 1.5 / 4.5 | 0 | - |
+| 66/s (0.25×) | 1.1 / 8.4 | 66 | 1.3 / 5 | 0 | 66 |
+| 133/s (0.5×) | 1.1 / 9.8 | 133 | 1.4 / 5.1 | 0 | 133 |
+| 265/s (1×) | 0.9 / 8.9 | 265 | 54 / 168 | 63 | 245 |
+| 398/s (1.5×) | 0.8 / 5.4 | 398 | 144 / 800 | 910 | 211 |
+| 531/s (2×) | 0.9 / 16 | 531 | 123 / 2,069 | 1,399 | 174 |
+| 796/s (3×) | 498 / 826 | 654 | 108 / 1,554 | 2,006 | 113 |
+| 1,062/s (4×) | 1,310 / 1,621 | 631 | 109 / 1,763 | 2,447 | 75 |
+
+Of the 5,000 cheap requests in each window, Rust answered every one without an error, at every step, though slowly past its capacity. Elixir's
+errors are 1% of them at 1×, 28% at 2× and 49% at 4×. Rust never refused a request;
+its 4× step had 2,211 heavy requests the driver held back.
+
+In each desk's own multiples (`--basis own`), the same shape appears at their own
+capacities: Rust, at 1× (697/s), had the cheap stream at p50 106 ms and p99 169 ms; at 1.25×
+(872/s) p50 756 ms, with the heavy request's p50 at 2.5 s, answering 645/s; at 3× it
+answered 675/s. Ash at 1× (266/s) had cheap p50 55 ms, p99 115 ms and 64 errors; at 3×
+(798/s) 119 heavy requests answered a second and 39% of the cheap requests failing.
+
+What this shows:
+
+- **Below its capacity, ash-rust keeps the cheap request quick whatever else it's doing**
+  (p99 under 20 ms up to 90% of its capacity), and Ash does up to about half of its own:
+  its cheap p99 was 5 ms at 50% of its capacity, 64 ms at 90% and 115 ms at 100%.
+- **Past capacity the two fail differently.** Rust queues: nothing is refused, memory grows
+  with the queue (6 GB resident at 4×, from under 150 MB at 2×), throughput holds at about
+  650/s, and every request, the cheap ones included, waits behind it (cheap p50 0.5 s at 3×,
+  1.3 s at 4×). Ash sheds: Ecto's pool drops a request that has waited about 100 ms
+  (`connection not available and request was dropped from queue`), so the cheap request that
+  succeeds waits a steady ~110 ms, and the rest fail; but what it answers falls as the
+  load grows (heavy answered/s from 245 at 1× to 75 at 4×), and it hadn't recovered within
+  15 s of the heavy stream stopping at 4×, where Rust had within 4 s.
+- **Neither desk isolates the cheap request from the heavy ones.** Both draw on one
+  20-connection Postgres pool and one database, and they share the machine.
+
+What it doesn't show: whether a preemptive scheduler matters. Neither server was CPU-bound
+(Rust used 8–9 of the 16 cores past capacity, Ash about 10), and the heavy request waits on
+Postgres, so the limit was the pool and the database, and the difference between the desks
+is how each treats a full pool: Rust's has no wait limit, Ash's sheds. A request that
+takes CPU and no database (a password hash, a large in-memory selection) would test the
+scheduler, and isn't here yet. The cheap p99 and the heavy request's time also include the
+driver and Postgres, which share the machine. Treat the figures as a baseline to compare a
+later change against, and the machine's load, noted in each run's `manifest.json`, as
+the largest source of noise.

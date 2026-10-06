@@ -22,9 +22,19 @@ export type Job = {
   until: number;
   /** Closed loop: this thread's clients. */
   clients?: number;
+  /** Keep each request's outcome by the second it was due in (`JobResult.timeline`). */
+  timeline?: boolean;
   /** Open loop: this thread's requests a second, and its offset in the schedule. */
   rate?: number;
   phase?: number;
+  /** Open loop: give up on a request this long after it's due, as a client would, so a
+   *  desk that's fallen behind is charged for the wait without the driver's own backlog
+   *  growing without end. */
+  timeoutMs?: number;
+  /** Open loop: requests this thread has unanswered at most; past it a due request is
+   *  counted as dropped, not sent. A guard for the driver, set above what a desk is
+   *  asked to hold. */
+  maxInFlight?: number;
 };
 
 export type JobResult = {
@@ -41,6 +51,13 @@ export type JobResult = {
   unfinished: number;
   /** Open loop: requests sent more than 20 ms after they were due (a busy driver). */
   late: number;
+  /** Open loop: requests the driver gave up on at `timeoutMs`, among the failures. */
+  timeouts?: number;
+  /** Open loop: requests due while `maxInFlight` were unanswered, not sent. */
+  dropped?: number;
+  /** Open loop: the latency of every request due in the window, by the second it was due
+   *  in (from `from`): `[second, latency, ok]` triples, kept when the job asks. */
+  timeline?: Array<[number, number, number]>;
   firstErrors: unknown[];
 };
 
@@ -52,12 +69,19 @@ const run = async (job: Job): Promise<JobResult> => {
   let completed = 0;
   let succeeded = 0;
   let late = 0;
+  let timeouts = 0;
+  let dropped = 0;
   let pending = 0;
+  const timeline: Array<[number, number, number]> = [];
   const firstErrors: unknown[] = [];
   const now = () => performance.timeOrigin + performance.now();
   const settle = (started: number, outcome: { ok: boolean; body: unknown } | Error) => {
     const ok = !(outcome instanceof Error) && outcome.ok;
     const finished = now();
+    if (outcome instanceof Error && outcome.name === "TimeoutError" && started >= job.from && started < job.until) timeouts += 1;
+    if (job.timeline && started >= job.from && started < job.until) {
+      timeline.push([Math.floor((started - job.from) / 1000), finished - started, ok ? 1 : 0]);
+    }
     if (ok) succeeded += 1;
     if (ok && finished >= job.from && finished <= job.until) completed += 1;
     if (started < job.from || started >= job.until) return;
@@ -93,8 +117,12 @@ const run = async (job: Job): Promise<JobResult> => {
       else if (-wait > 20) late += 1;
       // The same request for the same slot, however the timing falls.
       const r = rng(job.seed ^ (index * 7919 + i * 104729));
+      if (job.maxInFlight && pending >= job.maxInFlight) {
+        dropped += 1;
+        continue;
+      }
       pending += 1;
-      op(job.base, r, w)
+      op(job.base, r, w, job.timeoutMs ? AbortSignal.timeout(job.timeoutMs) : undefined)
         .then((outcome) => settle(due, outcome))
         .catch((error) => settle(due, error))
         .finally(() => (pending -= 1));
@@ -110,6 +138,9 @@ const run = async (job: Job): Promise<JobResult> => {
     succeeded,
     unfinished: pending,
     late,
+    timeouts,
+    dropped,
+    ...(job.timeline ? { timeline } : {}),
     firstErrors,
   };
 };
