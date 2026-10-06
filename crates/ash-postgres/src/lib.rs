@@ -26,6 +26,32 @@ use uuid::Uuid;
 /// Connections a pool opens at most.
 const POOL_SIZE: usize = 20;
 
+/// How a pool is sized, and how long a statement waits for a connection.
+///
+/// The default is 20 connections and no wait limit, so a statement waits for one as long as it
+/// takes and a queue of them can grow without bound under load. Ecto's pool, in Ash, sheds
+/// instead: a request that has waited past its `queue_target` (50 ms, doubled once the pool has
+/// been slow for an interval) is dropped before it reaches the database. Setting a
+/// `wait_timeout` fails a statement that has waited that long with a pool error, which a
+/// server can answer as overloaded, so a deep queue can't build.
+#[derive(Clone, Copy, Debug)]
+pub struct PoolSettings {
+    /// Connections the pool opens at most.
+    pub size: usize,
+    /// How long a statement waits for a free connection before it fails; `None` waits as
+    /// long as it takes.
+    pub wait_timeout: Option<std::time::Duration>,
+}
+
+impl Default for PoolSettings {
+    fn default() -> Self {
+        Self {
+            size: POOL_SIZE,
+            wait_timeout: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 enum PostgresSource {
     /// The pool, and the settings it connects with, for pools of its own (a tenant's
@@ -170,7 +196,12 @@ impl Postgres {
     /// round trip per statement. A connection the server closed is noticed locally and
     /// replaced; one that dies unnoticed while idle fails the next statement.
     pub async fn connect_with(config: tokio_postgres::Config) -> Result<Self> {
-        let pool = pool_of(&config, POOL_SIZE)?;
+        Self::connect_with_pool(config, PoolSettings::default()).await
+    }
+
+    /// [`connect_with`](Self::connect_with), with a pool sized and bounded as `settings` say.
+    pub async fn connect_with_pool(config: tokio_postgres::Config, settings: PoolSettings) -> Result<Self> {
+        let pool = pool_with(&config, settings)?;
         // Connect once now, so an unreachable database fails here, as sqlx's did.
         drop(pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?);
         Ok(Self {
@@ -199,7 +230,7 @@ impl Postgres {
                 .get()
                 .await
                 .map(Conn::Pooled)
-                .map_err(|e| Failure::Pool(e.to_string())),
+                .map_err(|e| Failure::Pool(pool_error(&e))),
             PostgresSource::Tx(conn) => Ok(Conn::Tx(conn.lock().await)),
         }
     }
@@ -866,6 +897,10 @@ impl TransactionSupport for Postgres {
 /// A pool of up to `size` connections made with `config`. A connection is reused without
 /// a round trip to check it (`RecyclingMethod::Fast`), as Postgrex reuses one.
 fn pool_of(config: &tokio_postgres::Config, size: usize) -> Result<Pool> {
+    pool_with(config, PoolSettings { size, ..PoolSettings::default() })
+}
+
+fn pool_with(config: &tokio_postgres::Config, settings: PoolSettings) -> Result<Pool> {
     let manager = Manager::from_config(
         config.clone(),
         NoTls,
@@ -873,10 +908,22 @@ fn pool_of(config: &tokio_postgres::Config, size: usize) -> Result<Pool> {
             recycling_method: RecyclingMethod::Fast,
         },
     );
-    Pool::builder(manager)
-        .max_size(size)
-        .build()
-        .map_err(|e| Error::DataLayer(e.to_string()))
+    let mut builder = Pool::builder(manager).max_size(settings.size);
+    if settings.wait_timeout.is_some() {
+        // A timeout needs the runtime that will time it.
+        builder = builder.runtime(deadpool_postgres::Runtime::Tokio1).wait_timeout(settings.wait_timeout);
+    }
+    builder.build().map_err(|e| Error::DataLayer(e.to_string()))
+}
+
+/// What a failed checkout says: that the pool had no connection free in time, or why not.
+fn pool_error(error: &deadpool_postgres::PoolError) -> String {
+    match error {
+        deadpool_postgres::PoolError::Timeout(deadpool_postgres::TimeoutType::Wait) => {
+            "connection pool exhausted: no connection became free within the wait limit".to_string()
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Runs declarative migrations against a PostgreSQL connection pool.
