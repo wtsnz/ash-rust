@@ -59,7 +59,12 @@ where
 }
 
 /// Packs containers of the given masses into a contract in one bulk call.
-async fn pack<D>(ctx: &Context<D>, contract: &Contract, prefix: &str, masses: &[i64]) -> Result<Vec<Container>>
+async fn pack<D>(
+    ctx: &Context<D>,
+    contract: &Contract,
+    prefix: &str,
+    masses: &[i64],
+) -> Result<Vec<Container>>
 where
     D: DataLayer + TransactionSupport + Clone + Send + Sync + 'static,
 {
@@ -78,9 +83,11 @@ where
         return_records: true,
         ..BulkCreateOptions::default()
     };
-    Ok(ash_core::bulk_create::<Container, _, _, _>(ctx, "pack", inputs, options)
-        .await?
-        .records)
+    Ok(
+        ash_core::bulk_create::<Container, _, _, _>(ctx, "pack", inputs, options)
+            .await?
+            .records,
+    )
 }
 
 /// Flies a voyage that is loaded and holds a berth: customs, launch, a stream of
@@ -100,13 +107,23 @@ where
     let customs = crew["Chen"].clone().with_tenant(voyage.line.clone());
     ops::clear_customs(&customs, voyage.id).await?;
     ops::launch(&crew[captain], voyage.id, at("2187-02-01T06:00:00Z")?).await?;
-    writeln!(log, "  {ship} launched ({:.2} AU, {} h)", voyage.distance_au.as_str().parse::<f64>().unwrap_or(0.0), voyage.transit_hours).ok();
+    writeln!(
+        log,
+        "  {ship} launched ({:.2} AU, {} h)",
+        voyage.distance_au.as_str().parse::<f64>().unwrap_or(0.0),
+        voyage.transit_hours
+    )
+    .ok();
 
     let transponder = app.transponder(&sol.api_keys[ship]).await?;
     let pings = 12;
     for hour in 0..pings {
         TelemetryPing::report(&transponder)
-            .position(Vector::new([1.0 - hour as f32 * 0.05, hour as f32 * 0.2, 0.01])?)
+            .position(Vector::new([
+                1.0 - hour as f32 * 0.05,
+                hour as f32 * 0.2,
+                0.01,
+            ])?)
             .speed_kms(Float::parse("38.5")?)
             .fuel_pct(95 - hour)
             .recorded_at(at(&format!("2187-02-01T{:02}:00:00Z", 7 + hour))?)
@@ -130,13 +147,61 @@ where
     let mut summary = Summary::default();
     let sol = seed::sol(app).await?;
     let crew = seed::contexts(app, &sol);
-    writeln!(log, "Charted {} bodies and {} ports; {} ships in service.", sol.planets.len(), sol.ports.len(), sol.ships.len()).ok();
+    writeln!(
+        log,
+        "Charted {} bodies and {} ports; {} ships in service.",
+        sol.planets.len(),
+        sol.ports.len(),
+        sol.ships.len()
+    )
+    .ok();
 
     // Monday: bookings. Grace's system sends one booking twice with a better rate.
-    book(&crew["Grace"], &sol, Booking { reference: "HF-CERES-1", email: "grace@helios-freight.example", origin: "LEO", destination: "PZZ", freight: 18_000, deliver_by: "2187-03-01" }).await?;
-    let ceres = book(&crew["Grace"], &sol, Booking { reference: "HF-CERES-1", email: "grace@helios-freight.example", origin: "LEO", destination: "PZZ", freight: 16_500, deliver_by: "2187-03-01" }).await?;
-    let mars = book(&crew["Sally"], &sol, Booking { reference: "RD-OLY-1", email: "sally@red-dust-logistics.example", origin: "KSC", destination: "OLY", freight: 9_000, deliver_by: "2187-03-10" }).await?;
-    writeln!(log, "Monday: {} and {} booked; {} re-imported at {} credits.", ceres.external_ref, mars.external_ref, ceres.external_ref, ceres.freight_credits).ok();
+    book(
+        &crew["Grace"],
+        &sol,
+        Booking {
+            reference: "HF-CERES-1",
+            email: "grace@helios-freight.example",
+            origin: "LEO",
+            destination: "PZZ",
+            freight: 18_000,
+            deliver_by: "2187-03-01",
+        },
+    )
+    .await?;
+    let ceres = book(
+        &crew["Grace"],
+        &sol,
+        Booking {
+            reference: "HF-CERES-1",
+            email: "grace@helios-freight.example",
+            origin: "LEO",
+            destination: "PZZ",
+            freight: 16_500,
+            deliver_by: "2187-03-01",
+        },
+    )
+    .await?;
+    let mars = book(
+        &crew["Sally"],
+        &sol,
+        Booking {
+            reference: "RD-OLY-1",
+            email: "sally@red-dust-logistics.example",
+            origin: "KSC",
+            destination: "OLY",
+            freight: 9_000,
+            deliver_by: "2187-03-10",
+        },
+    )
+    .await?;
+    writeln!(
+        log,
+        "Monday: {} and {} booked; {} re-imported at {} credits.",
+        ceres.external_ref, mars.external_ref, ceres.external_ref, ceres.freight_credits
+    )
+    .ok();
 
     // Tuesday: packing, and a drum of reactor fuel that customs must seal.
     let mut helios_cargo = pack(&crew["Grace"], &ceres, "HFCU", &[22, 18, 26]).await?;
@@ -148,35 +213,123 @@ where
         .await?;
     helios_cargo.push(fuel.clone());
     let red_dust_cargo = pack(&crew["Sally"], &mars, "RDCU", &[30, 30]).await?;
-    writeln!(log, "Tuesday: packed {} containers for Helios and {} for Red Dust.", helios_cargo.len(), red_dust_cargo.len()).ok();
+    writeln!(
+        log,
+        "Tuesday: packed {} containers for Helios and {} for Red Dust.",
+        helios_cargo.len(),
+        red_dust_cargo.len()
+    )
+    .ok();
 
     // Wednesday: voyages, stowage, and berths at the destination.
-    let long_haul = ops::plan_voyage(&crew["Ada"], sol.ship("Long Haul"), sol.port("LEO").id, sol.port("PZZ").id, Date::parse("2187-02-01")?).await?;
-    let dust_devil = ops::plan_voyage(&crew["Mae"], sol.ship("Dust Devil"), sol.port("KSC").id, sol.port("OLY").id, Date::parse("2187-02-01")?).await?;
+    let long_haul = ops::plan_voyage(
+        &crew["Ada"],
+        sol.ship("Long Haul"),
+        sol.port("LEO").id,
+        sol.port("PZZ").id,
+        Date::parse("2187-02-01")?,
+    )
+    .await?;
+    let dust_devil = ops::plan_voyage(
+        &crew["Mae"],
+        sol.ship("Dust Devil"),
+        sol.port("KSC").id,
+        sol.port("OLY").id,
+        Date::parse("2187-02-01")?,
+    )
+    .await?;
     for (n, container) in helios_cargo.iter().enumerate() {
-        ops::stow(&crew["Ada"], long_haul.id, container.id, Slot { bay: 1, stack: 1, tier: n as i64 + 1 }).await?;
+        ops::stow(
+            &crew["Ada"],
+            long_haul.id,
+            container.id,
+            Slot {
+                bay: 1,
+                stack: 1,
+                tier: n as i64 + 1,
+            },
+        )
+        .await?;
     }
     for (n, container) in red_dust_cargo.iter().enumerate() {
-        ops::stow(&crew["Mae"], dust_devil.id, container.id, Slot { bay: 1, stack: 1, tier: n as i64 + 1 }).await?;
+        ops::stow(
+            &crew["Mae"],
+            dust_devil.id,
+            container.id,
+            Slot {
+                bay: 1,
+                stack: 1,
+                tier: n as i64 + 1,
+            },
+        )
+        .await?;
     }
 
     let window = (at("2187-02-11T12:00:00Z")?, at("2187-02-12T12:00:00Z")?);
-    let held = ops::reserve_berth(&crew["Mae"], sol.ship("Dust Devil").id, sol.port("OLY").id, "A1", window.0.clone(), window.1.clone()).await?;
+    let held = ops::reserve_berth(
+        &crew["Mae"],
+        sol.ship("Dust Devil").id,
+        sol.port("OLY").id,
+        "A1",
+        window.0.clone(),
+        window.1.clone(),
+    )
+    .await?;
     // Helios wants the same berth for the same window and is turned away.
-    if ops::reserve_berth(&crew["Ada"], sol.ship("Tin Kettle").id, sol.port("OLY").id, "A1", window.0.clone(), window.1.clone()).await.is_err() {
+    if ops::reserve_berth(
+        &crew["Ada"],
+        sol.ship("Tin Kettle").id,
+        sol.port("OLY").id,
+        "A1",
+        window.0.clone(),
+        window.1.clone(),
+    )
+    .await
+    .is_err()
+    {
         summary.berth_refusals += 1;
     }
-    let ceres_berth = ops::reserve_berth(&crew["Ada"], sol.ship("Long Haul").id, sol.port("PZZ").id, "A1", window.0, window.1).await?;
-    let long_haul = Voyage::get(&crew["Ada"], long_haul.id).await?.hold_berth_on(&crew["Ada"]).reservation_id(ceres_berth.id).await?;
-    let dust_devil = Voyage::get(&crew["Mae"], dust_devil.id).await?.hold_berth_on(&crew["Mae"]).reservation_id(held.id).await?;
-    writeln!(log, "Wednesday: voyages planned and loaded; {} berth request refused as taken.", summary.berth_refusals).ok();
+    let ceres_berth = ops::reserve_berth(
+        &crew["Ada"],
+        sol.ship("Long Haul").id,
+        sol.port("PZZ").id,
+        "A1",
+        window.0,
+        window.1,
+    )
+    .await?;
+    let long_haul = Voyage::get(&crew["Ada"], long_haul.id)
+        .await?
+        .hold_berth_on(&crew["Ada"])
+        .reservation_id(ceres_berth.id)
+        .await?;
+    let dust_devil = Voyage::get(&crew["Mae"], dust_devil.id)
+        .await?
+        .hold_berth_on(&crew["Mae"])
+        .reservation_id(held.id)
+        .await?;
+    writeln!(
+        log,
+        "Wednesday: voyages planned and loaded; {} berth request refused as taken.",
+        summary.berth_refusals
+    )
+    .ok();
 
     // Thursday: customs refuses the unsealed fuel, seals it, and clears both voyages.
     let customs = crew["Chen"].clone().with_tenant(HELIOS);
     let refused = ops::clear_customs(&customs, long_haul.id).await.is_err();
     let seal = ash_core::Binary::from_bytes(*b"SOL-CUSTOMS 2187-01-29 #4471");
-    Container::get(&customs, fuel.id).await?.seal_on(&customs).seal(seal).await?;
-    writeln!(log, "Thursday: customs {} the fuel drum, then sealed it.", if refused { "refused" } else { "missed" }).ok();
+    Container::get(&customs, fuel.id)
+        .await?
+        .seal_on(&customs)
+        .seal(seal)
+        .await?;
+    writeln!(
+        log,
+        "Thursday: customs {} the fuel drum, then sealed it.",
+        if refused { "refused" } else { "missed" }
+    )
+    .ok();
 
     // Friday to the 12th: both ships fly.
     summary.pings_recorded += fly(app, &sol, &long_haul, "Yuri", "Long Haul", &mut log).await?;
@@ -195,7 +348,8 @@ where
             .all()
             .await?;
         summary.contracts_closed += closed.len();
-        summary.containers_delivered += closed.iter().filter_map(|c| c.container_count).sum::<i64>();
+        summary.containers_delivered +=
+            closed.iter().filter_map(|c| c.container_count).sum::<i64>();
     }
     let audit = Context::new(app.registry());
     summary.audit_events = OpsEvent::query(&audit).count().await?;

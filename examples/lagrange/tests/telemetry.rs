@@ -16,7 +16,11 @@ async fn telemetry_rows(h: &Harness<impl FleetDb>, table: &str) -> i64 {
 
 async fn transponders_report_positions<D: FleetDb>(h: Harness<D>) {
     let ship = h.sol.ship("Long Haul");
-    let transponder = h.app.transponder(&h.sol.api_keys["Long Haul"]).await.unwrap();
+    let transponder = h
+        .app
+        .transponder(&h.sol.api_keys["Long Haul"])
+        .await
+        .unwrap();
     for minute in 0..25 {
         TelemetryPing::report(&transponder)
             .position(Vector::new([1.0 - minute as f32 * 0.01, 0.1, 0.0]).unwrap())
@@ -51,8 +55,12 @@ async fn transponders_report_positions<D: FleetDb>(h: Harness<D>) {
     assert_eq!(minutes, (66..=90).rev().collect::<Vec<_>>());
 
     // A bad key gets nothing, and crew can't pose as a transponder.
-    assert!(matches!(h.app.transponder("lgx_not-a-key").await, Err(Error::Forbidden)));
-    let crew = ash_core::Context::new(h.app.registry()).with_actor(h.ctx("Yuri").actor.clone().unwrap());
+    assert!(matches!(
+        h.app.transponder("lgx_not-a-key").await,
+        Err(Error::Forbidden)
+    ));
+    let crew =
+        ash_core::Context::new(h.app.registry()).with_actor(h.ctx("Yuri").actor.clone().unwrap());
     let err = TelemetryPing::report(&crew)
         .position(Vector::new([0.0, 0.0, 0.0]).unwrap())
         .speed_kms(Float::parse("1").unwrap())
@@ -76,7 +84,10 @@ on_every_backend!(transponders_report_positions);
 
 async fn fleet_actions_are_audited<D: FleetDb>(h: Harness<D>) {
     let before = telemetry_rows(&h, "ops_events").await;
-    let grace = h.ctx("Grace").clone().with_metadata("client_ip", "203.0.113.9");
+    let grace = h
+        .ctx("Grace")
+        .clone()
+        .with_metadata("client_ip", "203.0.113.9");
     let contract = Contract::book(&grace)
         .external_ref("AUDIT-1")
         .shipper_email(CiString::parse("grace@helios-freight.example").unwrap())

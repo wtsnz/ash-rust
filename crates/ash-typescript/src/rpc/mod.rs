@@ -33,9 +33,9 @@
 //! client's filters and sorts guarded by field policies, and fields the actor may not
 //! read redacted.
 
+mod codegen;
 mod error;
 pub mod fields;
-mod codegen;
 mod names;
 
 use std::collections::HashMap;
@@ -45,8 +45,9 @@ use std::sync::Arc;
 
 use ash_core::input::{action_input, field_type, filter_input, sort_input, value_input};
 use ash_core::{
-    ActionDef, ActionKind, AttrType, CompiledQuery, Context, Countable, DataLayer, Error, FieldMap, Filter,
-    KeysetCursor, MetadataDef, PreparationDef, RelKind, RelatedQuery, Resource, ResourceDef, Sort, TransactionSupport, Value,
+    ActionDef, ActionKind, AttrType, CompiledQuery, Context, Countable, DataLayer, Error, FieldMap,
+    Filter, KeysetCursor, MetadataDef, PreparationDef, RelKind, RelatedQuery, Resource,
+    ResourceDef, Sort, TransactionSupport, Value,
 };
 use serde_json::{Map, Value as Json, json};
 
@@ -62,7 +63,8 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// What a generic action does, supplied with its RPC action: the context it runs in, and
 /// its input, cast to its arguments' types.
-pub type GenericRunner<D> = Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<Value>> + Send + Sync>;
+pub type GenericRunner<D> =
+    Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<Value>> + Send + Sync>;
 
 /// Told of each error AshTypescript has no shape for, with the id its client was given.
 pub type ErrorReporter = Arc<dyn Fn(&str, &Error) + Send + Sync>;
@@ -206,14 +208,18 @@ fn metadata_json(record: &FieldMap, shown: &[Shown]) -> Map<String, Json> {
     shown
         .iter()
         .map(|field| {
-            let value = ash_core::get_metadata(record, field.def.name).map_or(Json::Null, |value| to_json(Some(field.def.ty), value));
+            let value = ash_core::get_metadata(record, field.def.name)
+                .map_or(Json::Null, |value| to_json(Some(field.def.ty), value));
             (field.name.clone(), value)
         })
         .collect()
 }
 
 fn load_paths(paths: &[&str]) -> Vec<Vec<String>> {
-    paths.iter().map(|path| path.split('.').map(str::to_string).collect()).collect()
+    paths
+        .iter()
+        .map(|path| path.split('.').map(str::to_string).collect())
+        .collect()
 }
 
 /// An action clients run by name.
@@ -242,7 +248,16 @@ pub struct Rpc<D> {
 
 impl<D> Default for Rpc<D> {
     fn default() -> Self {
-        Self { actions: HashMap::new(), not_found_error: true, on_error: None, error_handler: None, show_raised_errors: false, names: Names::default(), declared: Vec::new(), typed_queries: Vec::new() }
+        Self {
+            actions: HashMap::new(),
+            not_found_error: true,
+            on_error: None,
+            error_handler: None,
+            show_raised_errors: false,
+            names: Names::default(),
+            declared: Vec::new(),
+            typed_queries: Vec::new(),
+        }
     }
 }
 
@@ -264,7 +279,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// (`fields` as a request selects them, with snake_case names).
     pub fn typed_query<R: Resource>(mut self, name: &str, action: &str, fields: Json) -> Self {
         let action = action_def(&R::DEF, action);
-        assert!(action.kind == ActionKind::Read, "typed query `{name}` reads, and `{}` isn't a read", action.name);
+        assert!(
+            action.kind == ActionKind::Read,
+            "typed query `{name}` reads, and `{}` isn't a read",
+            action.name
+        );
         self.typed_queries.push(codegen::TypedQuery {
             name: name.to_string(),
             resource: &R::DEF,
@@ -300,10 +319,18 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     /// `argument_names`: the names clients know the arguments of `R`'s `action` by.
-    pub fn argument_names<R: Resource>(mut self, action: &str, names: &[(&'static str, &'static str)]) -> Self {
+    pub fn argument_names<R: Resource>(
+        mut self,
+        action: &str,
+        names: &[(&'static str, &'static str)],
+    ) -> Self {
         let action = action_def(&R::DEF, action);
         for (argument, _) in names {
-            assert!(action.arguments.iter().any(|arg| arg.name == *argument), "`{}` has no argument `{argument}` to name", action.name);
+            assert!(
+                action.arguments.iter().any(|arg| arg.name == *argument),
+                "`{}` has no argument `{argument}` to name",
+                action.name
+            );
         }
         self.names.map_arguments(R::DEF.name, action.name, names);
         self
@@ -316,26 +343,57 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     /// `rpc_action :name, :action, options`.
-    pub fn action_with<R: Resource>(mut self, name: &str, action: &str, options: impl FnOnce(ActionOptions) -> ActionOptions) -> Self {
+    pub fn action_with<R: Resource>(
+        mut self,
+        name: &str,
+        action: &str,
+        options: impl FnOnce(ActionOptions) -> ActionOptions,
+    ) -> Self {
         let resource = &R::DEF;
         let action = action_def(resource, action);
         let options = options(ActionOptions::default());
         let read = options.read_action.map(|read| action_def(resource, read));
         for field in &options.get_by {
-            assert!(resource.attribute(field).is_some(), "`{name}` gets by `{field}`, which isn't an attribute of {}", resource.name);
+            assert!(
+                resource.attribute(field).is_some(),
+                "`{name}` gets by `{field}`, which isn't an attribute of {}",
+                resource.name
+            );
         }
-        for field in options.show_metadata.iter().flatten().chain(options.metadata_field_names.iter().map(|(field, _)| field)) {
-            assert!(action.metadata.iter().any(|def| def.name == *field), "`{name}` shows metadata `{field}`, which `{}` doesn't declare", action.name);
+        for field in options
+            .show_metadata
+            .iter()
+            .flatten()
+            .chain(options.metadata_field_names.iter().map(|(field, _)| field))
+        {
+            assert!(
+                action.metadata.iter().any(|def| def.name == *field),
+                "`{name}` shows metadata `{field}`, which `{}` doesn't declare",
+                action.name
+            );
         }
         // A generic action runs as its own `run` does (`Resource::run_generic`).
         let runner: Option<GenericRunner<D>> = (action.kind == ActionKind::Generic).then(|| {
             let name = action.name;
-            Arc::new(move |ctx: Context<D>, input: FieldMap| -> BoxFuture<'static, ash_core::Result<Value>> {
-                Box::pin(async move { R::run_generic(&ctx, name, input).await })
-            }) as GenericRunner<D>
+            Arc::new(
+                move |ctx: Context<D>,
+                      input: FieldMap|
+                      -> BoxFuture<'static, ash_core::Result<Value>> {
+                    Box::pin(async move { R::run_generic(&ctx, name, input).await })
+                },
+            ) as GenericRunner<D>
         });
         self.declare(name);
-        self.actions.insert(name.into(), RpcAction { resource, action, read, options, runner });
+        self.actions.insert(
+            name.into(),
+            RpcAction {
+                resource,
+                action,
+                read,
+                options,
+                runner,
+            },
+        );
         self
     }
 
@@ -352,7 +410,10 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         Fut: Future<Output = ash_core::Result<Value>> + Send + 'static,
     {
         let def = action_def(&R::DEF, action);
-        assert!(def.kind == ActionKind::Generic, "`{name}` isn't a generic action");
+        assert!(
+            def.kind == ActionKind::Generic,
+            "`{name}` isn't a generic action"
+        );
         let run = Arc::new(run);
         let runner: GenericRunner<D> = Arc::new(move |ctx: Context<D>, input| {
             let run = Arc::clone(&run);
@@ -364,7 +425,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         self.declare(name);
         self.actions.insert(
             name.into(),
-            RpcAction { resource: &R::DEF, action: def, read: None, options: ActionOptions::default(), runner: Some(runner) },
+            RpcAction {
+                resource: &R::DEF,
+                action: def,
+                read: None,
+                options: ActionOptions::default(),
+                runner: Some(runner),
+            },
         );
         self
     }
@@ -385,7 +452,10 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
 
     /// Rewrites each error before the client sees it, or drops it, as AshTypescript's
     /// domain `error_handler` does.
-    pub fn error_handler(mut self, handle: impl Fn(Failure, &ErrorSource) -> Option<Failure> + Send + Sync + 'static) -> Self {
+    pub fn error_handler(
+        mut self,
+        handle: impl Fn(Failure, &ErrorSource) -> Option<Failure> + Send + Sync + 'static,
+    ) -> Self {
         self.error_handler = Some(Arc::new(handle));
         self
     }
@@ -401,9 +471,15 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// AshTypescript does.
     pub async fn run(&self, ctx: &Context<D>, request: &Json) -> Json {
         match self.answer(ctx, request).await {
-            Ok(Answer { data, metadata: None }) => json!({ "success": true, "data": data }),
+            Ok(Answer {
+                data,
+                metadata: None,
+            }) => json!({ "success": true, "data": data }),
             // A write's metadata beside its data, as AshTypescript answers it.
-            Ok(Answer { data, metadata: Some(metadata) }) => json!({ "success": true, "data": data, "metadata": metadata }),
+            Ok(Answer {
+                data,
+                metadata: Some(metadata),
+            }) => json!({ "success": true, "data": data, "metadata": metadata }),
             Err(failures) => json!({ "success": false, "errors": self.report(failures, request) }),
         }
     }
@@ -441,7 +517,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     fn failure(&self, err: Error) -> Failure {
         if let Error::Multiple(errors) = err {
             let mut failures = errors.into_iter().map(|error| self.failure(error));
-            let mut first = failures.next().unwrap_or_else(|| self.failure(Error::Invalid("no errors".into())));
+            let mut first = failures
+                .next()
+                .unwrap_or_else(|| self.failure(Error::Invalid("no errors".into())));
             first.rest.extend(failures);
             return first;
         }
@@ -470,10 +548,16 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     async fn validation(&self, ctx: &Context<D>, request: &Json) -> Result<(), Vec<Failure>> {
-        let Parsed { rpc, ctx, input, .. } = self.parse(ctx, request, true).map_err(|failure| vec![failure])?;
+        let Parsed {
+            rpc, ctx, input, ..
+        } = self
+            .parse(ctx, request, true)
+            .map_err(|failure| vec![failure])?;
         let (resource, action) = (rpc.resource, rpc.action);
         // Each value cast to its field's type, as a form casts it.
-        let Json::Object(given) = &input else { return Ok(()) };
+        let Json::Object(given) = &input else {
+            return Ok(());
+        };
         let mut problems = Vec::new();
         let mut cast = FieldMap::new();
         for (name, value) in given {
@@ -482,45 +566,84 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 .iter()
                 .find(|arg| arg.name == name)
                 .map(|arg| arg.ty)
-                .or_else(|| action.accept.contains(&name.as_str()).then(|| resource.attribute(name).map(|attr| attr.ty)).flatten());
+                .or_else(|| {
+                    action
+                        .accept
+                        .contains(&name.as_str())
+                        .then(|| resource.attribute(name).map(|attr| attr.ty))
+                        .flatten()
+                });
             let Some(ty) = ty else { continue };
             match value_input(ty, value) {
                 Ok(value) => {
                     cast.insert(name.clone(), value);
                 }
-                Err(_) => problems.push(Error::TypeMismatch { field: name.clone(), expected: ty.name().to_string(), got: value.to_string() }),
+                Err(_) => problems.push(Error::TypeMismatch {
+                    field: name.clone(),
+                    expected: ty.name().to_string(),
+                    got: value.to_string(),
+                }),
             }
         }
-        let invalid: Vec<String> = problems.iter().filter_map(|p| match p { Error::TypeMismatch { field, .. } => Some(field.clone()), _ => None }).collect();
+        let invalid: Vec<String> = problems
+            .iter()
+            .filter_map(|p| match p {
+                Error::TypeMismatch { field, .. } => Some(field.clone()),
+                _ => None,
+            })
+            .collect();
         let existing = match action.kind {
             ActionKind::Update | ActionKind::Destroy => {
-                let id = self.identity(&ctx, rpc, request.get("identity")).await.map_err(|failure| vec![failure])?;
-                Some(self.found(&ctx, rpc, id).await.map_err(|failure| vec![failure])?)
+                let id = self
+                    .identity(&ctx, rpc, request.get("identity"))
+                    .await
+                    .map_err(|failure| vec![failure])?;
+                Some(
+                    self.found(&ctx, rpc, id)
+                        .await
+                        .map_err(|failure| vec![failure])?,
+                )
             }
             _ => None,
         };
-        if !matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+        if !matches!(
+            action.kind,
+            ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+        ) {
             ash_core::apply_argument_defaults(action.arguments, &mut cast);
         }
         match action.kind {
             ActionKind::Create | ActionKind::Update | ActionKind::Destroy => {
-                problems.extend(ash_core::DynamicChangeset::problems(&ctx, resource, action, existing, cast));
+                problems.extend(ash_core::DynamicChangeset::problems(
+                    &ctx, resource, action, existing, cast,
+                ));
             }
             // A read or generic action: its arguments, each it requires given or defaulted.
             _ => problems.extend(
                 action
                     .arguments
                     .iter()
-                    .filter(|arg| !arg.allow_nil && cast.get(arg.name).is_none_or(Value::is_null) && !invalid.iter().any(|field| field == arg.name))
-                    .map(|arg| Error::Missing { field: arg.name.to_string() }),
+                    .filter(|arg| {
+                        !arg.allow_nil
+                            && cast.get(arg.name).is_none_or(Value::is_null)
+                            && !invalid.iter().any(|field| field == arg.name)
+                    })
+                    .map(|arg| Error::Missing {
+                        field: arg.name.to_string(),
+                    }),
             ),
         }
         // A value that isn't of its type is invalid, not missing too.
-        problems.retain(|problem| !matches!(problem, Error::Missing { field } if invalid.contains(field)));
+        problems.retain(
+            |problem| !matches!(problem, Error::Missing { field } if invalid.contains(field)),
+        );
         if problems.is_empty() {
             return Ok(());
         }
-        Err(problems.into_iter().map(|problem| self.form_failure(resource, action, problem)).collect())
+        Err(problems
+            .into_iter()
+            .map(|problem| self.form_failure(resource, action, problem))
+            .collect())
     }
 
     /// A problem a form finds, as AshTypescript reports it: an invalid attribute, its
@@ -541,26 +664,61 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     /// Record `id`, as the read the action finds records through finds it.
-    async fn found(&self, ctx: &Context<D>, rpc: &RpcAction<D>, id: Value) -> Result<FieldMap, Failure> {
+    async fn found(
+        &self,
+        ctx: &Context<D>,
+        rpc: &RpcAction<D>,
+        id: Value,
+    ) -> Result<FieldMap, Failure> {
         let resource = rpc.resource;
         let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
-        let read = rpc.read.or_else(|| resource.primary_read()).ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
-        let query = CompiledQuery { filter: Some(Filter::eq(pk, id.clone())), tenant: ctx.tenant.clone(), limit: Some(1), ..CompiledQuery::default() };
-        let scoped = ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query).map_err(|e| self.failure(e))?;
-        let rows = ctx.data.run_query(resource, &scoped).await.map_err(|e| self.failure(e))?;
-        rows.into_iter().next().ok_or_else(|| Failure::new("not_found", "Not found", format!("record with id: {:?} not found", id.to_string())))
+        let read = rpc
+            .read
+            .or_else(|| resource.primary_read())
+            .ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
+        let query = CompiledQuery {
+            filter: Some(Filter::eq(pk, id.clone())),
+            tenant: ctx.tenant.clone(),
+            limit: Some(1),
+            ..CompiledQuery::default()
+        };
+        let scoped =
+            ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query)
+                .map_err(|e| self.failure(e))?;
+        let rows = ctx
+            .data
+            .run_query(resource, &scoped)
+            .await
+            .map_err(|e| self.failure(e))?;
+        rows.into_iter().next().ok_or_else(|| {
+            Failure::new(
+                "not_found",
+                "Not found",
+                format!("record with id: {:?} not found", id.to_string()),
+            )
+        })
     }
 
     async fn answer(&self, ctx: &Context<D>, request: &Json) -> Result<Answer, Vec<Failure>> {
-        self.answer_one(ctx, request).await.map_err(|failure| vec![failure])
+        self.answer_one(ctx, request)
+            .await
+            .map_err(|failure| vec![failure])
     }
 
     /// `request` checked as AshTypescript checks one before running it: the action it
     /// names, what that action needs and can't take, what it selects, its input's shape,
     /// a get's `getBy` and a read's page. Validating it, a read needn't select anything.
-    fn parse<'a>(&'a self, ctx: &Context<D>, request: &Json, validating: bool) -> Result<Parsed<'a, D>, Failure> {
+    fn parse<'a>(
+        &'a self,
+        ctx: &Context<D>,
+        request: &Json,
+        validating: bool,
+    ) -> Result<Parsed<'a, D>, Failure> {
         let name = request["action"].as_str().unwrap_or_default();
-        let rpc = self.actions.get(name).ok_or_else(|| Failure::action_not_found(name))?;
+        let rpc = self
+            .actions
+            .get(name)
+            .ok_or_else(|| Failure::action_not_found(name))?;
         let (resource, action, options) = (rpc.resource, rpc.action, &rpc.options);
         let mut ctx = ctx.clone();
         if let Some(tenant) = request["tenant"].as_str() {
@@ -573,14 +731,21 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let get = read && (options.get || !options.get_by.is_empty());
         if read && !validating {
             match request.get("fields") {
-                None | Some(Json::Null) => return Err(Failure::missing_required_parameter("fields")),
-                Some(Json::Array(items)) if items.is_empty() => return Err(Failure::empty_fields_array()),
+                None | Some(Json::Null) => {
+                    return Err(Failure::missing_required_parameter("fields"));
+                }
+                Some(Json::Array(items)) if items.is_empty() => {
+                    return Err(Failure::empty_fields_array());
+                }
                 Some(Json::Array(_)) => {}
                 Some(other) => return Err(Failure::invalid_fields_type(other)),
             }
         }
         let list = read && !get;
-        for (option, enabled) in [("filter", options.enable_filter), ("sort", options.enable_sort)] {
+        for (option, enabled) in [
+            ("filter", options.enable_filter),
+            ("sort", options.enable_sort),
+        ] {
             if given(option).is_some() {
                 if !list {
                     return Err(Failure::option_not_supported(option, "unsupported", None));
@@ -595,7 +760,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         }
 
         // What it selects.
-        let rules = Rules { actor: ctx.actor.as_ref(), enable_filter: options.enable_filter, enable_sort: options.enable_sort, loads: &options.loads, names: &self.names };
+        let rules = Rules {
+            actor: ctx.actor.as_ref(),
+            enable_filter: options.enable_filter,
+            enable_sort: options.enable_sort,
+            loads: &options.loads,
+            names: &self.names,
+        };
         let selection = match given("fields") {
             None => Selection::default(),
             Some(Json::Array(items)) if validating && items.is_empty() => Selection::default(),
@@ -608,80 +779,146 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             Some(input @ Json::Object(_)) => input.clone(),
             Some(other) => return Err(Failure::invalid_input_format(other)),
         };
-        let get_by = if options.get_by.is_empty() { Vec::new() } else { get_by_filters(&self.names, resource, &options.get_by, request.get("getBy"))? };
+        let get_by = if options.get_by.is_empty() {
+            Vec::new()
+        } else {
+            get_by_filters(&self.names, resource, &options.get_by, request.get("getBy"))?
+        };
         let page = match given("page") {
             None => None,
             Some(page) => Some(PageRequest::parse(page)?),
         };
         let shown = shown_metadata(rpc, request.get("metadataFields"));
-        Ok(Parsed { rpc, ctx, get, selection, input: self.names.input(resource, action, &raw_input), get_by, page, shown })
+        Ok(Parsed {
+            rpc,
+            ctx,
+            get,
+            selection,
+            input: self.names.input(resource, action, &raw_input),
+            get_by,
+            page,
+            shown,
+        })
     }
 
     async fn answer_one(&self, ctx: &Context<D>, request: &Json) -> Result<Answer, Failure> {
-        let Parsed { rpc, ctx, get, selection, input: raw_input, get_by, page, shown } = self.parse(ctx, request, false)?;
+        let Parsed {
+            rpc,
+            ctx,
+            get,
+            selection,
+            input: raw_input,
+            get_by,
+            page,
+            shown,
+        } = self.parse(ctx, request, false)?;
         let (resource, action, options) = (rpc.resource, rpc.action, &rpc.options);
         let name = request["action"].as_str().unwrap_or_default();
-        let input = action_input(resource, action, &raw_input).map_err(|e| self.failure_of(action, e))?;
+        let input =
+            action_input(resource, action, &raw_input).map_err(|e| self.failure_of(action, e))?;
         // What a write notes on its record, as the request shows it.
-        let metadata = |stored: &FieldMap| (!shown.is_empty()).then(|| metadata_json(stored, &shown));
+        let metadata =
+            |stored: &FieldMap| (!shown.is_empty()).then(|| metadata_json(stored, &shown));
 
         match action.kind {
             ActionKind::Read if get => {
-                let found = self.get(&ctx, rpc, &selection, input, get_by, &shown).await?;
+                let found = self
+                    .get(&ctx, rpc, &selection, input, get_by, &shown)
+                    .await?;
                 Ok(match found {
                     Some(record) => record,
-                    None if options.not_found_error.unwrap_or(self.not_found_error) => return Err(self.failure(Error::NotFound)),
+                    None if options.not_found_error.unwrap_or(self.not_found_error) => {
+                        return Err(self.failure(Error::NotFound));
+                    }
                     None => Json::Null,
                 }
                 .into())
             }
-            ActionKind::Read => self.list(&ctx, rpc, &selection, input, request, page, &shown).await.map(Answer::from),
+            ActionKind::Read => self
+                .list(&ctx, rpc, &selection, input, request, page, &shown)
+                .await
+                .map(Answer::from),
             ActionKind::Create => {
-                let stored = ash_core::create_dynamic(&ctx, resource, action, input).await.map_err(|e| self.failure_of(action, e))?;
+                let stored = ash_core::create_dynamic(&ctx, resource, action, input)
+                    .await
+                    .map_err(|e| self.failure_of(action, e))?;
                 let metadata = metadata(&stored);
-                Ok(Answer { data: self.written(&ctx, resource, stored, &selection).await?, metadata })
+                Ok(Answer {
+                    data: self.written(&ctx, resource, stored, &selection).await?,
+                    metadata,
+                })
             }
             ActionKind::Update => {
                 let id = self.identity(&ctx, rpc, request.get("identity")).await?;
                 // Not found before it runs, or failing as it runs, for its one record.
-                let stored = ash_core::update_dynamic_via(&ctx, resource, rpc.read, action, id, input)
-                    .await
-                    .map_err(|e| match e {
-                        Error::NotFound => self.failure(e),
-                        e => self.failure_of(action, e).in_bulk(),
-                    })?;
+                let stored =
+                    ash_core::update_dynamic_via(&ctx, resource, rpc.read, action, id, input)
+                        .await
+                        .map_err(|e| match e {
+                            Error::NotFound => self.failure(e),
+                            e => self.failure_of(action, e).in_bulk(),
+                        })?;
                 let metadata = metadata(&stored);
-                Ok(Answer { data: self.written(&ctx, resource, stored, &selection).await?, metadata })
+                Ok(Answer {
+                    data: self.written(&ctx, resource, stored, &selection).await?,
+                    metadata,
+                })
             }
             ActionKind::Destroy => {
                 // Nothing to destroy: a bulk destroy of no records, which succeeds, its
                 // selected fields as an empty record's.
-                let nothing = || Json::Object(
-                    selection.fields.iter().chain(selection.relationships.iter().map(|(name, _)| name)).map(|name| (self.names.field(resource, name), Json::Null)).collect(),
-                );
+                let nothing = || {
+                    Json::Object(
+                        selection
+                            .fields
+                            .iter()
+                            .chain(selection.relationships.iter().map(|(name, _)| name))
+                            .map(|name| (self.names.field(resource, name), Json::Null))
+                            .collect(),
+                    )
+                };
                 let id = match self.identity(&ctx, rpc, request.get("identity")).await {
                     Err(failure) if failure.kind == "not_found" => return Ok(nothing().into()),
                     found => found?,
                 };
                 // What it selects of the record, read before it goes.
-                let loaded = self.loads_of(&ctx, resource, id.clone(), &selection).await?;
-                match ash_core::destroy_dynamic_via(&ctx, resource, rpc.read, action, id, input).await {
+                let loaded = self
+                    .loads_of(&ctx, resource, id.clone(), &selection)
+                    .await?;
+                match ash_core::destroy_dynamic_via(&ctx, resource, rpc.read, action, id, input)
+                    .await
+                {
                     Err(Error::NotFound) => Ok(nothing().into()),
                     Err(e) => Err(self.failure_of(action, e)),
                     Ok(mut stored) => {
                         let metadata = metadata(&stored);
                         stored.extend(loaded);
-                        let rows = self.render(&ctx, resource, vec![stored], &selection).await?;
-                        Ok(Answer { data: rows.into_iter().next().unwrap_or(Json::Null), metadata })
+                        let rows = self
+                            .render(&ctx, resource, vec![stored], &selection)
+                            .await?;
+                        Ok(Answer {
+                            data: rows.into_iter().next().unwrap_or(Json::Null),
+                            metadata,
+                        })
                     }
                 }
             }
             ActionKind::Generic => {
-                let runner = rpc.runner.as_ref().ok_or_else(|| Failure::action_not_found(name))?;
-                let value = runner(ctx, input).await.map_err(|e| self.failure_of(action, e))?;
+                let runner = rpc
+                    .runner
+                    .as_ref()
+                    .ok_or_else(|| Failure::action_not_found(name))?;
+                let value = runner(ctx, input)
+                    .await
+                    .map_err(|e| self.failure_of(action, e))?;
                 // An action returning nothing answers an empty object, as AshTypescript's
                 // (`:ok`) does.
-                Ok(if action.returns.is_none() { json!({}) } else { to_json(action.returns, &value) }.into())
+                Ok(if action.returns.is_none() {
+                    json!({})
+                } else {
+                    to_json(action.returns, &value)
+                }
+                .into())
             }
         }
     }
@@ -690,7 +927,12 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     /// the fields of one of the action's identities, found through the read the action
     /// finds records through. An action taking no identity changes the one record that
     /// read finds.
-    async fn identity(&self, ctx: &Context<D>, rpc: &RpcAction<D>, given: Option<&Json>) -> Result<Value, Failure> {
+    async fn identity(
+        &self,
+        ctx: &Context<D>,
+        rpc: &RpcAction<D>,
+        given: Option<&Json>,
+    ) -> Result<Value, Failure> {
         let resource = rpc.resource;
         let identities = &rpc.options.identities;
         let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
@@ -710,30 +952,55 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         };
         let filter = match given.filter(|value| !value.is_null()) {
             None if identities.is_empty() => Filter::True,
-            None => return Err(Failure::missing_identity(expected(), identities == &[Identity::PrimaryKey])),
+            None => {
+                return Err(Failure::missing_identity(
+                    expected(),
+                    identities == &[Identity::PrimaryKey],
+                ));
+            }
             // A primary key given directly: the record by id, with no read first.
-            Some(given @ (Json::String(_) | Json::Number(_))) if identities.contains(&Identity::PrimaryKey) => {
-                let ty = resource.primary_key().map_or(AttrType::Uuid, |attr| attr.ty);
-                let invalid = || self.failure(Error::Invalid(format!("invalid primary key {given}")));
+            Some(given @ (Json::String(_) | Json::Number(_)))
+                if identities.contains(&Identity::PrimaryKey) =>
+            {
+                let ty = resource
+                    .primary_key()
+                    .map_or(AttrType::Uuid, |attr| attr.ty);
+                let invalid =
+                    || self.failure(Error::Invalid(format!("invalid primary key {given}")));
                 let value = value_input(ty, given).map_err(|_| invalid())?;
                 return ash_core::pk_cast(ty, &value).ok_or_else(invalid);
             }
             Some(Json::Object(fields)) => {
-                let fields: HashMap<String, &Json> = fields.iter().map(|(key, value)| (self.names.field_named(resource, key), value)).collect();
+                let fields: HashMap<String, &Json> = fields
+                    .iter()
+                    .map(|(key, value)| (self.names.field_named(resource, key), value))
+                    .collect();
                 let matched = identities.iter().find_map(|identity| {
                     let keys: Vec<&str> = match identity {
                         // A map names a composite primary key; a single one is given
                         // directly, as AshTypescript takes them.
                         Identity::PrimaryKey => {
-                            let keys: Vec<&str> = resource.attributes.iter().filter(|attr| attr.primary_key).map(|attr| attr.name).collect();
+                            let keys: Vec<&str> = resource
+                                .attributes
+                                .iter()
+                                .filter(|attr| attr.primary_key)
+                                .map(|attr| attr.name)
+                                .collect();
                             if keys.len() < 2 {
                                 return None;
                             }
                             keys
                         }
-                        Identity::Named(name) => resource.identities.iter().find(|i| i.name == *name)?.keys.to_vec(),
+                        Identity::Named(name) => resource
+                            .identities
+                            .iter()
+                            .find(|i| i.name == *name)?
+                            .keys
+                            .to_vec(),
                     };
-                    keys.iter().all(|key| fields.contains_key(*key)).then_some(keys)
+                    keys.iter()
+                        .all(|key| fields.contains_key(*key))
+                        .then_some(keys)
                 });
                 let Some(keys) = matched else {
                     let provided = fields.keys().map(|key| to_camel_case(key)).collect();
@@ -749,56 +1016,142 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                         )));
                     }
                     let ty = field_type(resource, key).unwrap_or(AttrType::String);
-                    parts.push(Filter::eq(key, value_input(ty, value).map_err(|e| self.failure(e))?));
+                    parts.push(Filter::eq(
+                        key,
+                        value_input(ty, value).map_err(|e| self.failure(e))?,
+                    ));
                 }
                 Filter::and(parts)
             }
-            Some(other) => return Err(Failure::invalid_identity(vec![other.to_string()], expected())),
+            Some(other) => {
+                return Err(Failure::invalid_identity(
+                    vec![other.to_string()],
+                    expected(),
+                ));
+            }
         };
         // Found through the read, as the actor may read it: its id.
-        let read = rpc.read.or_else(|| resource.primary_read()).ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
-        let query = CompiledQuery { filter: Some(filter), tenant: ctx.tenant.clone(), limit: Some(1), select: Some(vec![pk.to_string()]), ..CompiledQuery::default() };
-        let scoped = ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query).map_err(|e| self.failure(e))?;
-        let rows = ctx.data.run_query(resource, &scoped).await.map_err(|e| self.failure(e))?;
-        rows.first().and_then(|row| row.get(pk)).filter(|id| !id.is_null()).cloned().ok_or_else(|| self.failure(Error::NotFound))
+        let read = rpc
+            .read
+            .or_else(|| resource.primary_read())
+            .ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
+        let query = CompiledQuery {
+            filter: Some(filter),
+            tenant: ctx.tenant.clone(),
+            limit: Some(1),
+            select: Some(vec![pk.to_string()]),
+            ..CompiledQuery::default()
+        };
+        let scoped =
+            ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query)
+                .map_err(|e| self.failure(e))?;
+        let rows = ctx
+            .data
+            .run_query(resource, &scoped)
+            .await
+            .map_err(|e| self.failure(e))?;
+        rows.first()
+            .and_then(|row| row.get(pk))
+            .filter(|id| !id.is_null())
+            .cloned()
+            .ok_or_else(|| self.failure(Error::NotFound))
     }
 
     /// The one record a get finds, as selected.
-    async fn get(&self, ctx: &Context<D>, rpc: &RpcAction<D>, selection: &Selection, input: FieldMap, get_by: Vec<Filter>, shown: &[Shown]) -> Result<Option<Json>, Failure> {
+    async fn get(
+        &self,
+        ctx: &Context<D>,
+        rpc: &RpcAction<D>,
+        selection: &Selection,
+        input: FieldMap,
+        get_by: Vec<Filter>,
+        shown: &[Shown],
+    ) -> Result<Option<Json>, Failure> {
         let resource = rpc.resource;
-        let base = CompiledQuery { filter: Some(Filter::and(get_by)), sort: prepared_sort(rpc.action), tenant: ctx.tenant.clone(), ..CompiledQuery::default() };
-        let scoped = ash_core::scope_read(resource, rpc.action, ctx.actor.as_ref(), &input, base).map_err(|e| self.failure(e))?;
-        let rows = read_rows(ctx, resource, selection, CompiledQuery { limit: Some(2), ..scoped }).await.map_err(|e| self.failure(e))?;
+        let base = CompiledQuery {
+            filter: Some(Filter::and(get_by)),
+            sort: prepared_sort(rpc.action),
+            tenant: ctx.tenant.clone(),
+            ..CompiledQuery::default()
+        };
+        let scoped = ash_core::scope_read(resource, rpc.action, ctx.actor.as_ref(), &input, base)
+            .map_err(|e| self.failure(e))?;
+        let rows = read_rows(
+            ctx,
+            resource,
+            selection,
+            CompiledQuery {
+                limit: Some(2),
+                ..scoped
+            },
+        )
+        .await
+        .map_err(|e| self.failure(e))?;
         match rows.len() {
             0 => Ok(None),
-            1 => Ok(self.render_read(ctx, rpc, &input, rows, selection, shown).await?.into_iter().next()),
+            1 => Ok(self
+                .render_read(ctx, rpc, &input, rows, selection, shown)
+                .await?
+                .into_iter()
+                .next()),
             n => Err(self.failure(Error::TooMany(n))),
         }
     }
 
     /// A list read: its records, or a page of them, as its action's pagination decides.
     #[allow(clippy::too_many_arguments)]
-    async fn list(&self, ctx: &Context<D>, rpc: &RpcAction<D>, selection: &Selection, input: FieldMap, request: &Json, page: Option<PageRequest>, shown: &[Shown]) -> Result<Json, Failure> {
+    async fn list(
+        &self,
+        ctx: &Context<D>,
+        rpc: &RpcAction<D>,
+        selection: &Selection,
+        input: FieldMap,
+        request: &Json,
+        page: Option<PageRequest>,
+        shown: &[Shown],
+    ) -> Result<Json, Failure> {
         let (resource, action) = (rpc.resource, rpc.action);
         let actor = ctx.actor.as_ref();
         let mut filters = Vec::new();
         if let Some(filter) = request.get("filter").filter(|value| !value.is_null()) {
-            let filter = filter_input(resource, &self.names.filter(resource, filter)).map_err(|e| self.failure(e).under("filter"))?;
-            filters.push(ash_core::guard_input_filter(resource, actor, filter).map_err(|e| self.failure(e))?);
+            let filter = filter_input(resource, &self.names.filter(resource, filter))
+                .map_err(|e| self.failure(e).under("filter"))?;
+            filters.push(
+                ash_core::guard_input_filter(resource, actor, filter)
+                    .map_err(|e| self.failure(e))?,
+            );
         }
         // The action's sort, then the client's, as AshTypescript sorts its query after
         // running the read's preparations.
         let mut sort = prepared_sort(action);
-        if let Some(text) = request.get("sort").filter(|value| !value.is_null()).map(sort_text) {
-            let given = sort_input(resource, &self.names.sort(resource, &text)).map_err(|e| self.failure(e).under("sort"))?;
-            sort.extend(ash_core::guard_input_sort(resource, actor, given).map_err(|e| self.failure(e))?);
+        if let Some(text) = request
+            .get("sort")
+            .filter(|value| !value.is_null())
+            .map(sort_text)
+        {
+            let given = sort_input(resource, &self.names.sort(resource, &text))
+                .map_err(|e| self.failure(e).under("sort"))?;
+            sort.extend(
+                ash_core::guard_input_sort(resource, actor, given).map_err(|e| self.failure(e))?,
+            );
         }
-        let base = CompiledQuery { filter: Some(Filter::and(filters)), sort, tenant: ctx.tenant.clone(), ..CompiledQuery::default() };
-        let scoped = ash_core::scope_read(resource, action, actor, &input, base).map_err(|e| self.failure(e))?;
+        let base = CompiledQuery {
+            filter: Some(Filter::and(filters)),
+            sort,
+            tenant: ctx.tenant.clone(),
+            ..CompiledQuery::default()
+        };
+        let scoped = ash_core::scope_read(resource, action, actor, &input, base)
+            .map_err(|e| self.failure(e))?;
 
         let Some(pagination) = action.pagination else {
-            let rows = read_rows(ctx, resource, selection, scoped).await.map_err(|e| self.failure(e))?;
-            return Ok(Json::Array(self.render_read(ctx, rpc, &input, rows, selection, shown).await?));
+            let rows = read_rows(ctx, resource, selection, scoped)
+                .await
+                .map_err(|e| self.failure(e))?;
+            return Ok(Json::Array(
+                self.render_read(ctx, rpc, &input, rows, selection, shown)
+                    .await?,
+            ));
         };
         // As Ash pages a read: the default limit where none is given, and where the read
         // must page, a page of it even unasked.
@@ -809,41 +1162,89 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             page.limit = pagination.default_limit;
         }
         if page.is_none() && pagination.required {
-            page = pagination.default_limit.map(|limit| PageRequest { limit: Some(limit), ..PageRequest::default() });
+            page = pagination.default_limit.map(|limit| PageRequest {
+                limit: Some(limit),
+                ..PageRequest::default()
+            });
         }
-        if page.as_ref().is_some_and(|page| page.count == Some(true)) && pagination.countable == Countable::No {
-            return Err(Failure::new("invalid_page", "Invalid pagination", format!("Action {} cannot be counted", action.name)));
+        if page.as_ref().is_some_and(|page| page.count == Some(true))
+            && pagination.countable == Countable::No
+        {
+            return Err(Failure::new(
+                "invalid_page",
+                "Invalid pagination",
+                format!("Action {} cannot be counted", action.name),
+            ));
         }
-        let Some((page, limit)) = page.and_then(|page| page.limit.map(|limit| (page, limit))) else {
+        let Some((page, limit)) = page.and_then(|page| page.limit.map(|limit| (page, limit)))
+        else {
             if pagination.required {
-                return Err(Failure::new("invalid_page", "Invalid pagination", "Limit is required"));
+                return Err(Failure::new(
+                    "invalid_page",
+                    "Invalid pagination",
+                    "Limit is required",
+                ));
             }
-            let rows = read_rows(ctx, resource, selection, scoped).await.map_err(|e| self.failure(e))?;
-            return Ok(Json::Array(self.render_read(ctx, rpc, &input, rows, selection, shown).await?));
+            let rows = read_rows(ctx, resource, selection, scoped)
+                .await
+                .map_err(|e| self.failure(e))?;
+            return Ok(Json::Array(
+                self.render_read(ctx, rpc, &input, rows, selection, shown)
+                    .await?,
+            ));
         };
         // The smallest of the page's size, the read's own limit and its largest page, as
         // Ash takes it.
-        let limit = [Some(limit), scoped.limit, pagination.max_page_size].into_iter().flatten().min().unwrap_or(limit);
-        let count = if page.count == Some(true) || (pagination.countable == Countable::ByDefault && page.count != Some(false)) {
-            let counted = CompiledQuery { sort: Vec::new(), ..scoped.clone() };
-            Some(ctx.data.count(resource, &counted).await.map_err(|e| self.failure(e))?)
+        let limit = [Some(limit), scoped.limit, pagination.max_page_size]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(limit);
+        let count = if page.count == Some(true)
+            || (pagination.countable == Countable::ByDefault && page.count != Some(false))
+        {
+            let counted = CompiledQuery {
+                sort: Vec::new(),
+                ..scoped.clone()
+            };
+            Some(
+                ctx.data
+                    .count(resource, &counted)
+                    .await
+                    .map_err(|e| self.failure(e))?,
+            )
         } else {
             None
         };
-        let keyset = page.after.is_some() || page.before.is_some() || (page.offset.is_none() && pagination.keyset);
+        let keyset = page.after.is_some()
+            || page.before.is_some()
+            || (page.offset.is_none() && pagination.keyset);
         if !keyset {
             let offset = page.offset.unwrap_or(0);
-            let mut rows = read_rows(ctx, resource, selection, CompiledQuery { limit: Some(limit + 1), offset: Some(offset), ..scoped })
-                .await
-                .map_err(|e| self.failure(e))?;
+            let mut rows = read_rows(
+                ctx,
+                resource,
+                selection,
+                CompiledQuery {
+                    limit: Some(limit + 1),
+                    offset: Some(offset),
+                    ..scoped
+                },
+            )
+            .await
+            .map_err(|e| self.failure(e))?;
             let has_more = rows.len() > limit;
             rows.truncate(limit);
-            let results = self.render_read(ctx, rpc, &input, rows, selection, shown).await?;
+            let results = self
+                .render_read(ctx, rpc, &input, rows, selection, shown)
+                .await?;
             return Ok(json!({
                 "results": results, "hasMore": has_more, "limit": limit, "offset": offset, "count": count, "type": "offset",
             }));
         }
-        let page = self.keyset_page(ctx, rpc, &input, selection, scoped, limit, &page, shown).await?;
+        let page = self
+            .keyset_page(ctx, rpc, &input, selection, scoped, limit, &page, shown)
+            .await?;
         Ok(json!({
             "results": page.results, "hasMore": page.has_more, "limit": limit, "after": page.after, "before": page.before,
             "nextPage": page.next, "previousPage": page.previous, "count": count, "type": "keyset",
@@ -873,18 +1274,40 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
             let direction = if backward { "before" } else { "after" };
             let keyset = KeysetCursor::decode(cursor)
-                .filter(|keyset| keyset.values.len() == sort.len() && keyset.values.iter().zip(&sort).all(|((field, _), s)| *field == s.field))
+                .filter(|keyset| {
+                    keyset.values.len() == sort.len()
+                        && keyset
+                            .values
+                            .iter()
+                            .zip(&sort)
+                            .all(|((field, _), s)| *field == s.field)
+                })
                 .ok_or_else(|| Failure::invalid_keyset(cursor, direction))?;
             let values = ash_core::keyset_values(resource, &keyset, &sort);
-            if let Some(after) = ash_core::build_keyset_filter(resource, &sort, &values, !backward) {
+            if let Some(after) = ash_core::build_keyset_filter(resource, &sort, &values, !backward)
+            {
                 filter = Some(Filter::and(filter.into_iter().chain([after])));
             }
         }
-        let read_sort: Vec<Sort> = sort.iter().map(|s| if backward { s.reversed() } else { s.clone() }).collect();
-        let query = CompiledQuery { filter, sort: read_sort, limit: Some(limit + 1), offset: None, ..scoped };
-        let mut rows = read_rows(ctx, resource, &selection.keeping(sort.iter().map(|s| s.field.as_str())), query)
-            .await
-            .map_err(|e| self.failure(e))?;
+        let read_sort: Vec<Sort> = sort
+            .iter()
+            .map(|s| if backward { s.reversed() } else { s.clone() })
+            .collect();
+        let query = CompiledQuery {
+            filter,
+            sort: read_sort,
+            limit: Some(limit + 1),
+            offset: None,
+            ..scoped
+        };
+        let mut rows = read_rows(
+            ctx,
+            resource,
+            &selection.keeping(sort.iter().map(|s| s.field.as_str())),
+            query,
+        )
+        .await
+        .map_err(|e| self.failure(e))?;
         let has_more = rows.len() > limit;
         rows.truncate(limit);
         if backward {
@@ -893,18 +1316,41 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let cursor = |row: Option<&FieldMap>| -> Json {
             row.map_or(Json::Null, |row| {
                 let id = row.get(pk).cloned().unwrap_or(Value::Null);
-                let values = sort.iter().map(|s| (s.field.clone(), row.get(&s.field).cloned().unwrap_or(Value::Null))).collect();
+                let values = sort
+                    .iter()
+                    .map(|s| {
+                        (
+                            s.field.clone(),
+                            row.get(&s.field).cloned().unwrap_or(Value::Null),
+                        )
+                    })
+                    .collect();
                 Json::String(KeysetCursor { id, values }.encode())
             })
         };
         let (previous, next) = (cursor(rows.first()), cursor(rows.last()));
-        let results = self.render_read(ctx, rpc, input, rows, selection, shown).await?;
-        Ok(KeysetPage { results, has_more, after: page.after.clone(), before: page.before.clone(), next, previous })
+        let results = self
+            .render_read(ctx, rpc, input, rows, selection, shown)
+            .await?;
+        Ok(KeysetPage {
+            results,
+            has_more,
+            after: page.after.clone(),
+            before: page.before.clone(),
+            next,
+            previous,
+        })
     }
 
     /// The aggregates and calculations `selection` loads of record `id`, as the actor
     /// reads them.
-    async fn loads_of(&self, ctx: &Context<D>, resource: &'static ResourceDef, id: Value, selection: &Selection) -> Result<FieldMap, Failure> {
+    async fn loads_of(
+        &self,
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        id: Value,
+        selection: &Selection,
+    ) -> Result<FieldMap, Failure> {
         let loads = selection.of(|name| resource.attribute(name).is_none());
         let Some(pk) = resource.primary_key().filter(|_| !loads.is_empty()) else {
             return Ok(FieldMap::new());
@@ -916,14 +1362,33 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             calculation_args: selection.calculation_args.clone(),
             ..CompiledQuery::default()
         };
-        let row = read_rows(ctx, resource, selection, query).await.map_err(|e| self.failure(e))?.into_iter().next().unwrap_or_default();
-        Ok(loads.into_iter().filter_map(|name| row.get(&name).cloned().map(|value| (name, value))).collect())
+        let row = read_rows(ctx, resource, selection, query)
+            .await
+            .map_err(|e| self.failure(e))?
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        Ok(loads
+            .into_iter()
+            .filter_map(|name| row.get(&name).cloned().map(|value| (name, value)))
+            .collect())
     }
 
     /// A written record, as the client selected it: its aggregates and calculations read as
     /// the actor sees them, and its relationships loaded.
-    async fn written(&self, ctx: &Context<D>, resource: &'static ResourceDef, mut stored: FieldMap, selection: &Selection) -> Result<Json, Failure> {
-        if let Some(id) = resource.primary_key().and_then(|pk| stored.get(pk.name)).filter(|id| !id.is_null()).cloned() {
+    async fn written(
+        &self,
+        ctx: &Context<D>,
+        resource: &'static ResourceDef,
+        mut stored: FieldMap,
+        selection: &Selection,
+    ) -> Result<Json, Failure> {
+        if let Some(id) = resource
+            .primary_key()
+            .and_then(|pk| stored.get(pk.name))
+            .filter(|id| !id.is_null())
+            .cloned()
+        {
             stored.extend(self.loads_of(ctx, resource, id, selection).await?);
         }
         let rows = self.render(ctx, resource, vec![stored], selection).await?;
@@ -943,7 +1408,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         shown: &[Shown],
     ) -> Result<Vec<Json>, Failure> {
         ash_core::after_read(rpc.action, input, &mut rows).map_err(|e| self.failure(e))?;
-        let metadata: Vec<Map<String, Json>> = rows.iter().map(|row| metadata_json(row, shown)).collect();
+        let metadata: Vec<Map<String, Json>> =
+            rows.iter().map(|row| metadata_json(row, shown)).collect();
         let mut rendered = self.render(ctx, rpc.resource, rows, selection).await?;
         for (record, metadata) in rendered.iter_mut().zip(metadata) {
             if let Json::Object(record) = record {
@@ -954,7 +1420,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     }
 
     /// `rows` as the client selected them, their relationships loaded in turn.
-    fn render<'a>(&'a self, ctx: &'a Context<D>, resource: &'static ResourceDef, rows: Vec<FieldMap>, selection: &'a Selection) -> BoxFuture<'a, Result<Vec<Json>, Failure>> {
+    fn render<'a>(
+        &'a self,
+        ctx: &'a Context<D>,
+        resource: &'static ResourceDef,
+        rows: Vec<FieldMap>,
+        selection: &'a Selection,
+    ) -> BoxFuture<'a, Result<Vec<Json>, Failure>> {
         Box::pin(async move {
             let mut out: Vec<Map<String, Json>> = rows
                 .iter()
@@ -963,9 +1435,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                         .fields
                         .iter()
                         .map(|name| {
-                            let value = row.get(name).map_or(Json::Null, |value| match selection.values.get(name) {
-                                Some(within) => select_value(field_type(resource, name), value, within),
-                                None => to_json(field_type(resource, name), value),
+                            let value = row.get(name).map_or(Json::Null, |value| {
+                                match selection.values.get(name) {
+                                    Some(within) => {
+                                        select_value(field_type(resource, name), value, within)
+                                    }
+                                    None => to_json(field_type(resource, name), value),
+                                }
                             });
                             (self.names.field(resource, name), value)
                         })
@@ -973,23 +1449,48 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 })
                 .collect();
             for (rel_name, nested) in &selection.relationships {
-                let rel = resource.relationship(rel_name).expect("parsed against the resource");
+                let rel = resource
+                    .relationship(rel_name)
+                    .expect("parsed against the resource");
                 let dest = (rel.destination)();
                 let many = matches!(rel.kind, RelKind::HasMany | RelKind::ManyToMany);
                 let values: Vec<Json> = match &nested.page {
                     None => {
-                        let groups = ash_core::load_related_query(ctx, resource, rel_name, &rows, &nested.query).await.map_err(|e| self.failure(e))?;
+                        let groups = ash_core::load_related_query(
+                            ctx,
+                            resource,
+                            rel_name,
+                            &rows,
+                            &nested.query,
+                        )
+                        .await
+                        .map_err(|e| self.failure(e))?;
                         let sizes: Vec<usize> = groups.iter().map(Vec::len).collect();
-                        let mut rendered = self.render(ctx, dest, groups.into_iter().flatten().collect(), &nested.selection).await?.into_iter();
+                        let mut rendered = self
+                            .render(
+                                ctx,
+                                dest,
+                                groups.into_iter().flatten().collect(),
+                                &nested.selection,
+                            )
+                            .await?
+                            .into_iter();
                         sizes
                             .into_iter()
                             .map(|size| {
                                 let related: Vec<Json> = rendered.by_ref().take(size).collect();
-                                if many { Json::Array(related) } else { related.into_iter().next().unwrap_or(Json::Null) }
+                                if many {
+                                    Json::Array(related)
+                                } else {
+                                    related.into_iter().next().unwrap_or(Json::Null)
+                                }
                             })
                             .collect()
                     }
-                    Some(page) => self.nested_pages(ctx, resource, rel_name, dest, &rows, nested, page).await?,
+                    Some(page) => {
+                        self.nested_pages(ctx, resource, rel_name, dest, &rows, nested, page)
+                            .await?
+                    }
                 };
                 for (object, value) in out.iter_mut().zip(values) {
                     object.insert(self.names.field(resource, rel_name), value);
@@ -1027,11 +1528,20 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
                 let direction = if backward { "before" } else { "after" };
                 let keyset = KeysetCursor::decode(cursor)
-                    .filter(|keyset| keyset.values.len() == sort.len() && keyset.values.iter().zip(&sort).all(|((field, _), s)| field == &s.field))
+                    .filter(|keyset| {
+                        keyset.values.len() == sort.len()
+                            && keyset
+                                .values
+                                .iter()
+                                .zip(&sort)
+                                .all(|((field, _), s)| field == &s.field)
+                    })
                     .ok_or_else(|| Failure::invalid_keyset(cursor, direction))?;
                 let values = ash_core::keyset_values(dest, &keyset, &sort);
-                if let Some(after) = ash_core::build_keyset_filter(dest, &sort, &values, !backward) {
-                    query.filter = Some(Filter::and(query.filter.take().into_iter().chain([after])));
+                if let Some(after) = ash_core::build_keyset_filter(dest, &sort, &values, !backward)
+                {
+                    query.filter =
+                        Some(Filter::and(query.filter.take().into_iter().chain([after])));
                 }
             }
             if backward {
@@ -1046,15 +1556,32 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         }
         let limit = page.limit;
         query.limit = limit.map(|limit| limit + 1);
-        let groups = ash_core::load_related_query(ctx, resource, rel_name, rows, &query).await.map_err(|e| self.failure(e))?;
+        let groups = ash_core::load_related_query(ctx, resource, rel_name, rows, &query)
+            .await
+            .map_err(|e| self.failure(e))?;
         let counts = if page.count {
             let action = dest.default_read();
-            if action.pagination.is_some_and(|pagination| pagination.countable == Countable::No) {
-                return Err(Failure::new("invalid_page", "Invalid pagination", format!("Action {} cannot be counted", action.name)));
+            if action
+                .pagination
+                .is_some_and(|pagination| pagination.countable == Countable::No)
+            {
+                return Err(Failure::new(
+                    "invalid_page",
+                    "Invalid pagination",
+                    format!("Action {} cannot be counted", action.name),
+                ));
             }
-            let counting =
-                RelatedQuery { filter: nested.query.filter.clone(), calculation_args: nested.query.calculation_args.clone(), ..RelatedQuery::default() };
-            ash_core::count_related_query(ctx, resource, rel_name, rows, &counting).await.map_err(|e| self.failure(e))?.into_iter().map(Json::from).collect()
+            let counting = RelatedQuery {
+                filter: nested.query.filter.clone(),
+                calculation_args: nested.query.calculation_args.clone(),
+                ..RelatedQuery::default()
+            };
+            ash_core::count_related_query(ctx, resource, rel_name, rows, &counting)
+                .await
+                .map_err(|e| self.failure(e))?
+                .into_iter()
+                .map(Json::from)
+                .collect()
         } else {
             vec![Json::Null; rows.len()]
         };
@@ -1070,7 +1597,15 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             let cursor = |row: Option<&FieldMap>| -> Json {
                 row.map_or(Json::Null, |row| {
                     let id = row.get(pk).cloned().unwrap_or(Value::Null);
-                    let values = sort.iter().map(|s| (s.field.clone(), row.get(&s.field).cloned().unwrap_or(Value::Null))).collect();
+                    let values = sort
+                        .iter()
+                        .map(|s| {
+                            (
+                                s.field.clone(),
+                                row.get(&s.field).cloned().unwrap_or(Value::Null),
+                            )
+                        })
+                        .collect();
                     Json::String(KeysetCursor { id, values }.encode())
                 })
             };
@@ -1111,7 +1646,10 @@ struct Answer {
 
 impl From<Json> for Answer {
     fn from(data: Json) -> Self {
-        Self { data, metadata: None }
+        Self {
+            data,
+            metadata: None,
+        }
     }
 }
 
@@ -1124,7 +1662,12 @@ fn shown_metadata<D>(rpc: &RpcAction<D>, requested: Option<&Json>) -> Vec<Shown>
         .action
         .metadata
         .iter()
-        .filter(|def| options.show_metadata.as_ref().is_none_or(|shown| shown.contains(&def.name)))
+        .filter(|def| {
+            options
+                .show_metadata
+                .as_ref()
+                .is_none_or(|shown| shown.contains(&def.name))
+        })
         .collect();
     let name_of = |def: &MetadataDef| {
         options
@@ -1133,21 +1676,37 @@ fn shown_metadata<D>(rpc: &RpcAction<D>, requested: Option<&Json>) -> Vec<Shown>
             .find(|(field, _)| *field == def.name)
             .map_or_else(|| to_camel_case(def.name), |(_, name)| name.to_string())
     };
-    let requested: Vec<&str> = requested.and_then(Json::as_array).map(|items| items.iter().filter_map(Json::as_str).collect()).unwrap_or_default();
+    let requested: Vec<&str> = requested
+        .and_then(Json::as_array)
+        .map(|items| items.iter().filter_map(Json::as_str).collect())
+        .unwrap_or_default();
     let mut picked: Vec<&'static MetadataDef> = Vec::new();
     if requested.is_empty() {
-        if matches!(rpc.action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+        if matches!(
+            rpc.action.kind,
+            ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+        ) {
             picked = exposed;
         }
     } else {
         for given in requested {
-            let found = exposed.iter().copied().find(|def| name_of(def) == given || def.name == snake(given));
-            if let Some(def) = found.filter(|def| !picked.iter().any(|seen| seen.name == def.name)) {
+            let found = exposed
+                .iter()
+                .copied()
+                .find(|def| name_of(def) == given || def.name == snake(given));
+            if let Some(def) = found.filter(|def| !picked.iter().any(|seen| seen.name == def.name))
+            {
                 picked.push(def);
             }
         }
     }
-    picked.into_iter().map(|def| Shown { def, name: name_of(def) }).collect()
+    picked
+        .into_iter()
+        .map(|def| Shown {
+            def,
+            name: name_of(def),
+        })
+        .collect()
 }
 
 struct KeysetPage {
@@ -1186,26 +1745,52 @@ impl PageRequest {
         }
         let number = |key: &str| map.get(key).and_then(Json::as_u64).map(|n| n as usize);
         let text = |key: &str| map.get(key).and_then(Json::as_str).map(str::to_string);
-        Ok(Self { limit: number("limit"), offset: number("offset"), count: map.get("count").and_then(Json::as_bool), after: text("after"), before: text("before") })
+        Ok(Self {
+            limit: number("limit"),
+            offset: number("offset"),
+            count: map.get("count").and_then(Json::as_bool),
+            after: text("after"),
+            before: text("before"),
+        })
     }
 }
 
 /// A get's equality filters, from the request's `getBy`: exactly its fields, scalar.
-fn get_by_filters(names: &Names, resource: &ResourceDef, fields: &[&'static str], given: Option<&Json>) -> Result<Vec<Filter>, Failure> {
+fn get_by_filters(
+    names: &Names,
+    resource: &ResourceDef,
+    fields: &[&'static str],
+    given: Option<&Json>,
+) -> Result<Vec<Filter>, Failure> {
     let empty = Map::new();
     let given = given.and_then(Json::as_object).unwrap_or(&empty);
-    let provided: HashMap<String, &Json> = given.iter().map(|(key, value)| (names.field_named(resource, key), value)).collect();
+    let provided: HashMap<String, &Json> = given
+        .iter()
+        .map(|(key, value)| (names.field_named(resource, key), value))
+        .collect();
     let to_camel_case = |field: &str| names.field(resource, field);
     let allowed: Vec<String> = fields.iter().map(|field| to_camel_case(field)).collect();
-    let extra: Vec<String> = provided.keys().filter(|key| !fields.contains(&key.as_str())).map(|key| to_camel_case(key)).collect();
+    let extra: Vec<String> = provided
+        .keys()
+        .filter(|key| !fields.contains(&key.as_str()))
+        .map(|key| to_camel_case(key))
+        .collect();
     if !extra.is_empty() {
         return Err(Failure::unexpected_get_by_fields(extra, allowed));
     }
-    let missing: Vec<String> = fields.iter().filter(|field| !provided.contains_key(**field)).map(|field| to_camel_case(field)).collect();
+    let missing: Vec<String> = fields
+        .iter()
+        .filter(|field| !provided.contains_key(**field))
+        .map(|field| to_camel_case(field))
+        .collect();
     if !missing.is_empty() {
         return Err(Failure::missing_get_by_fields(missing));
     }
-    let non_scalar: Vec<String> = fields.iter().filter(|field| provided[**field].is_object() || provided[**field].is_array()).map(|field| to_camel_case(field)).collect();
+    let non_scalar: Vec<String> = fields
+        .iter()
+        .filter(|field| provided[**field].is_object() || provided[**field].is_array())
+        .map(|field| to_camel_case(field))
+        .collect();
     if !non_scalar.is_empty() {
         return Err(Failure::invalid_get_by(&non_scalar));
     }
@@ -1213,7 +1798,10 @@ fn get_by_filters(names: &Names, resource: &ResourceDef, fields: &[&'static str]
         .iter()
         .map(|field| {
             let ty = field_type(resource, field).expect("get_by names attributes");
-            let value = value_input(ty, provided[*field]).map_err(|e| Failure::from_error(&e).unwrap_or_else(|| Failure::new("invalid", "Invalid", e.to_string())))?;
+            let value = value_input(ty, provided[*field]).map_err(|e| {
+                Failure::from_error(&e)
+                    .unwrap_or_else(|| Failure::new("invalid", "Invalid", e.to_string()))
+            })?;
             Ok(Filter::eq(*field, value))
         })
         .collect()
@@ -1229,9 +1817,13 @@ fn keep_sort_fields(dest: &ResourceDef, query: &mut RelatedQuery, sort: &[Sort])
             {
                 select.push(field.to_string());
             }
-        } else if dest.calculation(field).is_some() && !query.calculations.iter().any(|name| name == field) {
+        } else if dest.calculation(field).is_some()
+            && !query.calculations.iter().any(|name| name == field)
+        {
             query.calculations.push(field.to_string());
-        } else if dest.aggregate(field).is_some() && !query.aggregates.iter().any(|name| name == field) {
+        } else if dest.aggregate(field).is_some()
+            && !query.aggregates.iter().any(|name| name == field)
+        {
             query.aggregates.push(field.to_string());
         }
     }
@@ -1243,7 +1835,11 @@ fn prepared_sort(action: &ActionDef) -> Vec<Sort> {
         .preparations
         .iter()
         .filter_map(|preparation| match *preparation {
-            PreparationDef::Sort { field, descending } => Some(Sort { field: field.to_string(), descending, ..Sort::default() }),
+            PreparationDef::Sort { field, descending } => Some(Sort {
+                field: field.to_string(),
+                descending,
+                ..Sort::default()
+            }),
             _ => None,
         })
         .collect()
@@ -1251,7 +1847,12 @@ fn prepared_sort(action: &ActionDef) -> Vec<Sort> {
 
 /// The rows `query` reads of `resource`, selecting what `selection` needs, as the actor
 /// may see them.
-async fn read_rows<D: DataLayer>(ctx: &Context<D>, resource: &'static ResourceDef, selection: &Selection, query: CompiledQuery) -> ash_core::Result<Vec<FieldMap>> {
+async fn read_rows<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    selection: &Selection,
+    query: CompiledQuery,
+) -> ash_core::Result<Vec<FieldMap>> {
     let query = CompiledQuery {
         select: Some(selection.attributes(resource)),
         aggregates: selection.of(|name| resource.aggregate(name).is_some()),
@@ -1272,24 +1873,39 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
     match (ty, value) {
         (_, Value::Null) => Json::Null,
         // Each item as its type renders.
-        (Some(AttrType::Array { of }), Value::Array(items)) => Json::Array(items.iter().map(|item| to_json(Some(*of), item)).collect()),
+        (Some(AttrType::Array { of }), Value::Array(items)) => {
+            Json::Array(items.iter().map(|item| to_json(Some(*of), item)).collect())
+        }
         // Declared fields, named as a client names them.
-        (Some(ty @ (AttrType::Embedded(_) | AttrType::TypedMap { .. })), Value::Map(map)) => Json::Object(
-            ty.fields()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|field| map.get(field.name).map(|value| (to_camel_case(field.name), to_json(Some(field.ty), value))))
-                .collect(),
-        ),
+        (Some(ty @ (AttrType::Embedded(_) | AttrType::TypedMap { .. })), Value::Map(map)) => {
+            Json::Object(
+                ty.fields()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|field| {
+                        map.get(field.name).map(|value| {
+                            (to_camel_case(field.name), to_json(Some(field.ty), value))
+                        })
+                    })
+                    .collect(),
+            )
+        }
         // The member it holds, as AshTypescript renders a union: `{member: value}`.
         (Some(AttrType::Union { members, .. }), value) => match value.union_member() {
             Some((name, held)) => {
-                let ty = members.iter().find(|member| member.name == name).map(|member| member.ty);
+                let ty = members
+                    .iter()
+                    .find(|member| member.name == name)
+                    .map(|member| member.ty);
                 json!({ to_camel_case(name): to_json(ty, held) })
             }
             None => value.to_plain_json(),
         },
-        (Some(AttrType::Float), Value::String(text)) => text.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map_or_else(|| Json::String(text.clone()), Json::Number),
+        (Some(AttrType::Float), Value::String(text)) => text
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map_or_else(|| Json::String(text.clone()), Json::Number),
         (_, Value::Bool(b)) => Json::Bool(*b),
         (_, Value::Int(i)) => Json::from(*i),
         (_, Value::Float(n)) => serde_json::Number::from_f64(*n).map_or(Json::Null, Json::Number),
@@ -1305,9 +1921,12 @@ fn to_json(ty: Option<AttrType>, value: &Value) -> Json {
 fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) -> Json {
     match (ty, value) {
         (_, Value::Null) => Json::Null,
-        (Some(AttrType::Array { of }), Value::Array(items)) => {
-            Json::Array(items.iter().map(|item| select_value(Some(*of), item, within)).collect())
-        }
+        (Some(AttrType::Array { of }), Value::Array(items)) => Json::Array(
+            items
+                .iter()
+                .map(|item| select_value(Some(*of), item, within))
+                .collect(),
+        ),
         (Some(ty), Value::Map(map)) if !matches!(ty, AttrType::Union { .. }) => {
             let ValueSelection::Fields(selected) = within else {
                 return to_json(Some(ty), value);
@@ -1317,7 +1936,10 @@ fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) ->
                 selected
                     .iter()
                     .map(|(name, nested)| {
-                        let field_ty = fields.iter().find(|field| field.name == *name).map(|field| field.ty);
+                        let field_ty = fields
+                            .iter()
+                            .find(|field| field.name == *name)
+                            .map(|field| field.ty);
                         let value = map.get(*name).map_or(Json::Null, |value| match nested {
                             Some(nested) => select_value(field_ty, value, nested),
                             None => to_json(field_ty, value),
@@ -1328,13 +1950,18 @@ fn select_value(ty: Option<AttrType>, value: &Value, within: &ValueSelection) ->
             )
         }
         (Some(AttrType::Union { members, .. }), value) => {
-            let (ValueSelection::Members(selected), Some((name, held))) = (within, value.union_member()) else {
+            let (ValueSelection::Members(selected), Some((name, held))) =
+                (within, value.union_member())
+            else {
                 return Json::Null;
             };
             let Some((_, nested)) = selected.iter().find(|(member, _)| *member == name) else {
                 return Json::Null;
             };
-            let member_ty = members.iter().find(|member| member.name == name).map(|member| member.ty);
+            let member_ty = members
+                .iter()
+                .find(|member| member.name == name)
+                .map(|member| member.ty);
             let held = match nested {
                 Some(nested) => select_value(member_ty, held, nested),
                 None => to_json(member_ty, held),
@@ -1377,7 +2004,10 @@ pub mod axum {
         rpc: Rpc<D>,
         context: impl Fn(&HeaderMap) -> Context<D> + Send + Sync + 'static,
     ) -> Router {
-        let served = Arc::new(Served { rpc, context: Arc::new(context) });
+        let served = Arc::new(Served {
+            rpc,
+            context: Arc::new(context),
+        });
         Router::new()
             .route("/rpc/run", post(run::<D>))
             .route("/rpc/validate", post(validate::<D>))
