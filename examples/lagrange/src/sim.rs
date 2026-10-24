@@ -115,7 +115,7 @@ where
     )
     .ok();
 
-    let transponder = app.transponder(&sol.api_keys[ship]).await?;
+    let transponder = app.transponder(&voyage.line, &sol.api_keys[ship]).await?;
     let pings = 12;
     for hour in 0..pings {
         TelemetryPing::report(&transponder)

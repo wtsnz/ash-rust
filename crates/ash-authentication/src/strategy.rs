@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use ash_core::Result as CoreResult;
-use ash_core::{Actor, Context, DataLayer, FieldMap, Filter, Resource, ResourceDef, Value};
+use ash_core::{
+    Actor, Context, CredentialReadPermit, DataLayer, FieldMap, Filter, Resource, ResourceDef, Value,
+};
 use uuid::Uuid;
 
 use crate::api_key::ApiKeyService;
@@ -13,9 +15,13 @@ use crate::token::{JwtService, TokenPair};
 use crate::token_store::DatabaseTokenStore;
 
 /// High-level authentication strategy coordinator.
+///
+/// The server adapter must select the tenant before calling this strategy. All
+/// credential lookups retain that tenant, including reads that bypass user policies.
 #[derive(Clone)]
 pub struct AuthStrategy<R: Resource> {
     resource_def: &'static ResourceDef,
+    credential_read: CredentialReadPermit,
     password_service: PasswordService,
     api_key_service: ApiKeyService,
     jwt_service: Option<JwtService>,
@@ -28,6 +34,7 @@ impl<R: Resource> AuthStrategy<R> {
     pub fn new(resource_def: &'static ResourceDef) -> Self {
         Self {
             resource_def,
+            credential_read: CredentialReadPermit::new(resource_def),
             password_service: PasswordService::new(),
             api_key_service: ApiKeyService::default(),
             jwt_service: None,
@@ -89,15 +96,8 @@ impl<R: Resource> AuthStrategy<R> {
 
         let filter = Filter::eq(pk_field, Value::Uuid(id));
         let records = ctx
-            .data
-            .run_query(
-                self.resource_def,
-                &ash_core::CompiledQuery {
-                    filter: Some(filter),
-                    limit: Some(1),
-                    ..ash_core::CompiledQuery::default()
-                },
-            )
+            .access()
+            .credentials(&self.credential_read, filter, 1)
             .await
             .map_err(AuthError::Core)?;
 
@@ -125,15 +125,8 @@ impl<R: Resource> AuthStrategy<R> {
         // 1. Query for the record by identity field
         let filter = Filter::eq(pass_cfg.identity_field, identity);
         let records: Vec<R> = ctx
-            .data
-            .run_query(
-                self.resource_def,
-                &ash_core::CompiledQuery {
-                    filter: Some(filter),
-                    limit: Some(2),
-                    ..ash_core::CompiledQuery::default()
-                },
-            )
+            .access()
+            .credentials(&self.credential_read, filter, 2)
             .await
             .map_err(AuthError::Core)?
             .into_iter()
@@ -257,6 +250,8 @@ impl<R: Resource> AuthStrategy<R> {
         })?;
 
         let claims = jwt.verify_token_with_purpose(refresh_token, "refresh")?;
+        ctx.access()
+            .require_tenant_match(claims.tenant.as_deref())?;
         let token_store = DatabaseTokenStore::new(ctx.clone());
 
         // Verify token exists and is not revoked
@@ -418,15 +413,8 @@ impl<R: Resource> AuthStrategy<R> {
         // 1. Look up user by identity (email)
         let filter = Filter::eq(pass_cfg.identity_field, Value::String(email.to_string()));
         let records = ctx
-            .data
-            .run_query(
-                self.resource_def,
-                &ash_core::CompiledQuery {
-                    filter: Some(filter),
-                    limit: Some(1),
-                    ..ash_core::CompiledQuery::default()
-                },
-            )
+            .access()
+            .credentials(&self.credential_read, filter, 1)
             .await
             .map_err(AuthError::Core)?;
 
@@ -477,6 +465,8 @@ impl<R: Resource> AuthStrategy<R> {
 
         // 1. Verify reset token
         let claims = jwt.verify_token_with_purpose(reset_token, "password_reset")?;
+        ctx.access()
+            .require_tenant_match(claims.tenant.as_deref())?;
         let token_store = DatabaseTokenStore::new(ctx.clone());
 
         // 2. Ensure reset token is active and not already consumed
@@ -543,15 +533,8 @@ impl<R: Resource> AuthStrategy<R> {
 
         let filter = Filter::eq(api_key_cfg.api_key_field, Value::String(hash));
         let records: Vec<R> = ctx
-            .data
-            .run_query(
-                self.resource_def,
-                &ash_core::CompiledQuery {
-                    filter: Some(filter),
-                    limit: Some(1),
-                    ..ash_core::CompiledQuery::default()
-                },
-            )
+            .access()
+            .credentials(&self.credential_read, filter, 1)
             .await
             .map_err(AuthError::Core)?
             .into_iter()

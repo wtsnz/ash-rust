@@ -8,6 +8,11 @@
 //! `{"success": true, "data": …}` or `{"success": false, "errors": [{"type", "message",
 //! "shortMessage", "vars", "fields", "path", "details"?}]}`.
 //!
+//! The server adapter owns tenant selection. Payload `tenant` is accepted only for
+//! AshTypescript wire compatibility and ignored by both execution and validation.
+//! Generated clients should send authentication or tenant-selection headers that
+//! their server adapter verifies, or use an already bound channel connection.
+//!
 //! - `fields` selects what comes back (see [`fields`]): attributes, aggregates and
 //!   calculations, relationships with fields of their own, or their own read
 //!   (`{"comments": {"fields": ["body"], "filter": …, "sort": "-insertedAt", "page": …}}`),
@@ -467,8 +472,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         self
     }
 
-    /// Runs `request` in `ctx`, its `tenant` overriding the context's, and answers as
-    /// AshTypescript does.
+    /// Runs `request` in the server-owned `ctx`. Payload tenant values are ignored.
+    /// Select and authorize the tenant in the server adapter before calling this.
     pub async fn run(&self, ctx: &Context<D>, request: &Json) -> Json {
         match self.answer(ctx, request).await {
             Ok(Answer {
@@ -676,18 +681,18 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .read
             .or_else(|| resource.primary_read())
             .ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
-        let query = CompiledQuery {
-            filter: Some(Filter::eq(pk, id.clone())),
-            tenant: ctx.tenant.clone(),
-            limit: Some(1),
-            ..CompiledQuery::default()
-        };
-        let scoped =
-            ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query)
-                .map_err(|e| self.failure(e))?;
         let rows = ctx
-            .data
-            .run_query(resource, &scoped)
+            .access()
+            .read(
+                resource,
+                read.name,
+                &FieldMap::new(),
+                ash_core::ReadRequest {
+                    filter: Some(Filter::eq(pk, id.clone())),
+                    limit: Some(1),
+                    ..Default::default()
+                },
+            )
             .await
             .map_err(|e| self.failure(e))?;
         rows.into_iter().next().ok_or_else(|| {
@@ -720,10 +725,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .get(name)
             .ok_or_else(|| Failure::action_not_found(name))?;
         let (resource, action, options) = (rpc.resource, rpc.action, &rpc.options);
-        let mut ctx = ctx.clone();
-        if let Some(tenant) = request["tenant"].as_str() {
-            ctx = ctx.with_tenant(tenant);
-        }
+        let ctx = ctx.clone();
         let given = |key: &str| request.get(key).filter(|value| !value.is_null());
 
         // What the action needs, and what it can't take.

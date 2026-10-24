@@ -42,12 +42,12 @@ async fn call(
     )
 }
 
-async fn token(router: &axum::Router, email: &str) -> String {
+async fn token(router: &axum::Router, line: &str, email: &str) -> String {
     let (status, body) = call(
         router,
         "/auth/sign-in",
         None,
-        json!({ "email": email, "password": lagrange::seed::PASSWORD }),
+        json!({ "line": line, "email": email, "password": lagrange::seed::PASSWORD }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -80,17 +80,44 @@ async fn http_api<D: FleetDb>(h: Harness<D>) {
     )
     .unwrap();
 
+    let (status, _) = call(&router, "/auth/sign-in", None, json!({ "line": lagrange::seed::HELIOS, "email": "ada@helios-freight.example", "password": "nope" })).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(&router, "/auth/sign-in", None, json!({ "line": lagrange::seed::RED_DUST, "email": "ada@helios-freight.example", "password": lagrange::seed::PASSWORD })).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "credentials must belong to the selected line"
+    );
     let (status, _) = call(
         &router,
         "/auth/sign-in",
         None,
-        json!({ "email": "ada@helios-freight.example", "password": "nope" }),
+        json!({ "email": "ada@helios-freight.example", "password": lagrange::seed::PASSWORD }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let ada = token(&router, "ada@helios-freight.example").await;
-    let mae = token(&router, "mae@red-dust-logistics.example").await;
-    let grace = token(&router, "grace@helios-freight.example").await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "line is required before authentication"
+    );
+    let ada = token(
+        &router,
+        lagrange::seed::HELIOS,
+        "ada@helios-freight.example",
+    )
+    .await;
+    let mae = token(
+        &router,
+        lagrange::seed::RED_DUST,
+        "mae@red-dust-logistics.example",
+    )
+    .await;
+    let grace = token(
+        &router,
+        lagrange::seed::HELIOS,
+        "grace@helios-freight.example",
+    )
+    .await;
 
     // The map is public; ships belong to a line.
     let ports = graphql(&router, None, "{ listPorts { code name } }").await;

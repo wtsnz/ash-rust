@@ -15,6 +15,9 @@ use crate::strategy::AuthStrategy;
 use crate::token::JwtService;
 
 /// Axum extractor providing the authenticated `Actor` from an `Authorization: Bearer <token>` header.
+///
+/// The signed tenant is preserved in the actor's `tenant` attribute. Adapters must
+/// compare it with their selected tenant before executing tenant-scoped operations.
 #[derive(Clone, Debug)]
 pub struct AuthUser(pub Actor);
 
@@ -46,6 +49,10 @@ where
         let mut actor = Actor::new(claims.sub);
         if let Some(role) = claims.role {
             actor = actor.with_role(role);
+        }
+        // Preserve the signed tenant until AuthUser carries a scope-bound principal.
+        if let Some(tenant) = claims.tenant {
+            actor = actor.with("tenant", tenant);
         }
 
         Ok(AuthUser(actor))
@@ -154,6 +161,9 @@ pub struct AuthRouterState<R: Resource, D: DataLayer> {
 
 /// Build a standard `/auth` router with `POST /sign-in`, `POST /refresh`, `POST /revoke`,
 /// `POST /change-password`, `POST /request-password-reset`, `POST /reset-password`, and `GET /me`.
+///
+/// `context` selects the tenant for every route. Access, refresh and reset tokens
+/// must name that same tenant, including when no tenant is selected.
 pub fn auth_router<R, D, S>(
     strategy: AuthStrategy<R>,
     jwt_service: Arc<JwtService>,
@@ -270,6 +280,12 @@ async fn change_password_handler<R: Resource, D: DataLayer>(
         .verify_token_with_purpose(token, "access")
         .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
 
+    state
+        .context
+        .access()
+        .require_tenant_match(claims.tenant.as_deref())
+        .map_err(|e| AuthRejection::AuthError(e.into()))?;
+
     let updated_user = state
         .strategy
         .change_password(
@@ -341,6 +357,12 @@ async fn me_handler<R: Resource, D: DataLayer>(
         .jwt_service
         .verify_token_with_purpose(token, "access")
         .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
+
+    state
+        .context
+        .access()
+        .require_tenant_match(claims.tenant.as_deref())
+        .map_err(|e| AuthRejection::AuthError(e.into()))?;
 
     Ok(Json(serde_json::json!({
         "user_id": claims.sub,

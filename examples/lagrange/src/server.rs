@@ -1,6 +1,6 @@
 //! The HTTP API: password sign-in that issues a JWT, and GraphQL over both databases.
 //!
-//! - `POST /auth/sign-in` with `{"email", "password"}` returns `{"token", "line", "role"}`.
+//! - `POST /auth/sign-in` with `{"line", "email", "password"}` returns `{"token", "line", "role"}`.
 //! - `POST /graphql` runs a query as the token's crew member, in their line, or as an
 //!   anonymous reader without a token.
 //! - `GET /graphql` serves GraphiQL, and `GET /graphql/ws` serves subscriptions.
@@ -53,6 +53,7 @@ struct ApiState<D> {
 
 #[derive(Deserialize)]
 struct SignIn {
+    line: String,
     email: String,
     password: String,
 }
@@ -92,7 +93,7 @@ where
 {
     let crew = state
         .app
-        .authenticate(&request.email, &request.password)
+        .authenticate(&request.line, &request.email, &request.password)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let role = match ash_core::AshType::to_value(&crew.role) {

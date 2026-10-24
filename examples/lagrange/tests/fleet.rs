@@ -13,7 +13,7 @@ async fn crew_sign_in<D: FleetDb>(h: Harness<D>) {
     // Emails are case-insensitive, and the session carries the member's line.
     let ada = h
         .app
-        .sign_in("ADA@helios-freight.example", PASSWORD)
+        .sign_in(HELIOS, "ADA@helios-freight.example", PASSWORD)
         .await
         .unwrap();
     assert_eq!(ada.tenant(), Some(HELIOS));
@@ -23,13 +23,19 @@ async fn crew_sign_in<D: FleetDb>(h: Harness<D>) {
     );
     assert!(
         h.app
-            .sign_in("ada@helios-freight.example", "wrong-password!")
+            .sign_in(HELIOS, "ada@helios-freight.example", "wrong-password!")
             .await
             .is_err()
     );
     assert!(
         h.app
-            .sign_in("nobody@helios-freight.example", PASSWORD)
+            .sign_in(HELIOS, "nobody@helios-freight.example", PASSWORD)
+            .await
+            .is_err()
+    );
+    assert!(
+        h.app
+            .sign_in(RED_DUST, "ada@helios-freight.example", PASSWORD)
             .await
             .is_err()
     );

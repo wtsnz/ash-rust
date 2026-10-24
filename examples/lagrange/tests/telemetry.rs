@@ -18,7 +18,7 @@ async fn transponders_report_positions<D: FleetDb>(h: Harness<D>) {
     let ship = h.sol.ship("Long Haul");
     let transponder = h
         .app
-        .transponder(&h.sol.api_keys["Long Haul"])
+        .transponder(lagrange::seed::HELIOS, &h.sol.api_keys["Long Haul"])
         .await
         .unwrap();
     for minute in 0..25 {
@@ -56,7 +56,15 @@ async fn transponders_report_positions<D: FleetDb>(h: Harness<D>) {
 
     // A bad key gets nothing, and crew can't pose as a transponder.
     assert!(matches!(
-        h.app.transponder("lgx_not-a-key").await,
+        h.app
+            .transponder(lagrange::seed::HELIOS, "lgx_not-a-key")
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert!(matches!(
+        h.app
+            .transponder(lagrange::seed::RED_DUST, &h.sol.api_keys["Long Haul"])
+            .await,
         Err(Error::Forbidden)
     ));
     let crew =

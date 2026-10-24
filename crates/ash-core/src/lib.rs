@@ -4,6 +4,7 @@
 //! [`DataLayer`], and read policies compile to filters so unauthorized rows
 //! never come back.
 
+mod access;
 mod action;
 mod actor;
 mod aggregate;
@@ -35,6 +36,7 @@ pub mod store;
 mod types;
 mod value;
 
+pub use access::{CredentialReadPermit, ReadRequest, ScopedAccess};
 pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, Countable, CustomChange, CustomValidation,
