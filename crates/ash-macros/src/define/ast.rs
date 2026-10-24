@@ -175,6 +175,8 @@ pub struct CalculationSpec {
     pub arguments: Vec<ArgumentSpec>,
     pub ty: Type,
     pub expr: CalculationExprSpec,
+    pub dependencies: Option<Vec<Ident>>,
+    pub declassify: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -207,6 +209,32 @@ pub enum CalculationExprSpec {
         else_expr: Box<CalculationExprSpec>,
     },
     Custom(syn::Path),
+}
+
+impl CalculationExprSpec {
+    pub fn is_custom(&self) -> bool {
+        match self {
+            Self::Custom(_) => true,
+            Self::Length(e) | Self::Lower(e) | Self::Upper(e) => e.is_custom(),
+            Self::Concat(parts) | Self::Coalesce(parts) => parts.iter().any(Self::is_custom),
+            Self::Add(a, b)
+            | Self::Sub(a, b)
+            | Self::Mul(a, b)
+            | Self::Div(a, b)
+            | Self::Eq(a, b)
+            | Self::Ne(a, b)
+            | Self::Gt(a, b)
+            | Self::Gte(a, b)
+            | Self::Lt(a, b)
+            | Self::Lte(a, b) => a.is_custom() || b.is_custom(),
+            Self::IfElse {
+                cond,
+                then_expr,
+                else_expr,
+            } => cond.is_custom() || then_expr.is_custom() || else_expr.is_custom(),
+            _ => false,
+        }
+    }
 }
 
 pub struct AggregateSpec {

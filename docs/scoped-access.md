@@ -147,10 +147,9 @@ caches accept only presented child Views. RPC rendering accepts Views and emits 
 the request's selected fields, including nested selections. Neither adapter computes
 field-policy masks from an already redacted record.
 
-Derived-value visibility is step 5. Calculations and aggregates still have their
-existing visibility semantics. This step does not declassify or suppress their
-inputs. Step 9 will feed private committed events through the same presenter for
-each subscriber or bound group scope. Notification and PubSub payloads remain
+Step 5 applies dependency visibility to calculations and projects aggregate source
+values for the reader. See [Derived values](#derived-values). Step 9 will feed private
+committed events through the same presenter for each subscriber or bound group scope. Notification and PubSub payloads remain
 unchanged; the existing GraphQL subscription response path presents each event for
 its current reader.
 
@@ -219,7 +218,8 @@ remains follow-up work. Legacy subscriptions keep their existing unshared behavi
 
 ## Limits
 
-Steps 2, 3 and 4 bind execution scope, normalize client reads and centralize result presentation.
+Steps 2 through 5 bind execution scope, normalize client reads, centralize result
+presentation and protect derived values.
 `Context::data` and raw `insert` remain
 public but deprecated until engine reads and writes use executable plans. Core uses a
 private backend accessor for those paths. Existing adapter code and raw-backend tests
@@ -238,9 +238,8 @@ so those additions do not require changing the binding API.
 
 This change does not fix token namespace isolation, durable access revocation,
 deleted-user validation, session invalidation or atomic reset/refresh consumption.
-It also does not fix managed relationships, upsert conflicts, derived-value
-visibility, or subscription authorization and payloads. The design and the
-full migration sequence are in
+It also does not fix managed relationships, upsert conflicts, subscription
+authorization and payloads. The design and the full migration sequence are in
 [RFC 0005: Scoped execution](wip/0005-scoped-execution.md).
 
 ## Verification
@@ -261,3 +260,70 @@ regressions are in `request_scope.rs`; HTTP and both WebSocket protocols are cov
 by `transport_scope.rs`. The inconsistent
 reset-claim fixtures sign and store their tokens directly because tenant-scoped
 reset requests can no longer issue those credentials.
+
+## Derived values
+
+Calculations inherit the visibility of every operand, including conditions and
+unused coalesce branches. If any operand is unreadable on that record, the
+calculation is forbidden and presents as null. This also applies when the stored
+operand is null. Explicit policies on a calculation add restrictions to that rule.
+Hidden calculations are skipped before evaluation, so callback errors and arithmetic
+overflow cannot expose unreadable inputs. Explicitly hidden aggregates are skipped
+too. Client filters and sorts compare the projected value, including null checks and
+negation. Trusted preparations can still compare or order by the stored operands.
+Sealed keyset cursors retain that effective ordering without exposing its values.
+
+A calculation may explicitly declare `declassify` to expose a reviewed derived
+value over hidden inputs. The declaration waives inherited visibility only;
+policies on the calculation itself still apply. Review both the expression and its
+arguments before granting this permission. A constant, concatenation or coalesce
+is not an implicit declassification.
+
+```rust,ignore
+calculations {
+    salary_x2: Option<i64> = coalesce(salary, 0) * 2;
+    ssn_last_4: Option<String> [depends_on [ssn], declassify] = custom(last_four);
+}
+field_policies {
+    field ssn { authorize_if actor_attribute_equals(role, "admin"); }
+    field salary_x2 { authorize_if actor_present; }
+}
+```
+
+Every opaque Rust calculation must declare `depends_on [fields]`, even if the list
+is empty. Its callback receives only those fields plus the expression's statically
+known dependencies. The framework rejects opaque calculations without a dependency
+declaration. A callback cannot inspect other record fields through its input map. The declaration also
+contributes to visibility for non-declassifying calculations. A callback depending
+on a whole embedded value requires its nested fields to be readable too. Any nested
+forbidden field hides that calculation, including when the callback would only use
+another part of the object. Declassification explicitly grants the declared raw
+composite input. Handwritten metadata
+uses `CalculationDef::dependencies(&["ssn"]).declassify()`. Custom callbacks remain
+Rust-only; SQL filters and sorts cannot execute them. Handwritten calculation
+metadata follows the DSL's existing stored-field dependency rule too. Derived-field
+and unknown-field dependencies fail explicitly, including on an empty table.
+
+Aggregates authorize destination and join rows as before. The value-reading kinds
+project their source field under each source record's policies inside the query:
+
+- `sum` ignores hidden and null operands and returns null if none are visible.
+- `first` chooses the first authorized row by ascending primary key, then projects
+  its operand. A hidden or null value produces null; it never skips that row to
+  find a visible value. Resources without a primary key retain backend row order.
+- `count` and `exists` depend on authorized rows, independently of field visibility.
+
+These are the four supported aggregate kinds. Policies on the aggregate itself
+can further restrict its result. Client aggregate comparisons and sorts use the
+same projected operands. Trusted preparations retain their original stored-value
+semantics. Data layers compute a raw derived value only when a trusted filter or
+sort needs it, and carry its projected counterpart privately until presentation or
+cursor sealing. Hidden inputs are never summed or evaluated merely to discard the
+result. Internal query column names beginning
+with `__ash_` are reserved and cannot be declared as resource fields.
+
+Reads, write-result loads, GraphQL and RPC all use these rules. GraphQL reports a
+forbidden-field error for inherited or explicit calculation restrictions and explicit
+aggregate restrictions. An aggregate whose source values project to null has a null
+value without an extra forbidden-field error. System scopes bypass field and row
+policies, while still requiring valid custom calculation declarations.

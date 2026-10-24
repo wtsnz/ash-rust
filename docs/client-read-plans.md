@@ -84,12 +84,17 @@ relationship or another missing dependency needs data; it never counts as a matc
 A comparison with SQL null remains unknown under negation. Explicit null checks
 retain their boolean semantics.
 
-GraphQL validates the subscription filter and default-read visibility predicate at
-registration. Filters that need relationships, calculations or aggregates are rejected
+GraphQL validates subscription dependencies before planning can simplify hidden
+fields away, then validates the planned filter and default-read visibility predicate
+at registration. Filters that need relationships, calculations or aggregates are rejected
 with an explicit error. Field-policy conditions used by an attribute filter must also
 be evaluable from stored snapshot attributes. Supported attribute filters continue to
 apply to create, update and destroy events. This release does not query relationships
 in response to events or implement general relational subscription predicates.
 
-Derived-value field visibility, private event payloads, grouped subscription actors
-and per-event relational revalidation remain separate migration steps.
+Calculation references inherit operand visibility unless explicitly declassified.
+Aggregate references project their source operands under each source record's field
+policies. Client comparisons and sorts use these projected values; trusted
+preparations retain stored-value semantics. See [Derived values](scoped-access.md#derived-values).
+Private event payloads, grouped subscription actors and per-event relational
+revalidation remain separate migration steps.

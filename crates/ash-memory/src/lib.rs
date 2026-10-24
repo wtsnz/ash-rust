@@ -346,6 +346,7 @@ impl DataLayer for Memory {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let mut tables = self.write()?;
+            query.validate_calculations(resource)?;
             let tenant = query.tenant.as_deref();
             let key = table_key(resource, tenant);
             let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
@@ -420,6 +421,7 @@ impl DataLayer for Memory {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let mut tables = self.write()?;
+            query.validate_calculations(resource)?;
             let tenant = query.tenant.as_deref();
             let key = table_key(resource, tenant);
             let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
@@ -483,6 +485,7 @@ impl DataLayer for Memory {
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
             let tables = self.read()?;
+            query.validate_calculations(resource)?;
             let tenant = query.tenant.as_deref();
             let mut rows: Vec<FieldMap> = tables
                 .get(&table_key(resource, tenant))
@@ -526,7 +529,9 @@ impl DataLayer for Memory {
                     Some(guard) if !row_matches_filter(&tables, tenant, resource, guard, row) => {
                         Value::Null
                     }
-                    _ => row.get(&sort.field).cloned().unwrap_or(Value::Null),
+                    _ => ash_core::derived::sort_value(row, sort)
+                        .cloned()
+                        .unwrap_or(Value::Null),
                 };
                 rows.sort_by(|left, right| {
                     let mut order = Ordering::Equal;
@@ -629,21 +634,41 @@ fn row_matches_filter(
 /// `row` with the calculations `filter` reads. Stored rows hold none, and the SQL
 /// data layers compute them inline wherever a filter uses them.
 fn with_calculations<'r>(
+    tables: &Tables,
+    tenant: Option<&str>,
+    actor: Option<&ash_core::Actor>,
     resource: &ResourceDef,
     filter: &Filter,
     row: &'r FieldMap,
 ) -> std::borrow::Cow<'r, FieldMap> {
     let mut names = Vec::new();
     filter.collect_fields(&mut names);
-    names.retain(|name| resource.calculation(name).is_some() && !row.contains_key(*name));
+    names.retain(|name| {
+        (resource.calculation(name).is_some() || resource.aggregate(name).is_some())
+            && !row.contains_key(*name)
+    });
     if names.is_empty() {
         return std::borrow::Cow::Borrowed(row);
     }
     let mut row = row.clone();
-    let no_args = FieldMap::new();
-    for name in names {
-        // A calculation that cannot run leaves its field missing, so it compares as null.
-        let _ = apply_named_with_args(resource, &mut row, name, &no_args);
+    let query = CompiledQuery {
+        actor: actor.cloned(),
+        filter: Some(filter.clone()),
+        ..Default::default()
+    };
+    // A failed derived expression remains unavailable to this predicate.
+    if compute(
+        tables,
+        tenant,
+        resource,
+        &query,
+        std::slice::from_mut(&mut row),
+        &names,
+        &mut Vec::new(),
+    )
+    .is_err()
+    {
+        return std::borrow::Cow::Owned(FieldMap::new());
     }
     std::borrow::Cow::Owned(row)
 }
@@ -743,6 +768,13 @@ fn eval_filter(
         }
         // `EXISTS (...)` in SQL: true or false, never unknown.
         Filter::Client(_) => None,
+        Filter::Projected(inner) => eval_filter(
+            tables,
+            tenant,
+            resource,
+            inner,
+            &ash_core::derived::projected_fields(row),
+        ),
         Filter::Related { .. } => {
             let planned = ash_core::plan_filter(
                 resource,
@@ -765,7 +797,8 @@ fn eval_filter(
                 return false;
             };
             let matches = |dest_row: &FieldMap| {
-                let dest_row = with_calculations(dest_res, rel_filter, dest_row);
+                let dest_row =
+                    with_calculations(tables, tenant, node.actor(), dest_res, rel_filter, dest_row);
                 eval_filter(tables, tenant, dest_res, rel_filter, &dest_row) == Some(true)
             };
 
@@ -805,7 +838,14 @@ fn eval_filter(
                         .filter(|jr| jr.get(source_on_join) == Some(source_val))
                         .filter(|jr| {
                             node.join_filter().is_none_or(|filter| {
-                                let jr = with_calculations(through_res, filter, jr);
+                                let jr = with_calculations(
+                                    tables,
+                                    tenant,
+                                    node.actor(),
+                                    through_res,
+                                    filter,
+                                    jr,
+                                );
                                 eval_filter(tables, tenant, through_res, filter, &jr) == Some(true)
                             })
                         })
@@ -864,6 +904,17 @@ fn compute<'a>(
     names: &[&'a str],
     computed: &mut Vec<&'a str>,
 ) -> Result<()> {
+    // Full stored rows may omit nullable columns after a raw insert. Materialize SQL
+    // nulls before visibility checks, which distinguish unloaded operands from null.
+    for row in rows.iter_mut() {
+        for attribute in resource
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.allow_nil)
+        {
+            row.entry(attribute.name.to_string()).or_insert(Value::Null);
+        }
+    }
     let fresh = |computed: &[&str], name: &&'a str| !computed.contains(name);
     let mut calculations: Vec<&'a str> = names
         .iter()
@@ -876,7 +927,14 @@ fn compute<'a>(
     for row in rows.iter_mut() {
         for name in &calculations {
             let args = query.calculation_args.get(*name).unwrap_or(&empty_args);
-            apply_named_with_args(resource, row, name, args)?;
+            ash_core::derived::apply_calculation(
+                resource,
+                query.actor.as_ref(),
+                row,
+                name,
+                args,
+                query.needs_trusted_value(name),
+            )?;
         }
     }
     computed.extend(&calculations);
@@ -889,14 +947,7 @@ fn compute<'a>(
     aggregates.sort_unstable();
     aggregates.dedup();
     if !aggregates.is_empty() {
-        apply_aggregates(
-            tables,
-            tenant,
-            resource,
-            rows,
-            &aggregates,
-            query.actor.as_ref(),
-        )?;
+        apply_aggregates(tables, tenant, resource, rows, &aggregates, query)?;
     }
     computed.extend(&aggregates);
     Ok(())
@@ -910,6 +961,7 @@ fn strip_unrequested_calculations(
     for calc in resource.calculations {
         if !query.calculations.iter().any(|name| name == calc.name) {
             row.remove(calc.name);
+            row.remove(&ash_core::derived::projected_name(calc.name));
         }
     }
 }
@@ -918,6 +970,7 @@ fn strip_unrequested_aggregates(resource: &ResourceDef, query: &CompiledQuery, r
     for agg in resource.aggregates {
         if !query.aggregates.iter().any(|name| name == agg.name) {
             row.remove(agg.name);
+            row.remove(&ash_core::derived::projected_name(agg.name));
         }
     }
 }
@@ -975,8 +1028,9 @@ fn apply_aggregates(
     resource: &ResourceDef,
     rows: &mut [FieldMap],
     needed: &[&str],
-    actor: Option<&ash_core::Actor>,
+    query: &CompiledQuery,
 ) -> Result<()> {
+    let actor = query.actor.as_ref();
     for agg_name in needed {
         let agg = resource.aggregate(agg_name).ok_or_else(|| {
             Error::Invalid(format!(
@@ -990,8 +1044,42 @@ fn apply_aggregates(
                 agg.relationship, agg.name, resource.name
             ))
         })?;
+        let own_visibility = ash_core::field_read_condition(resource, agg.name, actor)?;
+        let trusted = query.needs_trusted_value(agg.name);
+        let visible = |row: &FieldMap| {
+            own_visibility
+                .as_ref()
+                .is_none_or(|condition| condition.matches_on(resource, row))
+        };
+        if !trusted && rows.iter().all(|row| !visible(row)) {
+            for row in rows.iter_mut() {
+                row.insert(agg.name.to_string(), Value::Null);
+                row.insert(ash_core::derived::projected_name(agg.name), Value::Null);
+            }
+            continue;
+        }
         let dest = (rel.destination)();
         let dest_policy = read_policy(tenant, dest, actor)?;
+        let source_field = match agg.kind {
+            AggregateKind::First { field } | AggregateKind::Sum { field } => Some(field),
+            _ => None,
+        };
+        let visibility = source_field
+            .map(|field| ash_core::field_read_condition(dest, field, actor))
+            .transpose()?
+            .flatten();
+        let projected_value = |row: &FieldMap, field: &str| {
+            if visibility
+                .as_ref()
+                .is_some_and(|condition| !row_matches_filter(tables, tenant, dest, condition, row))
+            {
+                Value::Null
+            } else {
+                ash_core::derived::projected_value(row, field)
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            }
+        };
         let dest_rows: Vec<&FieldMap> = tables
             .get(&table_key(dest, tenant))
             .map(|t| {
@@ -1002,6 +1090,12 @@ fn apply_aggregates(
             .unwrap_or_default();
 
         for row in rows.iter_mut() {
+            let readable = visible(row);
+            if !readable && !trusted {
+                row.insert(agg.name.to_string(), Value::Null);
+                row.insert(ash_core::derived::projected_name(agg.name), Value::Null);
+                continue;
+            }
             let source_val = row
                 .get(rel.source_attribute)
                 .cloned()
@@ -1014,6 +1108,10 @@ fn apply_aggregates(
                     // A sum of nothing is nil, as Ash's is.
                     AggregateKind::Sum { .. } => Value::Null,
                 };
+                row.insert(
+                    ash_core::derived::projected_name(agg.name),
+                    default_val.clone(),
+                );
                 row.insert(agg.name.to_string(), default_val);
                 continue;
             }
@@ -1082,20 +1180,52 @@ fn apply_aggregates(
                 })
                 .collect();
 
-            let val = match agg.kind {
-                AggregateKind::Count => Value::Int(matching.len() as i64),
-                AggregateKind::Exists => Value::Bool(!matching.is_empty()),
-                AggregateKind::First { field } => matching
-                    .first()
-                    .and_then(|r| r.get(field).cloned())
-                    .unwrap_or(Value::Null),
-                // As SQL's SUM: nil values are skipped, and a sum of none is nil.
-                AggregateKind::Sum { field } => matching
-                    .iter()
-                    .filter_map(|r| r.get(field).and_then(Value::as_int))
-                    .reduce(|sum, n| sum + n)
-                    .map_or(Value::Null, Value::Int),
+            let mut matching = matching;
+            if matches!(agg.kind, AggregateKind::First { .. })
+                && let Some(pk) = dest.primary_key()
+            {
+                matching.sort_by(|a, b| {
+                    compare_typed(
+                        Some(pk.ty),
+                        a.get(pk.name).unwrap_or(&Value::Null),
+                        b.get(pk.name).unwrap_or(&Value::Null),
+                    )
+                });
+            }
+            let projected = if !readable {
+                Value::Null
+            } else {
+                match agg.kind {
+                    AggregateKind::Count => Value::Int(matching.len() as i64),
+                    AggregateKind::Exists => Value::Bool(!matching.is_empty()),
+                    AggregateKind::First { field } => matching
+                        .first()
+                        .map_or(Value::Null, |record| projected_value(record, field)),
+                    AggregateKind::Sum { field } => matching
+                        .iter()
+                        .filter_map(|record| projected_value(record, field).as_int())
+                        .reduce(|sum, n| sum + n)
+                        .map_or(Value::Null, Value::Int),
+                }
             };
+            let val = if trusted {
+                match agg.kind {
+                    AggregateKind::First { field } => matching
+                        .first()
+                        .and_then(|row| row.get(field).cloned())
+                        .unwrap_or(Value::Null),
+                    AggregateKind::Sum { field } => matching
+                        .iter()
+                        .filter_map(|row| row.get(field).and_then(Value::as_int))
+                        .reduce(|sum, n| sum + n)
+                        .map_or(Value::Null, Value::Int),
+                    AggregateKind::Count => Value::Int(matching.len() as i64),
+                    AggregateKind::Exists => Value::Bool(!matching.is_empty()),
+                }
+            } else {
+                projected.clone()
+            };
+            row.insert(ash_core::derived::projected_name(agg.name), projected);
             row.insert(agg.name.to_string(), val);
         }
     }

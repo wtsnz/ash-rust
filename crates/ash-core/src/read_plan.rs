@@ -35,9 +35,14 @@ pub struct Traversal {
     pub(crate) relationship: String,
     pub(crate) filter: Box<Filter>,
     pub(crate) join: Option<Box<Filter>>,
+    pub(crate) actor: Option<Actor>,
 }
 
 impl Traversal {
+    pub fn actor(&self) -> Option<&Actor> {
+        self.actor.as_ref()
+    }
+
     pub fn relationship(&self) -> &str {
         &self.relationship
     }
@@ -220,6 +225,7 @@ impl Planner<'_> {
                     relationship,
                     filter: Box::new(Filter::and([scoped, inner])),
                     join,
+                    actor: self.actor.cloned(),
                 }))
             }
             // Resolved nodes are opaque and can be carried through composed reads.

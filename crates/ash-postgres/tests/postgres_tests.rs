@@ -1039,12 +1039,13 @@ static SHOUTING_DEF: ResourceDef = ResourceDef {
         "shout",
         AttrType::String,
         ash_core::Expr::Custom(shout),
-    )],
+    )
+    .dependencies(&["label"])],
     ..NULLABLE_DEF
 };
 
 /// A calculation only Rust can compute loads from Postgres too: computed from the record
-/// once it's read, every attribute read for it, whatever the query selects.
+/// once it's read, its declared inputs loaded whatever the query selects.
 #[tokio::test]
 async fn test_postgres_computes_rust_only_calculations() {
     let Some(pg) = get_test_postgres().await else {

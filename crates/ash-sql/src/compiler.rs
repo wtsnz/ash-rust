@@ -104,6 +104,7 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     /// Ties a read to the key it's run for, inside a lateral join (see
     /// [`compile_select_per_key`](Self::compile_select_per_key)).
     per_key: Option<String>,
+    project_values: bool,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -121,6 +122,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             actor: None,
             expr_scope: None,
             per_key: None,
+            project_values: false,
         }
     }
 
@@ -130,12 +132,28 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         calc: &CalculationDef,
     ) -> Result<String> {
+        calc.validate_dependencies(resource)?;
         let args = self.calc_args.get(calc.name).cloned();
         let outer_args = std::mem::replace(&mut self.current_calc_args, args);
         let outer_arguments = std::mem::replace(&mut self.current_calc_arguments, calc.arguments);
         let compiled = self.compile_expr(resource, &calc.expr);
         self.current_calc_args = outer_args;
         self.current_calc_arguments = outer_arguments;
+        compiled
+    }
+
+    fn select_calculation(
+        &mut self,
+        resource: &ResourceDef,
+        calc: &CalculationDef,
+        query: &CompiledQuery,
+    ) -> Result<String> {
+        let outer = std::mem::replace(
+            &mut self.project_values,
+            !query.needs_trusted_value(calc.name),
+        );
+        let compiled = self.compile_operand(resource, calc.name);
+        self.project_values = outer;
         compiled
     }
 
@@ -249,7 +267,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let outer = std::mem::replace(&mut self.expr_scope, scope_alias.map(str::to_string));
             let compiled = self.compile_calculation(resource, calc);
             self.expr_scope = outer;
-            compiled
+            let value = compiled?;
+            self.project_operand(resource, field, scope_alias, value)
         } else if let Some(agg) = resource.aggregate(field) {
             // An aggregate is its subquery wherever a filter, sort or keyset refers to it,
             // as AshPostgres writes it: there's no column of that name to refer to.
@@ -257,7 +276,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 Some(alias) => alias.to_string(),
                 None => ident(self.dialect, resource.table_name())?,
             };
-            self.compile_aggregate_from(resource, agg, &source)
+            let value = self.compile_aggregate_from(resource, agg, &source)?;
+            self.project_operand(resource, field, scope_alias, value)
         } else {
             let col = column(self.dialect, resource, field)?;
             if let Some(alias) = scope_alias {
@@ -580,6 +600,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let inner = self.compile_filter_scoped(resource, part, scope_alias)?;
                 Ok(format!("NOT ({inner})"))
             }
+            Filter::Projected(inner) => {
+                let outer = std::mem::replace(&mut self.project_values, true);
+                let result = self.compile_filter_scoped(resource, inner, scope_alias);
+                self.project_values = outer;
+                result
+            }
             Filter::Client(_) => Err(Error::Invalid(
                 "client expression requires read planning".into(),
             )),
@@ -721,8 +747,62 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         if filter == Filter::True {
             return Ok(None);
         }
-        self.compile_filter_scoped(resource, &filter, Some(alias))
-            .map(Some)
+        let outer = std::mem::replace(&mut self.project_values, false);
+        let compiled = self
+            .compile_filter_scoped(resource, &filter, Some(alias))
+            .map(Some);
+        self.project_values = outer;
+        compiled
+    }
+
+    fn project_operand(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        alias: Option<&str>,
+        value: String,
+    ) -> Result<String> {
+        if self.project_values
+            && let Some(condition) =
+                ash_core::field_read_condition(resource, field, self.actor.as_ref())?
+        {
+            // Policy conditions inspect intact operands, not projected references.
+            let outer = std::mem::replace(&mut self.project_values, false);
+            let condition = self.compile_filter_scoped(resource, &condition, alias);
+            self.project_values = outer;
+            return Ok(format!("CASE WHEN {} THEN {value} END", condition?));
+        }
+        Ok(value)
+    }
+
+    fn projected_source(
+        &mut self,
+        resource: &ResourceDef,
+        field: &str,
+        alias: &str,
+    ) -> Result<String> {
+        let outer = std::mem::replace(&mut self.project_values, true);
+        let value = self.compile_operand_scoped(resource, field, Some(alias));
+        let result = value.and_then(|value| {
+            if resource.attribute(field).is_some() {
+                self.project_operand(resource, field, Some(alias), value)
+            } else {
+                Ok(value)
+            }
+        });
+        self.project_values = outer;
+        result
+    }
+
+    fn projected_aggregate(
+        &mut self,
+        resource: &ResourceDef,
+        agg: &AggregateDef,
+    ) -> Result<String> {
+        let outer = std::mem::replace(&mut self.project_values, true);
+        let result = self.compile_operand(resource, agg.name);
+        self.project_values = outer;
+        result
     }
 
     pub fn compile_aggregate(
@@ -772,18 +852,31 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     Ok(s)
                 }
                 AggregateKind::First { field } => {
-                    let f = ident(self.dialect, field)?;
-                    let mut s = format!(
-                        "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
-                    );
+                    let f = if self.project_values {
+                        self.projected_source(dest, field, &dest_alias)?
+                    } else {
+                        format!("{dest_alias}.{}", column(self.dialect, dest, field)?)
+                    };
+                    let mut s =
+                        format!("(SELECT {f} FROM {dest_table} AS {dest_alias} WHERE {join_sql}");
                     s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
+                    if let Some(pk) = dest.primary_key() {
+                        s.push_str(&format!(
+                            " ORDER BY {dest_alias}.{} ASC",
+                            column(self.dialect, dest, pk.name)?
+                        ));
+                    }
                     s.push_str(" LIMIT 1)");
                     Ok(s)
                 }
                 AggregateKind::Sum { field } => {
-                    let f = ident(self.dialect, field)?;
+                    let f = if self.project_values {
+                        self.projected_source(dest, field, &dest_alias)?
+                    } else {
+                        format!("{dest_alias}.{}", column(self.dialect, dest, field)?)
+                    };
                     let mut s = format!(
-                        "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
+                        "(SELECT SUM({f}) FROM {dest_table} AS {dest_alias} WHERE {join_sql}"
                     );
                     s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, None)?);
                     s.push(')');
@@ -832,18 +925,32 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                         Ok(s)
                     }
                     AggregateKind::First { field } => {
-                        let f = ident(self.dialect, field)?;
+                        let f = if self.project_values {
+                            self.projected_source(dest, field, &dest_alias)?
+                        } else {
+                            format!("{dest_alias}.{}", column(self.dialect, dest, field)?)
+                        };
                         let mut s = format!(
-                            "(SELECT {dest_alias}.{f} FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
+                            "(SELECT {f} FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
                         s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
+                        if let Some(pk) = dest.primary_key() {
+                            s.push_str(&format!(
+                                " ORDER BY {dest_alias}.{} ASC",
+                                column(self.dialect, dest, pk.name)?
+                            ));
+                        }
                         s.push_str(" LIMIT 1)");
                         Ok(s)
                     }
                     AggregateKind::Sum { field } => {
-                        let f = ident(self.dialect, field)?;
+                        let f = if self.project_values {
+                            self.projected_source(dest, field, &dest_alias)?
+                        } else {
+                            format!("{dest_alias}.{}", column(self.dialect, dest, field)?)
+                        };
                         let mut s = format!(
-                            "(SELECT SUM({dest_alias}.{f}) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
+                            "(SELECT SUM({f}) FROM {dest_table} AS {dest_alias} JOIN {join_table} AS {join_alias} ON {dest_alias}.{dest_attr} = {join_alias}.{dest_on_join} WHERE {join_alias}.{source_on_join} = {source_table}.{source_attr}"
                         );
                         s.push_str(&self.aggregate_conditions(dest, &dest_alias, agg, join)?);
                         s.push(')');
@@ -868,7 +975,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
     /// What `sort` orders by: its field, or null where its guard doesn't hold.
     fn sort_operand(&mut self, resource: &ResourceDef, sort: &Sort) -> Result<String> {
-        let col = self.compile_operand(resource, &sort.field)?;
+        let outer = std::mem::replace(&mut self.project_values, sort.projected);
+        let compiled = self.compile_operand(resource, &sort.field);
+        self.project_values = outer;
+        let col = compiled?;
         match &sort.guard {
             None => Ok(col),
             Some(guard) => {
@@ -953,6 +1063,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         query: &CompiledQuery,
         cursor: Option<&KeysetCursor>,
     ) -> Result<CompiledSql> {
+        query.validate_calculations(resource)?;
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
         self.actor = query.actor.clone();
@@ -970,7 +1081,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let rel = resource.relationship(agg.relationship).ok_or_else(|| {
                 Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
             })?;
-            if matches!(agg.kind, AggregateKind::First { .. }) {
+            if matches!(agg.kind, AggregateKind::First { .. })
+                || ash_core::field_read_condition(resource, agg.name, self.actor.as_ref())?
+                    .is_some()
+            {
                 inline.push(agg);
             } else {
                 match groups.iter_mut().find(|(r, _)| r.name == rel.name) {
@@ -1006,7 +1120,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             if calc.expr.is_custom() {
                 continue;
             }
-            let expr_sql = self.compile_calculation(resource, calc)?;
+            let expr_sql = self.select_calculation(resource, calc, query)?;
             let alias = ident(self.dialect, calc.name)?;
             select_items.push(format!("{expr_sql} AS {alias}"));
         }
@@ -1018,9 +1132,24 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                     resource.name
                 ))
             })?;
-            let agg_sql = self.compile_aggregate(resource, agg)?;
+            let agg_sql = if query.needs_trusted_value(agg.name) {
+                self.compile_aggregate(resource, agg)?
+            } else {
+                self.projected_aggregate(resource, agg)?
+            };
             let alias = ident(self.dialect, agg.name)?;
             select_items.push(format!("{agg_sql} AS {alias}"));
+            if matches!(
+                agg.kind,
+                AggregateKind::First { .. } | AggregateKind::Sum { .. }
+            ) {
+                let projected = self.projected_aggregate(resource, agg)?;
+                let alias = ident(
+                    self.dialect,
+                    &ash_core::derived::projected_column(resource, agg.name),
+                )?;
+                select_items.push(format!("{projected} AS {alias}"));
+            }
         }
 
         if self.per_key.is_some() {
@@ -1116,12 +1245,27 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             if calc.expr.is_custom() {
                 continue;
             }
-            let expr_sql = self.compile_calculation(resource, calc)?;
+            let expr_sql = self.select_calculation(resource, calc, query)?;
             items.push(format!("{expr_sql} AS {}", ident(self.dialect, calc.name)?));
         }
         for agg in inline {
-            let agg_sql = self.compile_aggregate(resource, agg)?;
+            let agg_sql = if query.needs_trusted_value(agg.name) {
+                self.compile_aggregate(resource, agg)?
+            } else {
+                self.projected_aggregate(resource, agg)?
+            };
             items.push(format!("{agg_sql} AS {}", ident(self.dialect, agg.name)?));
+            if matches!(
+                agg.kind,
+                AggregateKind::First { .. } | AggregateKind::Sum { .. }
+            ) {
+                let projected = self.projected_aggregate(resource, agg)?;
+                let alias = ident(
+                    self.dialect,
+                    &ash_core::derived::projected_column(resource, agg.name),
+                )?;
+                items.push(format!("{projected} AS {alias}"));
+            }
         }
         let sorts = query.sort.clone();
         let mut order = Vec::new();
@@ -1180,7 +1324,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         }
         let mut joins = Vec::new();
         for (rel, aggs) in groups {
-            let (join, values) = self.compile_aggregate_group(rel, aggs, &source)?;
+            let (join, values) =
+                self.compile_aggregate_group(resource, query, rel, aggs, &source)?;
             joins.push(join);
             columns.extend(values);
         }
@@ -1207,6 +1352,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
     /// the columns that read each from it, as the aggregate's name.
     fn compile_aggregate_group(
         &mut self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
         rel: &ash_core::RelationshipDef,
         aggs: &[&AggregateDef],
         source: &str,
@@ -1228,7 +1375,12 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 AggregateKind::Count => format!("COUNT(*){filter}"),
                 AggregateKind::Exists => format!("COUNT(*){filter} > 0"),
                 AggregateKind::Sum { field } => {
-                    format!("SUM({dest_alias}.{}){filter}", ident(self.dialect, field)?)
+                    let operand = if query.needs_trusted_value(agg.name) {
+                        format!("{dest_alias}.{}", column(self.dialect, dest, field)?)
+                    } else {
+                        self.projected_source(dest, field, &dest_alias)?
+                    };
+                    format!("SUM({operand}){filter}")
                 }
                 AggregateKind::First { .. } => {
                     return Err(Error::Invalid(format!(
@@ -1238,6 +1390,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 }
             };
             computed.push(format!("{value} AS {}", ident(self.dialect, agg.name)?));
+            if let AggregateKind::Sum { field } = agg.kind {
+                let operand = self.projected_source(dest, field, &dest_alias)?;
+                let alias = ident(
+                    self.dialect,
+                    &ash_core::derived::projected_column(resource, agg.name),
+                )?;
+                computed.push(format!("SUM({operand}){filter} AS {alias}"));
+            }
         }
 
         // The relationship's rows: the destination, through the join resource for a
@@ -1344,6 +1504,16 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 _ => value,
             };
             values.push(format!("{value} AS {name}"));
+            if matches!(agg.kind, AggregateKind::Sum { .. }) {
+                let alias = ident(
+                    self.dialect,
+                    &ash_core::derived::projected_column(resource, agg.name),
+                )?;
+                let value = self
+                    .dialect
+                    .cast_expression(agg.ty, &format!("{group_alias}.{alias}"));
+                values.push(format!("{value} AS {alias}"));
+            }
         }
         Ok((join, values))
     }
@@ -1440,6 +1610,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<CompiledSql> {
+        query.validate_calculations(resource)?;
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
         self.actor = query.actor.clone();

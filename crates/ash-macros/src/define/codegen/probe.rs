@@ -33,6 +33,17 @@ fn expand_completion_namespaces(def: &ResourceDefinition) -> TokenStream {
         let ty = &a.ty;
         quote! { pub #id: #ty }
     });
+    let readable_fields = def
+        .attributes
+        .iter()
+        .map(|field| (&field.ident, &field.ty))
+        .chain(
+            def.calculations
+                .iter()
+                .map(|field| (&field.ident, &field.ty)),
+        )
+        .chain(def.aggregates.iter().map(|field| (&field.ident, &field.ty)))
+        .map(|(id, ty)| quote! { pub #id: #ty });
     let rel_fields = def.relationships.iter().map(|r| {
         let id = &r.ident;
         let dest = &r.dest;
@@ -64,6 +75,10 @@ fn expand_completion_namespaces(def: &ResourceDefinition) -> TokenStream {
         #[allow(dead_code, non_camel_case_types)]
         struct __AshAcceptFields {
             #(#attr_fields,)*
+        }
+        #[allow(dead_code, non_camel_case_types)]
+        struct __AshReadableFields {
+            #(#readable_fields,)*
         }
         #[allow(dead_code, non_camel_case_types)]
         struct __AshRelFields {
@@ -249,7 +264,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
             match prep {
                 PreparationSpec::Sort { field, .. } => {
                     field_probes.push(ns_field_probe(
-                        &Ident::new("__ash_accept", field.span()),
+                        &Ident::new("__ash_readable", field.span()),
                         field,
                     ));
                 }
@@ -435,6 +450,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                 if false {
                     let __ash_accept: &__AshAcceptFields = loop {};
                     let __ash_rel: &__AshRelFields = loop {};
+                    let __ash_readable: &__AshReadableFields = loop {};
                     let __ash_actions: &__AshActionNames = loop {};
                     #actor_bind
                     #(#action_probes)*
@@ -548,7 +564,7 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
     for fp in &def.field_policies {
         let field = &fp.field;
         probes.push(ns_field_probe(
-            &Ident::new("__ash_accept", field.span()),
+            &Ident::new("__ash_readable", field.span()),
             field,
         ));
         for check in &fp.checks {
@@ -581,6 +597,12 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
             });
         }
         collect_calc_field_probes(&calc.expr, &mut calc_probes);
+        for field in calc.dependencies.iter().flatten() {
+            calc_probes.push(ns_field_probe(
+                &Ident::new("__ash_accept", field.span()),
+                field,
+            ));
+        }
         if let Some(typed) = calc_expr_typed(&calc.expr) {
             let ty = &calc.ty;
             calc_probes.push(quote! {
@@ -1140,7 +1162,7 @@ mod tests {
                     title: String;
                 }
                 calculations {
-                    ranked: Option<String> = custom(my_rank_calculator);
+                    ranked: Option<String> [depends_on []] = custom(my_rank_calculator);
                 }
                 actions {
                     create open {

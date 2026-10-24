@@ -134,6 +134,18 @@ pub fn read_row(
         })?;
         let val = extract_aggregate_value(row, agg)?;
         map.insert(agg.name.to_string(), val);
+        if matches!(
+            agg.kind,
+            ash_core::AggregateKind::First { .. } | ash_core::AggregateKind::Sum { .. }
+        ) {
+            let name = ash_core::derived::projected_name(agg.name);
+            let value = extract_column_value(
+                row,
+                &ash_core::derived::projected_column(resource, agg.name),
+                &agg.ty,
+            )?;
+            map.insert(name, value);
+        }
     }
 
     // What only Rust computes, from the record as read.
@@ -143,7 +155,14 @@ pub fn read_row(
             .get(calc.name)
             .cloned()
             .unwrap_or_default();
-        ash_core::apply_named_with_args(resource, &mut map, calc.name, &args)?;
+        ash_core::derived::apply_calculation(
+            resource,
+            query.actor.as_ref(),
+            &mut map,
+            calc.name,
+            &args,
+            query.needs_trusted_value(calc.name),
+        )?;
     }
 
     Ok(map)

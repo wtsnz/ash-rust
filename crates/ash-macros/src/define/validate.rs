@@ -436,9 +436,29 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
         }
     }
 
+    for field in def
+        .attributes
+        .iter()
+        .map(|field| &field.ident)
+        .chain(def.calculations.iter().map(|field| &field.ident))
+        .chain(def.aggregates.iter().map(|field| &field.ident))
+    {
+        if field.to_string().starts_with("__ash_") {
+            errors.push(Error::new_spanned(
+                field,
+                "field names beginning with `__ash_` are reserved",
+            ));
+        }
+    }
+    let readable_fields: Vec<_> = attr_names
+        .iter()
+        .chain(&names.calcs)
+        .chain(&names.aggs)
+        .cloned()
+        .collect();
     for fp in &def.field_policies {
-        if !attr_names.iter().any(|n| n == &fp.field.to_string()) {
-            errors.push(slot_error(&fp.field, "attribute", &attr_names, &names));
+        if !readable_fields.iter().any(|n| n == &fp.field.to_string()) {
+            errors.push(slot_error(&fp.field, "field", &readable_fields, &names));
         }
         for check in &fp.checks {
             validate_policy_effect(check, &policy_fields, def.actor.as_ref(), errors);
@@ -482,6 +502,20 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
 
     for calc in &def.calculations {
         validate_calc_fields(&calc.expr, def, &calc.arguments, errors);
+        if calc.expr.is_custom() && calc.dependencies.is_none() {
+            errors.push(Error::new_spanned(
+                &calc.ident,
+                "custom calculations require `depends_on [fields]`, which limits callback inputs",
+            ));
+        }
+        for dependency in calc.dependencies.iter().flatten() {
+            if !attr_names
+                .iter()
+                .any(|name| name == &dependency.to_string())
+            {
+                errors.push(unknown_field(dependency, &attr_names, "dependency"));
+            }
+        }
     }
 
     for agg in &def.aggregates {
@@ -619,10 +653,12 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
             use crate::define::ast::ChangeSpec;
             match &chg {
                 ChangeSpec::Set { field, .. } | ChangeSpec::SetNew { field, .. } => {
-                    if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> =
-                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(field, "attribute", &attr_names, &names));
+                    if def
+                        .attributes
+                        .iter()
+                        .all(|attribute| attribute.ident != *field)
+                    {
+                        errors.push(slot_error(field, "attribute", &names.attrs, &names));
                     } else {
                         kept_changes.push(chg);
                     }
@@ -654,10 +690,12 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                 }
                 ChangeSpec::OptimisticLock { field } => {
                     let kind = action.kind;
-                    if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> =
-                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(field, "attribute", &attr_names, &names));
+                    if def
+                        .attributes
+                        .iter()
+                        .all(|attribute| attribute.ident != *field)
+                    {
+                        errors.push(slot_error(field, "attribute", &names.attrs, &names));
                     } else if !matches!(
                         kind,
                         crate::define::ast::ActionKind::Update
@@ -673,10 +711,12 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     }
                 }
                 ChangeSpec::RelateActor { field } => {
-                    if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> =
-                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(field, "attribute", &attr_names, &names));
+                    if def
+                        .attributes
+                        .iter()
+                        .all(|attribute| attribute.ident != *field)
+                    {
+                        errors.push(slot_error(field, "attribute", &names.attrs, &names));
                     } else {
                         kept_changes.push(chg);
                     }
@@ -701,10 +741,15 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
         for prep in &action.preparations {
             match prep {
                 crate::define::ast::PreparationSpec::Sort { field, .. } => {
-                    if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> =
-                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(field, "attribute", &attr_names, &names));
+                    let fields: Vec<String> = names
+                        .attrs
+                        .iter()
+                        .chain(&names.calcs)
+                        .chain(&names.aggs)
+                        .cloned()
+                        .collect();
+                    if !fields.contains(&field.to_string()) {
+                        errors.push(slot_error(field, "field", &fields, &names));
                     }
                 }
                 crate::define::ast::PreparationSpec::Filter { expr } => {
@@ -1012,6 +1057,31 @@ mod tests {
     }
 
     #[test]
+    fn custom_calculations_require_dependency_declarations() {
+        let message = validate_err_msg(quote! {
+            Item {
+                attributes { id: Uuid [pk]; secret: Option<String>; }
+                calculations { opaque: Option<String> = coalesce(custom(callback), "empty"); }
+            }
+        });
+        assert!(
+            message.contains("custom calculations require `depends_on [fields]`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn custom_dependencies_must_name_stored_fields() {
+        let message = validate_err_msg(quote! {
+            Item {
+                attributes { id: Uuid [pk]; secret: Option<String>; }
+                calculations { opaque: Option<String> [depends_on [missing]] = custom(callback); }
+            }
+        });
+        assert!(message.contains("missing"), "{message}");
+    }
+
+    #[test]
     fn test_accept_unknown_attribute_suggests_did_you_mean() {
         let msg = validate_err_msg(quote! {
             TestResource {
@@ -1053,6 +1123,27 @@ mod tests {
             "got: {msg}"
         );
         assert!(msg.contains("change manage"), "got: {msg}");
+    }
+
+    #[test]
+    fn write_changes_require_stored_attributes() {
+        for change in [
+            quote!(change set_new(title_length = 1);),
+            quote!(change optimistic_lock(title_length);),
+            quote!(change relate_actor(title_length);),
+        ] {
+            let message = validate_err_msg(quote! {
+                Item {
+                    attributes { id: Uuid [pk]; title: String; }
+                    calculations { title_length: Option<i64> = string_length(title); }
+                    actions { update edit { #change } }
+                }
+            });
+            assert!(
+                message.contains("`title_length` is a calculation, not an attribute"),
+                "{message}"
+            );
+        }
     }
 
     #[test]

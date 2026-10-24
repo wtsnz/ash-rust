@@ -44,6 +44,7 @@ impl<D> Context<D> {
                     &s.field,
                     s.descending,
                     s.nulls_first(),
+                    s.projected,
                     format!("{:?}", s.guard),
                 )
             })
@@ -88,7 +89,9 @@ impl<D> Context<D> {
                     {
                         Value::Null
                     } else {
-                        fields.get(&sort.field).cloned().unwrap_or(Value::Null)
+                        crate::derived::sort_value(fields, sort)
+                            .cloned()
+                            .unwrap_or(Value::Null)
                     };
                     (sort.field.clone(), value)
                 })

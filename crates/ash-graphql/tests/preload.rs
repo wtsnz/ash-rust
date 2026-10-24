@@ -253,7 +253,8 @@ static POST_DEF: ResourceDef = ResourceDef {
             },
         ),
         // Only Rust can compute this.
-        CalculationDef::new("shout", AttrType::String, Expr::Custom(shout)),
+        CalculationDef::new("shout", AttrType::String, Expr::Custom(shout))
+            .dependencies(&["title"]),
     ],
     field_policies: POST_FIELD_POLICIES,
     ..AUTHOR_DEF
@@ -751,16 +752,16 @@ async fn a_mutation_result_hides_what_field_policies_hide() {
     );
 }
 
-/// A calculation loaded with the record is its value, nil included: the narrowed record
-/// can't compute it again. One only Rust computes reads every attribute it might need.
+/// Hidden dependencies suppress the whole expression, including an unused branch.
+/// Rust callbacks load their declared inputs even when the selection omits them.
 #[tokio::test]
-async fn calculations_load_as_the_record_is_stored() {
+async fn calculation_loads_project_dependencies_and_read_declared_custom_inputs() {
     let (data, _) = seeded().await;
     let actor = || Some(Actor::new(Uuid::new_v4()));
     let page = run(&data, r#"{ listPosts(filter: { title: { in: ["A0P0", "A0P1"] } }, sort: [{ field: TITLE }]) { results { firstLabel } } }"#, actor()).await;
     assert_eq!(
         page["listPosts"]["results"],
-        json!([{ "firstLabel": null }, { "firstLabel": "other" }])
+        json!([{ "firstLabel": null }, { "firstLabel": null }])
     );
     data.take_selects();
 

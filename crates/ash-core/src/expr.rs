@@ -35,6 +35,42 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// Fields used by every branch, including coalesce fallbacks and conditions.
+    pub fn fields(&self, out: &mut Vec<&'static str>) {
+        match self {
+            Self::Field(name) | Self::StringLength(name) => out.push(name),
+            Self::Length(e) | Self::Lower(e) | Self::Upper(e) => e.fields(out),
+            Self::Concat(parts) | Self::Coalesce(parts) => {
+                for part in *parts {
+                    part.fields(out);
+                }
+            }
+            Self::Add(a, b)
+            | Self::Sub(a, b)
+            | Self::Mul(a, b)
+            | Self::Div(a, b)
+            | Self::Eq(a, b)
+            | Self::Ne(a, b)
+            | Self::Gt(a, b)
+            | Self::Gte(a, b)
+            | Self::Lt(a, b)
+            | Self::Lte(a, b) => {
+                a.fields(out);
+                b.fields(out);
+            }
+            Self::IfElse {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                cond.fields(out);
+                then_expr.fields(out);
+                else_expr.fields(out);
+            }
+            _ => {}
+        }
+    }
+
     /// Whether only Rust can compute this: it calls a custom function, which a data layer
     /// can't run, and which reads whatever of the record it likes.
     pub fn is_custom(&self) -> bool {
@@ -119,15 +155,62 @@ pub struct CalculationDef {
     pub ty: AttrType,
     pub expr: Expr,
     pub arguments: &'static [crate::action::ArgumentDef],
+    /// Required for opaque Rust callbacks. Callbacks receive only these fields and
+    /// the expression's statically known dependencies.
+    pub dependencies: Option<&'static [&'static str]>,
+    /// Reviewed permission to expose a derived value over unreadable dependencies.
+    /// Explicit policies on this calculation still apply.
+    pub declassify: bool,
 }
 
 impl CalculationDef {
+    pub const fn dependencies(mut self, fields: &'static [&'static str]) -> Self {
+        self.dependencies = Some(fields);
+        self
+    }
+
+    pub const fn declassify(mut self) -> Self {
+        self.declassify = true;
+        self
+    }
+
+    pub fn dependency_fields(&self) -> Result<Vec<&'static str>> {
+        if self.expr.is_custom() && self.dependencies.is_none() {
+            return Err(Error::Invalid(format!(
+                "custom calculation `{}` must declare dependencies",
+                self.name
+            )));
+        }
+        let mut fields = Vec::new();
+        self.expr.fields(&mut fields);
+        fields.extend(self.dependencies.unwrap_or_default());
+        fields.sort_unstable();
+        fields.dedup();
+        Ok(fields)
+    }
+
+    /// Match the DSL's stored-input contract for handwritten definitions too.
+    pub fn validate_dependencies(&self, resource: &ResourceDef) -> Result<Vec<&'static str>> {
+        let fields = self.dependency_fields()?;
+        for field in &fields {
+            if resource.attribute(field).is_none() {
+                return Err(Error::Invalid(format!(
+                    "calculation `{}` dependency `{field}` must be a stored attribute",
+                    self.name
+                )));
+            }
+        }
+        Ok(fields)
+    }
+
     pub const fn new(name: &'static str, ty: AttrType, expr: Expr) -> Self {
         Self {
             name,
             ty,
             expr,
             arguments: &[],
+            dependencies: None,
+            declassify: false,
         }
     }
 
@@ -142,6 +225,8 @@ impl CalculationDef {
             ty,
             expr,
             arguments,
+            dependencies: None,
+            declassify: false,
         }
     }
 }
@@ -337,7 +422,19 @@ pub fn apply_named_with_args(
     args: &FieldMap,
 ) -> Result<()> {
     if let Some(calc) = resource.calculation(name) {
-        let value = eval_with_args(&calc.expr, row, args)?;
+        let dependencies = calc.validate_dependencies(resource)?;
+        let value = if calc.expr.is_custom() {
+            let inputs = dependencies
+                .iter()
+                .filter_map(|name| {
+                    row.get(*name)
+                        .map(|value| ((*name).to_string(), value.clone()))
+                })
+                .collect();
+            eval_with_args(&calc.expr, &inputs, args)?
+        } else {
+            eval_with_args(&calc.expr, row, args)?
+        };
         row.insert(calc.name.to_string(), value);
     }
     Ok(())

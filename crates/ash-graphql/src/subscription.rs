@@ -7,7 +7,7 @@ use async_graphql::ErrorExtensions;
 use async_graphql::dynamic::*;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::filter::{parse_resource_filter, resource_filter_input_name};
+use crate::filter::{parse_subscription_filter, resource_filter_input_name};
 
 /// Returns camelCase name of the resource (e.g. "ticket" for "Ticket").
 pub fn uncapitalize(s: &str) -> String {
@@ -163,7 +163,7 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                         let ash = request_context::<D>(&ctx)?;
                         // An argument given as `null`, as an unset variable is, means none.
                         let filter = match ctx.args.get("filter").filter(|arg| !arg.is_null()) {
-                            Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?.into_filter()),
+                            Some(filter) => Some(parse_subscription_filter(resource, filter.as_value())?.into_filter()),
                             None => None,
                         };
                         let filter = filter.map(|filter| ash_core::plan_filter(resource, actor.as_ref(), tenant.as_deref(), ash_core::TrustedExpr::Filter(filter)))

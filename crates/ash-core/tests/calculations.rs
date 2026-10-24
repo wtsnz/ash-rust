@@ -36,7 +36,7 @@ pub mod item {
             upper_code: String = upper(code);
             display_name: String = coalesce(nickname, name, "Item");
             badge: String = if_else(views >= 500, "Popular", "Regular");
-            discount_type: String = custom(calculate_discount_code);
+            discount_type: String [depends_on [price]] = custom(calculate_discount_code);
             discounted(discount: i64): i64 = price - arg(discount);
         }
 

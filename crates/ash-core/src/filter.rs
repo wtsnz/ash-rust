@@ -7,6 +7,9 @@ use crate::value::{FieldMap, Value};
 pub enum Filter {
     Client(Box<crate::ClientExpr<Filter>>),
     Traversal(Box<crate::Traversal>),
+    /// A planned reference to per-reader derived values. Trusted predicates outside
+    /// this node retain access to stored operands.
+    Projected(Box<Filter>),
     True,
     False,
     Eq(String, Value),
@@ -107,9 +110,23 @@ impl Filter {
         Self::In(field.into(), values.into_iter().map(Into::into).collect())
     }
 
+    pub(crate) fn collect_trusted_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            Self::Projected(_) | Self::Client(_) | Self::Traversal(_) | Self::Related { .. } => {}
+            Self::And(parts) | Self::Or(parts) => {
+                for part in parts {
+                    part.collect_trusted_fields(out);
+                }
+            }
+            Self::Not(inner) => inner.collect_trusted_fields(out),
+            leaf => leaf.collect_fields(out),
+        }
+    }
+
     pub fn collect_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
             Self::Client(input) => input.0.collect_fields(out),
+            Self::Projected(inner) => inner.collect_fields(out),
             Self::Traversal(_) => {}
             Self::True | Self::False => {}
             Self::Eq(field, _)
@@ -199,6 +216,9 @@ impl Filter {
         };
         match self {
             Self::Client(_) => None,
+            Self::Projected(inner) => {
+                inner.eval(resource, &crate::derived::projected_fields(fields))
+            }
             Self::Traversal(node) => Self::related(node.relationship.clone(), *node.filter.clone())
                 .eval(resource, fields),
             Self::True => Some(true),

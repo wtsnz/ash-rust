@@ -16,6 +16,8 @@ mod cursor;
 mod data_layer;
 #[doc(hidden)]
 pub mod default_value;
+#[doc(hidden)]
+pub mod derived;
 mod engine;
 mod error;
 mod expr;
@@ -64,6 +66,7 @@ pub use context::{Context, Runtime};
 pub use data_layer::{
     CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
+pub use policy::field_read_condition;
 // Re-export the deprecated compatibility insert until the write-plan migration.
 #[allow(deprecated)]
 pub use engine::{

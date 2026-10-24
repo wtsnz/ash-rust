@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1 through 4 implemented, pending review; the rest planned. See §5.
+- **Status**: Proposed. Steps 1 through 5 implemented, pending review; the rest planned. See §5.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -85,9 +85,9 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | `Runtime`, sealed `Scope`, `bind`/`system`, private `Context` fields, changesets tied to their scope, multi-scope `runtime.transaction`, every transport (HTTP and both WebSocket protocols) bound through the same binder | 2 | In review (#87) |
 | Cross-tenant lookup grant | — | Planned. Until it lands, apps that log in by email across tenants (such as the Lagrange example) ask for the tenant first |
 | System capabilities declared by action hooks | — | Planned |
-| `ClientExpr`/`TrustedExpr`, destination and join traversal scopes, Runtime-sealed cursors, snapshot filter registration checks | 3 | Implemented, pending review. See [Client read plans](../client-read-plans.md) |
+| `ClientExpr`/`TrustedExpr`, destination and join traversal scopes, Runtime-sealed cursors, snapshot filter registration checks | 3 | In review (#89). See [Client read plans](../client-read-plans.md) |
 | Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | In review (#88). Typed APIs return projected resource structs; raw data-layer transport remains until step 8 |
-| Derived-value visibility and `declassify` | 5 | Planned |
+| Derived-value visibility and `declassify` | 5 | Implemented, pending review. Calculation dependencies and explicit policies; projected first/sum operands and client comparisons; declared custom inputs. See [Derived values](../scoped-access.md#derived-values) |
 | Guarded upsert conflicts; data-layer-specific trusted plan nodes | 6 | Planned |
 | Managed relationships through scoped resolution; atomic cascades | 7 | Planned |
 | Delete raw data-layer access (bypasses become compile errors) | 8 | Planned |

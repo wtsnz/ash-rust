@@ -1238,7 +1238,7 @@ struct RowPlan<'q> {
     resource: &'q ResourceDef,
     query: &'q CompiledQuery,
     /// Each field read: its name, type, and column, if the result has it.
-    fields: Vec<(&'static str, AttrType, Option<usize>)>,
+    fields: Vec<(String, AttrType, Option<usize>)>,
 }
 
 impl<'q> RowPlan<'q> {
@@ -1255,19 +1255,27 @@ impl<'q> RowPlan<'q> {
             .iter()
             .filter(|attr| query.reads(resource, attr))
         {
-            fields.push((attr.name, attr.ty, column(attr.name)));
+            fields.push((attr.name.to_string(), attr.ty, column(attr.name)));
         }
         for calc_name in &query.calculations {
             if let Some(calc) = resource
                 .calculation(calc_name)
                 .filter(|calc| !calc.expr.is_custom())
             {
-                fields.push((calc.name, calc.ty, column(calc.name)));
+                fields.push((calc.name.to_string(), calc.ty, column(calc.name)));
             }
         }
         for agg_name in &query.aggregates {
             if let Some(agg) = resource.aggregate(agg_name) {
-                fields.push((agg.name, agg.ty, column(agg.name)));
+                fields.push((agg.name.to_string(), agg.ty, column(agg.name)));
+                if matches!(
+                    agg.kind,
+                    ash_core::AggregateKind::First { .. } | ash_core::AggregateKind::Sum { .. }
+                ) {
+                    let name = ash_core::derived::projected_name(agg.name);
+                    let index = column(&ash_core::derived::projected_column(resource, agg.name));
+                    fields.push((name, agg.ty, index));
+                }
             }
         }
         Self {
@@ -1291,7 +1299,14 @@ impl<'q> RowPlan<'q> {
                 .get(calc.name)
                 .cloned()
                 .unwrap_or_default();
-            ash_core::apply_named_with_args(self.resource, &mut map, calc.name, &args)?;
+            ash_core::derived::apply_calculation(
+                self.resource,
+                self.query.actor.as_ref(),
+                &mut map,
+                calc.name,
+                &args,
+                self.query.needs_trusted_value(calc.name),
+            )?;
         }
         Ok(map)
     }
