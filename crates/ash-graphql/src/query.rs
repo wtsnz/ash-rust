@@ -88,7 +88,7 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 // A get sees what the primary read sees: an archived record is not found.
                 let fields = selected(ctx.ctx.field(), None);
                 let query = Load::of(resource, &fields, []).onto(CompiledQuery {
-                    filter: Some(Filter::eq(pk_name, id)),
+                    filter: Some(ash_core::ClientExpr::new(Filter::eq(pk_name, id)).into_filter()),
                     limit: Some(1),
                     tenant: ash.tenant().map(str::to_owned),
                     ..CompiledQuery::default()

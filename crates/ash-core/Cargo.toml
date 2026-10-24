@@ -9,6 +9,7 @@ description = "Typed actions, resources, and policies"
 [dependencies]
 ash-macros = { path = "../ash-macros" }
 base64 = "0.22"
+chacha20poly1305 = "0.10.1"
 chrono = { version = "0.4", default-features = false, features = ["now", "std"] }
 futures-util = { version = "0.3", default-features = false }
 serde = { version = "1", features = ["derive"] }

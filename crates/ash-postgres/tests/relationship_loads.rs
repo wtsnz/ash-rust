@@ -68,7 +68,9 @@ static BOOK: ResourceDef = ResourceDef {
     ],
     actions: &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(on_shelf)])],
+        .preparations(&[PreparationDef::Filter(|| {
+            ash_core::TrustedExpr::Filter(on_shelf())
+        })])],
     ..BASE
 };
 

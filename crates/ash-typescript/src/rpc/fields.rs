@@ -58,10 +58,17 @@ pub(crate) fn selection_category(ty: AttrType) -> Option<&'static str> {
 
 impl ValueSelection {
     /// What `spec` selects within a value of type `ty`, at `path`.
-    pub(crate) fn parse(ty: AttrType, spec: &Json, path: &[String], name: &str) -> Result<Self, Failure> {
+    pub(crate) fn parse(
+        ty: AttrType,
+        spec: &Json,
+        path: &[String],
+        name: &str,
+    ) -> Result<Self, Failure> {
         let category = selection_category(ty).unwrap_or("attribute");
         let Json::Array(items) = spec else {
-            return Err(Failure::unsupported_field_combination(path, name, category, spec));
+            return Err(Failure::unsupported_field_combination(
+                path, name, category, spec,
+            ));
         };
         if items.is_empty() {
             return Err(Failure::requires_field_selection(path, name, category));
@@ -74,11 +81,26 @@ impl ValueSelection {
         };
         // What each name names: a declared field, or a union's member.
         let (union, entries): (bool, Vec<(&'static str, AttrType)>) = match ty {
-            AttrType::Union { members, .. } => (true, members.iter().map(|member| (member.name, member.ty)).collect()),
-            ty => (false, ty.fields().unwrap_or_default().into_iter().map(|field| (field.name, field.ty)).collect()),
+            AttrType::Union { members, .. } => (
+                true,
+                members
+                    .iter()
+                    .map(|member| (member.name, member.ty))
+                    .collect(),
+            ),
+            ty => (
+                false,
+                ty.fields()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|field| (field.name, field.ty))
+                    .collect(),
+            ),
         };
         let unknown = |given: &str| match ty {
-            AttrType::Embedded(embedded) => Failure::unknown_field(&here, given, embedded.resource()),
+            AttrType::Embedded(embedded) => {
+                Failure::unknown_field(&here, given, embedded.resource())
+            }
             _ => Failure::unknown_field_of(&here, given, if union { "union" } else { "map" }),
         };
         let mut selected = Vec::new();
@@ -86,9 +108,16 @@ impl ValueSelection {
             match item {
                 Json::String(given) => {
                     let given = snake(given);
-                    let (entry, entry_ty) = *entries.iter().find(|(entry, _)| *entry == given).ok_or_else(|| unknown(&given))?;
+                    let (entry, entry_ty) = *entries
+                        .iter()
+                        .find(|(entry, _)| *entry == given)
+                        .ok_or_else(|| unknown(&given))?;
                     if selection_category(entry_ty).is_some() {
-                        let category = if union { "complex_type" } else { selection_category(entry_ty).unwrap() };
+                        let category = if union {
+                            "complex_type"
+                        } else {
+                            selection_category(entry_ty).unwrap()
+                        };
                         return Err(Failure::requires_field_selection(&here, entry, category));
                     }
                     selected.push((entry, None));
@@ -96,7 +125,10 @@ impl ValueSelection {
                 Json::Object(map) => {
                     for (given, spec) in map {
                         let given = snake(given);
-                        let (entry, entry_ty) = *entries.iter().find(|(entry, _)| *entry == given).ok_or_else(|| unknown(&given))?;
+                        let (entry, entry_ty) = *entries
+                            .iter()
+                            .find(|(entry, _)| *entry == given)
+                            .ok_or_else(|| unknown(&given))?;
                         if selection_category(entry_ty).is_none() {
                             return Err(Failure::field_does_not_support_nesting(&here, entry));
                         }
@@ -106,7 +138,11 @@ impl ValueSelection {
                 other => return Err(Failure::invalid_field_format(&here, other)),
             }
         }
-        Ok(if union { Self::Members(selected) } else { Self::Fields(selected) })
+        Ok(if union {
+            Self::Members(selected)
+        } else {
+            Self::Fields(selected)
+        })
     }
 }
 
@@ -157,9 +193,13 @@ impl LoadRestrictions {
         let shown = || vec![full.join(".")];
         match self {
             Self::None => Ok(()),
-            Self::Allow(allowed) if allowed.iter().any(|a| *a == full || a.starts_with(&full)) => Ok(()),
+            Self::Allow(allowed) if allowed.iter().any(|a| *a == full || a.starts_with(&full)) => {
+                Ok(())
+            }
             Self::Allow(_) => Err(Failure::load_restricted(false, shown())),
-            Self::Deny(denied) if denied.iter().any(|d| full.starts_with(d)) => Err(Failure::load_restricted(true, shown())),
+            Self::Deny(denied) if denied.iter().any(|d| full.starts_with(d)) => {
+                Err(Failure::load_restricted(true, shown()))
+            }
             Self::Deny(_) => Ok(()),
         }
     }
@@ -173,10 +213,17 @@ enum Spec<'a> {
     Fields,
     /// Query options for a relationship: `args` (which it mustn't have), its `fields`,
     /// and `page`, `filter`, `sort`, `limit`, `offset`.
-    QueryOptions { args: Option<&'a Json>, fields: Option<&'a Json>, options: &'a Map<String, Json> },
+    QueryOptions {
+        args: Option<&'a Json>,
+        fields: Option<&'a Json>,
+        options: &'a Map<String, Json>,
+    },
     /// `args` for a calculation, with `fields` for one of a type that has them; or bare
     /// `fields`, a relationship's.
-    Args { args: Option<&'a Json>, fields: Option<&'a Json> },
+    Args {
+        args: Option<&'a Json>,
+        fields: Option<&'a Json>,
+    },
 }
 
 fn classify(spec: &Json) -> Spec<'_> {
@@ -186,7 +233,11 @@ fn classify(spec: &Json) -> Spec<'_> {
     let args = map.get("args").filter(|args| !args.is_null());
     let fields = map.get("fields");
     if QUERY_OPTION_KEYS.iter().any(|key| map.contains_key(*key)) {
-        Spec::QueryOptions { args, fields, options: map }
+        Spec::QueryOptions {
+            args,
+            fields,
+            options: map,
+        }
     } else if args.is_some() || fields.is_some() {
         Spec::Args { args, fields }
     } else {
@@ -212,7 +263,12 @@ fn kind(resource: &ResourceDef, name: &str) -> Option<&'static str> {
 impl Selection {
     /// The selection `fields` makes of `resource`, at `path` (the relationships it's
     /// under).
-    pub(crate) fn parse(resource: &'static ResourceDef, fields: &Json, path: &[String], rules: &Rules) -> Result<Self, Failure> {
+    pub(crate) fn parse(
+        resource: &'static ResourceDef,
+        fields: &Json,
+        path: &[String],
+        rules: &Rules,
+    ) -> Result<Self, Failure> {
         let items = match fields {
             Json::Array(items) => items,
             other => return Err(Failure::invalid_fields_type(other)),
@@ -221,10 +277,21 @@ impl Selection {
         let mut selection = Selection::default();
         for item in items {
             match item {
-                Json::String(name) => selection.simple(resource, &rules.names.field_named(resource, name), path, rules)?,
+                Json::String(name) => selection.simple(
+                    resource,
+                    &rules.names.field_named(resource, name),
+                    path,
+                    rules,
+                )?,
                 Json::Object(map) => {
                     for (name, spec) in map {
-                        selection.nested(resource, &rules.names.field_named(resource, name), spec, path, rules)?;
+                        selection.nested(
+                            resource,
+                            &rules.names.field_named(resource, name),
+                            spec,
+                            path,
+                            rules,
+                        )?;
                     }
                 }
                 other => return Err(Failure::invalid_field_format(path, other)),
@@ -234,16 +301,29 @@ impl Selection {
     }
 
     /// A field named alone.
-    fn simple(&mut self, resource: &'static ResourceDef, name: &str, path: &[String], rules: &Rules) -> Result<(), Failure> {
+    fn simple(
+        &mut self,
+        resource: &'static ResourceDef,
+        name: &str,
+        path: &[String],
+        rules: &Rules,
+    ) -> Result<(), Failure> {
         match kind(resource, name) {
             None => Err(Failure::unknown_field(path, name, resource)),
-            Some("relationship") => Err(Failure::requires_field_selection(path, name, "relationship")),
+            Some("relationship") => Err(Failure::requires_field_selection(
+                path,
+                name,
+                "relationship",
+            )),
             Some("calculation") if !resource.calculation(name).unwrap().arguments.is_empty() => {
                 Err(Failure::calculation_requires_args(path, name))
             }
             Some("attribute") => {
                 // A value of declared fields or members needs them selected.
-                if let Some(category) = resource.attribute(name).and_then(|attr| selection_category(attr.ty)) {
+                if let Some(category) = resource
+                    .attribute(name)
+                    .and_then(|attr| selection_category(attr.ty))
+                {
                     return Err(Failure::requires_field_selection(path, name, category));
                 }
                 self.fields.push(name.to_string());
@@ -258,43 +338,80 @@ impl Selection {
     }
 
     /// A field named with what it selects.
-    fn nested(&mut self, resource: &'static ResourceDef, name: &str, spec: &Json, path: &[String], rules: &Rules) -> Result<(), Failure> {
+    fn nested(
+        &mut self,
+        resource: &'static ResourceDef,
+        name: &str,
+        spec: &Json,
+        path: &[String],
+        rules: &Rules,
+    ) -> Result<(), Failure> {
         match classify(spec) {
-            Spec::QueryOptions { args, fields, options } => self.query_options(resource, name, args, fields, options, path, rules),
+            Spec::QueryOptions {
+                args,
+                fields,
+                options,
+            } => self.query_options(resource, name, args, fields, options, path, rules),
             Spec::Args { args, fields } if kind(resource, name) == Some("relationship") => {
                 // A relationship's bare `fields` envelope, or one with `args`, which it
                 // doesn't take.
                 self.query_options(resource, name, args, fields, &Map::new(), path, rules)
             }
-            Spec::Args { args, fields } => self.calculation_with_args(resource, name, args, fields, path, rules),
+            Spec::Args { args, fields } => {
+                self.calculation_with_args(resource, name, args, fields, path, rules)
+            }
             Spec::Fields => self.nested_fields(resource, name, spec, path, rules),
         }
     }
 
     /// A field with a list of fields (or something else) of its own: a relationship's.
-    fn nested_fields(&mut self, resource: &'static ResourceDef, name: &str, spec: &Json, path: &[String], rules: &Rules) -> Result<(), Failure> {
+    fn nested_fields(
+        &mut self,
+        resource: &'static ResourceDef,
+        name: &str,
+        spec: &Json,
+        path: &[String],
+        rules: &Rules,
+    ) -> Result<(), Failure> {
         match kind(resource, name) {
             None => Err(Failure::unknown_field(path, name, resource)),
             Some("calculation") if !resource.calculation(name).unwrap().arguments.is_empty() => {
                 Err(Failure::invalid_calculation_args(path, name))
             }
             Some("aggregate") => Err(Failure::invalid_field_selection(path, name, ":aggregate")),
-            Some("calculation") if spec.is_object() => Err(Failure::invalid_calculation_args(path, name)),
+            Some("calculation") if spec.is_object() => {
+                Err(Failure::invalid_calculation_args(path, name))
+            }
             // Within an embedded resource, typed map or union.
-            Some("attribute") if resource.attribute(name).is_some_and(|attr| selection_category(attr.ty).is_some()) => {
+            Some("attribute")
+                if resource
+                    .attribute(name)
+                    .is_some_and(|attr| selection_category(attr.ty).is_some()) =>
+            {
                 let ty = resource.attribute(name).unwrap().ty;
                 let selection = ValueSelection::parse(ty, spec, path, name)?;
                 self.fields.push(name.to_string());
                 self.values.insert(name.to_string(), selection);
                 Ok(())
             }
-            Some("calculation" | "attribute") => Err(Failure::field_does_not_support_nesting(path, name)),
+            Some("calculation" | "attribute") => {
+                Err(Failure::field_does_not_support_nesting(path, name))
+            }
             _ => {
                 let Json::Array(items) = spec else {
-                    return Err(Failure::unsupported_field_combination(path, name, "relationship", spec));
+                    return Err(Failure::unsupported_field_combination(
+                        path,
+                        name,
+                        "relationship",
+                        spec,
+                    ));
                 };
                 if items.is_empty() {
-                    return Err(Failure::requires_field_selection(path, name, "relationship"));
+                    return Err(Failure::requires_field_selection(
+                        path,
+                        name,
+                        "relationship",
+                    ));
                 }
                 let dest = (resource.relationship(name).unwrap().destination)();
                 let selection = Selection::parse(dest, spec, &child(path, name), rules)?;
@@ -319,7 +436,10 @@ impl Selection {
         path: &[String],
         rules: &Rules,
     ) -> Result<(), Failure> {
-        let Some(rel) = resource.relationship(name).filter(|_| kind(resource, name) == Some("relationship")) else {
+        let Some(rel) = resource
+            .relationship(name)
+            .filter(|_| kind(resource, name) == Some("relationship"))
+        else {
             return Err(match kind(resource, name) {
                 None => Failure::unknown_field(path, name, resource),
                 Some(kind) => Failure::query_opts_on_non_relationship(path, name, kind),
@@ -338,10 +458,18 @@ impl Selection {
             return Err(Failure::nested_pagination_not_supported(path, name));
         }
         if given("filter").is_some() && !rules.enable_filter {
-            return Err(Failure::option_not_supported("filter", "disabled", Some((path, name))));
+            return Err(Failure::option_not_supported(
+                "filter",
+                "disabled",
+                Some((path, name)),
+            ));
         }
         if given("sort").is_some() && !rules.enable_sort {
-            return Err(Failure::option_not_supported("sort", "disabled", Some((path, name))));
+            return Err(Failure::option_not_supported(
+                "sort",
+                "disabled",
+                Some((path, name)),
+            ));
         }
         if given("page").is_some() && (given("limit").is_some() || given("offset").is_some()) {
             return Err(Failure::page_and_limit_offset_combined(path, name));
@@ -349,9 +477,20 @@ impl Selection {
         let fields = match fields {
             Some(Json::Array(items)) if !items.is_empty() => fields.unwrap(),
             Some(other @ (Json::Object(_) | Json::String(_) | Json::Number(_) | Json::Bool(_))) => {
-                return Err(Failure::unsupported_field_combination(path, name, "relationship", other));
+                return Err(Failure::unsupported_field_combination(
+                    path,
+                    name,
+                    "relationship",
+                    other,
+                ));
             }
-            _ => return Err(Failure::requires_field_selection(path, name, "relationship")),
+            _ => {
+                return Err(Failure::requires_field_selection(
+                    path,
+                    name,
+                    "relationship",
+                ));
+            }
         };
         let at = child(path, name);
         let selection = Selection::parse(dest, fields, &at, rules)?;
@@ -362,20 +501,28 @@ impl Selection {
         let filter = match given("filter") {
             None => None,
             Some(filter) => {
-                let filter = filter_input(dest, &rules.names.filter(dest, filter)).map_err(|e| failure(&e).under("filter"))?;
-                Some(ash_core::guard_input_filter(dest, rules.actor, filter).map_err(|e| failure(&e))?)
+                let filter = filter_input(dest, &rules.names.filter(dest, filter))
+                    .map_err(|e| failure(&e).under("filter"))?;
+                Some(filter.into_filter())
             }
         };
         let sort = match given("sort") {
             None => Vec::new(),
             Some(sort) => {
                 let text = sort_text(sort);
-                let sort = sort_input(dest, &rules.names.sort(dest, &text)).map_err(|e| failure(&e).under("sort"))?;
-                ash_core::guard_input_sort(dest, rules.actor, sort).map_err(|e| failure(&e))?
+                let sort = sort_input(dest, &rules.names.sort(dest, &text))
+                    .map_err(|e| failure(&e).under("sort"))?;
+                ash_core::plan_client_sort(dest, rules.actor, sort).map_err(|e| failure(&e))?
             }
         };
         let number = |key: &str| given(key).and_then(Json::as_u64).map(|n| n as usize);
-        let query = RelatedQuery { filter, sort, limit: number("limit"), offset: number("offset"), ..RelatedQuery::default() };
+        let query = RelatedQuery {
+            filter,
+            sort,
+            limit: number("limit"),
+            offset: number("offset"),
+            ..RelatedQuery::default()
+        };
         rules.loads.check(path, name)?;
         self.relationship(name, dest, selection, query, page);
         Ok(())
@@ -411,10 +558,22 @@ impl Selection {
         let mut cast = FieldMap::new();
         for (key, value) in given.into_iter().flatten() {
             let key = snake(key);
-            let arg = calc.arguments.iter().find(|arg| arg.name == key).ok_or_else(|| Failure::invalid_calculation_args(path, name))?;
-            cast.insert(key, value_input(arg.ty, value).map_err(|_| Failure::invalid_calculation_args(path, name))?);
+            let arg = calc
+                .arguments
+                .iter()
+                .find(|arg| arg.name == key)
+                .ok_or_else(|| Failure::invalid_calculation_args(path, name))?;
+            cast.insert(
+                key,
+                value_input(arg.ty, value)
+                    .map_err(|_| Failure::invalid_calculation_args(path, name))?,
+            );
         }
-        if calc.arguments.iter().any(|arg| !arg.allow_nil && cast.get(arg.name).is_none_or(|v| v.is_null())) {
+        if calc
+            .arguments
+            .iter()
+            .any(|arg| !arg.allow_nil && cast.get(arg.name).is_none_or(|v| v.is_null()))
+        {
             return Err(Failure::invalid_calculation_args(path, name));
         }
         rules.loads.check(path, name)?;
@@ -423,16 +582,34 @@ impl Selection {
         Ok(())
     }
 
-    fn relationship(&mut self, name: &str, dest: &'static ResourceDef, selection: Selection, mut query: RelatedQuery, page: Option<NestedPage>) {
+    fn relationship(
+        &mut self,
+        name: &str,
+        dest: &'static ResourceDef,
+        selection: Selection,
+        mut query: RelatedQuery,
+        page: Option<NestedPage>,
+    ) {
         query.select = Some(selection.attributes(dest));
         query.aggregates = selection.of(|field| dest.aggregate(field).is_some());
         query.calculations = selection.of(|field| dest.calculation(field).is_some());
         query.calculation_args = selection.calculation_args.clone();
-        self.relationships.push((name.to_string(), Nested { selection, query, page }));
+        self.relationships.push((
+            name.to_string(),
+            Nested {
+                selection,
+                query,
+                page,
+            },
+        ));
     }
 
     pub(crate) fn of(&self, matches: impl Fn(&str) -> bool) -> Vec<String> {
-        self.fields.iter().filter(|name| matches(name)).cloned().collect()
+        self.fields
+            .iter()
+            .filter(|name| matches(name))
+            .cloned()
+            .collect()
     }
 
     /// The attributes a read must select: those chosen, the primary key, those the field
@@ -483,7 +660,11 @@ fn child(path: &[String], name: &str) -> Vec<String> {
 /// A sort as text, as the generated client sends it (an array joined by commas).
 pub(crate) fn sort_text(sort: &Json) -> String {
     match sort {
-        Json::Array(items) => items.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(","),
+        Json::Array(items) => items
+            .iter()
+            .filter_map(Json::as_str)
+            .collect::<Vec<_>>()
+            .join(","),
         Json::String(text) => text.clone(),
         other => other.to_string(),
     }
@@ -513,7 +694,12 @@ fn check_duplicates(items: &[Json], path: &[String]) -> Result<(), Failure> {
 }
 
 /// A relationship's `page`: a map of the keys its read's pagination takes.
-fn nested_page(page: &Json, pagination: ash_core::Pagination, path: &[String], name: &str) -> Result<NestedPage, Failure> {
+fn nested_page(
+    page: &Json,
+    pagination: ash_core::Pagination,
+    path: &[String],
+    name: &str,
+) -> Result<NestedPage, Failure> {
     let Json::Object(map) = page else {
         return Err(Failure::invalid_nested_page(path, name, ":not_a_map"));
     };
@@ -522,20 +708,36 @@ fn nested_page(page: &Json, pagination: ash_core::Pagination, path: &[String], n
         (false, true) => &["limit", "after", "before", "count"],
         _ => &["limit", "offset", "count", "after", "before"],
     };
-    let unknown: Vec<String> = map.keys().map(|key| snake(key)).filter(|key| !allowed.contains(&key.as_str())).collect();
+    let unknown: Vec<String> = map
+        .keys()
+        .map(|key| snake(key))
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .collect();
     if !unknown.is_empty() {
         // As Elixir inspects them: a page key it knows an atom, any other a string.
         let keys: Vec<String> = unknown
             .iter()
-            .map(|key| if ["limit", "offset", "count", "after", "before"].contains(&key.as_str()) { format!(":{key}") } else { format!("{key:?}") })
+            .map(|key| {
+                if ["limit", "offset", "count", "after", "before"].contains(&key.as_str()) {
+                    format!(":{key}")
+                } else {
+                    format!("{key:?}")
+                }
+            })
             .collect();
-        return Err(Failure::invalid_nested_page(path, name, &format!("{{:unknown_keys, [{}]}}", keys.join(", "))));
+        return Err(Failure::invalid_nested_page(
+            path,
+            name,
+            &format!("{{:unknown_keys, [{}]}}", keys.join(", ")),
+        ));
     }
     let number = |key: &str| map.get(key).and_then(Json::as_u64).map(|n| n as usize);
     let text = |key: &str| map.get(key).and_then(Json::as_str).map(str::to_string);
     let offset = number("offset");
     let (after, before) = (text("after"), text("before"));
-    let limit = number("limit").or(pagination.default_limit).map(|limit| pagination.max_page_size.map_or(limit, |max| limit.min(max)));
+    let limit = number("limit")
+        .or(pagination.default_limit)
+        .map(|limit| pagination.max_page_size.map_or(limit, |max| limit.min(max)));
     Ok(NestedPage {
         limit,
         offset,

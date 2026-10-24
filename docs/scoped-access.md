@@ -85,8 +85,11 @@ its existing tenantless behavior.
 
 These reads return `View`s with reader-specific projected values and forbidden-field
 masks. `view.fields()` and `view.into_fields()` expose projected values only.
-`ReadRequest` accepts trusted `Filter` and `Sort` values. Adapters still
-must guard client expressions with the existing input policy helpers.
+`ReadRequest` accepts trusted Rust `Filter` and `Sort` values. Client parsers return
+`ClientExpr`; its filter marker survives composition until the core planner applies
+field visibility and resolves relationship scopes. Generated preparations return
+`TrustedExpr`. See [Client read plans](client-read-plans.md) for parser APIs, Runtime
+cursor-key configuration and supported subscription predicates.
 
 ## Reader-specific results
 
@@ -216,7 +219,7 @@ remains follow-up work. Legacy subscriptions keep their existing unshared behavi
 
 ## Limits
 
-Steps 2 and 4 bind execution scope and centralize result presentation.
+Steps 2, 3 and 4 bind execution scope, normalize client reads and centralize result presentation.
 `Context::data` and raw `insert` remain
 public but deprecated until engine reads and writes use executable plans. Core uses a
 private backend accessor for those paths. Existing adapter code and raw-backend tests
@@ -229,8 +232,8 @@ Cross-tenant lookup grants still need a resource/action declaration and a backen
 contract for discovering tenant namespaces. Lagrange therefore still requires a line
 at login. Subscription deduplication still trusts the application's string key and resolves
 with the first member's context. That stays the case until groups bind
-their own complete Scope and resolve as the group actor. Sealed cursors and backend-specific trusted
-plan expressions belong to later steps. Scope has no public constructor or layout,
+their own complete Scope and resolve as the group actor. Keyset cursors are sealed by Runtime in step 3. Backend-specific trusted
+plan expressions remain planned; `TrustedExpr` reserves that extension point. Scope has no public constructor or layout,
 so those additions do not require changing the binding API.
 
 This change does not fix token namespace isolation, durable access revocation,

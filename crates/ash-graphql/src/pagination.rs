@@ -7,9 +7,8 @@
 //! paged with `limit` and `offset`. Which a read gives follows its action's `pagination`.
 
 use ash_core::{
-    ActionDef, ActionKind, CompiledQuery, Countable, DataLayer, FieldMap, Filter, KeysetCursor,
-    Pagination, ResourceDef, Sort, Value, build_keyset_filter, keyset_sort, keyset_values,
-    scope_read,
+    ActionDef, ActionKind, CompiledQuery, Countable, DataLayer, FieldMap, Filter, Pagination,
+    ResourceDef, keyset_sort, scope_read,
 };
 use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::*;
@@ -317,15 +316,16 @@ pub(crate) fn scoped_read<D: DataLayer>(
 ) -> async_graphql::Result<(FieldMap, CompiledQuery)> {
     let arguments = read_arguments(ctx, action)?;
     let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
-        Some(filter) => Some(parse_resource_filter(
-            resource,
-            ash.authorization_actor(),
-            filter.as_value(),
-        )?),
+        Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?.into_filter()),
         None => None,
     };
     let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
-        Some(sort) => parse_resource_sort(resource, ash.authorization_actor(), sort.as_value())?,
+        Some(sort) => ash_core::plan_client_sort(
+            resource,
+            ash.authorization_actor(),
+            parse_resource_sort(resource, sort.as_value())?,
+        )
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?,
         None => Vec::new(),
     };
     let query = scope_read(
@@ -396,12 +396,6 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
     resource: &'static ResourceDef,
     action: &'static ActionDef,
 ) -> Field {
-    let pk_name = resource
-        .attributes
-        .iter()
-        .find(|a| a.primary_key)
-        .map(|a| a.name)
-        .unwrap_or("id");
     let pagination = pagination_of(action);
 
     let field = Field::new(
@@ -439,16 +433,11 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 } else {
                     after.as_deref()
                 };
-                if let Some(cursor) = cursor.and_then(KeysetCursor::decode) {
-                    let values = keyset_values(resource, &cursor, &sort);
-                    if let Some(keyset_filter) =
-                        build_keyset_filter(resource, &sort, &values, !backward)
-                    {
-                        page_filter = Some(match page_filter {
-                            Some(f) => Filter::And(vec![f, keyset_filter]),
-                            None => keyset_filter,
-                        });
-                    }
+                if let Some(cursor) = cursor {
+                    let keyset_filter = ash
+                        .keyset_filter(resource, action.name, &sort, cursor, !backward)
+                        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                    page_filter = Some(Filter::and(page_filter.into_iter().chain([keyset_filter])));
                 }
 
                 // A backward page reads in reverse, then flips.
@@ -497,6 +486,14 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 if backward {
                     records.reverse();
                 }
+                let keyset = |record: Option<&FieldMap>| {
+                    record
+                        .map(|row| ash.seal_keyset(resource, action.name, &sort, row))
+                        .transpose()
+                        .map_err(|e| async_graphql::Error::new(e.to_string()))
+                };
+                let start_keyset = keyset(records.first())?;
+                let end_keyset = keyset(records.last())?;
                 after_read(action, &arguments, &mut records)?;
                 let mut records = records
                     .into_iter()
@@ -512,12 +509,9 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     &mut records,
                 )
                 .await?;
-                let keyset = |record: Option<&ash_core::View>| {
-                    record.map(|r| keyset_of(r.fields(), &sort, pk_name))
-                };
                 Ok(Some(FieldValue::owned_any(KeysetPage {
-                    start_keyset: keyset(records.first()),
-                    end_keyset: keyset(records.last()),
+                    start_keyset,
+                    end_keyset,
                     results: records,
                     count,
                 })))
@@ -650,18 +644,4 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
     read_field_arguments(field, resource, action)
         .argument(limit)
         .argument(InputValue::new("offset", TypeRef::named(TypeRef::INT)))
-}
-
-fn keyset_of(record: &FieldMap, sort: &[Sort], pk_name: &str) -> String {
-    let id = record.get(pk_name).cloned().unwrap_or(Value::Null);
-    let values = sort
-        .iter()
-        .map(|s| {
-            (
-                s.field.clone(),
-                record.get(&s.field).cloned().unwrap_or(Value::Null),
-            )
-        })
-        .collect();
-    KeysetCursor { id, values }.encode()
 }

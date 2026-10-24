@@ -150,7 +150,8 @@ impl Library {
     }
 
     async fn nested(&self, role: &str, relationship: Json) -> Json {
-        let actor = Actor::new(Uuid::new_v4()).with_attr("role", Value::from(role));
+        let actor = Actor::new(Uuid::from_u128(if role == "editor" { 1 } else { 2 }))
+            .with_attr("role", Value::from(role));
         let request = json!({ "action": "get_shelf", "getBy": { "id": self.shelf }, "fields": ["id", relationship] });
         let response = self
             .rpc

@@ -16,7 +16,10 @@ use super::query::query;
 pub async fn get<R: Resource, D: DataLayer>(ctx: &Context<D>, id: impl Into<Value>) -> Result<R> {
     let pk = pk_name(&R::DEF)?;
     let id: Value = id.into();
-    query::<R, D>(ctx).filter(Filter::eq(pk, id)).one().await
+    query::<R, D>(ctx)
+        .filter(crate::ClientExpr::new(Filter::eq(pk, id)).into_filter())
+        .one()
+        .await
 }
 
 pub async fn create<R: Resource, D: DataLayer>(
@@ -266,7 +269,7 @@ async fn read_visible<D: DataLayer>(
     scope: Option<Filter>,
 ) -> Result<FieldMap> {
     let pk = pk_name(resource)?;
-    let by_id = Some(Filter::eq(pk, id.clone()));
+    let by_id = Some(crate::ClientExpr::new(Filter::eq(pk, id.clone())).into_filter());
     let (filter, tenant) = match scope {
         Some(scope) => {
             let (filter, tenant) = crate::pipeline::apply_tenant_scope(
@@ -278,6 +281,16 @@ async fn read_visible<D: DataLayer>(
         }
         None => crate::pipeline::visible_scope(resource, by_id, ctx.tenant().map(str::to_owned))?,
     };
+    let filter = filter
+        .map(|filter| {
+            crate::plan_filter(
+                resource,
+                ctx.authorization_actor(),
+                tenant.as_deref(),
+                crate::TrustedExpr::Filter(filter),
+            )
+        })
+        .transpose()?;
     ctx.raw_data()
         .run_query(
             resource,

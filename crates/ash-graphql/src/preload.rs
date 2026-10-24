@@ -61,8 +61,17 @@ pub(crate) fn related_query<'v>(
             continue;
         }
         match name {
-            "filter" => query.filter = Some(parse_resource_filter(destination, actor, value)?),
-            "sort" => query.sort = parse_resource_sort(destination, actor, value)?,
+            "filter" => {
+                query.filter = Some(parse_resource_filter(destination, value)?.into_filter())
+            }
+            "sort" => {
+                query.sort = ash_core::plan_client_sort(
+                    destination,
+                    actor,
+                    parse_resource_sort(destination, value)?,
+                )
+                .map_err(|e| async_graphql::Error::new(e.to_string()))?
+            }
             "limit" => query.limit = number(value),
             "offset" => query.offset = number(value),
             _ => {}

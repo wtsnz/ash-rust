@@ -6,14 +6,11 @@ use crate::data_layer::{CompiledQuery, DataLayer, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::keys::{AggregateName, CalcName, FieldName, RelName};
-use crate::pipeline::{pk_name, read_action};
+use crate::pipeline::read_action;
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
-use super::lifecycle::get;
-use super::pagination::{
-    KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort, keyset_values,
-};
+use super::pagination::{Page, keyset_sort};
 use super::read::scope_read;
 
 /// Query shape bound to its context's immutable execution identity.
@@ -168,6 +165,15 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
     }
 
     pub async fn load(self) -> Result<Vec<R>> {
+        self.load_with_keysets(None)
+            .await
+            .map(|(records, _)| records)
+    }
+
+    async fn load_with_keysets(
+        self,
+        keyset_sort: Option<&[Sort]>,
+    ) -> Result<(Vec<R>, Vec<String>)> {
         let action = read_action(&R::DEF, self.action)?;
         let this = self;
 
@@ -250,7 +256,11 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
         }
         let mut records = Vec::with_capacity(rows.len());
+        let mut keysets = Vec::new();
         for row in rows {
+            if let Some(sort) = keyset_sort {
+                keysets.push(this.ctx.seal_keyset(&R::DEF, action.name, sort, &row)?);
+            }
             let view = this.ctx.present(&R::DEF, row.into(), None)?;
             let mut fields = view.into_fields();
             for operand in &operands {
@@ -269,7 +279,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
             records.push(record);
         }
-        Ok(records)
+        Ok((records, keysets))
     }
 
     pub async fn all(self) -> Result<Vec<R>> {
@@ -364,8 +374,15 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         after: Option<&str>,
         before: Option<&str>,
     ) -> Result<Page<R>> {
-        let pk = pk_name(&R::DEF)?.to_string();
-        self.sort = keyset_sort(&R::DEF, std::mem::take(&mut self.sort));
+        let action = read_action(&R::DEF, self.action)?;
+        let scoped = self.scoped(
+            action,
+            CompiledQuery {
+                sort: self.sort.clone(),
+                ..Default::default()
+            },
+        )?;
+        self.sort = keyset_sort(&R::DEF, scoped.sort);
         // Each record's keyset holds the values it sorts by: an aggregate or calculation
         // sorted by loads with it.
         for sort in &self.sort {
@@ -381,27 +398,11 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let is_before = before.is_some() && after.is_none();
         let target_cursor_str = if is_before { before } else { after };
 
-        if let Some(c_str) = target_cursor_str
-            && let Some(mut cursor) = KeysetCursor::decode(c_str)
-        {
-            if cursor.values.is_empty() {
-                if let Ok(rec) = get::<R, D>(self.ctx, cursor.id.clone()).await {
-                    let fields = R::to_fields(&rec);
-                    for s in &self.sort {
-                        let val = fields.get(&s.field).cloned().unwrap_or(Value::Null);
-                        cursor.values.push((s.field.clone(), val));
-                    }
-                } else {
-                    cursor.values.push((pk.clone(), cursor.id.clone()));
-                }
-            }
-
-            let values = keyset_values(&R::DEF, &cursor, &self.sort);
-            if let Some(keyset_filter) =
-                build_keyset_filter(&R::DEF, &self.sort, &values, !is_before)
-            {
-                self = self.filter(keyset_filter);
-            }
+        if let Some(token) = target_cursor_str {
+            let filter =
+                self.ctx
+                    .keyset_filter(&R::DEF, action.name, &self.sort, token, !is_before)?;
+            self = self.filter(filter);
         }
 
         let effective_sort = self.sort.clone();
@@ -413,22 +414,16 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         }
 
         self.limit = Some(limit + 1);
-        let mut results = self.load().await?;
+        let (mut results, mut keysets) = self.load_with_keysets(Some(&effective_sort)).await?;
         let has_more = results.len() > limit;
-        if has_more {
-            results.truncate(limit);
-        }
-
+        results.truncate(limit);
+        keysets.truncate(limit);
         if is_before {
             results.reverse();
+            keysets.reverse();
         }
-
-        let after_cursor = results
-            .last()
-            .map(|r| cursor_for_record(r, &effective_sort));
-        let before_cursor = results
-            .first()
-            .map(|r| cursor_for_record(r, &effective_sort));
+        let after_cursor = keysets.last().cloned();
+        let before_cursor = keysets.first().cloned();
 
         Ok(Page {
             results,

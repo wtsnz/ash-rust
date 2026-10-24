@@ -33,11 +33,11 @@ static TICKET_READ_ACTION: ActionDef = ActionDef::read("read")
 static TICKET_BY_STATUS_ACTION: ActionDef = ActionDef::read("by_status")
     .arguments(&[ArgumentDef::new("status", AttrType::String)])
     .preparations(&[PreparationDef::filter_with_args(|args| {
-        if let Some(Value::String(s)) = args.get("status") {
+        ash_core::TrustedExpr::Filter(if let Some(Value::String(s)) = args.get("status") {
             Filter::eq("status", Value::String(s.clone()))
         } else {
             Filter::True
-        }
+        })
     })]);
 
 static TICKET_ACTIONS: &[ActionDef] = &[TICKET_READ_ACTION, TICKET_BY_STATUS_ACTION];

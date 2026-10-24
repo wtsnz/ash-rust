@@ -54,8 +54,8 @@ use std::sync::Arc;
 use ash_core::input::{action_input, field_type, filter_input, sort_input, value_input};
 use ash_core::{
     ActionDef, ActionKind, AttrType, CompiledQuery, Context, Countable, DataLayer, Error, FieldMap,
-    Filter, KeysetCursor, MetadataDef, PreparationDef, RelKind, RelatedQuery, Resource,
-    ResourceDef, Sort, TransactionSupport, Value,
+    Filter, MetadataDef, PreparationDef, RelKind, RelatedQuery, Resource, ResourceDef, Sort,
+    TransactionSupport, Value,
 };
 use serde_json::{Map, Value as Json, json};
 
@@ -707,7 +707,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 read.name,
                 &FieldMap::new(),
                 ash_core::ReadRequest {
-                    filter: Some(Filter::eq(pk, id.clone())),
+                    filter: Some(
+                        ash_core::ClientExpr::new(Filter::eq(pk, id.clone())).into_filter(),
+                    ),
                     limit: Some(1),
                     ..Default::default()
                 },
@@ -1070,7 +1072,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .or_else(|| resource.primary_read())
             .ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
         let query = CompiledQuery {
-            filter: Some(filter),
+            filter: Some(ash_core::ClientExpr::new(filter).into_filter()),
             tenant: ctx.tenant().map(str::to_owned),
             limit: Some(1),
             select: Some(vec![pk.to_string()]),
@@ -1103,12 +1105,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         rpc: &RpcAction<D>,
         selection: &Selection,
         input: FieldMap,
-        get_by: Vec<Filter>,
+        get_by: Vec<ash_core::ClientExpr<Filter>>,
         shown: &[Shown],
     ) -> Result<Option<Json>, Failure> {
         let resource = rpc.resource;
         let base = CompiledQuery {
-            filter: Some(Filter::and(get_by)),
+            filter: Some(Filter::and(
+                get_by.into_iter().map(ash_core::ClientExpr::into_filter),
+            )),
             sort: prepared_sort(rpc.action),
             tenant: ctx.tenant().map(str::to_owned),
             ..CompiledQuery::default()
@@ -1161,10 +1165,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         if let Some(filter) = request.get("filter").filter(|value| !value.is_null()) {
             let filter = filter_input(resource, &self.names.filter(resource, filter))
                 .map_err(|e| self.failure(e).under("filter"))?;
-            filters.push(
-                ash_core::guard_input_filter(resource, actor, filter)
-                    .map_err(|e| self.failure(e))?,
-            );
+            filters.push(filter.into_filter());
         }
         // The action's sort, then the client's, as AshTypescript sorts its query after
         // running the read's preparations.
@@ -1177,7 +1178,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             let given = sort_input(resource, &self.names.sort(resource, &text))
                 .map_err(|e| self.failure(e).under("sort"))?;
             sort.extend(
-                ash_core::guard_input_sort(resource, actor, given).map_err(|e| self.failure(e))?,
+                ash_core::plan_client_sort(resource, actor, given).map_err(|e| self.failure(e))?,
             );
         }
         let base = CompiledQuery {
@@ -1312,27 +1313,15 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
     ) -> Result<KeysetPage, Failure> {
         let resource = rpc.resource;
         let sort = ash_core::keyset_sort(resource, scoped.sort.clone());
-        let pk = resource.primary_key().map(|attr| attr.name).unwrap_or("id");
         // Ash reads before a keyset when given both.
         let backward = page.before.is_some();
         let mut filter = scoped.filter.clone();
         if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
             let direction = if backward { "before" } else { "after" };
-            let keyset = KeysetCursor::decode(cursor)
-                .filter(|keyset| {
-                    keyset.values.len() == sort.len()
-                        && keyset
-                            .values
-                            .iter()
-                            .zip(&sort)
-                            .all(|((field, _), s)| *field == s.field)
-                })
-                .ok_or_else(|| Failure::invalid_keyset(cursor, direction))?;
-            let values = ash_core::keyset_values(resource, &keyset, &sort);
-            if let Some(after) = ash_core::build_keyset_filter(resource, &sort, &values, !backward)
-            {
-                filter = Some(Filter::and(filter.into_iter().chain([after])));
-            }
+            let after = ctx
+                .keyset_filter(resource, rpc.action.name, &sort, cursor, !backward)
+                .map_err(|_| Failure::invalid_keyset(cursor, direction))?;
+            filter = Some(Filter::and(filter.into_iter().chain([after])));
         }
         let read_sort: Vec<Sort> = sort
             .iter()
@@ -1359,25 +1348,13 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             rows.reverse();
         }
         let cursor = |row: Option<&FieldMap>| -> Result<Json, Failure> {
-            let view = row
-                .map(|row| {
-                    ctx.present(resource, row.clone().into(), None)
-                        .map_err(|e| self.failure(e))
-                })
-                .transpose()?;
-            Ok(view.as_ref().map_or(Json::Null, |row| {
-                let id = row.get(pk).cloned().unwrap_or(Value::Null);
-                let values = sort
-                    .iter()
-                    .map(|s| {
-                        (
-                            s.field.clone(),
-                            row.get(&s.field).cloned().unwrap_or(Value::Null),
-                        )
-                    })
-                    .collect();
-                Json::String(KeysetCursor { id, values }.encode())
-            }))
+            row.map(|row| {
+                ctx.seal_keyset(resource, rpc.action.name, &sort, row)
+                    .map(Json::String)
+                    .map_err(|e| self.failure(e))
+            })
+            .transpose()
+            .map(|cursor| cursor.unwrap_or(Json::Null))
         };
         let (previous, next) = (cursor(rows.first())?, cursor(rows.last())?);
         let results = self
@@ -1579,7 +1556,6 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         nested: &fields::Nested,
         page: &NestedPage,
     ) -> Result<Vec<Json>, Failure> {
-        let pk = dest.primary_key().map(|attr| attr.name).unwrap_or("id");
         let mut query: RelatedQuery = nested.query.clone();
         // The request's sort, then the read's prepared sort, then the primary key to break
         // ties, as Ash adds its stability sort to the prepared query.
@@ -1594,23 +1570,12 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         if page.keyset {
             if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
                 let direction = if backward { "before" } else { "after" };
-                let keyset = KeysetCursor::decode(cursor)
-                    .filter(|keyset| {
-                        keyset.values.len() == sort.len()
-                            && keyset
-                                .values
-                                .iter()
-                                .zip(&sort)
-                                .all(|((field, _), s)| field == &s.field)
-                    })
-                    .ok_or_else(|| Failure::invalid_keyset(cursor, direction))?;
-                let values = ash_core::keyset_values(dest, &keyset, &sort);
-                if let Some(after) = ash_core::build_keyset_filter(dest, &sort, &values, !backward)
-                {
-                    query.filter =
-                        Some(Filter::and(query.filter.take().into_iter().chain([after])));
-                }
+                let after = ctx
+                    .keyset_filter(dest, dest.default_read().name, &sort, cursor, !backward)
+                    .map_err(|_| Failure::invalid_keyset(cursor, direction))?;
+                query.filter = Some(Filter::and(query.filter.take().into_iter().chain([after])));
             }
+            query.cursor_sort = Some(sort.clone());
             if backward {
                 sort = sort.iter().map(Sort::reversed).collect();
             }
@@ -1662,19 +1627,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 group.reverse();
             }
             let cursor = |row: Option<&ash_core::View>| -> Json {
-                row.map_or(Json::Null, |row| {
-                    let id = row.get(pk).cloned().unwrap_or(Value::Null);
-                    let values = sort
-                        .iter()
-                        .map(|s| {
-                            (
-                                s.field.clone(),
-                                row.get(&s.field).cloned().unwrap_or(Value::Null),
-                            )
-                        })
-                        .collect();
-                    Json::String(KeysetCursor { id, values }.encode())
-                })
+                row.and_then(ash_core::View::keyset)
+                    .map_or(Json::Null, |token| Json::String(token.to_owned()))
             };
             let (previous, next) = (cursor(group.first()), cursor(group.last()));
             let results = self.render(ctx, dest, group, &nested.selection).await?;
@@ -1699,7 +1653,7 @@ struct Parsed<'a, D> {
     get: bool,
     selection: Selection,
     input: Json,
-    get_by: Vec<Filter>,
+    get_by: Vec<ash_core::ClientExpr<Filter>>,
     page: Option<PageRequest>,
     /// The action metadata the request shows.
     shown: Vec<Shown>,
@@ -1828,7 +1782,7 @@ fn get_by_filters(
     resource: &ResourceDef,
     fields: &[&'static str],
     given: Option<&Json>,
-) -> Result<Vec<Filter>, Failure> {
+) -> Result<Vec<ash_core::ClientExpr<Filter>>, Failure> {
     let empty = Map::new();
     let given = given.and_then(Json::as_object).unwrap_or(&empty);
     let provided: HashMap<String, &Json> = given
@@ -1869,7 +1823,7 @@ fn get_by_filters(
                 Failure::from_error(&e)
                     .unwrap_or_else(|| Failure::new("invalid", "Invalid", e.to_string()))
             })?;
-            Ok(Filter::eq(*field, value))
+            Ok(ash_core::ClientExpr::new(Filter::eq(*field, value)))
         })
         .collect()
 }

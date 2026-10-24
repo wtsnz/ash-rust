@@ -5,6 +5,8 @@ use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Filter {
+    Client(Box<crate::ClientExpr<Filter>>),
+    Traversal(Box<crate::Traversal>),
     True,
     False,
     Eq(String, Value),
@@ -98,12 +100,17 @@ impl Filter {
         Self::ILike(field.into(), pattern.into())
     }
 
-    pub fn in_list(field: impl Into<String>, values: impl IntoIterator<Item = impl Into<Value>>) -> Self {
+    pub fn in_list(
+        field: impl Into<String>,
+        values: impl IntoIterator<Item = impl Into<Value>>,
+    ) -> Self {
         Self::In(field.into(), values.into_iter().map(Into::into).collect())
     }
 
     pub fn collect_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
+            Self::Client(input) => input.0.collect_fields(out),
+            Self::Traversal(_) => {}
             Self::True | Self::False => {}
             Self::Eq(field, _)
             | Self::Ne(field, _)
@@ -174,11 +181,11 @@ impl Filter {
     /// Evaluates the filter against one record of `resource`, so text filters on
     /// `CiString` attributes and calculations ignore case as they do in the data layers.
     pub fn matches_on(&self, resource: &ResourceDef, fields: &FieldMap) -> bool {
-        self.eval(Some(resource), fields) == Some(true)
+        self.snapshot_match(resource, fields) == crate::FilterMatch::Match
     }
 
     /// SQL's three-valued result, with `None` for unknown.
-    fn eval(&self, resource: Option<&ResourceDef>, fields: &FieldMap) -> Option<bool> {
+    pub(crate) fn eval(&self, resource: Option<&ResourceDef>, fields: &FieldMap) -> Option<bool> {
         let present = |field: &str| fields.get(field).filter(|got| !got.is_null());
         let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
             let ci = resource.is_some_and(|resource| {
@@ -191,6 +198,9 @@ impl Filter {
             present(field).map(|got| text_matches(Some(got), needle, ci, test))
         };
         match self {
+            Self::Client(_) => None,
+            Self::Traversal(node) => Self::related(node.relationship.clone(), *node.filter.clone())
+                .eval(resource, fields),
             Self::True => Some(true),
             Self::False => Some(false),
             Self::Eq(field, value) if value.is_null() => Some(present(field).is_none()),
@@ -202,15 +212,17 @@ impl Filter {
             Self::Lt(field, value) => compare(fields.get(field), value, Ordering::Less, false),
             Self::Lte(field, value) => compare(fields.get(field), value, Ordering::Less, true),
             Self::In(_, values) if values.is_empty() => Some(false),
-            Self::In(field, values) => {
-                in_list(present(field), values, |got, value| got == value)
-            }
+            Self::In(field, values) => in_list(present(field), values, |got, value| got == value),
             Self::IsNil(field) => Some(present(field).is_none()),
-            Self::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
+            Self::Contains(field, needle) => {
+                text(field, needle, |text, needle| text.contains(needle))
+            }
             Self::StartsWith(field, needle) => {
                 text(field, needle, |text, needle| text.starts_with(needle))
             }
-            Self::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+            Self::EndsWith(field, needle) => {
+                text(field, needle, |text, needle| text.ends_with(needle))
+            }
             Self::Like(field, pattern) => text(field, pattern, like_matches),
             Self::ILike(field, pattern) => {
                 present(field).map(|got| text_matches(Some(got), pattern, true, like_matches))
@@ -222,7 +234,10 @@ impl Filter {
             Self::And(parts) => all_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Not(inner) => inner.eval(resource, fields).map(|matched| !matched),
-            Self::Related { relationship, filter } => {
+            Self::Related {
+                relationship,
+                filter,
+            } => {
                 let destination = resource
                     .and_then(|resource| resource.relationship(relationship))
                     .map(|rel| (rel.destination)());
@@ -233,7 +248,8 @@ impl Filter {
                         Value::Map(m) => matches(m),
                         _ => false,
                     }),
-                    _ => true,
+                    Some(Value::Null) => false,
+                    _ => return None,
                 })
             }
         }
@@ -273,7 +289,10 @@ pub fn in_list(
     same: impl Fn(&Value, &Value) -> bool,
 ) -> Option<bool> {
     let got = got.filter(|got| !got.is_null())?;
-    if values.iter().any(|value| !value.is_null() && same(got, value)) {
+    if values
+        .iter()
+        .any(|value| !value.is_null() && same(got, value))
+    {
         Some(true)
     } else if values.iter().any(Value::is_null) {
         None
@@ -579,7 +598,6 @@ mod tests {
         assert!((!Filter::contains("name", "ADA")).matches_on(&CONTACT, &row));
     }
 
-   
     #[test]
     fn operator_overloading() {
         let open = Filter::eq("status", "open");

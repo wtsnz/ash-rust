@@ -52,10 +52,16 @@ static CATEGORY_DEF: ResourceDef = def!(
         AttributeDef::required("name", AttrType::String),
         AttributeDef::optional("parent_id", AttrType::Uuid),
     ],
-    &[RelationshipDef::has_many("children", || &CATEGORY_DEF, "parent_id")],
+    &[RelationshipDef::has_many(
+        "children",
+        || &CATEGORY_DEF,
+        "parent_id"
+    )],
     &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(no_bad_children)])],
+        .preparations(&[PreparationDef::Filter(|| ash_core::TrustedExpr::Filter(
+            no_bad_children()
+        ))])],
     &[],
     &[AggregateDef::count("child_count", "children")]
 );
@@ -67,7 +73,10 @@ fn live_links() -> Filter {
 static TAG_DEF: ResourceDef = def!(
     "Tag",
     "tags",
-    &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("name", AttrType::String)
+    ],
     &[],
     &[ActionDef::read("read").primary()],
     &[],
@@ -85,15 +94,26 @@ static POST_TAG_DEF: ResourceDef = def!(
     &[],
     &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(live_links)])],
+        .preparations(&[PreparationDef::Filter(|| ash_core::TrustedExpr::Filter(
+            live_links()
+        ))])],
     &[],
     &[]
 );
 static POST_DEF: ResourceDef = def!(
     "Post",
     "posts",
-    &[AttributeDef::uuid_pk("id"), AttributeDef::required("title", AttrType::String)],
-    &[RelationshipDef::many_to_many("tags", || &TAG_DEF, || &POST_TAG_DEF, "post_id", "tag_id")],
+    &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("title", AttrType::String)
+    ],
+    &[RelationshipDef::many_to_many(
+        "tags",
+        || &TAG_DEF,
+        || &POST_TAG_DEF,
+        "post_id",
+        "tag_id"
+    )],
     &[ActionDef::read("read").primary()],
     &[],
     &[AggregateDef::count("tag_count", "tags")]
@@ -114,7 +134,9 @@ static ITEM_DEF: ResourceDef = def!(
     &[],
     &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(doubled_above_two)])],
+        .preparations(&[PreparationDef::Filter(|| ash_core::TrustedExpr::Filter(
+            doubled_above_two()
+        ))])],
     &[
         CalculationDef::new(
             "double_qty",
@@ -140,7 +162,14 @@ static OWNER_DEF: ResourceDef = def!(
     &[AggregateDef::count("item_count", "items")]
 );
 
-const ALL: [&ResourceDef; 6] = [&CATEGORY_DEF, &TAG_DEF, &POST_TAG_DEF, &POST_DEF, &ITEM_DEF, &OWNER_DEF];
+const ALL: [&ResourceDef; 6] = [
+    &CATEGORY_DEF,
+    &TAG_DEF,
+    &POST_TAG_DEF,
+    &POST_DEF,
+    &ITEM_DEF,
+    &OWNER_DEF,
+];
 
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
@@ -152,20 +181,45 @@ async fn insert<D: DataLayer>(data: &D, def: &ResourceDef, n: u128, values: &[(&
     for (name, value) in values {
         fields.insert((*name).into(), value.clone());
     }
-    data.create(def, None, ash_core::Value::from(id(n)), fields).await.unwrap();
+    data.create(def, None, ash_core::Value::from(id(n)), fields)
+        .await
+        .unwrap();
 }
 
 async fn seed<D: DataLayer>(data: &D) {
     // Root has children A ("bad") and B ("ok"); B has child C ("bad").
     insert(data, &CATEGORY_DEF, 1, &[("name", "root".into())]).await;
-    insert(data, &CATEGORY_DEF, 2, &[("name", "bad".into()), ("parent_id", id(1).into())]).await;
-    insert(data, &CATEGORY_DEF, 3, &[("name", "ok".into()), ("parent_id", id(1).into())]).await;
-    insert(data, &CATEGORY_DEF, 4, &[("name", "bad".into()), ("parent_id", id(3).into())]).await;
+    insert(
+        data,
+        &CATEGORY_DEF,
+        2,
+        &[("name", "bad".into()), ("parent_id", id(1).into())],
+    )
+    .await;
+    insert(
+        data,
+        &CATEGORY_DEF,
+        3,
+        &[("name", "ok".into()), ("parent_id", id(1).into())],
+    )
+    .await;
+    insert(
+        data,
+        &CATEGORY_DEF,
+        4,
+        &[("name", "bad".into()), ("parent_id", id(3).into())],
+    )
+    .await;
 
     insert(data, &TAG_DEF, 10, &[("name", "t".into())]).await;
     insert(data, &POST_DEF, 11, &[("title", "unlinked".into())]).await;
     insert(data, &POST_DEF, 12, &[("title", "linked".into())]).await;
-    let link = |post: u128| vec![("post_id", Value::from(id(post))), ("tag_id", id(10).into())];
+    let link = |post: u128| {
+        vec![
+            ("post_id", Value::from(id(post))),
+            ("tag_id", id(10).into()),
+        ]
+    };
     let mut archived = link(11);
     archived.push(("archived_at", "2024-01-01".into()));
     insert(data, &POST_TAG_DEF, 13, &archived).await;
@@ -173,7 +227,13 @@ async fn seed<D: DataLayer>(data: &D) {
 
     insert(data, &OWNER_DEF, 20, &[]).await;
     for (n, qty) in [(21, 1), (22, 2)] {
-        insert(data, &ITEM_DEF, n, &[("owner_id", id(20).into()), ("qty", Value::Int(qty))]).await;
+        insert(
+            data,
+            &ITEM_DEF,
+            n,
+            &[("owner_id", id(20).into()), ("qty", Value::Int(qty))],
+        )
+        .await;
     }
 }
 
@@ -200,7 +260,10 @@ async fn run<D: DataLayer>(
             let Some(Value::Uuid(id)) = row.get("id") else {
                 panic!("row without id: {row:?}");
             };
-            (id.as_u128(), aggregate.and_then(|name| row.get(name).cloned()))
+            (
+                id.as_u128(),
+                aggregate.and_then(|name| row.get(name).cloned()),
+            )
         })
         .collect();
     rows.sort_by_key(|(id, _)| *id);
@@ -232,7 +295,10 @@ async fn scenario<D: DataLayer>(data: D) {
         [(11, Some(Value::Int(0))), (12, Some(Value::Int(1)))]
     );
     let tagged = Filter::related("tags", Filter::eq("name", "t"));
-    assert_eq!(run(&data, &POST_DEF, Some(tagged), None, none()).await, [(12, None)]);
+    assert_eq!(
+        run(&data, &POST_DEF, Some(tagged), None, none()).await,
+        [(12, None)]
+    );
 
     // The item read filter is on a calculation, which memory must compute to apply it.
     assert_eq!(
@@ -240,7 +306,11 @@ async fn scenario<D: DataLayer>(data: D) {
         [(20, Some(Value::Int(1)))]
     );
     let small = Filter::related("items", Filter::eq("qty", 1));
-    assert!(run(&data, &OWNER_DEF, Some(small), None, none()).await.is_empty());
+    assert!(
+        run(&data, &OWNER_DEF, Some(small), None, none())
+            .await
+            .is_empty()
+    );
 
     // A calculation in a filter gets the query's arguments for it.
     let mut extra = FieldMap::new();

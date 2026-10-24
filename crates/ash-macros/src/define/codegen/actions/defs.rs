@@ -270,8 +270,8 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
                         let prep_fn_name = format_ident!("__prep_{}_{}_filter", act.name, idx);
                         let filter_tokens = filter_expr_to_tokens(expr, resource);
                         prep_helpers.push(quote! {
-                            fn #prep_fn_name() -> ::ash_core::Filter {
-                                #filter_tokens
+                            fn #prep_fn_name() -> ::ash_core::TrustedExpr {
+                                ::ash_core::TrustedExpr::Filter(#filter_tokens)
                             }
                         });
                         prep_tokens.push(quote! {

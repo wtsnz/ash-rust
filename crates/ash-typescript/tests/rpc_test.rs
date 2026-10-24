@@ -303,11 +303,11 @@ impl Blog {
 }
 
 fn editor() -> Actor {
-    Actor::new(Uuid::new_v4()).with_attr("role", Value::from("editor"))
+    Actor::new(Uuid::from_u128(1)).with_attr("role", Value::from("editor"))
 }
 
 fn reader() -> Actor {
-    Actor::new(Uuid::new_v4()).with_attr("role", Value::from("reader"))
+    Actor::new(Uuid::from_u128(2)).with_attr("role", Value::from("reader"))
 }
 
 fn error_types(response: &Json) -> Vec<&str> {
