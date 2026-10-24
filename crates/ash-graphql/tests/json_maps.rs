@@ -30,8 +30,12 @@ resource! {
 
 async fn create(input: &str) -> Value {
     let ctx = Context::new(Memory::new());
-    let schema = AshGraphQL::from_resources(&[&Profile::DEF]).finish::<Memory>().unwrap();
-    let query = format!("mutation {{ createProfile(input: {input}) {{ result {{ settings history }} errors {{ code }} }} }}");
+    let schema = AshGraphQL::from_resources(&[&Profile::DEF])
+        .finish::<Memory>()
+        .unwrap();
+    let query = format!(
+        "mutation {{ createProfile(input: {input}) {{ result {{ settings history }} errors {{ code }} }} }}"
+    );
     let response = schema.execute(Request::new(query).data(ctx)).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     response.data.into_json().unwrap()["createProfile"].clone()
@@ -41,22 +45,39 @@ async fn create(input: &str) -> Value {
 async fn a_map_is_taken_as_an_object_or_as_json_text() {
     let expected = json!({ "settings": { "theme": "dark", "size": 2 }, "history": [{ "at": 1 }, { "at": 2 }] });
 
-    let objects = create(r#"{ settings: { theme: "dark", size: 2 }, history: [{ at: 1 }, { at: 2 }] }"#).await;
+    let objects =
+        create(r#"{ settings: { theme: "dark", size: 2 }, history: [{ at: 1 }, { at: 2 }] }"#)
+            .await;
     assert_eq!(objects["result"], expected, "{objects}");
 
-    let text = create(r#"{ settings: "{\"theme\":\"dark\",\"size\":2}", history: ["{\"at\":1}", "{\"at\":2}"] }"#).await;
+    let text = create(
+        r#"{ settings: "{\"theme\":\"dark\",\"size\":2}", history: ["{\"at\":1}", "{\"at\":2}"] }"#,
+    )
+    .await;
     assert_eq!(text["result"], expected, "{text}");
 }
 
 #[tokio::test]
 async fn json_text_for_a_map_must_hold_an_object() {
     let ctx = Context::new(Memory::new());
-    let schema = AshGraphQL::from_resources(&[&Profile::DEF]).finish::<Memory>().unwrap();
-    for input in [r#"{ history: ["5"] }"#, r#"{ history: ["[]"] }"#, r#"{ settings: "true" }"#, r#"{ settings: "\"text\"" }"#, r#"{ history: [5] }"#, r#"{ settings: "{" }"#] {
+    let schema = AshGraphQL::from_resources(&[&Profile::DEF])
+        .finish::<Memory>()
+        .unwrap();
+    for input in [
+        r#"{ history: ["5"] }"#,
+        r#"{ history: ["[]"] }"#,
+        r#"{ settings: "true" }"#,
+        r#"{ settings: "\"text\"" }"#,
+        r#"{ history: [5] }"#,
+        r#"{ settings: "{" }"#,
+    ] {
         let query = format!("mutation {{ createProfile(input: {input}) {{ result {{ id }} }} }}");
         let response = schema.execute(Request::new(query).data(ctx.clone())).await;
         assert!(!response.errors.is_empty(), "{input} should be refused");
     }
     let stored = Profile::query(&ctx).all().await;
-    assert!(stored.is_ok_and(|rows| rows.is_empty()), "nothing was stored");
+    assert!(
+        stored.is_ok_and(|rows| rows.is_empty()),
+        "nothing was stored"
+    );
 }

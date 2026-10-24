@@ -97,8 +97,8 @@ fn test_embedded_standalone_build_and_validations() {
         .expect("update should succeed");
 
     assert_eq!(updated.street, "100 Market St"); // preserved
-    assert_eq!(updated.city, "Oakland");        // updated
-    assert_eq!(updated.zip_code, "94105");       // preserved
+    assert_eq!(updated.city, "Oakland"); // updated
+    assert_eq!(updated.zip_code, "94105"); // preserved
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -127,7 +127,9 @@ async fn test_embedded_in_parent_resource_memory() {
     assert_eq!(customer_addr.city, "Springfield");
 
     // Query customer back
-    let fetched = Customer::get(&ctx, customer.id).await.expect("fetch customer");
+    let fetched = Customer::get(&ctx, customer.id)
+        .await
+        .expect("fetch customer");
     let fetched_addr = fetched.address.expect("address present");
     assert_eq!(fetched_addr.street, "742 Evergreen Terrace");
     assert_eq!(fetched_addr.city, "Springfield");
@@ -137,7 +139,9 @@ async fn test_embedded_in_parent_resource_memory() {
 #[test]
 async fn test_embedded_in_parent_resource_sqlite_json_roundtrip() {
     let db = Sqlite::memory().await.expect("sqlite memory");
-    db.install_resources(&[&Customer::DEF]).await.expect("install schema");
+    db.install_resources(&[&Customer::DEF])
+        .await
+        .expect("install schema");
     let ctx = Context::new(db);
 
     let addr = Address::build_create()
@@ -159,7 +163,9 @@ async fn test_embedded_in_parent_resource_sqlite_json_roundtrip() {
     assert_eq!(customer.address.as_ref().unwrap().city, "London");
 
     // Fetch back from SQLite and verify JSON deserialized into typed Address struct
-    let fetched = Customer::get(&ctx, customer.id).await.expect("fetch from sqlite");
+    let fetched = Customer::get(&ctx, customer.id)
+        .await
+        .expect("fetch from sqlite");
     let fetched_addr = fetched.address.expect("address present");
     assert_eq!(fetched_addr.street, "221B Baker Street");
     assert_eq!(fetched_addr.city, "London");
@@ -180,7 +186,12 @@ async fn test_embedded_in_parent_resource_sqlite_json_roundtrip() {
         .await
         .expect("update address in sqlite");
 
-    let re_read = Customer::get(&ctx, updated_cust.id).await.expect("re-read from sqlite");
-    assert_eq!(re_read.address.as_ref().unwrap().street, "10 Downing Street");
+    let re_read = Customer::get(&ctx, updated_cust.id)
+        .await
+        .expect("re-read from sqlite");
+    assert_eq!(
+        re_read.address.as_ref().unwrap().street,
+        "10 Downing Street"
+    );
     assert_eq!(re_read.address.as_ref().unwrap().zip_code, "SW1A 2AA");
 }

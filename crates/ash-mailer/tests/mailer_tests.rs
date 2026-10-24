@@ -215,7 +215,13 @@ async fn test_email_notifier_on_resource_action() -> Result<()> {
     let expected_subject = format!("Receipt for Order {}", order.id);
     assert_eq!(email.subject.as_deref(), Some(expected_subject.as_str()));
     assert!(email.text.as_ref().unwrap().contains("$79"));
-    assert!(email.html.as_ref().unwrap().contains("<strong>$79</strong>"));
+    assert!(
+        email
+            .html
+            .as_ref()
+            .unwrap()
+            .contains("<strong>$79</strong>")
+    );
 
     Ok(())
 }
@@ -254,7 +260,10 @@ async fn test_auth_mailer_sender_password_reset() -> Result<()> {
 
     let email = mailer.last_delivered().unwrap();
     assert_eq!(email.from.as_deref(), Some("accounts@myservice.com"));
-    assert_eq!(email.subject.as_deref(), Some("Password Reset Instructions"));
+    assert_eq!(
+        email.subject.as_deref(),
+        Some("Password Reset Instructions")
+    );
     assert!(email.text.as_ref().unwrap().contains(&reset_token));
     assert!(
         email
@@ -332,10 +341,7 @@ async fn test_custom_auth_mailer_template() -> Result<()> {
         Some("CUSTOM: Reset your Security Key")
     );
     let expected_body = format!("Custom reset code: {reset_token}");
-    assert_eq!(
-        email.text.as_deref(),
-        Some(expected_body.as_str())
-    );
+    assert_eq!(email.text.as_deref(), Some(expected_body.as_str()));
 
     Ok(())
 }

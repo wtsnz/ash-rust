@@ -61,10 +61,7 @@ async fn static_update_by_id() {
         .unwrap();
     assert_eq!(ticket.representative_id, Some(alice.id));
 
-    let ticket = Ticket::close(&as_alice, ticket.id)
-        .call()
-        .await
-        .unwrap();
+    let ticket = Ticket::close(&as_alice, ticket.id).call().await.unwrap();
     assert_eq!(ticket.status, Status::Closed);
 }
 
@@ -88,9 +85,7 @@ async fn static_update_by_record_reference() {
         .unwrap();
     assert_eq!(ticket.representative_id, Some(alice.id));
 
-    let ticket = Ticket::close(&as_alice, &ticket)
-        .await
-        .unwrap();
+    let ticket = Ticket::close(&as_alice, &ticket).await.unwrap();
     assert_eq!(ticket.status, Status::Closed);
 }
 
@@ -145,7 +140,12 @@ async fn fluent_filter_composition_and_rel_accessors() {
     let rep_opt = results[0].representative.as_option().unwrap();
     assert_eq!(rep_opt.unwrap().name, "Alice");
     assert_eq!(
-        results[0].representative.expect_loaded("must be loaded").as_ref().unwrap().name,
+        results[0]
+            .representative
+            .expect_loaded("must be loaded")
+            .as_ref()
+            .unwrap()
+            .name,
         "Alice"
     );
 

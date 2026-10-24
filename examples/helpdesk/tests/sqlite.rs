@@ -38,7 +38,10 @@ async fn other_customer_does_not_see_ticket() {
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
     let as_other = ctx.with_actor(actor_customer(Uuid::new_v4()));
 
-    Ticket::open(&as_customer).subject("Broken mouse").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("Broken mouse")
+        .await
+        .unwrap();
     let listed = Ticket::query(&as_other).load().await.unwrap();
     assert!(listed.is_empty());
 }
@@ -73,8 +76,14 @@ async fn representative_sees_unassigned_then_only_assigned() {
 async fn user_filter_and_policy_filter_combine() {
     let ctx = ctx().await;
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    Ticket::open(&as_customer).subject("open one").await.unwrap();
-    let closed = Ticket::open(&as_customer).subject("close me").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("open one")
+        .await
+        .unwrap();
+    let closed = Ticket::open(&as_customer)
+        .subject("close me")
+        .await
+        .unwrap();
     closed.close(&as_customer).await.unwrap();
 
     let open_only = Ticket::query(&as_customer)
@@ -141,7 +150,10 @@ async fn customer_cannot_assign() {
 async fn calculation_is_selected_in_sql() {
     let ctx = ctx().await;
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    Ticket::open(&as_customer).subject("hello world").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("hello world")
+        .await
+        .unwrap();
     let loaded = Ticket::query(&as_customer)
         .calc("subject_length")
         .one()
@@ -155,7 +167,10 @@ async fn calculation_filter_is_sql_where() {
     let ctx = ctx().await;
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
     Ticket::open(&as_customer).subject("hi").await.unwrap();
-    Ticket::open(&as_customer).subject("hello world").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("hello world")
+        .await
+        .unwrap();
 
     let long = Ticket::query(&as_customer)
         .filter(Filter::gt("subject_length", 5_i64))
@@ -185,7 +200,10 @@ async fn belongs_to_loads_representative() {
         .one()
         .await
         .unwrap();
-    assert_eq!(loaded.representative.as_option().unwrap().unwrap().name, "Alice");
+    assert_eq!(
+        loaded.representative.as_option().unwrap().unwrap().name,
+        "Alice"
+    );
 }
 
 #[tokio::test]

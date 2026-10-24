@@ -179,8 +179,15 @@ async fn test_fullstack_helpdesk_server_crud() {
     assert_eq!(res.status(), StatusCode::OK);
     let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(body["data"]["closeTicket"]["errors"], serde_json::json!([]), "{body:?}");
-    assert_eq!(body["data"]["closeTicket"]["result"]["id"], created_id.as_str());
+    assert_eq!(
+        body["data"]["closeTicket"]["errors"],
+        serde_json::json!([]),
+        "{body:?}"
+    );
+    assert_eq!(
+        body["data"]["closeTicket"]["result"]["id"],
+        created_id.as_str()
+    );
 }
 
 #[test]
@@ -303,7 +310,12 @@ async fn input_fields(app: &axum::Router, name: &str) -> Vec<(String, serde_json
         .as_array()
         .unwrap_or_else(|| panic!("{name} missing from GraphQL schema: {body:?}"))
         .iter()
-        .map(|field| (field["name"].as_str().unwrap().to_string(), field["type"].clone()))
+        .map(|field| {
+            (
+                field["name"].as_str().unwrap().to_string(),
+                field["type"].clone(),
+            )
+        })
         .collect();
     fields.sort_by(|a, b| a.0.cmp(&b.0));
     fields
@@ -361,7 +373,8 @@ fn assert_value_type(ts_type: &str, gql: &serde_json::Value, at: &str) {
         "boolean" => assert_eq!(gql_named, "Boolean", "{at}"),
         literals if literals.starts_with('"') => {
             assert_eq!(gql["kind"], "ENUM", "{at}");
-            let mut ts_values: Vec<&str> = literals.split(" | ").map(|v| v.trim_matches('"')).collect();
+            let mut ts_values: Vec<&str> =
+                literals.split(" | ").map(|v| v.trim_matches('"')).collect();
             let mut gql_values: Vec<&str> = gql["enumValues"]
                 .as_array()
                 .unwrap()
@@ -380,11 +393,17 @@ fn assert_value_type(ts_type: &str, gql: &serde_json::Value, at: &str) {
 async fn test_typescript_filters_match_graphql_filter_inputs() {
     let app = build_app().await.expect("Failed to build Axum app");
     let mut ts = ash_typescript::types::generate_common_types();
-    for def in [&astro_helpdesk::TICKET_DEF, &astro_helpdesk::REPRESENTATIVE_DEF] {
+    for def in [
+        &astro_helpdesk::TICKET_DEF,
+        &astro_helpdesk::REPRESENTATIVE_DEF,
+    ] {
         ts.push_str(&ash_typescript::types::generate_resource_filter_input(def));
     }
     let ash_filter = ts_fields(&ts, "export interface AshFilter<T>");
-    let text_ops = ts_fields(&ts, "export interface AshTextFilter extends AshFilter<string>");
+    let text_ops = ts_fields(
+        &ts,
+        "export interface AshTextFilter extends AshFilter<string>",
+    );
 
     for resource in ["Ticket", "Representative"] {
         let input = format!("{resource}FilterInput");
@@ -399,7 +418,10 @@ async fn test_typescript_filters_match_graphql_filter_inputs() {
             let (gql, gql_list) = unwrap_type(gql_type);
             let gql_named = gql["name"].as_str().unwrap();
             // `and` / `or` / `not`, and relationships: another filter input.
-            if let Some(other) = ts_type.strip_suffix("FilterInput[]").or(ts_type.strip_suffix("FilterInput")) {
+            if let Some(other) = ts_type
+                .strip_suffix("FilterInput[]")
+                .or(ts_type.strip_suffix("FilterInput"))
+            {
                 assert_eq!(gql_list, ts_type.ends_with("[]"), "list mismatch at {at}");
                 assert_eq!(gql_named, format!("{other}FilterInput"), "{at}");
                 continue;

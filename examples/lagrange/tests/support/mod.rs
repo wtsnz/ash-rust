@@ -90,7 +90,9 @@ pub async fn postgres_fleet() -> Option<Postgres> {
         return None;
     };
     // Setup SQL runs through a pool of its own: the data layer's is tokio-postgres's.
-    let admin = sqlx::PgPool::connect(&base).await.expect("connect to DATABASE_URL");
+    let admin = sqlx::PgPool::connect(&base)
+        .await
+        .expect("connect to DATABASE_URL");
     // Extensions are database-wide and racing `CREATE EXTENSION` calls collide, so
     // install them once, under a lock, before any schema migrates.
     let mut tx = admin.begin().await.unwrap();

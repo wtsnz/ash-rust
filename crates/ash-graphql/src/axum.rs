@@ -1,16 +1,16 @@
 //! Axum web framework integration helpers for `ash-graphql`.
 
-use std::sync::Arc;
 use async_graphql::dynamic::Schema;
 use async_graphql::http::GraphiQLSource;
 use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse};
 use axum::{
+    Router,
     extract::{State, WebSocketUpgrade},
     http::HeaderMap,
     response::{Html, IntoResponse},
     routing::{get, post},
-    Router,
 };
+use std::sync::Arc;
 
 pub use crate::ws::{Hub as SubscriptionHub, SHARED_BUFFER};
 
@@ -23,7 +23,11 @@ pub trait RequestData: Send + Sync + 'static {
     /// `request`, with what `headers` say it runs as attached, and a scope naming that
     /// (the tenant and the actor, say): subscribers share a stream only within one scope,
     /// so one never hears what another may not see.
-    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> (async_graphql::Request, String);
+    fn apply(
+        &self,
+        headers: &HeaderMap,
+        request: async_graphql::Request,
+    ) -> (async_graphql::Request, String);
 }
 
 /// Every request runs as the schema's context says.
@@ -31,7 +35,11 @@ pub trait RequestData: Send + Sync + 'static {
 pub struct SchemaContext;
 
 impl RequestData for SchemaContext {
-    fn apply(&self, _headers: &HeaderMap, request: async_graphql::Request) -> (async_graphql::Request, String) {
+    fn apply(
+        &self,
+        _headers: &HeaderMap,
+        request: async_graphql::Request,
+    ) -> (async_graphql::Request, String) {
         (request, String::new())
     }
 }
@@ -51,7 +59,11 @@ pub async fn graphql_handler(
 }
 
 /// [`graphql_handler`], running the request as its [`RequestData`] says.
-async fn graphql_handler_with(State(served): State<Served>, headers: HeaderMap, req: GraphQLRequest) -> GraphQLResponse {
+async fn graphql_handler_with(
+    State(served): State<Served>,
+    headers: HeaderMap,
+    req: GraphQLRequest,
+) -> GraphQLResponse {
     let (request, _) = served.request_data.apply(&headers, req.into_inner());
     served.schema.execute(request).await.into()
 }
@@ -89,15 +101,21 @@ pub fn graphql_router_with_hub(schema: Schema, hub: Arc<SubscriptionHub>) -> Rou
 
 /// [`graphql_router_with_hub`], each request and subscription running as `request_data`
 /// says from its headers: its actor and tenant.
-pub fn graphql_router_with(schema: Schema, hub: Arc<SubscriptionHub>, request_data: Arc<dyn RequestData>) -> Router {
+pub fn graphql_router_with(
+    schema: Schema,
+    hub: Arc<SubscriptionHub>,
+    request_data: Arc<dyn RequestData>,
+) -> Router {
     let served = Served {
         schema: Arc::new(schema.clone()),
         request_data: Arc::clone(&request_data),
     };
-    let subscriptions = move |protocol: GraphQLProtocol, headers: HeaderMap, upgrade: WebSocketUpgrade| {
-        let (schema, hub, request_data) = (schema.clone(), Arc::clone(&hub), Arc::clone(&request_data));
-        async move { crate::ws::upgrade(protocol, headers, upgrade, schema, hub, request_data) }
-    };
+    let subscriptions =
+        move |protocol: GraphQLProtocol, headers: HeaderMap, upgrade: WebSocketUpgrade| {
+            let (schema, hub, request_data) =
+                (schema.clone(), Arc::clone(&hub), Arc::clone(&request_data));
+            async move { crate::ws::upgrade(protocol, headers, upgrade, schema, hub, request_data) }
+        };
 
     Router::new()
         .route("/graphql/ws", get(subscriptions))

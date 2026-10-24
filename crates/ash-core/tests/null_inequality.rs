@@ -4,26 +4,26 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    Document {
-        table "documents";
+Document {
+    table "documents";
 
-    attributes {
-        id: Uuid [pk];
-        title: String;
-        status: Option<String>;
+attributes {
+    id: Uuid [pk];
+    title: String;
+    status: Option<String>;
+}
+
+actions {
+    create create {
+        primary;
+        accept [title, status];
     }
 
-    actions {
-        create create {
-            primary;
-            accept [title, status];
-        }
-
-        read read {
-            primary;
-        }
+    read read {
+        primary;
     }
-    }}
+}
+}}
 
 #[tokio::test]
 async fn test_null_inequality_identical_in_memory_and_sqlite() {
@@ -72,8 +72,16 @@ async fn test_null_inequality_identical_in_memory_and_sqlite() {
         .await
         .unwrap();
 
-    assert_eq!(mem_ne.len(), 1, "Memory: NULL must not match status != 'published'");
-    assert_eq!(sql_ne.len(), 1, "SQLite: NULL must not match status != 'published'");
+    assert_eq!(
+        mem_ne.len(),
+        1,
+        "Memory: NULL must not match status != 'published'"
+    );
+    assert_eq!(
+        sql_ne.len(),
+        1,
+        "SQLite: NULL must not match status != 'published'"
+    );
     assert_eq!(mem_ne[0].title, "Doc Draft");
     assert_eq!(sql_ne[0].title, "Doc Draft");
 

@@ -110,8 +110,16 @@ async fn stored_rows<D: DataLayer>(ctx: &Context<D>, resource: &ash_core::Resour
 async fn scenario<D: DataLayer>(ctx: Context<D>) {
     let kept = Post::create(&ctx).title("Kept").await.unwrap();
     let archived = Post::create(&ctx).title("Archived").await.unwrap();
-    for (post, body) in [(&kept, "stays"), (&archived, "goes"), (&archived, "goes too")] {
-        Comment::create(&ctx).post_id(post.id).body(body).await.unwrap();
+    for (post, body) in [
+        (&kept, "stays"),
+        (&archived, "goes"),
+        (&archived, "goes too"),
+    ] {
+        Comment::create(&ctx)
+            .post_id(post.id)
+            .body(body)
+            .await
+            .unwrap();
     }
 
     // Destroy archives the post and, through archive_related, its comments.
@@ -178,7 +186,10 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
         .count()
         .await
         .unwrap();
-    assert_eq!(matched, 0, "archived comments must not match a related filter");
+    assert_eq!(
+        matched, 0,
+        "archived comments must not match a related filter"
+    );
     let matched = Post::query(&ctx)
         .filter(ash_core::Filter::related(
             "comments",
@@ -197,7 +208,9 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
 
     // An excluded destroy action really deletes.
     let scratch = Post::create(&ctx).title("Scratch").await.unwrap();
-    destroy_existing::<Post, D>(&ctx, "purge", scratch).await.unwrap();
+    destroy_existing::<Post, D>(&ctx, "purge", scratch)
+        .await
+        .unwrap();
     assert_eq!(stored_rows(&ctx, &Post::DEF).await, 2);
 }
 
@@ -248,16 +261,34 @@ async fn graphql_destroy_archives_and_lists_hide_archived() {
         r#"mutation {{ destroyPost(id: "{}") {{ errors {{ message code }} }} }}"#,
         post.id
     );
-    let res = schema.execute(Request::new(destroy).data(ctx.clone())).await;
-    assert!(res.errors.is_empty(), "{:?}", res.errors);
-    let data = res.data.into_json().unwrap();
-    assert_eq!(data["destroyPost"]["errors"], serde_json::json!([]), "{data}");
-
     let res = schema
-        .execute(Request::new("query { listPosts { results { id archivedAt } } }").data(ctx.clone()))
+        .execute(Request::new(destroy).data(ctx.clone()))
         .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
-    assert_eq!(res.data.into_json().unwrap()["listPosts"]["results"], serde_json::json!([]));
+    let data = res.data.into_json().unwrap();
+    assert_eq!(
+        data["destroyPost"]["errors"],
+        serde_json::json!([]),
+        "{data}"
+    );
+
+    let res = schema
+        .execute(
+            Request::new("query { listPosts { results { id archivedAt } } }").data(ctx.clone()),
+        )
+        .await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.into_json().unwrap()["listPosts"]["results"],
+        serde_json::json!([])
+    );
     assert_eq!(stored_rows(&ctx, &Post::DEF).await, 1);
-    assert!(Post::query(&ctx).action("archived").one().await.unwrap().is_archived());
+    assert!(
+        Post::query(&ctx)
+            .action("archived")
+            .one()
+            .await
+            .unwrap()
+            .is_archived()
+    );
 }

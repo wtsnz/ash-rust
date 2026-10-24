@@ -50,9 +50,10 @@ fn is_required_accept(
         return false;
     }
     if let Some(attr) = def.attributes.iter().find(|a| a.ident == *name)
-        && (attr.default.is_some() || attr.default_fn.is_some() || attr.pk || attr.generated) {
-            return false;
-        }
+        && (attr.default.is_some() || attr.default_fn.is_some() || attr.pk || attr.generated)
+    {
+        return false;
+    }
     if act.changes.iter().any(|chg| match chg {
         ChangeSpec::Set { field, .. }
         | ChangeSpec::SetNew { field, .. }
@@ -508,7 +509,13 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
                 let (need_traits, impl_ready, into_future_impl, into_changeset_impl) =
-                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names, &quote! { ::ash_core::DataLayer });
+                    typestate_ready_impls(
+                        &builder_name,
+                        resource,
+                        &act_pascal,
+                        &required_names,
+                        &quote! { ::ash_core::DataLayer },
+                    );
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
                 let into_fieldmap_owned = if has_state {
                     quote! {
@@ -821,7 +828,13 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
                 let (need_traits, impl_ready, into_future_impl, into_changeset_impl) =
-                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names, &quote! { ::ash_core::DataLayer });
+                    typestate_ready_impls(
+                        &builder_name,
+                        resource,
+                        &act_pascal,
+                        &required_names,
+                        &quote! { ::ash_core::DataLayer },
+                    );
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
                 let into_fieldmap_owned = if has_state {
                     quote! {
@@ -1272,8 +1285,13 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 } else {
                     quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> }
                 };
-                let (need_traits, impl_ready, into_future_impl, _) =
-                    typestate_ready_impls(&builder_name, resource, &act_pascal, &required_names, &d_bound);
+                let (need_traits, impl_ready, into_future_impl, _) = typestate_ready_impls(
+                    &builder_name,
+                    resource,
+                    &act_pascal,
+                    &required_names,
+                    &d_bound,
+                );
                 let impl_new = quote! { impl<'a, D: ::ash_core::DataLayer> #builder_name<'a, D> };
 
                 let all_inputs: Vec<(&syn::Ident, &syn::Type)> = act
@@ -1319,7 +1337,11 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         });
                     }
 
-                    let default = act.arguments.iter().find(|arg| arg.name == *name).and_then(|arg| arg.default.as_ref());
+                    let default = act
+                        .arguments
+                        .iter()
+                        .find(|arg| arg.name == *name)
+                        .and_then(|arg| arg.default.as_ref());
                     if let Some(default) = default {
                         // Its default when not given, as Ash fills an argument in.
                         if option_inner(ty).is_some() {

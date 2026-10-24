@@ -56,36 +56,36 @@ macro_rules! searchable {
 
 // Define resource using Pattern 1 `extend` blocks
 resource! {
-    Product {
-        table "products";
+Product {
+    table "products";
 
-    attributes {
-        id: Uuid [pk];
-        title: String;
-        price: i64;
+attributes {
+    id: Uuid [pk];
+    title: String;
+    price: i64;
+}
+
+actions {
+    create create {
+        primary;
+        accept [title, price];
     }
 
-    actions {
-        create create {
-            primary;
-            accept [title, price];
-        }
-
-        read read {
-            primary;
-        }
+    read read {
+        primary;
     }
+}
 
-    // Pattern 1 Extension A: audit tracking
-    extend audit_trail! {
-        track: [price];
-    }
+// Pattern 1 Extension A: audit tracking
+extend audit_trail! {
+    track: [price];
+}
 
-    // Pattern 1 Extension B: search engine indexing
-    extend searchable! {
-        index: "products_v1";
-    }
-    }}
+// Pattern 1 Extension B: search engine indexing
+extend searchable! {
+    index: "products_v1";
+}
+}}
 
 #[tokio::test]
 async fn test_pattern1_extend_companion_traits_and_crud() {

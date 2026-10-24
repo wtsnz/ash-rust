@@ -80,7 +80,9 @@ fn bench_queries(c: &mut Criterion) {
         d.install().await.unwrap();
         let cust = d.with_actor(actor_customer(Uuid::new_v4()));
         for i in 1..=100 {
-            cust.open_ticket(&format!("Ticket number {i}")).await.unwrap();
+            cust.open_ticket(&format!("Ticket number {i}"))
+                .await
+                .unwrap();
         }
         d
     });

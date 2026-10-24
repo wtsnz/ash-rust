@@ -7,34 +7,34 @@ use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
 resource! {
-    Article {
-        table "articles";
+Article {
+    table "articles";
 
-    attributes {
-        id: Uuid [pk];
-        title: String;
-        body: String;
-        slug: Option<String>;
-        view_count: i64 [default: 0];
+attributes {
+    id: Uuid [pk];
+    title: String;
+    body: String;
+    slug: Option<String>;
+    view_count: i64 [default: 0];
+}
+
+actions {
+    read read {
+        primary;
     }
 
-    actions {
-        read read {
-            primary;
-        }
-
-        create create {
-            primary;
-            accept [title, body, slug, view_count];
-        }
-
-        update update {
-            require_atomic false;
-            primary;
-            accept [title, body, slug, view_count];
-        }
+    create create {
+        primary;
+        accept [title, body, slug, view_count];
     }
-    }}
+
+    update update {
+        require_atomic false;
+        primary;
+        accept [title, body, slug, view_count];
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_before_action_mutates_attributes() -> Result<()> {
@@ -220,7 +220,10 @@ async fn test_multiple_hooks_execution_order() -> Result<()> {
         .await?;
 
     let executed = order.lock().unwrap().clone();
-    assert_eq!(executed, vec!["before_1", "before_2", "after_1", "after_tx"]);
+    assert_eq!(
+        executed,
+        vec!["before_1", "before_2", "after_1", "after_tx"]
+    );
 
     Ok(())
 }

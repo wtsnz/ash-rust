@@ -17,42 +17,42 @@ const STATIC_NOTIFIER: SyncFnNotifier<fn(&Notification) -> ash_core::Result<()>>
     });
 
 resource! {
-    Order {
-        table "orders";
+Order {
+    table "orders";
 
-    attributes {
-        id: Uuid [pk];
-        customer: String;
-        amount: i64;
-        status: String;
+attributes {
+    id: Uuid [pk];
+    customer: String;
+    amount: i64;
+    status: String;
+}
+
+notifiers [
+    &STATIC_NOTIFIER
+]
+
+actions {
+    create create {
+        primary;
+        accept [customer, amount];
+        change set(status = "pending");
+        validate present(customer);
+        validate numericality(amount, min: 1);
     }
 
-    notifiers [
-        &STATIC_NOTIFIER
-    ]
-
-    actions {
-        create create {
-            primary;
-            accept [customer, amount];
-            change set(status = "pending");
-            validate present(customer);
-            validate numericality(amount, min: 1);
-        }
-
-        read read {
-            primary;
-        }
-
-        update complete {
-            change set(status = "completed");
-        }
-
-        destroy cancel {
-            primary;
-        }
+    read read {
+        primary;
     }
-    }}
+
+    update complete {
+        change set(status = "completed");
+    }
+
+    destroy cancel {
+        primary;
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_standalone_crud_notifications() {
@@ -96,7 +96,10 @@ async fn test_standalone_crud_notifications() {
         assert_eq!(n.action, "complete");
         assert_eq!(n.action_kind, ActionKind::Update);
         assert_eq!(n.get("status").and_then(|v| v.as_str()), Some("completed"));
-        assert_eq!(n.previous("status").and_then(|v| v.as_str()), Some("pending"));
+        assert_eq!(
+            n.previous("status").and_then(|v| v.as_str()),
+            Some("pending")
+        );
     }
 
     // 3. Destroy action
@@ -129,7 +132,11 @@ async fn test_multi_atomic_rollback_discards_notifications_in_memory() {
 
     let ctx = Context::new(Memory::new()).with_notifier(notifier);
 
-    let cs1 = Order::create(&ctx).customer("Charlie").amount(100).changeset().unwrap();
+    let cs1 = Order::create(&ctx)
+        .customer("Charlie")
+        .amount(100)
+        .changeset()
+        .unwrap();
 
     // Multi transaction with a failing step
     let multi = Multi::new()
@@ -153,7 +160,10 @@ async fn test_multi_atomic_rollback_discards_notifications_in_memory() {
 #[tokio::test]
 async fn test_multi_success_dispatches_all_notifications_in_sqlite() {
     let sqlite = Sqlite::memory().await.expect("sqlite memory");
-    sqlite.install_resources(&[&Order::DEF]).await.expect("install schema");
+    sqlite
+        .install_resources(&[&Order::DEF])
+        .await
+        .expect("install schema");
 
     let received = Arc::new(Mutex::new(Vec::<Notification>::new()));
     let received_clone = Arc::clone(&received);
@@ -165,13 +175,19 @@ async fn test_multi_success_dispatches_all_notifications_in_sqlite() {
 
     let ctx = Context::new(sqlite).with_notifier(notifier);
 
-    let cs1 = Order::create(&ctx).customer("Elena").amount(200).changeset().unwrap();
-    let cs2 = Order::create(&ctx).customer("Frank").amount(400).changeset().unwrap();
+    let cs1 = Order::create(&ctx)
+        .customer("Elena")
+        .amount(200)
+        .changeset()
+        .unwrap();
+    let cs2 = Order::create(&ctx)
+        .customer("Frank")
+        .amount(400)
+        .changeset()
+        .unwrap();
 
     // Multi pipeline that succeeds completely
-    let multi = Multi::new()
-        .create("order1", cs1)
-        .create("order2", cs2);
+    let multi = Multi::new().create("order1", cs1).create("order2", cs2);
 
     let res = ctx.run_multi(multi).await.expect("multi succeeds");
     let o1: &Order = res.get("order1").unwrap();
@@ -181,7 +197,13 @@ async fn test_multi_success_dispatches_all_notifications_in_sqlite() {
     let list = received.lock().unwrap();
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].id, ash_core::Value::from(o1.id));
-    assert_eq!(list[0].get("customer").and_then(|v| v.as_str()), Some("Elena"));
+    assert_eq!(
+        list[0].get("customer").and_then(|v| v.as_str()),
+        Some("Elena")
+    );
     assert_eq!(list[1].id, ash_core::Value::from(o2.id));
-    assert_eq!(list[1].get("customer").and_then(|v| v.as_str()), Some("Frank"));
+    assert_eq!(
+        list[1].get("customer").and_then(|v| v.as_str()),
+        Some("Frank")
+    );
 }

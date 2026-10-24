@@ -94,7 +94,10 @@ async fn test_timestamps_and_defaults_in_memory() {
 
     assert_eq!(updated.title, "Deep Dive into Ash Rust (2nd Edition)");
     assert_eq!(updated.status, "published");
-    assert_eq!(updated.created_at, initial_created_at, "created_at must never be mutated on update");
+    assert_eq!(
+        updated.created_at, initial_created_at,
+        "created_at must never be mutated on update"
+    );
     // updated_at is recalculated on update
     assert!(!updated.updated_at.as_str().is_empty());
 }

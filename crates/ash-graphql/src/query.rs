@@ -1,13 +1,14 @@
 use ash_core::{
-    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef,
-    scope_read,
+    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, scope_read,
 };
 use async_graphql::dynamic::*;
 
-use crate::redact::redact_record;
 use crate::names::{camel, plural};
-use crate::pagination::{PageStrategy, build_keyset_query, build_offset_query, read_field_arguments, scoped_read};
+use crate::pagination::{
+    PageStrategy, build_keyset_query, build_offset_query, read_field_arguments, scoped_read,
+};
 use crate::preload::{Load, preload, selected};
+use crate::redact::redact_record;
 use crate::request::request_context;
 
 /// Runs `query` as a read through `action` in `ctx`: with the action's preparations and
@@ -78,7 +79,8 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                     tenant: ash.tenant.clone(),
                     ..CompiledQuery::default()
                 });
-                let records = run_read(&ash, resource, read_action, &FieldMap::new(), query).await?;
+                let records =
+                    run_read(&ash, resource, read_action, &FieldMap::new(), query).await?;
                 let Some(mut record) = records.into_iter().next() else {
                     return Ok(None);
                 };
@@ -100,7 +102,11 @@ pub fn build_read_action_query<D: DataLayer + Clone + 'static>(
     action: &'static ActionDef,
     resource: &'static ResourceDef,
 ) -> Field {
-    build_list_query::<D>(list_query_name_for_action(action.name, resource.name), resource, action)
+    build_list_query::<D>(
+        list_query_name_for_action(action.name, resource.name),
+        resource,
+        action,
+    )
 }
 
 /// A list query through `action`, as AshGraphql's `list` query: a `KeysetPageOf<Resource>`
@@ -124,29 +130,31 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
     resource: &'static ResourceDef,
     action: &'static ActionDef,
 ) -> Field {
-    let field = Field::new(
-        name,
-        TypeRef::named_nn_list_nn(resource.name),
-        move |ctx| {
-            FieldFuture::new(async move {
-                let ash = request_context::<D>(&ctx)?;
-                let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
-                let fields = selected(ctx.ctx.field(), None);
-                let load = Load::of(resource, &fields, scoped.sort.iter().map(|s| s.field.as_str()));
-                let query = load.onto(scoped);
-                let mut records = ash
-                    .data
-                    .run_query(resource, &query)
-                    .await
-                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-                crate::pagination::after_read(action, &arguments, &mut records)?;
-                for record in &mut records {
-                    redact_record(resource, ash.actor.as_ref(), record);
-                }
-                preload(&ash, resource, fields, &mut records).await?;
-                Ok(Some(FieldValue::list(records.into_iter().map(FieldValue::owned_any))))
-            })
-        },
-    );
+    let field = Field::new(name, TypeRef::named_nn_list_nn(resource.name), move |ctx| {
+        FieldFuture::new(async move {
+            let ash = request_context::<D>(&ctx)?;
+            let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
+            let fields = selected(ctx.ctx.field(), None);
+            let load = Load::of(
+                resource,
+                &fields,
+                scoped.sort.iter().map(|s| s.field.as_str()),
+            );
+            let query = load.onto(scoped);
+            let mut records = ash
+                .data
+                .run_query(resource, &query)
+                .await
+                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+            crate::pagination::after_read(action, &arguments, &mut records)?;
+            for record in &mut records {
+                redact_record(resource, ash.actor.as_ref(), record);
+            }
+            preload(&ash, resource, fields, &mut records).await?;
+            Ok(Some(FieldValue::list(
+                records.into_iter().map(FieldValue::owned_any),
+            )))
+        })
+    });
     read_field_arguments(field, resource, action)
 }

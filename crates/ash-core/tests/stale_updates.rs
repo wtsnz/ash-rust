@@ -59,7 +59,10 @@ async fn neither_update_undoes_the_other<D: DataLayer>(ctx: Context<D>) {
     telemetry.report_on(&ctx).speed_kph(42).await.unwrap();
 
     let stored = Vehicle::get(&ctx, id).await.unwrap();
-    assert_eq!((stored.status.as_str(), stored.speed_kph), ("returning", 42));
+    assert_eq!(
+        (stored.status.as_str(), stored.speed_kph),
+        ("returning", 42)
+    );
 }
 
 /// Setting a field to the value the copy already holds isn't a change, as in Ash: it

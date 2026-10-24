@@ -45,19 +45,40 @@ impl Slow {
 }
 
 impl DataLayer for Slow {
-    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: ash_core::Value, fields: FieldMap) -> Result<FieldMap> {
+    async fn create(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: ash_core::Value,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         self.inner.create(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: ash_core::Value, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: ash_core::Value,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         self.inner.update(resource, tenant, id, fields).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: ash_core::Value) -> Result<()> {
+    async fn destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: ash_core::Value,
+    ) -> Result<()> {
         self.inner.destroy(resource, tenant, id).await
     }
 
-    async fn run_query(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<Vec<FieldMap>> {
+    async fn run_query(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+    ) -> Result<Vec<FieldMap>> {
         self.read(self.inner.run_query(resource, query)).await
     }
 
@@ -76,5 +97,9 @@ async fn a_counted_page_reads_its_count_alongside_the_page() {
 
     let page = Note::query(&ctx).page_offset(2, 0, true).await.unwrap();
     assert_eq!((page.results.len(), page.total_count), (2, Some(5)));
-    assert_eq!(slow.most.load(Ordering::SeqCst), 2, "the count and the page are read at once");
+    assert_eq!(
+        slow.most.load(Ordering::SeqCst),
+        2,
+        "the count and the page are read at once"
+    );
 }

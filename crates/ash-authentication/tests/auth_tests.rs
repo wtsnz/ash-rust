@@ -1,49 +1,49 @@
 #[cfg(feature = "axum")]
 use std::sync::Arc;
 
-use ash_authentication::{JwtService, authentication};
 #[cfg(feature = "axum")]
 use ash_authentication::{AuthUser, auth_router};
+use ash_authentication::{JwtService, authentication};
 use ash_core::{Context, Resource, Result, Value};
 use ash_memory::Memory;
 use uuid::Uuid;
 
 #[authentication]
 ash_core::resource! {
-    User {
-        table "users";
+User {
+    table "users";
 
-    attributes {
-        id: Uuid [pk];
-        email: String;
+attributes {
+    id: Uuid [pk];
+    email: String;
+}
+
+authentication {
+    strategy password {
+        identity_field: email;
+        hashed_password_field: hashed_password;
+        min_password_length: 8;
+        require_confirmation: true;
     }
 
-    authentication {
-        strategy password {
-            identity_field: email;
-            hashed_password_field: hashed_password;
-            min_password_length: 8;
-            require_confirmation: true;
-        }
-
-        strategy tokens {
-            token_lifetime_secs: 3600;
-        }
-
-        strategy api_key {
-            api_key_field: api_key_hash;
-            key_prefix: "ash_test_";
-        }
+    strategy tokens {
+        token_lifetime_secs: 3600;
     }
 
-    actions {
-        read read { primary; }
-        update update {
-            primary;
-            accept [api_key_hash];
-        }
+    strategy api_key {
+        api_key_field: api_key_hash;
+        key_prefix: "ash_test_";
     }
-    }}
+}
+
+actions {
+    read read { primary; }
+    update update {
+        primary;
+        accept [api_key_hash];
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_declarative_authentication_registration_and_sign_in() -> Result<()> {
@@ -53,14 +53,8 @@ async fn test_declarative_authentication_registration_and_sign_in() -> Result<()
     let ext = User::DEF
         .extension::<ash_authentication::AuthenticationDef>()
         .expect("AuthenticationDef should be present on User::DEF");
-    assert_eq!(
-        ext.password.as_ref().unwrap().identity_field,
-        "email"
-    );
-    assert_eq!(
-        ext.password.as_ref().unwrap().min_password_length,
-        8
-    );
+    assert_eq!(ext.password.as_ref().unwrap().identity_field, "email");
+    assert_eq!(ext.password.as_ref().unwrap().min_password_length, 8);
 
     // 1. Register a new user using the injected `register_with_password` action
     let user: User = User::register_with_password(&ctx)
@@ -206,15 +200,13 @@ async fn test_axum_auth_router_and_auth_user_extractor() -> Result<()> {
         .method("POST")
         .uri("/auth/sign-in")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "identity": "alice_web@example.com",
-                    "password": "strong-password-123"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "identity": "alice_web@example.com",
+                "password": "strong-password-123"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(sign_in_req).await.unwrap();
@@ -353,11 +345,7 @@ async fn test_change_password_and_session_invalidation() -> Result<()> {
 
     // Obtain token pair
     let (_, pair) = strategy
-        .sign_in_with_password_and_token_pair(
-            &ctx,
-            "pwd_change@example.com",
-            "old-password-123",
-        )
+        .sign_in_with_password_and_token_pair(&ctx, "pwd_change@example.com", "old-password-123")
         .await
         .expect("sign in should succeed");
 
@@ -547,11 +535,7 @@ async fn test_sqlite_database_token_store_and_rotation() -> Result<()> {
         .expect("registration in sqlite should succeed");
 
     let (_, pair1) = strategy
-        .sign_in_with_password_and_token_pair(
-            &ctx,
-            "sqlite_user@example.com",
-            "sqlite-pass-123",
-        )
+        .sign_in_with_password_and_token_pair(&ctx, "sqlite_user@example.com", "sqlite-pass-123")
         .await
         .expect("sqlite sign-in with token pair should succeed");
 
@@ -576,8 +560,8 @@ async fn test_sqlite_database_token_store_and_rotation() -> Result<()> {
 #[cfg(feature = "axum")]
 #[tokio::test]
 async fn test_axum_full_auth_lifecycle() -> Result<()> {
-    use axum::http::StatusCode;
     use axum::Router;
+    use axum::http::StatusCode;
     use serde_json::json;
     use tower::ServiceExt;
 
@@ -612,22 +596,22 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
     };
 
     let auth_routes = auth_router(strategy, jwt_service.clone(), ctx.clone());
-    let app: Router = Router::new().nest("/auth", auth_routes).with_state(app_state);
+    let app: Router = Router::new()
+        .nest("/auth", auth_routes)
+        .with_state(app_state);
 
     // 1. POST /auth/sign-in
     let sign_in_req = axum::http::Request::builder()
         .method("POST")
         .uri("/auth/sign-in")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "identity": "lifecycle_user@example.com",
-                    "password": "initial-pass-123"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "identity": "lifecycle_user@example.com",
+                "password": "initial-pass-123"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(sign_in_req).await.unwrap();
@@ -641,21 +625,21 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(auth_res.user_id, user.id);
     let initial_access_token = auth_res.token;
-    let initial_refresh_token = auth_res.refresh_token.expect("refresh token should be present");
+    let initial_refresh_token = auth_res
+        .refresh_token
+        .expect("refresh token should be present");
 
     // 2. POST /auth/refresh
     let refresh_req = axum::http::Request::builder()
         .method("POST")
         .uri("/auth/refresh")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "refresh_token": initial_refresh_token
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "refresh_token": initial_refresh_token
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(refresh_req).await.unwrap();
@@ -675,14 +659,12 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .method("POST")
         .uri("/auth/refresh")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "refresh_token": initial_refresh_token
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "refresh_token": initial_refresh_token
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(replay_req).await.unwrap();
@@ -694,16 +676,14 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .uri("/auth/change-password")
         .header("Authorization", format!("Bearer {second_access_token}"))
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "current_password": "initial-pass-123",
-                    "new_password": "changed-pass-789",
-                    "password_confirmation": "changed-pass-789"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "current_password": "initial-pass-123",
+                "new_password": "changed-pass-789",
+                "password_confirmation": "changed-pass-789"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(change_pwd_req).await.unwrap();
@@ -714,14 +694,12 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .method("POST")
         .uri("/auth/request-password-reset")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "email": "lifecycle_user@example.com"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "email": "lifecycle_user@example.com"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(reset_req).await.unwrap();
@@ -747,16 +725,14 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .method("POST")
         .uri("/auth/reset-password")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "reset_token": reset_token,
-                    "new_password": "brand-new-pass-321",
-                    "password_confirmation": "mismatch-pass"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "reset_token": reset_token,
+                "new_password": "brand-new-pass-321",
+                "password_confirmation": "mismatch-pass"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(mismatch_reset_req).await.unwrap();
@@ -767,16 +743,14 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .method("POST")
         .uri("/auth/reset-password")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "reset_token": reset_token,
-                    "new_password": "brand-new-pass-321",
-                    "password_confirmation": "brand-new-pass-321"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "reset_token": reset_token,
+                "new_password": "brand-new-pass-321",
+                "password_confirmation": "brand-new-pass-321"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(reset_confirm_req).await.unwrap();
@@ -787,15 +761,13 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .method("POST")
         .uri("/auth/sign-in")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "identity": "lifecycle_user@example.com",
-                    "password": "brand-new-pass-321"
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "identity": "lifecycle_user@example.com",
+                "password": "brand-new-pass-321"
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(sign_in_new_req).await.unwrap();
@@ -814,14 +786,12 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .method("POST")
         .uri("/auth/revoke")
         .header("Content-Type", "application/json")
-        .body(http_body_util::BodyExt::boxed(
-            http_body_util::Full::from(
-                json!({
-                    "token": active_token
-                })
-                .to_string(),
-            ),
-        ))
+        .body(http_body_util::BodyExt::boxed(http_body_util::Full::from(
+            json!({
+                "token": active_token
+            })
+            .to_string(),
+        )))
         .unwrap();
 
     let res = app.clone().oneshot(revoke_req).await.unwrap();

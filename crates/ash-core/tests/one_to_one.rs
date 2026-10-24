@@ -58,14 +58,33 @@ use pilot::Pilot;
 
 async fn scenario<D: DataLayer>(ctx: Context<D>) {
     let pilot = Pilot::create(&ctx).name("Yuri").await.unwrap();
-    License::create(&ctx).pilot_id(pilot.id).grade("deep space").await.unwrap();
+    License::create(&ctx)
+        .pilot_id(pilot.id)
+        .grade("deep space")
+        .await
+        .unwrap();
 
-    let loaded = Pilot::query(&ctx).load_rel(Pilot::license).one().await.unwrap();
-    let license = loaded.license.as_option().unwrap().expect("the pilot's license");
+    let loaded = Pilot::query(&ctx)
+        .load_rel(Pilot::license)
+        .one()
+        .await
+        .unwrap();
+    let license = loaded
+        .license
+        .as_option()
+        .unwrap()
+        .expect("the pilot's license");
     assert_eq!(license.grade, "deep space");
 
-    let loaded = License::query(&ctx).load_rel(License::pilot).one().await.unwrap();
-    assert_eq!(loaded.pilot.as_option().unwrap().map(|p| p.name.as_str()), Some("Yuri"));
+    let loaded = License::query(&ctx)
+        .load_rel(License::pilot)
+        .one()
+        .await
+        .unwrap();
+    assert_eq!(
+        loaded.pilot.as_option().unwrap().map(|p| p.name.as_str()),
+        Some("Yuri")
+    );
 }
 
 #[tokio::test]
@@ -76,6 +95,9 @@ async fn one_to_one_both_ways_in_memory() {
 #[tokio::test]
 async fn one_to_one_both_ways_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install_resources(&[&Pilot::DEF, &License::DEF]).await.unwrap();
+    sqlite
+        .install_resources(&[&Pilot::DEF, &License::DEF])
+        .await
+        .unwrap();
     scenario(Context::new(sqlite)).await;
 }

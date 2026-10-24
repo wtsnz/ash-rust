@@ -38,8 +38,14 @@ pub(crate) fn lock_of(action: &ActionDef, existing: &FieldMap) -> Option<Lock> {
     }
     match guards.len() {
         0 => None,
-        1 => Some(Lock { guard: guards.pop().expect("one guard"), next }),
-        _ => Some(Lock { guard: Filter::and(guards), next }),
+        1 => Some(Lock {
+            guard: guards.pop().expect("one guard"),
+            next,
+        }),
+        _ => Some(Lock {
+            guard: Filter::and(guards),
+            next,
+        }),
     }
 }
 
@@ -53,21 +59,56 @@ pub(crate) fn next_version(current: Option<&Value>) -> Value {
 }
 
 /// Record `id` within the context's tenant and `guard`.
-fn guarded_query(ctx_tenant: Option<String>, resource: &ResourceDef, id: &Value, guard: Filter) -> Result<CompiledQuery> {
+fn guarded_query(
+    ctx_tenant: Option<String>,
+    resource: &ResourceDef,
+    id: &Value,
+    guard: Filter,
+) -> Result<CompiledQuery> {
     let by_id = Filter::and([Filter::eq(pk_name(resource)?, id.clone()), guard]);
     let (filter, tenant) = apply_tenant_scope(resource, Some(by_id), ctx_tenant)?;
-    Ok(CompiledQuery { filter, tenant, limit: Some(1), ..CompiledQuery::default() })
+    Ok(CompiledQuery {
+        filter,
+        tenant,
+        limit: Some(1),
+        ..CompiledQuery::default()
+    })
 }
 
 /// Why a guarded write of record `id` found nothing to write: it's still there, so it
 /// changed since it was read ([`Error::StaleRecord`]), or it isn't ([`Error::NotFound`]).
-async fn stale_or_missing<D: DataLayer>(ctx: &Context<D>, resource: &ResourceDef, id: Value) -> Error {
-    let found = match pk_name(resource).and_then(|pk| apply_tenant_scope(resource, Some(Filter::eq(pk, id.clone())), ctx.tenant.clone())) {
-        Ok((filter, tenant)) => ctx.data.run_query(resource, &CompiledQuery { filter, tenant, limit: Some(1), ..CompiledQuery::default() }).await,
+async fn stale_or_missing<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &ResourceDef,
+    id: Value,
+) -> Error {
+    let found = match pk_name(resource).and_then(|pk| {
+        apply_tenant_scope(
+            resource,
+            Some(Filter::eq(pk, id.clone())),
+            ctx.tenant.clone(),
+        )
+    }) {
+        Ok((filter, tenant)) => {
+            ctx.data
+                .run_query(
+                    resource,
+                    &CompiledQuery {
+                        filter,
+                        tenant,
+                        limit: Some(1),
+                        ..CompiledQuery::default()
+                    },
+                )
+                .await
+        }
         Err(err) => return err,
     };
     match found {
-        Ok(rows) if !rows.is_empty() => Error::StaleRecord { resource: resource.name, id },
+        Ok(rows) if !rows.is_empty() => Error::StaleRecord {
+            resource: resource.name,
+            id,
+        },
         Ok(_) => Error::NotFound,
         Err(err) => err,
     }
@@ -76,7 +117,12 @@ async fn stale_or_missing<D: DataLayer>(ctx: &Context<D>, resource: &ResourceDef
 /// Checks record `id` still holds the versions `lock` read, before anything that can't
 /// be taken back runs on its behalf (a cascade to its related records), as Ash's filter
 /// leaves a stale record out before its action runs.
-pub(crate) async fn check_lock<D: DataLayer>(ctx: &Context<D>, resource: &'static ResourceDef, id: Value, lock: &Lock) -> Result<()> {
+pub(crate) async fn check_lock<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    id: Value,
+    lock: &Lock,
+) -> Result<()> {
     let query = guarded_query(ctx.tenant.clone(), resource, &id, lock.guard.clone())?;
     if ctx.data.run_query(resource, &query).await?.is_empty() {
         return Err(stale_or_missing(ctx, resource, id).await);
@@ -95,7 +141,10 @@ pub(crate) async fn update_guarded<D: DataLayer>(
     lock: Option<Lock>,
 ) -> Result<FieldMap> {
     let Some(lock) = lock else {
-        return ctx.data.update(resource, ctx.tenant.as_deref(), id, fields).await;
+        return ctx
+            .data
+            .update(resource, ctx.tenant.as_deref(), id, fields)
+            .await;
     };
     fields.extend(lock.next);
     let query = guarded_query(ctx.tenant.clone(), resource, &id, lock.guard)?;
@@ -104,7 +153,12 @@ pub(crate) async fn update_guarded<D: DataLayer>(
         for (name, value) in fields {
             update.set(name, AtomicExpr::Value(value));
         }
-        return match ctx.data.update_atomic(resource, &query, &update).await?.pop() {
+        return match ctx
+            .data
+            .update_atomic(resource, &query, &update)
+            .await?
+            .pop()
+        {
             Some(stored) => Ok(stored),
             None => Err(stale_or_missing(ctx, resource, id).await),
         };
@@ -112,18 +166,30 @@ pub(crate) async fn update_guarded<D: DataLayer>(
     if ctx.data.run_query(resource, &query).await?.is_empty() {
         return Err(stale_or_missing(ctx, resource, id).await);
     }
-    ctx.data.update(resource, ctx.tenant.as_deref(), id, fields).await
+    ctx.data
+        .update(resource, ctx.tenant.as_deref(), id, fields)
+        .await
 }
 
 /// Deletes record `id`, under `lock` when the action locks, as [`update_guarded`]
 /// writes.
-pub(crate) async fn destroy_guarded<D: DataLayer>(ctx: &Context<D>, resource: &'static ResourceDef, id: Value, lock: Option<&Lock>) -> Result<()> {
+pub(crate) async fn destroy_guarded<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    id: Value,
+    lock: Option<&Lock>,
+) -> Result<()> {
     let Some(lock) = lock else {
         return ctx.data.destroy(resource, ctx.tenant.as_deref(), id).await;
     };
     let query = guarded_query(ctx.tenant.clone(), resource, &id, lock.guard.clone())?;
     if ctx.data.can_destroy_atomically(resource) {
-        return match ctx.data.destroy_atomic(resource, &query, &[]).await?.is_empty() {
+        return match ctx
+            .data
+            .destroy_atomic(resource, &query, &[])
+            .await?
+            .is_empty()
+        {
             false => Ok(()),
             true => Err(stale_or_missing(ctx, resource, id).await),
         };

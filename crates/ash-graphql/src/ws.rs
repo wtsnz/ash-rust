@@ -208,7 +208,10 @@ impl Hub {
     /// Forgets the stream for `key` that's ending, unless it's been replaced already.
     fn ended(&self, key: &Key, generation: u64) {
         let mut streams = self.streams.lock().expect("hub lock");
-        if streams.get(key).is_some_and(|shared| shared.generation == generation) {
+        if streams
+            .get(key)
+            .is_some_and(|shared| shared.generation == generation)
+        {
             streams.remove(key);
         }
     }
@@ -247,7 +250,11 @@ struct Member {
 
 impl Member {
     async fn recv(&mut self) -> Result<Frame, broadcast::error::RecvError> {
-        self.receiver.as_mut().expect("a receiver until dropped").recv().await
+        self.receiver
+            .as_mut()
+            .expect("a receiver until dropped")
+            .recv()
+            .await
     }
 }
 
@@ -362,7 +369,9 @@ async fn serve(
         match message.kind.as_str() {
             "connection_init" => {
                 if acknowledged {
-                    let _ = out.send(close(4429, "Too many initialisation requests")).await;
+                    let _ = out
+                        .send(close(4429, "Too many initialisation requests"))
+                        .await;
                     break;
                 }
                 acknowledged = true;

@@ -4,7 +4,9 @@
 //! guards the write however the action runs: as one statement, after a before-action
 //! hook, as a destroy, by id (read first), and in bulk (a stale record left out).
 
-use ash_core::{BulkUpdateOptions, Context, Error, FieldMap, Resource, TransactionSupport, Value, resource};
+use ash_core::{
+    BulkUpdateOptions, Context, Error, FieldMap, Resource, TransactionSupport, Value, resource,
+};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -117,7 +119,11 @@ pub mod drafts {
 use drafts::Draft;
 
 async fn scenario<D: TransactionSupport + Clone + 'static>(ctx: Context<D>) {
-    let account = BankAccount::open(&ctx).holder("Alice").balance(100).await.unwrap();
+    let account = BankAccount::open(&ctx)
+        .holder("Alice")
+        .balance(100)
+        .await
+        .unwrap();
     assert_eq!(account.version, 1);
     let stale = account.clone();
 
@@ -134,9 +140,16 @@ async fn scenario<D: TransactionSupport + Clone + 'static>(ctx: Context<D>) {
 
     // So is one that can't run as one statement.
     let stale = deposited.clone();
-    let audited = deposited.audited_deposit_on(&ctx).balance(175).await.unwrap();
+    let audited = deposited
+        .audited_deposit_on(&ctx)
+        .balance(175)
+        .await
+        .unwrap();
     assert_eq!(audited.version, 3);
-    assert!(matches!(stale.audited_deposit_on(&ctx).balance(1).await, Err(Error::StaleRecord { .. })));
+    assert!(matches!(
+        stale.audited_deposit_on(&ctx).balance(1).await,
+        Err(Error::StaleRecord { .. })
+    ));
 
     // An unlocked action leaves the version alone, and isn't refused for it.
     let renamed = deposited.rename_on(&ctx).holder("Alicia").await.unwrap();
@@ -144,48 +157,104 @@ async fn scenario<D: TransactionSupport + Clone + 'static>(ctx: Context<D>) {
 
     // By id, a locked update reads the record first and writes at the version it read.
     let action = BankAccount::DEF.action("deposit").unwrap();
-    let by_id = ash_core::update_dynamic(&ctx, &BankAccount::DEF, action, account.id, FieldMap::from([("balance".to_string(), Value::from(300))]))
-        .await
-        .unwrap();
+    let by_id = ash_core::update_dynamic(
+        &ctx,
+        &BankAccount::DEF,
+        action,
+        account.id,
+        FieldMap::from([("balance".to_string(), Value::from(300))]),
+    )
+    .await
+    .unwrap();
     assert_eq!(by_id.get("version"), Some(&Value::Int(4)));
 
     // In bulk, a record changed since it was read is left out, as Ash's bulk update
     // leaves it out.
     let current = BankAccount::get(&ctx, account.id).await.unwrap();
-    let other = BankAccount::open(&ctx).holder("Bob").balance(10).await.unwrap();
+    let other = BankAccount::open(&ctx)
+        .holder("Bob")
+        .balance(10)
+        .await
+        .unwrap();
     let mut balance = FieldMap::new();
     balance.insert("balance".into(), Value::from(1));
     let rows = vec![(stale.clone(), balance.clone()), (other.clone(), balance)];
-    let result = ash_core::bulk_update::<BankAccount, D, _, _>(&ctx, "deposit", rows, BulkUpdateOptions::default()).await.unwrap();
+    let result = ash_core::bulk_update::<BankAccount, D, _, _>(
+        &ctx,
+        "deposit",
+        rows,
+        BulkUpdateOptions::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(result.count, 1, "the stale record is left out");
     assert_eq!(result.error_count, 0, "and isn't an error");
     assert_eq!(BankAccount::get(&ctx, other.id).await.unwrap().balance, 1);
-    assert_eq!(BankAccount::get(&ctx, account.id).await.unwrap().balance, current.balance);
+    assert_eq!(
+        BankAccount::get(&ctx, account.id).await.unwrap().balance,
+        current.balance
+    );
 
     // A locked destroy, too.
     match ash_core::destroy_existing::<BankAccount, D>(&ctx, "close", stale).await {
         Err(Error::StaleRecord { .. }) => {}
         other => panic!("expected StaleRecord, got {other:?}"),
     }
-    ash_core::destroy_existing::<BankAccount, D>(&ctx, "close", current).await.unwrap();
-    assert!(matches!(BankAccount::get(&ctx, account.id).await, Err(Error::NotFound)));
+    ash_core::destroy_existing::<BankAccount, D>(&ctx, "close", current)
+        .await
+        .unwrap();
+    assert!(matches!(
+        BankAccount::get(&ctx, account.id).await,
+        Err(Error::NotFound)
+    ));
 }
 
 async fn the_increment_is_set_last<D: TransactionSupport + Clone + 'static>(ctx: Context<D>) {
     // One record at a time, after a hook.
-    let account = BankAccount::open(&ctx).holder("Cy").balance(1).await.unwrap();
+    let account = BankAccount::open(&ctx)
+        .holder("Cy")
+        .balance(1)
+        .await
+        .unwrap();
     let stale = account.clone();
     let reset = account.reset_and_deposit_on(&ctx).balance(2).await.unwrap();
-    assert_eq!(reset.version, 2, "the lock's increment wins over the action's set");
-    assert!(matches!(stale.reset_and_deposit_on(&ctx).balance(3).await, Err(Error::StaleRecord { .. })));
+    assert_eq!(
+        reset.version, 2,
+        "the lock's increment wins over the action's set"
+    );
+    assert!(matches!(
+        stale.reset_and_deposit_on(&ctx).balance(3).await,
+        Err(Error::StaleRecord { .. })
+    ));
 
     // In bulk.
-    let account = BankAccount::open(&ctx).holder("Di").balance(1).await.unwrap();
-    let rows = vec![(account.clone(), FieldMap::from([("balance".to_string(), Value::from(2))]))];
-    let result = ash_core::bulk_update::<BankAccount, D, _, _>(&ctx, "reset_in_bulk", rows.clone(), BulkUpdateOptions::default()).await.unwrap();
+    let account = BankAccount::open(&ctx)
+        .holder("Di")
+        .balance(1)
+        .await
+        .unwrap();
+    let rows = vec![(
+        account.clone(),
+        FieldMap::from([("balance".to_string(), Value::from(2))]),
+    )];
+    let result = ash_core::bulk_update::<BankAccount, D, _, _>(
+        &ctx,
+        "reset_in_bulk",
+        rows.clone(),
+        BulkUpdateOptions::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(result.count, 1);
     assert_eq!(BankAccount::get(&ctx, account.id).await.unwrap().version, 2);
-    let result = ash_core::bulk_update::<BankAccount, D, _, _>(&ctx, "reset_in_bulk", rows, BulkUpdateOptions::default()).await.unwrap();
+    let result = ash_core::bulk_update::<BankAccount, D, _, _>(
+        &ctx,
+        "reset_in_bulk",
+        rows,
+        BulkUpdateOptions::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(result.count, 0, "the copy read at version 1 is stale");
 }
 
@@ -196,13 +265,22 @@ async fn null_and_many_versions<D: TransactionSupport + Clone + 'static>(ctx: Co
     let stale = draft.clone();
     let edited = draft.edit_on(&ctx).body("b").await.unwrap();
     assert_eq!(edited.version, Some(1));
-    assert!(matches!(stale.edit_on(&ctx).body("c").await, Err(Error::StaleRecord { .. })));
+    assert!(matches!(
+        stale.edit_on(&ctx).body("c").await,
+        Err(Error::StaleRecord { .. })
+    ));
 
     // Every lock is checked, and every lock moves on.
     let stale = edited.clone();
     let revised = edited.revise_on(&ctx).body("d").await.unwrap();
     assert_eq!((revised.version, revised.revision), (Some(1), 2));
-    assert!(matches!(stale.edit_both_on(&ctx).body("e").await, Err(Error::StaleRecord { .. })), "the second lock moved on");
+    assert!(
+        matches!(
+            stale.edit_both_on(&ctx).body("e").await,
+            Err(Error::StaleRecord { .. })
+        ),
+        "the second lock moved on"
+    );
     let both = revised.edit_both_on(&ctx).body("f").await.unwrap();
     assert_eq!((both.version, both.revision), (Some(2), 3));
 }
@@ -217,7 +295,10 @@ async fn optimistic_locks_in_memory() {
 #[tokio::test]
 async fn optimistic_locks_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install(&[&BankAccount::DEF, &Draft::DEF]).await.unwrap();
+    sqlite
+        .install(&[&BankAccount::DEF, &Draft::DEF])
+        .await
+        .unwrap();
     scenario(Context::new(sqlite.clone())).await;
     the_increment_is_set_last(Context::new(sqlite.clone())).await;
     null_and_many_versions(Context::new(sqlite)).await;

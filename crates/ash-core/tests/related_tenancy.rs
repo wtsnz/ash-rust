@@ -80,9 +80,21 @@ async fn reads_reach_only_the_tenant<D: DataLayer + Clone>(data: D) {
     let helios = ctx.with_tenant("helios");
     let red_dust = ctx.with_tenant("red_dust");
     let leo = Port::create(&ctx).code("LEO").await.unwrap();
-    Booking::create(&helios).port_id(leo.id).tonnes(10).await.unwrap();
-    Booking::create(&red_dust).port_id(leo.id).tonnes(30).await.unwrap();
-    Booking::create(&red_dust).port_id(leo.id).tonnes(5).await.unwrap();
+    Booking::create(&helios)
+        .port_id(leo.id)
+        .tonnes(10)
+        .await
+        .unwrap();
+    Booking::create(&red_dust)
+        .port_id(leo.id)
+        .tonnes(30)
+        .await
+        .unwrap();
+    Booking::create(&red_dust)
+        .port_id(leo.id)
+        .tonnes(5)
+        .await
+        .unwrap();
 
     let port = |ctx: Context<D>| async move {
         Port::query(&ctx)
@@ -93,9 +105,15 @@ async fn reads_reach_only_the_tenant<D: DataLayer + Clone>(data: D) {
             .unwrap()
     };
     let seen = port(helios.clone()).await;
-    assert_eq!((seen.booking_count, seen.booked_tonnes), (Some(1), Some(10)));
+    assert_eq!(
+        (seen.booking_count, seen.booked_tonnes),
+        (Some(1), Some(10))
+    );
     let seen = port(red_dust.clone()).await;
-    assert_eq!((seen.booking_count, seen.booked_tonnes), (Some(2), Some(35)));
+    assert_eq!(
+        (seen.booking_count, seen.booked_tonnes),
+        (Some(2), Some(35))
+    );
 
     // Filtering through the relationship sees the tenant's bookings only.
     let heavy = |ctx: Context<D>| async move {

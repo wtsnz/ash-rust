@@ -17,31 +17,31 @@ use uuid::Uuid;
 
 #[authentication]
 ash_core::resource! {
-    Account {
-        table "accounts";
+Account {
+    table "accounts";
 
-    attributes {
-        id: Uuid [pk];
-        email: String;
+attributes {
+    id: Uuid [pk];
+    email: String;
+}
+
+authentication {
+    strategy password {
+        identity_field: email;
+        hashed_password_field: hashed_password;
+        min_password_length: 8;
+        require_confirmation: true;
     }
 
-    authentication {
-        strategy password {
-            identity_field: email;
-            hashed_password_field: hashed_password;
-            min_password_length: 8;
-            require_confirmation: true;
-        }
-
-        strategy tokens {
-            token_lifetime_secs: 7200;
-        }
+    strategy tokens {
+        token_lifetime_secs: 7200;
     }
+}
 
-    actions {
-        read read { primary; }
-    }
-    }}
+actions {
+    read read { primary; }
+}
+}}
 
 #[derive(Clone)]
 struct AppState {
@@ -99,7 +99,9 @@ async fn main() -> Result<()> {
     println!("  • GET  /auth/me                    - Inspect authenticated identity claims");
     println!("  • GET  /api/profile                - Protected application route");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 
     Ok(())

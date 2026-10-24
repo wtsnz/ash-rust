@@ -29,8 +29,14 @@ resource! {
 
 /// The titles of this run's posts (Postgres keeps earlier runs') matching `filter`.
 async fn titles<D: DataLayer>(ctx: &Context<D>, run: Uuid, filter: Filter) -> Vec<String> {
-    let mut titles: Vec<String> =
-        Post::query(ctx).filter(Filter::eq("run", run) & filter).all().await.unwrap().into_iter().map(|post| post.title).collect();
+    let mut titles: Vec<String> = Post::query(ctx)
+        .filter(Filter::eq("run", run) & filter)
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|post| post.title)
+        .collect();
     titles.sort();
     titles
 }
@@ -39,19 +45,51 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     let ctx = Context::new(data);
     let run = Uuid::new_v4();
     let tags = |tags: &[&str]| tags.iter().map(|tag| tag.to_string()).collect::<Vec<_>>();
-    Post::create(&ctx).title("a").run(run).tags(tags(&["urgent", "billing"])).scores(vec![1, 5]).await.unwrap();
-    Post::create(&ctx).title("b").run(run).tags(tags(&["billing"])).scores(vec![5]).await.unwrap();
+    Post::create(&ctx)
+        .title("a")
+        .run(run)
+        .tags(tags(&["urgent", "billing"]))
+        .scores(vec![1, 5])
+        .await
+        .unwrap();
+    Post::create(&ctx)
+        .title("b")
+        .run(run)
+        .tags(tags(&["billing"]))
+        .scores(vec![5])
+        .await
+        .unwrap();
     Post::create(&ctx).title("c").run(run).await.unwrap();
 
-    let read = Post::query(&ctx).filter(Filter::eq("run", run) & Filter::eq("title", "a")).one().await.unwrap();
+    let read = Post::query(&ctx)
+        .filter(Filter::eq("run", run) & Filter::eq("title", "a"))
+        .one()
+        .await
+        .unwrap();
     assert_eq!(read.tags, tags(&["urgent", "billing"]));
     assert_eq!(read.scores, vec![1, 5]);
 
-    assert_eq!(titles(&ctx, run, Filter::has("tags", "urgent")).await, ["a"]);
-    assert_eq!(titles(&ctx, run, Filter::has("tags", "billing")).await, ["a", "b"]);
-    assert_eq!(titles(&ctx, run, Filter::has("scores", 5i64)).await, ["a", "b"]);
-    assert!(titles(&ctx, run, Filter::has("scores", 2i64)).await.is_empty());
-    assert_eq!(titles(&ctx, run, !Filter::has("tags", "billing")).await, ["c"]);
+    assert_eq!(
+        titles(&ctx, run, Filter::has("tags", "urgent")).await,
+        ["a"]
+    );
+    assert_eq!(
+        titles(&ctx, run, Filter::has("tags", "billing")).await,
+        ["a", "b"]
+    );
+    assert_eq!(
+        titles(&ctx, run, Filter::has("scores", 5i64)).await,
+        ["a", "b"]
+    );
+    assert!(
+        titles(&ctx, run, Filter::has("scores", 2i64))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        titles(&ctx, run, !Filter::has("tags", "billing")).await,
+        ["c"]
+    );
 
     // A client's filter, with the value cast to the list's item type.
     let filter = input::filter_input(&Post::DEF, &json!({ "scores": { "has": 1 } })).unwrap();
@@ -74,7 +112,8 @@ async fn list_filters_in_sqlite() {
 
 #[tokio::test]
 async fn list_filters_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");

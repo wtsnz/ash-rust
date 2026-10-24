@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::representative::fields as rep;
 use crate::ticket::fields as t;
-use crate::ticket::{actor_customer, actor_representative, Status};
+use crate::ticket::{Status, actor_customer, actor_representative};
 use crate::{Representative, Ticket, open_sqlite};
 
 #[derive(Parser)]
@@ -192,7 +192,9 @@ async fn run_ticket(ctx: &Context<Sqlite>, cmd: TicketCommand) -> ash_core::Resu
             print_ticket_verbose(&ticket);
         }
         TicketCommand::Assign { id, representative } => {
-            let ticket = Ticket::assign(ctx, id).representative_id(representative).await?;
+            let ticket = Ticket::assign(ctx, id)
+                .representative_id(representative)
+                .await?;
             print_ticket(&ticket);
         }
         TicketCommand::Close { id } => {

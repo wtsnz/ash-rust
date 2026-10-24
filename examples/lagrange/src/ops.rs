@@ -3,8 +3,7 @@
 //! all apply.
 
 use ash_core::{
-    Context, DataLayer, Date, Error, Filter, ResourceExt, Result, TransactionSupport,
-    UtcDateTime,
+    Context, DataLayer, Date, Error, Filter, ResourceExt, Result, TransactionSupport, UtcDateTime,
 };
 use uuid::Uuid;
 
@@ -145,13 +144,19 @@ where
             .one()
             .await?;
         if voyage.current_state() != "planned" {
-            return Err(refused("voyage", "cargo is only loaded while a voyage is planned"));
+            return Err(refused(
+                "voyage",
+                "cargo is only loaded while a voyage is planned",
+            ));
         }
         let ship = Ship::get(&tx, voyage.ship_id).await?;
         if voyage.container_count.unwrap_or(0) >= ship.slot_capacity {
             return Err(refused(
                 "voyage",
-                format!("{} has no free slots ({} aboard)", ship.name, ship.slot_capacity),
+                format!(
+                    "{} has no free slots ({} aboard)",
+                    ship.name, ship.slot_capacity
+                ),
             ));
         }
         let container = Container::get(&tx, container_id).await?;
@@ -207,7 +212,10 @@ where
 }
 
 /// The contracts whose containers ride on a voyage.
-async fn contracts_aboard<D: DataLayer>(ctx: &Context<D>, voyage_id: Uuid) -> Result<Vec<Contract>> {
+async fn contracts_aboard<D: DataLayer>(
+    ctx: &Context<D>,
+    voyage_id: Uuid,
+) -> Result<Vec<Contract>> {
     let stowed = Stowage::query(ctx)
         .filter(Stowage::voyage_id.eq(voyage_id))
         .load_rel(Stowage::container)
@@ -231,7 +239,11 @@ async fn contracts_aboard<D: DataLayer>(ctx: &Context<D>, voyage_id: Uuid) -> Re
 
 /// The captain launches: the voyage leaves, the ship is in transit, and its cargo is
 /// dispatched. Launching needs a berth held at the destination.
-pub async fn launch<D>(ctx: &Context<D>, voyage_id: Uuid, departed_at: UtcDateTime) -> Result<Voyage>
+pub async fn launch<D>(
+    ctx: &Context<D>,
+    voyage_id: Uuid,
+    departed_at: UtcDateTime,
+) -> Result<Voyage>
 where
     D: DataLayer + TransactionSupport + Clone + 'static,
 {

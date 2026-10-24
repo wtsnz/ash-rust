@@ -45,9 +45,9 @@ pub fn metrics_router(metrics: Option<crate::sim::TickMetrics>, fleet: usize) ->
             let metrics = metrics.clone();
             async move {
                 let simulating = metrics.is_some();
-                let mut body = metrics.map(|m| m.to_json()).unwrap_or_else(|| {
-                    serde_json::json!({ "ticks": 0, "errors": 0, "recent_tick_ms": [] })
-                });
+                let mut body = metrics.map(|m| m.to_json()).unwrap_or_else(
+                    || serde_json::json!({ "ticks": 0, "errors": 0, "recent_tick_ms": [] }),
+                );
                 body["fleet"] = fleet.into();
                 body["simulating"] = simulating.into();
                 axum::Json(body)
@@ -87,6 +87,7 @@ pub async fn postgres(url: &str) -> ash_core::Result<ash_postgres::Postgres> {
         .iter()
         .map(|resource| format!("\"{}\"", resource.table))
         .collect();
-    db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", "))).await?;
+    db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", ")))
+        .await?;
     Ok(db)
 }

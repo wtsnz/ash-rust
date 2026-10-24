@@ -1,7 +1,5 @@
 use helpdesk::representative::fields as r;
-use helpdesk::{
-    Helpdesk, Representative, actor_customer, actor_representative,
-};
+use helpdesk::{Helpdesk, Representative, actor_customer, actor_representative};
 use uuid::Uuid;
 
 mod order {
@@ -210,7 +208,13 @@ async fn sqlite_aggregates_loading_and_filtering() {
 
     // Aggregates count only the tickets the reader may read, as Ash authorizes them:
     // none, for a reader who isn't signed in.
-    let anonymous = desk.representatives().aggregate(r::ticket_count).sort(r::name).all().await.unwrap();
+    let anonymous = desk
+        .representatives()
+        .aggregate(r::ticket_count)
+        .sort(r::name)
+        .all()
+        .await
+        .unwrap();
     assert!(anonymous.iter().all(|rep| rep.ticket_count == Some(0)));
 
     // Query across SQLite using domain accessors, as the customer who opened them all.
@@ -292,10 +296,7 @@ async fn sum_and_filtered_aggregates_on_orders() {
     let mem = ash_memory::Memory::new();
     let ctx = ash_core::Context::new(mem);
 
-    let order = Order::create(&ctx)
-        .customer_name("Will")
-        .await
-        .unwrap();
+    let order = Order::create(&ctx).customer_name("Will").await.unwrap();
 
     // Add line items
     LineItem::create(&ctx)
@@ -335,7 +336,7 @@ async fn sum_and_filtered_aggregates_on_orders() {
 
     assert_eq!(loaded.item_count, Some(3));
     assert_eq!(loaded.total_amount, Some(350)); // 120 + 80 + 150
-    assert_eq!(loaded.paid_amount, Some(200));  // 120 + 80
+    assert_eq!(loaded.paid_amount, Some(200)); // 120 + 80
     assert_eq!(loaded.has_items, Some(true));
     assert_eq!(loaded.pending_item_sku.as_deref(), Some("MONITOR-ARM"));
 }

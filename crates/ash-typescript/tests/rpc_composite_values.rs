@@ -63,7 +63,9 @@ resource! {
 }
 
 fn rpc() -> Rpc<Memory> {
-    Rpc::new().action::<Parcel>("list_parcels", "read").action::<Parcel>("create_parcel", "create")
+    Rpc::new()
+        .action::<Parcel>("list_parcels", "read")
+        .action::<Parcel>("create_parcel", "create")
 }
 
 async fn run(ctx: &Context<Memory>, request: Json) -> Json {
@@ -126,29 +128,79 @@ async fn values_come_back_with_only_what_is_selected() {
     );
 
     // A member not selected is null.
-    let text_only = run(&ctx, json!({ "action": "list_parcels", "fields": ["name", { "content": ["text"] }] })).await;
-    let a = text_only["data"].as_array().unwrap().iter().find(|parcel| parcel["name"] == "a").unwrap().clone();
+    let text_only = run(
+        &ctx,
+        json!({ "action": "list_parcels", "fields": ["name", { "content": ["text"] }] }),
+    )
+    .await;
+    let a = text_only["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parcel| parcel["name"] == "a")
+        .unwrap()
+        .clone();
     assert_eq!(a["content"], Json::Null);
 }
 
 #[tokio::test]
 async fn values_need_what_they_hold_selected() {
     let ctx = seeded().await;
-    let error = |response: Json| (response["errors"][0]["type"].clone(), response["errors"][0]["vars"].clone());
+    let error = |response: Json| {
+        (
+            response["errors"][0]["type"].clone(),
+            response["errors"][0]["vars"].clone(),
+        )
+    };
     for (fields, expected) in [
-        (json!(["address"]), json!({ "fieldType": "Embedded_resource", "field": "address" })),
-        (json!(["content"]), json!({ "fieldType": "Union_attribute", "field": "content" })),
-        (json!(["size"]), json!({ "fieldType": "Field_constrained_type", "field": "size" })),
-        (json!([{ "content": ["sized"] }]), json!({ "fieldType": "Complex_type", "field": "content.sized" })),
-        (json!([{ "address": [] }]), json!({ "fieldType": "Embedded_resource", "field": "address" })),
+        (
+            json!(["address"]),
+            json!({ "fieldType": "Embedded_resource", "field": "address" }),
+        ),
+        (
+            json!(["content"]),
+            json!({ "fieldType": "Union_attribute", "field": "content" }),
+        ),
+        (
+            json!(["size"]),
+            json!({ "fieldType": "Field_constrained_type", "field": "size" }),
+        ),
+        (
+            json!([{ "content": ["sized"] }]),
+            json!({ "fieldType": "Complex_type", "field": "content.sized" }),
+        ),
+        (
+            json!([{ "address": [] }]),
+            json!({ "fieldType": "Embedded_resource", "field": "address" }),
+        ),
     ] {
         let response = run(&ctx, json!({ "action": "list_parcels", "fields": fields })).await;
-        assert_eq!(error(response), (json!("requires_field_selection"), expected), "{fields}");
+        assert_eq!(
+            error(response),
+            (json!("requires_field_selection"), expected),
+            "{fields}"
+        );
     }
-    let unknown = run(&ctx, json!({ "action": "list_parcels", "fields": [{ "address": ["nope"] }] })).await;
-    assert_eq!(unknown["errors"][0]["type"], json!("unknown_field"), "{unknown}");
-    let not_nested = run(&ctx, json!({ "action": "list_parcels", "fields": [{ "size": [{ "width": ["x"] }] }] })).await;
-    assert_eq!(not_nested["errors"][0]["type"], json!("field_does_not_support_nesting"), "{not_nested}");
+    let unknown = run(
+        &ctx,
+        json!({ "action": "list_parcels", "fields": [{ "address": ["nope"] }] }),
+    )
+    .await;
+    assert_eq!(
+        unknown["errors"][0]["type"],
+        json!("unknown_field"),
+        "{unknown}"
+    );
+    let not_nested = run(
+        &ctx,
+        json!({ "action": "list_parcels", "fields": [{ "size": [{ "width": ["x"] }] }] }),
+    )
+    .await;
+    assert_eq!(
+        not_nested["errors"][0]["type"],
+        json!("field_does_not_support_nesting"),
+        "{not_nested}"
+    );
 }
 
 #[tokio::test]
@@ -156,7 +208,24 @@ async fn typed_values_round_trip() {
     let ctx = seeded().await;
     let parcels = Parcel::query(&ctx).all().await.unwrap();
     let a = parcels.iter().find(|parcel| parcel.name == "a").unwrap();
-    assert_eq!(a.size, Some(Size { width: 2, height: 3, label: None }));
-    assert_eq!(a.content, Some(Content::Sized(Size { width: 4, height: 5, label: Some("box".into()) })));
-    assert_eq!(a.address.as_ref().map(|address| address.zip_code.as_str()), Some("94105"));
+    assert_eq!(
+        a.size,
+        Some(Size {
+            width: 2,
+            height: 3,
+            label: None
+        })
+    );
+    assert_eq!(
+        a.content,
+        Some(Content::Sized(Size {
+            width: 4,
+            height: 5,
+            label: Some("box".into())
+        }))
+    );
+    assert_eq!(
+        a.address.as_ref().map(|address| address.zip_code.as_str()),
+        Some("94105")
+    );
 }

@@ -1,7 +1,7 @@
-use std::time::{Duration, Instant};
 use ash_memory::Memory;
 use helpdesk::ticket::fields as t;
 use helpdesk::{Helpdesk, Status, Ticket, actor_customer};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 async fn run_bench<F, Fut>(name: &str, warmup_dur: Duration, bench_dur: Duration, mut op: F)
@@ -40,9 +40,18 @@ where
     println!("Benchmark: {name}");
     println!("  Iterations:   {:>10}", latencies.len());
     println!("  Throughput:   {:>10.2} ips", ips);
-    println!("  Average:      {:>10.2} µs", avg.as_nanos() as f64 / 1000.0);
-    println!("  Median:       {:>10.2} µs", median.as_nanos() as f64 / 1000.0);
-    println!("  P99:          {:>10.2} µs", p99.as_nanos() as f64 / 1000.0);
+    println!(
+        "  Average:      {:>10.2} µs",
+        avg.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "  Median:       {:>10.2} µs",
+        median.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "  P99:          {:>10.2} µs",
+        p99.as_nanos() as f64 / 1000.0
+    );
     println!("--------------------------------------------------\n");
 }
 
@@ -84,7 +93,10 @@ async fn main() {
         let desk = Helpdesk::new(Memory::new());
         let customer = desk.with_actor(actor_customer(Uuid::new_v4()));
         for i in 1..=100 {
-            customer.open_ticket(&format!("Ticket number {i}")).await.unwrap();
+            customer
+                .open_ticket(&format!("Ticket number {i}"))
+                .await
+                .unwrap();
         }
 
         run_bench(

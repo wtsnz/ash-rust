@@ -61,7 +61,9 @@ resource! {
 }
 
 async fn run(ctx: &Context<Memory>, query: &str) -> Value {
-    let schema = AshGraphQL::from_resources(&[&Parcel::DEF]).finish::<Memory>().unwrap();
+    let schema = AshGraphQL::from_resources(&[&Parcel::DEF])
+        .finish::<Memory>()
+        .unwrap();
     let response = schema.execute(Request::new(query).data(ctx.clone())).await;
     assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
     response.data.into_json().unwrap()
@@ -106,12 +108,31 @@ async fn composite_values_have_their_own_types() {
             "errors": [],
         })
     );
-    run(&ctx, r#"mutation { createParcel(input: { content: { text: "hi" } }) { errors { message } } }"#).await;
-    let listed = run(&ctx, "{ listParcels { content { ... on ContentText { value } } } }").await;
-    let contents: Vec<&Value> = listed["listParcels"].as_array().unwrap().iter().map(|parcel| &parcel["content"]).collect();
-    assert!(contents.contains(&&json!({ "value": "hi" })), "{contents:?}");
+    run(
+        &ctx,
+        r#"mutation { createParcel(input: { content: { text: "hi" } }) { errors { message } } }"#,
+    )
+    .await;
+    let listed = run(
+        &ctx,
+        "{ listParcels { content { ... on ContentText { value } } } }",
+    )
+    .await;
+    let contents: Vec<&Value> = listed["listParcels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|parcel| &parcel["content"])
+        .collect();
+    assert!(
+        contents.contains(&&json!({ "value": "hi" })),
+        "{contents:?}"
+    );
 
-    let sdl = AshGraphQL::from_resources(&[&Parcel::DEF]).finish::<Memory>().unwrap().sdl();
+    let sdl = AshGraphQL::from_resources(&[&Parcel::DEF])
+        .finish::<Memory>()
+        .unwrap()
+        .sdl();
     for expected in [
         "type Address {",
         "input ParcelAddressInput {",

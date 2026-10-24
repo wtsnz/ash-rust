@@ -77,7 +77,9 @@ pub(crate) async fn destroy_existing_returning<R: Resource, D: DataLayer>(
     action: &str,
     existing: R,
 ) -> Result<R> {
-    Changeset::for_destroy(ctx, action, existing)?.commit(ctx).await
+    Changeset::for_destroy(ctx, action, existing)?
+        .commit(ctx)
+        .await
 }
 
 pub async fn destroy_dynamic<D: DataLayer>(
@@ -104,7 +106,16 @@ pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
     existing_fields: &FieldMap,
     cascade: &super::managed::Cascade,
 ) -> Result<FieldMap> {
-    destroy_dynamic_input(ctx, resource, action, id, existing_fields, FieldMap::new(), cascade).await
+    destroy_dynamic_input(
+        ctx,
+        resource,
+        action,
+        id,
+        existing_fields,
+        FieldMap::new(),
+        cascade,
+    )
+    .await
 }
 
 /// [`destroy_dynamic_with`] given `input`: the action's arguments, and attributes a soft
@@ -166,28 +177,37 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
         None => super::atomic::finding_read(resource, action)?,
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
-    let can = if action.soft { ctx.data.can_update_atomically(resource) } else { ctx.data.can_destroy_atomically(resource) };
+    let can = if action.soft {
+        ctx.data.can_update_atomically(resource)
+    } else {
+        ctx.data.can_destroy_atomically(resource)
+    };
     let atomic = !action.has_optimistic_lock() && can;
     if atomic {
-        let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
-            let plan = super::atomic::plan_update(
-                resource,
-                action,
-                super::atomic::PlanInput {
-                    actor: ctx.actor.as_ref(),
-                    tenant: ctx.tenant(),
-                    sets: accepted,
-                    arguments: &arguments,
-                    expected_versions: None,
-                    collect_hooks: true,
-                    can_raise: ctx.data.can_raise_atomically(resource),
-                },
-            )?;
-            Ok((plan, arguments))
-        });
+        let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(
+            |(accepted, arguments)| {
+                let plan = super::atomic::plan_update(
+                    resource,
+                    action,
+                    super::atomic::PlanInput {
+                        actor: ctx.actor.as_ref(),
+                        tenant: ctx.tenant(),
+                        sets: accepted,
+                        arguments: &arguments,
+                        expected_versions: None,
+                        collect_hooks: true,
+                        can_raise: ctx.data.can_raise_atomically(resource),
+                    },
+                )?;
+                Ok((plan, arguments))
+            },
+        );
         match found_first(ctx, resource, id.clone(), &scope, planned).await? {
             (Ok(plan), arguments) => {
-                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan, scope).await;
+                return DynamicChangeset::commit_atomic_by_id(
+                    ctx, resource, action, id, arguments, plan, scope,
+                )
+                .await;
             }
             // Only a soft destroy must be atomic, as in Ash: a hard one reads first.
             (Err(reason), _) if action.soft && action.require_atomic => {
@@ -247,13 +267,22 @@ async fn read_visible<D: DataLayer>(
     let by_id = Some(Filter::eq(pk, id.clone()));
     let (filter, tenant) = match scope {
         Some(scope) => {
-            let (filter, tenant) = crate::pipeline::apply_tenant_scope(resource, by_id, ctx.tenant.clone())?;
+            let (filter, tenant) =
+                crate::pipeline::apply_tenant_scope(resource, by_id, ctx.tenant.clone())?;
             (crate::pipeline::and_filters(filter, Some(scope)), tenant)
         }
         None => crate::pipeline::visible_scope(resource, by_id, ctx.tenant.clone())?,
     };
     ctx.data
-        .run_query(resource, &CompiledQuery { filter, tenant, actor: ctx.actor.clone(), ..CompiledQuery::default() })
+        .run_query(
+            resource,
+            &CompiledQuery {
+                filter,
+                tenant,
+                actor: ctx.actor.clone(),
+                ..CompiledQuery::default()
+            },
+        )
         .await?
         .into_iter()
         .next()
@@ -310,25 +339,30 @@ pub async fn update_dynamic_via<D: DataLayer>(
     };
     let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
     if !action.has_optimistic_lock() && ctx.data.can_update_atomically(resource) {
-        let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(|(accepted, arguments)| {
-            let plan = super::atomic::plan_update(
-                resource,
-                action,
-                super::atomic::PlanInput {
-                    actor: ctx.actor.as_ref(),
-                    tenant: ctx.tenant(),
-                    sets: accepted,
-                    arguments: &arguments,
-                    expected_versions: None,
-                    collect_hooks: true,
-                    can_raise: ctx.data.can_raise_atomically(resource),
-                },
-            )?;
-            Ok((plan, arguments))
-        });
+        let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(
+            |(accepted, arguments)| {
+                let plan = super::atomic::plan_update(
+                    resource,
+                    action,
+                    super::atomic::PlanInput {
+                        actor: ctx.actor.as_ref(),
+                        tenant: ctx.tenant(),
+                        sets: accepted,
+                        arguments: &arguments,
+                        expected_versions: None,
+                        collect_hooks: true,
+                        can_raise: ctx.data.can_raise_atomically(resource),
+                    },
+                )?;
+                Ok((plan, arguments))
+            },
+        );
         match found_first(ctx, resource, id.clone(), &scope, planned).await? {
             (Ok(plan), arguments) => {
-                return DynamicChangeset::commit_atomic_by_id(ctx, resource, action, id, arguments, plan, scope).await;
+                return DynamicChangeset::commit_atomic_by_id(
+                    ctx, resource, action, id, arguments, plan, scope,
+                )
+                .await;
             }
             (Err(reason), _) if action.require_atomic => {
                 return Err(Error::MustBeAtomic {
@@ -341,7 +375,9 @@ pub async fn update_dynamic_via<D: DataLayer>(
         }
     }
     let existing = read_visible(ctx, resource, id.clone(), scope).await?;
-    update_existing_dynamic(ctx, resource, action, existing, input).await.map_err(changed_is_gone)
+    update_existing_dynamic(ctx, resource, action, existing, input)
+        .await
+        .map_err(changed_is_gone)
 }
 
 /// [`update_dynamic`] of a record already read, as `ctx` sees it: no second read.
@@ -382,6 +418,9 @@ where
 pub async fn insert<R: Resource, D: DataLayer>(ctx: &Context<D>, record: &R) -> Result<R> {
     let fields = record.to_fields();
     let id = crate::pipeline::new_pk(&R::DEF, &fields)?;
-    let stored = ctx.data.create(&R::DEF, ctx.tenant.as_deref(), id, fields).await?;
+    let stored = ctx
+        .data
+        .create(&R::DEF, ctx.tenant.as_deref(), id, fields)
+        .await?;
     R::from_fields(&stored)
 }

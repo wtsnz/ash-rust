@@ -286,8 +286,12 @@ impl Check {
     /// The record's fields this check reads.
     pub fn fields(&self, out: &mut Vec<&'static str>) {
         match self {
-            Check::RelatesToActor { field } | Check::IsNil { field } | Check::Eq { field, .. } => out.push(field),
-            Check::And(checks) | Check::Or(checks) => checks.iter().for_each(|check| check.fields(out)),
+            Check::RelatesToActor { field } | Check::IsNil { field } | Check::Eq { field, .. } => {
+                out.push(field)
+            }
+            Check::And(checks) | Check::Or(checks) => {
+                checks.iter().for_each(|check| check.fields(out))
+            }
             Check::Always | Check::ActorPresent | Check::ActorAttributeEquals { .. } => {}
         }
     }
@@ -324,7 +328,11 @@ pub fn redact_fields(
 
 /// The fields of `record` that `actor` may not see under `resource`'s field policies,
 /// each policy checking the record as given.
-pub fn hidden_fields(resource: &ResourceDef, actor: Option<&Actor>, record: &FieldMap) -> Result<Vec<&'static str>> {
+pub fn hidden_fields(
+    resource: &ResourceDef,
+    actor: Option<&Actor>,
+    record: &FieldMap,
+) -> Result<Vec<&'static str>> {
     let mut hidden = Vec::new();
     for fp in resource.field_policies {
         if !eval_policy_effects(fp.checks, actor, Some(record))? {
@@ -336,8 +344,18 @@ pub fn hidden_fields(resource: &ResourceDef, actor: Option<&Actor>, record: &Fie
 
 /// Where `actor` may read every one of `fields` of `resource` under its field policies, as
 /// a filter on the record: `None` where nothing hides any of them.
-pub(crate) fn readable_condition(resource: &ResourceDef, fields: &[&str], actor: Option<&Actor>) -> Result<Option<Filter>> {
-    let conditions: Vec<Filter> = fields.iter().map(|field| field_condition(resource, field, actor)).collect::<Result<Vec<_>>>()?.into_iter().flatten().collect();
+pub(crate) fn readable_condition(
+    resource: &ResourceDef,
+    fields: &[&str],
+    actor: Option<&Actor>,
+) -> Result<Option<Filter>> {
+    let conditions: Vec<Filter> = fields
+        .iter()
+        .map(|field| field_condition(resource, field, actor))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     Ok(match Filter::and(conditions) {
         Filter::True => None,
         condition => Some(condition),
@@ -347,7 +365,11 @@ pub(crate) fn readable_condition(resource: &ResourceDef, fields: &[&str], actor:
 /// Where `actor` may read `field` of `resource` under its field policies, as a filter on
 /// the record: `None` where nothing hides it (no field policy, or the primary key, which
 /// Ash never hides).
-fn field_condition(resource: &ResourceDef, field: &str, actor: Option<&Actor>) -> Result<Option<Filter>> {
+fn field_condition(
+    resource: &ResourceDef,
+    field: &str,
+    actor: Option<&Actor>,
+) -> Result<Option<Filter>> {
     if resource.primary_key().is_some_and(|pk| pk.name == field) {
         return Ok(None);
     }
@@ -370,13 +392,25 @@ fn field_condition(resource: &ResourceDef, field: &str, actor: Option<&Actor>) -
 /// Null makes a comparison unknown, which a filter excludes even negated, so a comparison
 /// on a hidden field holds only where the field may be read, and its negation too.
 /// Whether the field is nil holds wherever it's hidden.
-pub fn guard_input_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter) -> Result<Filter> {
+pub fn guard_input_filter(
+    resource: &ResourceDef,
+    actor: Option<&Actor>,
+    filter: Filter,
+) -> Result<Filter> {
     guard_filter(resource, actor, filter, true)
 }
 
-fn guard_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter, positive: bool) -> Result<Filter> {
+fn guard_filter(
+    resource: &ResourceDef,
+    actor: Option<&Actor>,
+    filter: Filter,
+    positive: bool,
+) -> Result<Filter> {
     let guard_all = |parts: Vec<Filter>| -> Result<Vec<Filter>> {
-        parts.into_iter().map(|part| guard_filter(resource, actor, part, positive)).collect()
+        parts
+            .into_iter()
+            .map(|part| guard_filter(resource, actor, part, positive))
+            .collect()
     };
     Ok(match filter {
         Filter::True | Filter::False => filter,
@@ -386,7 +420,10 @@ fn guard_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter, p
         // The related rows a client's filter reaches are those the actor may read, as Ash
         // adds the destination read's authorization filter to each relationship path in
         // a client's filter: a filter can't find records by related rows hidden from it.
-        Filter::Related { relationship, filter } => match resource.relationship(&relationship) {
+        Filter::Related {
+            relationship,
+            filter,
+        } => match resource.relationship(&relationship) {
             Some(rel) => {
                 let dest = (rel.destination)();
                 let inner = guard_filter(dest, actor, *filter, positive)?;
@@ -398,7 +435,10 @@ fn guard_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter, p
                 };
                 Filter::related(relationship, readable)
             }
-            None => Filter::Related { relationship, filter },
+            None => Filter::Related {
+                relationship,
+                filter,
+            },
         },
         leaf => {
             let mut fields = Vec::new();
@@ -409,7 +449,9 @@ fn guard_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter, p
             };
             match condition {
                 None => leaf,
-                Some(condition) if matches!(leaf, Filter::IsNil(_)) => Filter::or([!condition, leaf]),
+                Some(condition) if matches!(leaf, Filter::IsNil(_)) => {
+                    Filter::or([!condition, leaf])
+                }
                 // Negated, `not (c and leaf)` would hold where it's hidden: `not c or leaf`
                 // negates to `c and not leaf`.
                 Some(condition) if positive => Filter::and([condition, leaf]),
@@ -421,7 +463,11 @@ fn guard_filter(resource: &ResourceDef, actor: Option<&Actor>, filter: Filter, p
 
 /// A client's sort on `resource`, as `actor` may run it: a field a field policy hides
 /// sorts as null where it's hidden, as Ash sorts by a client's reference to it.
-pub fn guard_input_sort(resource: &ResourceDef, actor: Option<&Actor>, sorts: Vec<Sort>) -> Result<Vec<Sort>> {
+pub fn guard_input_sort(
+    resource: &ResourceDef,
+    actor: Option<&Actor>,
+    sorts: Vec<Sort>,
+) -> Result<Vec<Sort>> {
     sorts
         .into_iter()
         .map(|sort| {
@@ -433,11 +479,19 @@ pub fn guard_input_sort(resource: &ResourceDef, actor: Option<&Actor>, sorts: Ve
 
 /// The records `actor` may run the write `action` on, as a filter: what [`authorize_write`]
 /// decides record by record, as Ash compiles a write's policies into an atomic update.
-pub fn write_filter(resource: &ResourceDef, action: &ActionDef, actor: Option<&Actor>) -> Result<Filter> {
+pub fn write_filter(
+    resource: &ResourceDef,
+    action: &ActionDef,
+    actor: Option<&Actor>,
+) -> Result<Filter> {
     if resource.policies.is_empty() {
         return Ok(Filter::True);
     }
-    let applicable: Vec<_> = resource.policies.iter().filter(|policy| policy.applies(action)).collect();
+    let applicable: Vec<_> = resource
+        .policies
+        .iter()
+        .filter(|policy| policy.applies(action))
+        .collect();
     if applicable.is_empty() {
         return Ok(Filter::False);
     }

@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::marker::PhantomData;
 
-
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, Sort};
 use crate::error::{Error, Result};
@@ -12,7 +11,9 @@ use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
 
 use super::lifecycle::get;
-use super::pagination::{KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort, keyset_values};
+use super::pagination::{
+    KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort, keyset_values,
+};
 use super::read::scope_read;
 use super::relations::attach_relationships;
 
@@ -308,7 +309,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 None => Ok(None),
             }
         };
-        let (total_count, mut results) = futures_util::future::try_join(counting, self.load()).await?;
+        let (total_count, mut results) =
+            futures_util::future::try_join(counting, self.load()).await?;
         let has_more = results.len() > limit;
         if has_more {
             results.truncate(limit);
@@ -341,7 +343,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         for sort in &self.sort {
             if R::DEF.aggregate(&sort.field).is_some() && !self.aggregates.contains(&sort.field) {
                 self.aggregates.push(sort.field.clone());
-            } else if R::DEF.calculation(&sort.field).is_some() && !self.calculations.contains(&sort.field) {
+            } else if R::DEF.calculation(&sort.field).is_some()
+                && !self.calculations.contains(&sort.field)
+            {
                 self.calculations.push(sort.field.clone());
             }
         }
@@ -365,7 +369,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             }
 
             let values = keyset_values(&R::DEF, &cursor, &self.sort);
-            if let Some(keyset_filter) = build_keyset_filter(&R::DEF, &self.sort, &values, !is_before) {
+            if let Some(keyset_filter) =
+                build_keyset_filter(&R::DEF, &self.sort, &values, !is_before)
+            {
                 self = self.filter(keyset_filter);
             }
         }

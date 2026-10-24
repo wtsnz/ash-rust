@@ -1,6 +1,4 @@
-use ash_core::{
-    resource, Context, DataLayerKind, DataLayerRegistry, Resource, SchemaSupport,
-};
+use ash_core::{Context, DataLayerKind, DataLayerRegistry, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -120,10 +118,16 @@ async fn test_resource_bound_data_layer_registry() {
     // Invariant 5: Multi pipeline combining steps across both data layers seamlessly
     let multi_res = ctx
         .multi()
-        .create("create_bob", User::create(&ctx).email("bob@example.com").name("Bob"))
+        .create(
+            "create_bob",
+            User::create(&ctx).email("bob@example.com").name("Bob"),
+        )
         .create_from("create_bob_session", |ctx_arg, res| {
             let bob: &User = res.get("create_bob").unwrap();
-            Session::create(ctx_arg).token("tok_bob_999").user_id(bob.id).changeset()
+            Session::create(ctx_arg)
+                .token("tok_bob_999")
+                .user_id(bob.id)
+                .changeset()
         })
         .commit()
         .await

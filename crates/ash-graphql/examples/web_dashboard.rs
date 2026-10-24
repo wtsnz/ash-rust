@@ -9,16 +9,16 @@
 //! - Web Dashboard & Overview: http://127.0.0.1:4000/
 //! - GraphiQL Interactive IDE: http://127.0.0.1:4000/graphiql
 
-use std::collections::HashMap;
 use ash_core::{
     ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
-use std::sync::Arc;
 use axum::response::Html;
 use axum::routing::get;
+use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 static TICKET_ATTRS: &[AttributeDef] = &[
@@ -107,7 +107,8 @@ static REP_DEF: ResourceDef = ResourceDef {
 };
 
 async fn dashboard_landing() -> Html<&'static str> {
-    Html(r#"<!DOCTYPE html>
+    Html(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -230,7 +231,8 @@ query {
     </pre>
   </div>
 </body>
-</html>"#)
+</html>"#,
+    )
 }
 
 #[tokio::main]
@@ -242,7 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let id1 = Uuid::new_v4();
     let mut f1 = FieldMap::new();
     f1.insert("id".into(), Value::Uuid(id1));
-    f1.insert("title".into(), Value::String("Network printer unreachable on 3rd floor".into()));
+    f1.insert(
+        "title".into(),
+        Value::String("Network printer unreachable on 3rd floor".into()),
+    );
     f1.insert("status".into(), Value::String("OPEN".into()));
     f1.insert("priority".into(), Value::Int(2));
     mem.create(&TICKET_DEF, None, Value::from(id1), f1).await?;
@@ -250,7 +255,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let id2 = Uuid::new_v4();
     let mut f2 = FieldMap::new();
     f2.insert("id".into(), Value::Uuid(id2));
-    f2.insert("title".into(), Value::String("Postgres replication lag investigation".into()));
+    f2.insert(
+        "title".into(),
+        Value::String("Postgres replication lag investigation".into()),
+    );
     f2.insert("status".into(), Value::String("IN_PROGRESS".into()));
     f2.insert("priority".into(), Value::Int(1));
     mem.create(&TICKET_DEF, None, Value::from(id2), f2).await?;
@@ -260,7 +268,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f_rep.insert("id".into(), Value::Uuid(rep_id));
     f_rep.insert("name".into(), Value::String("Alex Mercer".into()));
     f_rep.insert("email".into(), Value::String("alex@example.com".into()));
-    mem.create(&REP_DEF, None, Value::from(rep_id), f_rep).await?;
+    mem.create(&REP_DEF, None, Value::from(rep_id), f_rep)
+        .await?;
 
     // Writes publish their changes to subscriptions through the context's notifier.
     let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));
@@ -270,8 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_dataloader()
         .finish_with_context(ctx)?;
 
-    let app = ash_graphql::axum::graphql_router(schema)
-        .route("/", get(dashboard_landing));
+    let app = ash_graphql::axum::graphql_router(schema).route("/", get(dashboard_landing));
 
     let addr = "127.0.0.1:4000";
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -2,8 +2,7 @@ use ash_core::{Context, Error, Filter, Rel, Value};
 use ash_memory::Memory;
 use helpdesk::ticket::{fields, intake_store};
 use helpdesk::{
-    Representative, Status, Ticket, TicketActions, actor_customer, actor_representative,
-    intake_get,
+    Representative, Status, Ticket, TicketActions, actor_customer, actor_representative, intake_get,
 };
 use uuid::Uuid;
 
@@ -153,10 +152,7 @@ async fn customer_cannot_assign() {
 #[tokio::test]
 async fn open_without_actor_is_forbidden() {
     let ctx = ctx();
-    let err = Ticket::open(&ctx)
-        .subject("Printer")
-        .await
-        .unwrap_err();
+    let err = Ticket::open(&ctx).subject("Printer").await.unwrap_err();
     assert!(matches!(err, Error::Forbidden));
 }
 
@@ -164,8 +160,14 @@ async fn open_without_actor_is_forbidden() {
 async fn user_filter_and_policy_filter_combine() {
     let ctx = ctx();
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    Ticket::open(&as_customer).subject("open one").await.unwrap();
-    let closed = Ticket::open(&as_customer).subject("close me").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("open one")
+        .await
+        .unwrap();
+    let closed = Ticket::open(&as_customer)
+        .subject("close me")
+        .await
+        .unwrap();
     closed.close(&as_customer).await.unwrap();
 
     // Uses operator overloading (&) for filter composition
@@ -219,10 +221,7 @@ async fn generic_action_analyzes_text() {
 #[tokio::test]
 async fn generic_action_requires_actor() {
     let ctx = ctx();
-    let err = Ticket::analyze_subject(&ctx)
-        .text("hi")
-        .await
-        .unwrap_err();
+    let err = Ticket::analyze_subject(&ctx).text("hi").await.unwrap_err();
     assert!(matches!(err, Error::Forbidden));
 }
 
@@ -302,7 +301,10 @@ async fn create_rejects_manual_action() {
 async fn calculation_is_absent_until_loaded() {
     let ctx = ctx();
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let ticket = Ticket::open(&as_customer).subject("hello world").await.unwrap();
+    let ticket = Ticket::open(&as_customer)
+        .subject("hello world")
+        .await
+        .unwrap();
     assert_eq!(ticket.subject_length, None);
 
     let listed = Ticket::query(&as_customer).load().await.unwrap();
@@ -321,7 +323,10 @@ async fn calculation_filter_runs_without_loading() {
     let ctx = ctx();
     let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
     Ticket::open(&as_customer).subject("hi").await.unwrap();
-    Ticket::open(&as_customer).subject("hello world").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("hello world")
+        .await
+        .unwrap();
 
     let long = Ticket::query(&as_customer)
         .filter(fields::subject_length.gt(5_i64))
@@ -354,7 +359,10 @@ async fn belongs_to_is_not_loaded_until_asked() {
         .one()
         .await
         .unwrap();
-    assert_eq!(loaded.representative.as_option().unwrap().unwrap().name, "Alice");
+    assert_eq!(
+        loaded.representative.as_option().unwrap().unwrap().name,
+        "Alice"
+    );
 }
 
 #[tokio::test]

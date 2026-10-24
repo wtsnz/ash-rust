@@ -7,32 +7,32 @@ use ash_memory::Memory;
 use ash_pubsub::{PubSub, PubSubNotifier, topic_matches};
 
 resource! {
-    Order {
-        table "orders";
+Order {
+    table "orders";
 
-    attributes {
-        id: Uuid [pk];
-        customer: String;
-        amount: i64;
-        status: String;
+attributes {
+    id: Uuid [pk];
+    customer: String;
+    amount: i64;
+    status: String;
+}
+
+actions {
+    create create {
+        primary;
+        accept [customer, amount];
+        change set(status, "pending");
     }
 
-    actions {
-        create create {
-            primary;
-            accept [customer, amount];
-            change set(status, "pending");
-        }
-
-        read read {
-            primary;
-        }
-
-        update complete {
-            change set(status, "completed");
-        }
+    read read {
+        primary;
     }
-    }}
+
+    update complete {
+        change set(status, "completed");
+    }
+}
+}}
 
 #[test]
 fn test_topic_pattern_matching_rules() {
@@ -102,7 +102,10 @@ async fn test_pubsub_topic_and_wildcard_subscriptions() {
 
     // sub_create does NOT receive complete
     let sub_create_check = tokio::time::timeout(Duration::from_millis(50), sub_create.recv()).await;
-    assert!(sub_create_check.is_err(), "sub_create should not receive complete event");
+    assert!(
+        sub_create_check.is_err(),
+        "sub_create should not receive complete event"
+    );
 }
 
 #[tokio::test]
@@ -140,9 +143,8 @@ async fn test_pubsub_custom_topic_formatting() {
     let pubsub = Arc::new(PubSub::new());
     // Custom topic formatter: "events.Order.create"
     let notifier = Arc::new(
-        PubSubNotifier::new(Arc::clone(&pubsub)).with_topics(|notif| {
-            vec![format!("events.{}.{}", notif.resource, notif.action)]
-        }),
+        PubSubNotifier::new(Arc::clone(&pubsub))
+            .with_topics(|notif| vec![format!("events.{}.{}", notif.resource, notif.action)]),
     );
     let ctx = Context::new(Memory::new()).with_notifier(notifier);
 
@@ -166,11 +168,16 @@ async fn test_pubsub_custom_topic_formatting() {
 #[tokio::test]
 async fn subscribers_share_one_notification() {
     let pubsub = Arc::new(PubSub::new());
-    let ctx = Context::new(Memory::new()).with_notifier(Arc::new(PubSubNotifier::new(pubsub.clone())));
+    let ctx =
+        Context::new(Memory::new()).with_notifier(Arc::new(PubSubNotifier::new(pubsub.clone())));
     let mut first = pubsub.subscribe("order:*");
     let mut second = pubsub.subscribe("order:*");
 
-    Order::create(&ctx).customer("Ada".to_string()).amount(42).await.unwrap();
+    Order::create(&ctx)
+        .customer("Ada".to_string())
+        .amount(42)
+        .await
+        .unwrap();
 
     let (a, b) = (first.recv().await.unwrap(), second.recv().await.unwrap());
     assert!(Arc::ptr_eq(&a, &b));

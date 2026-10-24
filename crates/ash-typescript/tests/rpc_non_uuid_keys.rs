@@ -70,20 +70,45 @@ async fn run(ctx: &Context<Memory>, request: Json) -> Json {
 #[tokio::test]
 async fn an_integer_key_is_given_as_a_number() {
     let ctx = Context::new(Memory::new());
-    let created = run(&ctx, json!({ "action": "create_tally", "input": { "label": "a" }, "fields": ["id", "label"] })).await;
-    assert_eq!(created, json!({ "success": true, "data": { "id": 1, "label": "a" } }));
+    let created = run(
+        &ctx,
+        json!({ "action": "create_tally", "input": { "label": "a" }, "fields": ["id", "label"] }),
+    )
+    .await;
+    assert_eq!(
+        created,
+        json!({ "success": true, "data": { "id": 1, "label": "a" } })
+    );
 
     let relabelled =
         run(&ctx, json!({ "action": "relabel_tally", "identity": 1, "input": { "label": "b" }, "fields": ["id", "label"] })).await;
-    assert_eq!(relabelled, json!({ "success": true, "data": { "id": 1, "label": "b" } }));
+    assert_eq!(
+        relabelled,
+        json!({ "success": true, "data": { "id": 1, "label": "b" } })
+    );
 
-    let missing = run(&ctx, json!({ "action": "relabel_tally", "identity": 2, "input": { "label": "c" } })).await;
+    let missing = run(
+        &ctx,
+        json!({ "action": "relabel_tally", "identity": 2, "input": { "label": "c" } }),
+    )
+    .await;
     assert_eq!(missing["errors"][0]["type"], "not_found", "{missing}");
-    let invalid = run(&ctx, json!({ "action": "relabel_tally", "identity": "one", "input": { "label": "c" } })).await;
+    let invalid = run(
+        &ctx,
+        json!({ "action": "relabel_tally", "identity": "one", "input": { "label": "c" } }),
+    )
+    .await;
     assert_eq!(invalid["success"], false, "{invalid}");
 
-    let destroyed = run(&ctx, json!({ "action": "destroy_tally", "identity": 1, "fields": ["label"] })).await;
-    assert_eq!(destroyed, json!({ "success": true, "data": { "label": "b" } }));
+    let destroyed = run(
+        &ctx,
+        json!({ "action": "destroy_tally", "identity": 1, "fields": ["label"] }),
+    )
+    .await;
+    assert_eq!(
+        destroyed,
+        json!({ "success": true, "data": { "label": "b" } })
+    );
     let listed = run(&ctx, json!({ "action": "list_tallies", "fields": ["id"] })).await;
     assert_eq!(listed["data"], json!([]));
 }
@@ -96,10 +121,17 @@ async fn a_text_key_is_given_as_itself() {
         json!({ "action": "create_country", "input": { "code": "NZ", "name": "New Zealand" }, "fields": ["code", "name"] }),
     )
     .await;
-    assert_eq!(created["data"], json!({ "code": "NZ", "name": "New Zealand" }), "{created}");
+    assert_eq!(
+        created["data"],
+        json!({ "code": "NZ", "name": "New Zealand" }),
+        "{created}"
+    );
     let renamed =
         run(&ctx, json!({ "action": "rename_country", "identity": "NZ", "input": { "name": "Aotearoa" }, "fields": ["name"] })).await;
-    assert_eq!(renamed, json!({ "success": true, "data": { "name": "Aotearoa" } }));
+    assert_eq!(
+        renamed,
+        json!({ "success": true, "data": { "name": "Aotearoa" } })
+    );
 }
 
 #[test]

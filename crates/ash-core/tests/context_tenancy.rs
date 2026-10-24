@@ -78,16 +78,38 @@ pub mod booking {
 /// Every read and write of a context-tenant resource stays in its tenant: direct reads,
 /// writes by id, aggregates and filters through a relationship, loads, and writes in a
 /// transaction.
-pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(ctx: Context<D>, acme: &str, globex: &str) {
+pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(
+    ctx: Context<D>,
+    acme: &str,
+    globex: &str,
+) {
     let acme = ctx.with_tenant(acme);
     let globex = ctx.with_tenant(globex);
     let leo = Port::create(&ctx).code("LEO").await.unwrap();
-    let ours = Booking::create(&acme).port_id(leo.id).tonnes(10).await.unwrap();
-    Booking::create(&acme).port_id(leo.id).tonnes(30).await.unwrap();
-    let theirs = Booking::create(&globex).port_id(leo.id).tonnes(5).await.unwrap();
+    let ours = Booking::create(&acme)
+        .port_id(leo.id)
+        .tonnes(10)
+        .await
+        .unwrap();
+    Booking::create(&acme)
+        .port_id(leo.id)
+        .tonnes(30)
+        .await
+        .unwrap();
+    let theirs = Booking::create(&globex)
+        .port_id(leo.id)
+        .tonnes(5)
+        .await
+        .unwrap();
 
     let tonnes = |ctx: Context<D>| async move {
-        let mut tonnes: Vec<i64> = Booking::query(&ctx).all().await.unwrap().iter().map(|b| b.tonnes).collect();
+        let mut tonnes: Vec<i64> = Booking::query(&ctx)
+            .all()
+            .await
+            .unwrap()
+            .iter()
+            .map(|b| b.tonnes)
+            .collect();
         tonnes.sort();
         tonnes
     };
@@ -95,13 +117,18 @@ pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(ctx: 
     assert_eq!(tonnes(globex.clone()).await, [5]);
 
     // Knowing another tenant's id reaches nothing.
-    assert!(matches!(Booking::get(&globex, ours.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Booking::get(&globex, ours.id).await,
+        Err(Error::NotFound)
+    ));
     let err = ash_core::update_dynamic(
         &globex,
         &Booking::DEF,
         Booking::DEF.action("weigh").unwrap(),
         ours.id,
-        [("tonnes".to_string(), ash_core::Value::Int(99))].into_iter().collect(),
+        [("tonnes".to_string(), ash_core::Value::Int(99))]
+            .into_iter()
+            .collect(),
     )
     .await
     .unwrap_err();
@@ -119,7 +146,10 @@ pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(ctx: 
         .one()
         .await
         .unwrap();
-    assert_eq!((port.booking_count, port.booked_tonnes), (Some(2), Some(40)));
+    assert_eq!(
+        (port.booking_count, port.booked_tonnes),
+        (Some(2), Some(40))
+    );
     assert_eq!(port.bookings.loaded().unwrap().len(), 2);
     let heavy = Port::query(&globex)
         .filter(Filter::eq("id", leo.id) & Filter::related("bookings", Filter::gt("tonnes", 20)))
@@ -134,7 +164,10 @@ pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(ctx: 
         .await
         .unwrap();
     assert!(Booking::get(&acme, in_tx.id).await.is_ok());
-    assert!(matches!(Booking::get(&globex, in_tx.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Booking::get(&globex, in_tx.id).await,
+        Err(Error::NotFound)
+    ));
 
     // A tenant-scoped resource needs a tenant.
     assert!(matches!(
@@ -151,11 +184,18 @@ async fn memory_keeps_tenants_apart() {
 #[tokio::test]
 async fn sqlite_refuses_context_tenancy() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install_resources(&[&Port::DEF, &Booking::DEF]).await.unwrap();
+    sqlite
+        .install_resources(&[&Port::DEF, &Booking::DEF])
+        .await
+        .unwrap();
     let ctx = Context::new(sqlite);
     let leo = Port::create(&ctx).code("LEO").await.unwrap();
     let acme = ctx.with_tenant("acme");
-    let err = Booking::create(&acme).port_id(leo.id).tonnes(10).await.unwrap_err();
+    let err = Booking::create(&acme)
+        .port_id(leo.id)
+        .tonnes(10)
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("no schemas"), "{err}");
     let err = Booking::query(&acme).all().await.unwrap_err();
     assert!(err.to_string().contains("no schemas"), "{err}");

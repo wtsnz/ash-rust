@@ -13,7 +13,10 @@ async fn test_board_template_multi_and_aggregates() {
     let workspaces = Workspaces::new(mem.clone());
     let kanban = Kanban::new(mem);
 
-    let alice = workspaces.register_user("Alice", "alice@test.com").await.unwrap();
+    let alice = workspaces
+        .register_user("Alice", "alice@test.com")
+        .await
+        .unwrap();
     let as_alice = kanban.with_actor(actor_user(alice.id));
 
     let ws = workspaces

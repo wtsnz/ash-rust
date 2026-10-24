@@ -1,6 +1,4 @@
-use ash_core::{
-    Context, Error, FieldMap, ManagedRelType, Resource, Result, Value, resource,
-};
+use ash_core::{Context, Error, FieldMap, ManagedRelType, Resource, Result, Value, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -293,9 +291,9 @@ pub mod article_tag_mod {
 }
 
 pub mod article_mod {
-    use super::*;
     use super::article_tag_mod::ArticleTag;
     use super::tag_mod::Tag;
+    use super::*;
 
     resource! {
         Article {
@@ -383,10 +381,21 @@ async fn test_managed_has_many_direct_control_on_parent_update() -> Result<()> {
 
     // 1. Initial order with 2 items: item1 and item2
     let order = Order::create(&ctx).customer("Bob").await?;
-    let item1 = LineItem::create(&ctx).order_id(order.id).item("Monitor").price(300).await?;
-    let item2 = LineItem::create(&ctx).order_id(order.id).item("Mouse").price(50).await?;
+    let item1 = LineItem::create(&ctx)
+        .order_id(order.id)
+        .item("Monitor")
+        .price(300)
+        .await?;
+    let item2 = LineItem::create(&ctx)
+        .order_id(order.id)
+        .item("Mouse")
+        .price(50)
+        .await?;
 
-    let items_before = LineItem::query(&ctx).filter(LineItem::order_id.eq(order.id)).all().await?;
+    let items_before = LineItem::query(&ctx)
+        .filter(LineItem::order_id.eq(order.id))
+        .all()
+        .await?;
     assert_eq!(items_before.len(), 2);
 
     // 2. Synchronize via DirectControl on update:
@@ -402,7 +411,10 @@ async fn test_managed_has_many_direct_control_on_parent_update() -> Result<()> {
         .manage_items(
             vec![
                 updated_item1,
-                LineItem::create(&ctx).item("Keyboard").price(100).into_fields(),
+                LineItem::create(&ctx)
+                    .item("Keyboard")
+                    .price(100)
+                    .into_fields(),
             ],
             ManagedRelType::DirectControl,
         )
@@ -410,7 +422,10 @@ async fn test_managed_has_many_direct_control_on_parent_update() -> Result<()> {
 
     assert_eq!(updated_order.customer, "Bob Updated");
 
-    let items_after = LineItem::query(&ctx).filter(LineItem::order_id.eq(updated_order.id)).all().await?;
+    let items_after = LineItem::query(&ctx)
+        .filter(LineItem::order_id.eq(updated_order.id))
+        .all()
+        .await?;
     assert_eq!(items_after.len(), 2);
 
     // Check item1 price updated
@@ -421,7 +436,10 @@ async fn test_managed_has_many_direct_control_on_parent_update() -> Result<()> {
     assert!(LineItem::get(&ctx, item2.id).await.is_err());
 
     // Check new item was created
-    let keyboard = items_after.into_iter().find(|i| i.item == "Keyboard").expect("keyboard created");
+    let keyboard = items_after
+        .into_iter()
+        .find(|i| i.item == "Keyboard")
+        .expect("keyboard created");
     assert_eq!(keyboard.price, 100);
     assert_eq!(keyboard.order_id, updated_order.id);
 
@@ -433,8 +451,14 @@ async fn test_managed_has_many_direct_control_nilify() -> Result<()> {
     let ctx = Context::new(Memory::new());
 
     let team = Team::create(&ctx).name("Lakers").await?;
-    let p1 = Player::create(&ctx).team_id(Some(team.id)).name("LeBron").await?;
-    let p2 = Player::create(&ctx).team_id(Some(team.id)).name("Davis").await?;
+    let p1 = Player::create(&ctx)
+        .team_id(Some(team.id))
+        .name("LeBron")
+        .await?;
+    let p2 = Player::create(&ctx)
+        .team_id(Some(team.id))
+        .name("Davis")
+        .await?;
 
     // Update team with DirectControl, keeping only p1
     let mut keep_p1 = FieldMap::new();

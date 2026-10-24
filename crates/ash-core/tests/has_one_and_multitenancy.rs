@@ -1,6 +1,4 @@
-use ash_core::{
-    resource, Context, Error, Filter, RelKind, Resource, SchemaSupport,
-};
+use ash_core::{Context, Error, Filter, RelKind, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -156,7 +154,11 @@ async fn test_has_one_cascading_delete() {
     User::destroy(&ctx, u.id).await.unwrap();
 
     let profiles = Profile::query(&ctx).all().await.unwrap();
-    assert_eq!(profiles.len(), 0, "Profile should have been cascade deleted");
+    assert_eq!(
+        profiles.len(),
+        0,
+        "Profile should have been cascade deleted"
+    );
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -258,7 +260,10 @@ async fn test_attribute_multitenancy() {
 #[test]
 async fn test_has_one_and_relational_filter_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install_resources(&[&User::DEF, &Profile::DEF]).await.unwrap();
+    sqlite
+        .install_resources(&[&User::DEF, &Profile::DEF])
+        .await
+        .unwrap();
     let ctx = Context::new(sqlite);
 
     let u1 = User::create(&ctx).name("Carol").call().await.unwrap();
@@ -279,7 +284,10 @@ async fn test_has_one_and_relational_filter_in_sqlite() {
 
     // SQL EXISTS correlated subquery test: User with profile.bio = "Lead Architect"
     let carol_user = User::query(&ctx)
-        .filter(Filter::related("profile", Filter::eq("bio", "Lead Architect")))
+        .filter(Filter::related(
+            "profile",
+            Filter::eq("bio", "Lead Architect"),
+        ))
         .all()
         .await
         .unwrap();

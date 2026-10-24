@@ -10,8 +10,8 @@
 //! record's rows then limited and offset.
 
 use ash_core::{
-    CompiledQuery, Context, DataLayer, FieldMap, Filter, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value,
-    field_policy_fields, load_related_query,
+    CompiledQuery, Context, DataLayer, FieldMap, Filter, RelKind, RelatedQuery, RelationshipDef,
+    ResourceDef, Value, field_policy_fields, load_related_query,
 };
 use async_graphql::{SelectionField, Value as GqlValue};
 use futures_util::future::{BoxFuture, try_join_all};
@@ -25,8 +25,14 @@ use crate::sort::parse_resource_sort;
 /// by response key, so a relationship selected under two aliases keeps both, and by the
 /// arguments that shape them, so a relationship selected under the same key with others
 /// (under two aliases of the records' own field) keeps both too.
-pub(crate) fn preloaded_key(relationship: &str, field: &SelectionField<'_>) -> async_graphql::Result<String> {
-    let mut key = format!("__graphql_preloaded:{relationship}:{}", field.alias().unwrap_or(field.name()));
+pub(crate) fn preloaded_key(
+    relationship: &str,
+    field: &SelectionField<'_>,
+) -> async_graphql::Result<String> {
+    let mut key = format!(
+        "__graphql_preloaded:{relationship}:{}",
+        field.alias().unwrap_or(field.name())
+    );
     for (name, value) in field.arguments()? {
         if !matches!(value, GqlValue::Null) {
             key.push_str(&format!(":{name}={value}"));
@@ -65,7 +71,10 @@ pub(crate) fn related_query<'v>(
 
 /// The fields selected under `field`, or under its `child` fields (a page's `results`, a
 /// mutation's `result`), fragments included.
-pub(crate) fn selected<'a>(field: SelectionField<'a>, child: Option<&str>) -> Vec<SelectionField<'a>> {
+pub(crate) fn selected<'a>(
+    field: SelectionField<'a>,
+    child: Option<&str>,
+) -> Vec<SelectionField<'a>> {
     match child {
         None => field.selection_set().collect(),
         Some(child) => field
@@ -98,16 +107,32 @@ impl Load {
         let selected: Vec<&str> = fields.iter().map(|field| field.name()).collect();
         let is_selected = |name: &str| selected.iter().any(|field| *field == camel(name));
         let mut load = Load::default();
-        for attr in resource.attributes.iter().filter(|attr| attr.primary_key || is_selected(attr.name)) {
+        for attr in resource
+            .attributes
+            .iter()
+            .filter(|attr| attr.primary_key || is_selected(attr.name))
+        {
             load.add(resource, attr.name);
         }
-        for agg in resource.aggregates.iter().filter(|agg| is_selected(agg.name)) {
+        for agg in resource
+            .aggregates
+            .iter()
+            .filter(|agg| is_selected(agg.name))
+        {
             load.add(resource, agg.name);
         }
-        for calc in resource.calculations.iter().filter(|calc| is_selected(calc.name)) {
+        for calc in resource
+            .calculations
+            .iter()
+            .filter(|calc| is_selected(calc.name))
+        {
             load.add(resource, calc.name);
         }
-        for rel in resource.relationships.iter().filter(|rel| is_selected(rel.name)) {
+        for rel in resource
+            .relationships
+            .iter()
+            .filter(|rel| is_selected(rel.name))
+        {
             for column in rel.source_columns() {
                 load.add(resource, column);
             }
@@ -173,11 +198,23 @@ pub(crate) async fn load_selected<D: DataLayer>(
     let Some(pk) = resource.primary_key().map(|attr| attr.name) else {
         return Ok(());
     };
-    let ids: Vec<Value> = records.iter().filter_map(|record| record.get(pk).cloned()).collect();
-    let loaded_names: Vec<String> = wanted.aggregates.iter().chain(&wanted.calculations).cloned().collect();
+    let ids: Vec<Value> = records
+        .iter()
+        .filter_map(|record| record.get(pk).cloned())
+        .collect();
+    let loaded_names: Vec<String> = wanted
+        .aggregates
+        .iter()
+        .chain(&wanted.calculations)
+        .cloned()
+        .collect();
     // What's selected, and what the field policies check, each once.
     let mut load = Load::default();
-    for field in loaded_names.iter().map(String::as_str).chain(field_policy_fields(resource)) {
+    for field in loaded_names
+        .iter()
+        .map(String::as_str)
+        .chain(field_policy_fields(resource))
+    {
         load.add(resource, field);
     }
     let query = CompiledQuery {
@@ -189,7 +226,11 @@ pub(crate) async fn load_selected<D: DataLayer>(
         actor: ash.actor.clone(),
         ..CompiledQuery::default()
     };
-    let mut loaded = ash.data.run_query(resource, &query).await.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    let mut loaded = ash
+        .data
+        .run_query(resource, &query)
+        .await
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     for row in &mut loaded {
         crate::redact::redact_record(resource, ash.actor.as_ref(), row);
     }
@@ -234,7 +275,11 @@ pub(crate) fn preload<'a, D: DataLayer>(
         }
         let mut wanted: Vec<Wanted<'a>> = Vec::new();
         for field in fields {
-            let Some(rel) = resource.relationships.iter().find(|rel| camel(rel.name) == field.name()) else {
+            let Some(rel) = resource
+                .relationships
+                .iter()
+                .find(|rel| camel(rel.name) == field.name())
+            else {
                 continue;
             };
             let key = preloaded_key(rel.name, &field)?;
@@ -248,7 +293,12 @@ pub(crate) fn preload<'a, D: DataLayer>(
                         ash.actor.as_ref(),
                         arguments.iter().map(|(name, value)| (name.as_str(), value)),
                     )?;
-                    wanted.push(Wanted { rel, key, query, children });
+                    wanted.push(Wanted {
+                        rel,
+                        key,
+                        query,
+                        children,
+                    });
                 }
             }
         }
@@ -257,39 +307,50 @@ pub(crate) fn preload<'a, D: DataLayer>(
         }
 
         let records_ref: &[FieldMap] = records;
-        let loaded = try_join_all(wanted.into_iter().map(|Wanted { rel, key, query, children }| async move {
-            let destination = (rel.destination)();
-            let sort: Vec<String> = query.sort.iter().map(|sort| sort.field.clone()).collect();
-            let query = Load::of(destination, &children, sort.iter().map(String::as_str)).onto_related(query);
-            let sources: Vec<FieldMap> = records_ref.iter().map(|record| relationship_source(rel, record)).collect();
-            let related = load_related_query(ash, resource, rel.name, &sources, &query)
-                .await
-                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-            // Every related row once, as the requester may see it, so what's selected
-            // under it loads in one go too.
-            let counts: Vec<usize> = related.iter().map(Vec::len).collect();
-            let mut rows: Vec<FieldMap> = related.into_iter().flatten().collect();
-            for row in &mut rows {
-                redact_record(destination, ash.actor.as_ref(), row);
-            }
-            preload(ash, destination, children, &mut rows).await?;
+        let loaded = try_join_all(wanted.into_iter().map(
+            |Wanted {
+                 rel,
+                 key,
+                 query,
+                 children,
+             }| async move {
+                let destination = (rel.destination)();
+                let sort: Vec<String> = query.sort.iter().map(|sort| sort.field.clone()).collect();
+                let query = Load::of(destination, &children, sort.iter().map(String::as_str))
+                    .onto_related(query);
+                let sources: Vec<FieldMap> = records_ref
+                    .iter()
+                    .map(|record| relationship_source(rel, record))
+                    .collect();
+                let related = load_related_query(ash, resource, rel.name, &sources, &query)
+                    .await
+                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                // Every related row once, as the requester may see it, so what's selected
+                // under it loads in one go too.
+                let counts: Vec<usize> = related.iter().map(Vec::len).collect();
+                let mut rows: Vec<FieldMap> = related.into_iter().flatten().collect();
+                for row in &mut rows {
+                    redact_record(destination, ash.actor.as_ref(), row);
+                }
+                preload(ash, destination, children, &mut rows).await?;
 
-            let to_one = matches!(rel.kind, RelKind::BelongsTo | RelKind::HasOne);
-            let mut rows = rows.into_iter();
-            let values: Vec<Value> = counts
-                .into_iter()
-                .map(|count| {
-                    // All of this record's rows, so none is left over for the next.
-                    let mine: Vec<Value> = rows.by_ref().take(count).map(Value::Map).collect();
-                    if to_one {
-                        mine.into_iter().next().unwrap_or(Value::Null)
-                    } else {
-                        Value::Array(mine)
-                    }
-                })
-                .collect();
-            Ok::<_, async_graphql::Error>((key, values))
-        }))
+                let to_one = matches!(rel.kind, RelKind::BelongsTo | RelKind::HasOne);
+                let mut rows = rows.into_iter();
+                let values: Vec<Value> = counts
+                    .into_iter()
+                    .map(|count| {
+                        // All of this record's rows, so none is left over for the next.
+                        let mine: Vec<Value> = rows.by_ref().take(count).map(Value::Map).collect();
+                        if to_one {
+                            mine.into_iter().next().unwrap_or(Value::Null)
+                        } else {
+                            Value::Array(mine)
+                        }
+                    })
+                    .collect();
+                Ok::<_, async_graphql::Error>((key, values))
+            },
+        ))
         .await?;
 
         for (key, values) in loaded {

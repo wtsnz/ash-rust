@@ -82,7 +82,11 @@ async fn domain_deref_to_context() {
         .unwrap();
 
     let as_bob = desk.with_actor(actor_representative(rep.id));
-    let assigned = ticket.assign(&as_bob).representative_id(rep.id).await.unwrap();
+    let assigned = ticket
+        .assign(&as_bob)
+        .representative_id(rep.id)
+        .await
+        .unwrap();
     assert_eq!(assigned.representative_id, Some(rep.id));
 }
 

@@ -440,9 +440,10 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
 fn declares_argument(body: &TokenStream2, name: &str) -> bool {
     let trees: Vec<proc_macro2::TokenTree> = body.clone().into_iter().collect();
     trees.windows(2).any(|pair| match pair {
-        [proc_macro2::TokenTree::Ident(keyword), proc_macro2::TokenTree::Ident(ident)] => {
-            keyword == "argument" && ident == name
-        }
+        [
+            proc_macro2::TokenTree::Ident(keyword),
+            proc_macro2::TokenTree::Ident(ident),
+        ] => keyword == "argument" && ident == name,
         _ => false,
     })
 }

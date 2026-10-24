@@ -55,9 +55,9 @@ pub mod post_tag {
 }
 
 pub mod post {
-    use super::*;
     use super::post_tag::PostTag;
     use super::tag::Tag;
+    use super::*;
 
     resource! {
         Post {

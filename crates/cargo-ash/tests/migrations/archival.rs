@@ -60,8 +60,10 @@ async fn archive_and_restore<D: DataLayer>(ctx: Context<D>) {
 
 async fn archival_resources_migrate_and_archive(db: TestDb) {
     let project = Project::for_db(&db);
-    let migration =
-        project.generate("create_archived_notes", &[&NoteFolder::DEF, &ArchivedNote::DEF]);
+    let migration = project.generate(
+        "create_archived_notes",
+        &[&NoteFolder::DEF, &ArchivedNote::DEF],
+    );
     let dialect = db.dialect().name();
     let up = std::fs::read_to_string(project.migrations().join(format!(
         "{}_create_archived_notes.{dialect}.up.sql",

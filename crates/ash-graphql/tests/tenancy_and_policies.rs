@@ -130,7 +130,9 @@ use protected::Protected;
 
 /// Nothing arrives within the wait.
 async fn quiet(stream: &mut (impl futures_util::Stream + Unpin)) -> bool {
-    tokio::time::timeout(Duration::from_millis(100), stream.next()).await.is_err()
+    tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .is_err()
 }
 
 #[tokio::test]
@@ -138,16 +140,27 @@ async fn a_subscriber_hears_nothing_from_another_context_tenant() {
     let pubsub = PubSub::new();
     let base = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
     let (a, b) = (base.with_tenant("a"), base.with_tenant("b"));
-    let schema = AshGraphQL::from_resources(&[&Isolated::DEF]).with_pubsub(pubsub).finish::<Memory>().unwrap();
-    let mut stream = schema.execute_stream(Request::new("subscription { isolatedCreated { created { text } } }").data(a.clone()));
+    let schema = AshGraphQL::from_resources(&[&Isolated::DEF])
+        .with_pubsub(pubsub)
+        .finish::<Memory>()
+        .unwrap();
+    let mut stream = schema.execute_stream(
+        Request::new("subscription { isolatedCreated { created { text } } }").data(a.clone()),
+    );
     assert!(quiet(&mut stream).await);
 
     Isolated::create(&b).text("tenant b's").await.unwrap();
     assert!(quiet(&mut stream).await, "tenant a heard tenant b's record");
 
     Isolated::create(&a).text("tenant a's").await.unwrap();
-    let event = tokio::time::timeout(Duration::from_millis(500), stream.next()).await.unwrap().unwrap();
-    assert_eq!(event.data.into_json().unwrap()["isolatedCreated"]["created"]["text"], json!("tenant a's"));
+    let event = tokio::time::timeout(Duration::from_millis(500), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.data.into_json().unwrap()["isolatedCreated"]["created"]["text"],
+        json!("tenant a's")
+    );
 }
 
 #[tokio::test]
@@ -155,31 +168,73 @@ async fn a_subscriber_reads_fields_as_its_own_policies_allow() {
     let pubsub = PubSub::new();
     let base = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
     let admin = base.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", "admin"));
-    let schema = AshGraphQL::from_resources(&[&Protected::DEF]).with_pubsub(pubsub).finish::<Memory>().unwrap();
-    let mut stream = schema.execute_stream(Request::new("subscription { protectedCreated { created { email } } }").data(admin));
+    let schema = AshGraphQL::from_resources(&[&Protected::DEF])
+        .with_pubsub(pubsub)
+        .finish::<Memory>()
+        .unwrap();
+    let mut stream = schema.execute_stream(
+        Request::new("subscription { protectedCreated { created { email } } }").data(admin),
+    );
     assert!(quiet(&mut stream).await);
 
     // Written by someone who may not read the email; heard by an admin, who may.
-    let written = Protected::create(&base).email("s@example.com").await.unwrap();
-    assert_eq!(written.email, None, "the writer reads it as its policies allow");
-    let event = tokio::time::timeout(Duration::from_millis(500), stream.next()).await.unwrap().unwrap();
+    let written = Protected::create(&base)
+        .email("s@example.com")
+        .await
+        .unwrap();
+    assert_eq!(
+        written.email, None,
+        "the writer reads it as its policies allow"
+    );
+    let event = tokio::time::timeout(Duration::from_millis(500), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(event.errors.is_empty(), "{:?}", event.errors);
-    assert_eq!(event.data.into_json().unwrap()["protectedCreated"]["created"]["email"], json!("s@example.com"));
+    assert_eq!(
+        event.data.into_json().unwrap()["protectedCreated"]["created"]["email"],
+        json!("s@example.com")
+    );
 }
 
 #[tokio::test]
 async fn a_filter_reaches_only_the_related_rows_the_actor_may_read() {
     let ctx = Context::new(Memory::new());
     let parent = Parent::create(&ctx).name("a").await.unwrap();
-    Child::create(&ctx).parent_id(parent.id).body("secret").internal(true).await.unwrap();
-    Child::create(&ctx).parent_id(parent.id).body("hello").internal(false).await.unwrap();
-    let schema = AshGraphQL::from_resources(&[&Parent::DEF, &Child::DEF]).finish::<Memory>().unwrap();
-    let list = |body: &str| format!(r#"{{ listParents(filter: {{ children: {{ body: {{ eq: "{body}" }} }} }}) {{ name }} }}"#);
+    Child::create(&ctx)
+        .parent_id(parent.id)
+        .body("secret")
+        .internal(true)
+        .await
+        .unwrap();
+    Child::create(&ctx)
+        .parent_id(parent.id)
+        .body("hello")
+        .internal(false)
+        .await
+        .unwrap();
+    let schema = AshGraphQL::from_resources(&[&Parent::DEF, &Child::DEF])
+        .finish::<Memory>()
+        .unwrap();
+    let list = |body: &str| {
+        format!(
+            r#"{{ listParents(filter: {{ children: {{ body: {{ eq: "{body}" }} }} }}) {{ name }} }}"#
+        )
+    };
 
-    let hidden = schema.execute(Request::new(list("secret")).data(ctx.clone())).await;
+    let hidden = schema
+        .execute(Request::new(list("secret")).data(ctx.clone()))
+        .await;
     assert!(hidden.errors.is_empty(), "{:?}", hidden.errors);
-    assert_eq!(hidden.data.into_json().unwrap()["listParents"], json!([]), "found by a child it can't read");
+    assert_eq!(
+        hidden.data.into_json().unwrap()["listParents"],
+        json!([]),
+        "found by a child it can't read"
+    );
 
     let visible = schema.execute(Request::new(list("hello")).data(ctx)).await;
-    assert_eq!(visible.data.into_json().unwrap()["listParents"], json!([{ "name": "a" }]));
+    assert_eq!(
+        visible.data.into_json().unwrap()["listParents"],
+        json!([{ "name": "a" }])
+    );
 }

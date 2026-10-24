@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    Actor, BulkCreateOptions, BulkDestroyOptions, Context, Error, FieldMap, Notification,
-    Resource, Result, SyncFnNotifier, ValidationContext, Value, resource,
+    Actor, BulkCreateOptions, BulkDestroyOptions, Context, Error, FieldMap, Notification, Resource,
+    Result, SyncFnNotifier, ValidationContext, Value, resource,
 };
 use ash_memory::Memory;
 use uuid::Uuid;
@@ -81,21 +81,39 @@ fn recording() -> (Context<Memory>, Arc<Mutex<Vec<Notification>>>) {
         log.lock().unwrap().push(notification.clone());
         Ok(())
     });
-    (Context::new(Memory::new()).with_notifier(Arc::new(notifier)), sent)
+    (
+        Context::new(Memory::new()).with_notifier(Arc::new(notifier)),
+        sent,
+    )
 }
 
 #[tokio::test]
 async fn every_write_path_notifies_with_its_arguments() {
     let (ctx, sent) = recording();
     let owner = Uuid::new_v4();
-    Note::write(&ctx).owner_id(owner).body("typed").reason("filing").await.unwrap();
-    ash_core::create_dynamic(&ctx, &Note::DEF, action("write"), note(owner, "dynamic")).await.unwrap();
-    ash_core::bulk_create::<Note, _, _, _>(&ctx, "write", [note(owner, "bulk")], BulkCreateOptions::default())
+    Note::write(&ctx)
+        .owner_id(owner)
+        .body("typed")
+        .reason("filing")
         .await
         .unwrap();
+    ash_core::create_dynamic(&ctx, &Note::DEF, action("write"), note(owner, "dynamic"))
+        .await
+        .unwrap();
+    ash_core::bulk_create::<Note, _, _, _>(
+        &ctx,
+        "write",
+        [note(owner, "bulk")],
+        BulkCreateOptions::default(),
+    )
+    .await
+    .unwrap();
 
     let sent = sent.lock().unwrap();
-    let reasons: Vec<_> = sent.iter().map(|n| n.metadata.get("reason").cloned()).collect();
+    let reasons: Vec<_> = sent
+        .iter()
+        .map(|n| n.metadata.get("reason").cloned())
+        .collect();
     assert_eq!(reasons, vec![Some(Value::String("filing".into())); 3]);
 }
 
@@ -108,14 +126,30 @@ async fn updates_authorize_against_the_record_as_it_was() {
 
     // The owner may hand a note on, through either path: the policy reads the record
     // being updated, as Ash's does, not the one it would become.
-    let typed = Note::write(&ctx).owner_id(owner).body("typed").reason("filing").await.unwrap();
-    typed.edit_on(&as_owner).owner_id(heir).await.unwrap();
-    let dynamic = Note::write(&ctx).owner_id(owner).body("dynamic").reason("filing").await.unwrap();
-    let mut input = FieldMap::new();
-    input.insert("owner_id".into(), Value::Uuid(heir));
-    ash_core::update_dynamic(&as_owner, &Note::DEF, action("edit"), dynamic.id, input.clone())
+    let typed = Note::write(&ctx)
+        .owner_id(owner)
+        .body("typed")
+        .reason("filing")
         .await
         .unwrap();
+    typed.edit_on(&as_owner).owner_id(heir).await.unwrap();
+    let dynamic = Note::write(&ctx)
+        .owner_id(owner)
+        .body("dynamic")
+        .reason("filing")
+        .await
+        .unwrap();
+    let mut input = FieldMap::new();
+    input.insert("owner_id".into(), Value::Uuid(heir));
+    ash_core::update_dynamic(
+        &as_owner,
+        &Note::DEF,
+        action("edit"),
+        dynamic.id,
+        input.clone(),
+    )
+    .await
+    .unwrap();
 
     // And someone else may not, whatever they set.
     let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
@@ -133,15 +167,29 @@ async fn dynamic_writes_take_only_what_the_action_accepts() {
     let err = ash_core::create_dynamic(&ctx, &Note::DEF, action("write"), input)
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::NotAccepted { ref field, .. } if field == "id"), "{err:?}");
+    assert!(
+        matches!(err, Error::NotAccepted { ref field, .. } if field == "id"),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
 async fn bulk_destroys_run_the_destroy_action() {
     let ctx = Context::new(Memory::new());
     let owner = Uuid::new_v4();
-    let open = Note::write(&ctx).owner_id(owner).body("open").reason("filing").await.unwrap();
-    let locked = Note::write(&ctx).owner_id(owner).body("locked").reason("filing").locked(true).await.unwrap();
+    let open = Note::write(&ctx)
+        .owner_id(owner)
+        .body("open")
+        .reason("filing")
+        .await
+        .unwrap();
+    let locked = Note::write(&ctx)
+        .owner_id(owner)
+        .body("locked")
+        .reason("filing")
+        .locked(true)
+        .await
+        .unwrap();
 
     let result = ash_core::bulk_destroy::<Note, _, _>(
         &ctx.with_actor(Actor::new(owner)),
@@ -151,7 +199,18 @@ async fn bulk_destroys_run_the_destroy_action() {
     )
     .await
     .unwrap();
-    assert_eq!((result.count, result.error_count), (1, 1), "{:?}", result.errors);
-    let left: Vec<String> = Note::query(&ctx).all().await.unwrap().into_iter().map(|n| n.body).collect();
+    assert_eq!(
+        (result.count, result.error_count),
+        (1, 1),
+        "{:?}",
+        result.errors
+    );
+    let left: Vec<String> = Note::query(&ctx)
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.body)
+        .collect();
     assert_eq!(left, ["locked"]);
 }

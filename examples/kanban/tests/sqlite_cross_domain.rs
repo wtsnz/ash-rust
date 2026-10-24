@@ -2,8 +2,7 @@ use ash_sqlite::Sqlite;
 use kanban::kanban::board::fields as b_f;
 use kanban::workspaces::workspace::fields as ws_f;
 use kanban::{
-    Board, Kanban, Workspaces, actor_user, board_template_multi,
-    workspace_with_owner_multi,
+    Board, Kanban, Workspaces, actor_user, board_template_multi, workspace_with_owner_multi,
 };
 
 #[tokio::test]
@@ -18,7 +17,10 @@ async fn test_sqlite_two_domains_and_transactions() {
     kanban.install().await.unwrap();
 
     // 1. Create user and workspace in Workspaces domain
-    let alice = workspaces.register_user("Alice", "alice@corp.com").await.unwrap();
+    let alice = workspaces
+        .register_user("Alice", "alice@corp.com")
+        .await
+        .unwrap();
     let as_alice_ws = workspaces.with_actor(actor_user(alice.id));
 
     let ws_multi = workspace_with_owner_multi(

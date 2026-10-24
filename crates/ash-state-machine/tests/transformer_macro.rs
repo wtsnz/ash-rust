@@ -30,49 +30,46 @@ use uuid::Uuid;
 
 #[state_machine]
 resource! {
-    Order {
-        table "orders";
+Order {
+    table "orders";
 
-    attributes {
-        id: Uuid [pk];
-        // Note: `status` is omitted here! The transformer injects `status: String`.
-        amount: i64;
+attributes {
+    id: Uuid [pk];
+    // Note: `status` is omitted here! The transformer injects `status: String`.
+    amount: i64;
+}
+
+state_machine {
+    state_attribute status;
+    initial: "pending";
+    transition submit, from: ["pending"], to: "submitted";
+    transition pay, from: ["submitted"], to: "paid";
+    transition cancel, from: ["pending", "submitted"], to: "cancelled";
+}
+
+actions {
+    create create {
+        primary;
+        accept [amount];
     }
 
-    state_machine {
-        state_attribute status;
-        initial: "pending";
-        transition submit, from: ["pending"], to: "submitted";
-        transition pay, from: ["submitted"], to: "paid";
-        transition cancel, from: ["pending", "submitted"], to: "cancelled";
+    read read {
+        primary;
     }
 
-    actions {
-        create create {
-            primary;
-            accept [amount];
-        }
-
-        read read {
-            primary;
-        }
-
-        // Action validations and target state changes are injected automatically!
-        update submit {}
-        update pay {}
-        update cancel {}
-    }
-    }}
+    // Action validations and target state changes are injected automatically!
+    update submit {}
+    update pay {}
+    update cancel {}
+}
+}}
 
 #[tokio::test]
 async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
     let ctx = Context::new(Memory::new());
 
     // 1. Create: verify auto-injected initial state "pending"
-    let order = Order::create(&ctx)
-        .amount(250)
-        .await
-        .expect("create order");
+    let order = Order::create(&ctx).amount(250).await.expect("create order");
 
     assert_eq!(order.current_state(), "pending");
     assert_eq!(order.status, "pending");
@@ -87,8 +84,7 @@ async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
     assert_eq!(next_states, vec!["submitted", "cancelled"]);
 
     // 3. Attempt invalid transition: pay from pending -> must fail with InvalidTransition error!
-    let invalid_pay_res = Order::pay(&ctx, order.id)
-        .await;
+    let invalid_pay_res = Order::pay(&ctx, order.id).await;
 
     match invalid_pay_res {
         Err(Error::Extension(ext_err)) => {
@@ -113,9 +109,7 @@ async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
     assert!(submitted_order.can_cancel());
 
     // 5. Valid transition: pay -> moves to "paid"
-    let paid_order = Order::pay(&ctx, order.id)
-        .await
-        .expect("pay succeeds");
+    let paid_order = Order::pay(&ctx, order.id).await.expect("pay succeeds");
 
     assert_eq!(paid_order.current_state(), "paid");
     assert!(!paid_order.can_submit());
@@ -136,10 +130,7 @@ async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
 async fn test_pattern2_transformer_macro_cancellation_flow() {
     let ctx = Context::new(Memory::new());
 
-    let order = Order::create(&ctx)
-        .amount(500)
-        .await
-        .expect("create order");
+    let order = Order::create(&ctx).amount(500).await.expect("create order");
 
     // Cancel directly from pending
     let cancelled = Order::cancel(&ctx, order.id)
@@ -211,7 +202,10 @@ mod ticket_module {
             .expect("resolve ticket");
 
         assert_eq!(resolved.current_state(), "resolved");
-        assert_eq!(resolved.resolution_note.as_deref(), Some("Fixed in commit 1234"));
+        assert_eq!(
+            resolved.resolution_note.as_deref(),
+            Some("Fixed in commit 1234")
+        );
 
         // 2. Close using the auto-synthesized `close` action
         let closed = Ticket::close(&ctx, ticket.id)

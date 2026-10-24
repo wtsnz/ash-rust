@@ -70,7 +70,11 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     for handle in handles {
         handle.await.unwrap();
     }
-    let counted = Tally::query(&ctx).filter(ash_core::Filter::eq("id", fresh.id)).one().await.unwrap();
+    let counted = Tally::query(&ctx)
+        .filter(ash_core::Filter::eq("id", fresh.id))
+        .one()
+        .await
+        .unwrap();
     assert_eq!(counted.views, 10);
 }
 
@@ -88,7 +92,8 @@ async fn atomic_updates_in_sqlite() {
 
 #[tokio::test]
 async fn atomic_updates_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");

@@ -3,42 +3,42 @@ use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    Product {
-        table "products";
+Product {
+    table "products";
 
-    attributes {
-        id: Uuid [pk];
-        name: String;
-        category: String;
-        price: i64;
-        status: String;
+attributes {
+    id: Uuid [pk];
+    name: String;
+    category: String;
+    price: i64;
+    status: String;
+}
+
+actions {
+    create create {
+        accept [name, category, price, status];
+        validate present(name);
+        validate string_length(name, min: 3, max: 20);
+        validate one_of(category, ["electronics", "books", "clothing"]);
+        validate numericality(price, min: 1, max: 10000);
+        change set_new(status = "draft");
     }
 
-    actions {
-        create create {
-            accept [name, category, price, status];
-            validate present(name);
-            validate string_length(name, min: 3, max: 20);
-            validate one_of(category, ["electronics", "books", "clothing"]);
-            validate numericality(price, min: 1, max: 10000);
-            change set_new(status = "draft");
-        }
-
-        update publish {
-            change set(status = "published");
-        }
-
-        read read {
-            primary;
-        }
+    update publish {
+        change set(status = "published");
     }
 
-    policies {
-        policy always {
-            authorize_if always;
-        }
+    read read {
+        primary;
     }
-    }}
+}
+
+policies {
+    policy always {
+        authorize_if always;
+    }
+}
+}}
 
 #[tokio::test]
 async fn validation_present_and_string_length() {
@@ -66,7 +66,10 @@ async fn validation_present_and_string_length() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message.contains("must be present"), "unexpected message: {message}");
+            assert!(
+                message.contains("must be present"),
+                "unexpected message: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -82,7 +85,10 @@ async fn validation_present_and_string_length() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message.contains("must be present"), "unexpected message: {message}");
+            assert!(
+                message.contains("must be present"),
+                "unexpected message: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -98,7 +104,10 @@ async fn validation_present_and_string_length() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message == "must have length of between 3 and 20", "unexpected message: {message}");
+            assert!(
+                message == "must have length of between 3 and 20",
+                "unexpected message: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -114,7 +123,10 @@ async fn validation_present_and_string_length() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "name");
-            assert!(message == "must have length of between 3 and 20", "unexpected message: {message}");
+            assert!(
+                message == "must have length of between 3 and 20",
+                "unexpected message: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -145,7 +157,10 @@ async fn validation_one_of() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "category");
-            assert!(message == "expected one of electronics, books, clothing", "unexpected: {message}");
+            assert!(
+                message == "expected one of electronics, books, clothing",
+                "unexpected: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -167,7 +182,11 @@ async fn validation_numericality() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "price");
-            assert!(message == "must be greater than or equal to 1 and must be less than or equal to 10000", "unexpected: {message}");
+            assert!(
+                message
+                    == "must be greater than or equal to 1 and must be less than or equal to 10000",
+                "unexpected: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -183,7 +202,11 @@ async fn validation_numericality() {
     match err {
         Error::Validation { field, .. } => {
             assert_eq!(field, "price");
-            assert!(message == "must be greater than or equal to 1 and must be less than or equal to 10000", "unexpected: {message}");
+            assert!(
+                message
+                    == "must be greater than or equal to 1 and must be less than or equal to 10000",
+                "unexpected: {message}"
+            );
         }
         other => panic!("expected Error::Validation, got {:?}", other),
     }
@@ -227,10 +250,7 @@ async fn helpdesk_ticket_and_representative_validations() {
     let as_customer = desk.with_actor(actor_customer(Uuid::new_v4()));
 
     // 1. Subject with 1 character fails string_length(min: 2)
-    let err = Ticket::open(&as_customer)
-        .subject("x")
-        .await
-        .unwrap_err();
+    let err = Ticket::open(&as_customer).subject("x").await.unwrap_err();
     let message = err.message();
     match err {
         Error::Validation { field, .. } => {
@@ -241,10 +261,7 @@ async fn helpdesk_ticket_and_representative_validations() {
     }
 
     // 2. Empty subject fails present validation
-    let err = as_customer
-        .open_ticket("")
-        .await
-        .unwrap_err();
+    let err = as_customer.open_ticket("").await.unwrap_err();
     let message = err.message();
     match err {
         Error::Validation { field, .. } => {
@@ -263,10 +280,7 @@ async fn helpdesk_ticket_and_representative_validations() {
     assert_eq!(ticket.status, helpdesk::Status::Open);
 
     // 4. Representative name validation
-    let err = desk
-        .create_representative("A")
-        .await
-        .unwrap_err();
+    let err = desk.create_representative("A").await.unwrap_err();
     let message = err.message();
     match err {
         Error::Validation { field, .. } => {

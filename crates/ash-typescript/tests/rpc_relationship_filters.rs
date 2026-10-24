@@ -69,13 +69,30 @@ use parent::Parent;
 async fn a_filter_reaches_only_the_related_rows_the_actor_may_read() {
     let ctx = Context::new(Memory::new());
     let parent = Parent::create(&ctx).name("a").await.unwrap();
-    Child::create(&ctx).parent_id(parent.id).body("secret").internal(true).await.unwrap();
-    Child::create(&ctx).parent_id(parent.id).body("hello").internal(false).await.unwrap();
+    Child::create(&ctx)
+        .parent_id(parent.id)
+        .body("secret")
+        .internal(true)
+        .await
+        .unwrap();
+    Child::create(&ctx)
+        .parent_id(parent.id)
+        .body("hello")
+        .internal(false)
+        .await
+        .unwrap();
     let rpc = Rpc::new().action::<Parent>("list_parents", "read");
     let list = |body: &str| json!({ "action": "list_parents", "fields": ["name"], "filter": { "children": { "body": { "eq": body } } } });
 
     let hidden = rpc.run(&ctx, &list("secret")).await;
-    assert_eq!(hidden, json!({ "success": true, "data": [] }), "found by a child it can't read");
+    assert_eq!(
+        hidden,
+        json!({ "success": true, "data": [] }),
+        "found by a child it can't read"
+    );
     let visible = rpc.run(&ctx, &list("hello")).await;
-    assert_eq!(visible, json!({ "success": true, "data": [{ "name": "a" }] }));
+    assert_eq!(
+        visible,
+        json!({ "success": true, "data": [{ "name": "a" }] })
+    );
 }

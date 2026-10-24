@@ -5,9 +5,9 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    ActionDef, Actor, AggregateDef, AttrType, CalculationDef, Expr, AttributeDef, Check, CompiledQuery, Context, DataLayer, FieldMap,
-    FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind, RelationshipDef, ResourceDef, Result,
-    Value,
+    ActionDef, Actor, AggregateDef, AttrType, AttributeDef, CalculationDef, Check, CompiledQuery,
+    Context, DataLayer, Expr, FieldMap, FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind,
+    RelationshipDef, ResourceDef, Result, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -47,11 +47,23 @@ impl Counting {
 }
 
 impl DataLayer for Counting {
-    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
+    async fn create(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Value,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         self.inner.create(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Value,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         self.inner.update(resource, tenant, id, fields).await
     }
 
@@ -87,14 +99,21 @@ impl DataLayer for Counting {
         self.inner.destroy_atomic(resource, query, conditions).await
     }
 
-    async fn run_query(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<Vec<FieldMap>> {
+    async fn run_query(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+    ) -> Result<Vec<FieldMap>> {
         let name = [&AUTHOR_DEF, &POST_DEF, &COMMENT_DEF]
             .into_iter()
             .find(|def| def.name == resource.name)
             .map(|def| def.name)
             .unwrap_or("other");
         self.reads.lock().unwrap().push(name);
-        self.selects.lock().unwrap().push((name, query.select.clone()));
+        self.selects
+            .lock()
+            .unwrap()
+            .push((name, query.select.clone()));
         self.inner.run_query(resource, query).await
     }
 }
@@ -125,13 +144,20 @@ const fn rel(
 static AUTHOR_DEF: ResourceDef = ResourceDef {
     name: "Author",
     table: "authors",
-    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("name", AttrType::String),
+    ],
     relationships: &[
         rel("posts", RelKind::HasMany, || &POST_DEF, "id", "author_id"),
         // One of the author's posts, though they've written several.
         rel("one_post", RelKind::HasOne, || &POST_DEF, "id", "author_id"),
     ],
-    actions: &[ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false))],
+    actions: &[ActionDef::read("read").primary().pagination(
+        ash_core::Pagination::keyset()
+            .countable(ash_core::Countable::Yes)
+            .required(false),
+    )],
     policies: &[],
     field_policies: &[],
     calculations: &[],
@@ -153,11 +179,17 @@ static AUTHOR_DEF: ResourceDef = ResourceDef {
 /// Who wrote a post, and how many comments it has, are for signed-in readers only.
 /// A post's label is no one's to read, and a labelled post's comment count isn't either.
 static POST_FIELD_POLICIES: &[FieldPolicyDef] = &[
-    FieldPolicyDef::new("author_id", &[PolicyEffect::AuthorizeIf(Check::ActorPresent)]),
+    FieldPolicyDef::new(
+        "author_id",
+        &[PolicyEffect::AuthorizeIf(Check::ActorPresent)],
+    ),
     FieldPolicyDef::new("label", &[PolicyEffect::ForbidIf(Check::Always)]),
     FieldPolicyDef::new(
         "comment_count",
-        &[PolicyEffect::AuthorizeIf(Check::And(&[Check::ActorPresent, Check::IsNil { field: "label" }]))],
+        &[PolicyEffect::AuthorizeIf(Check::And(&[
+            Check::ActorPresent,
+            Check::IsNil { field: "label" },
+        ]))],
     ),
 ];
 
@@ -166,7 +198,11 @@ static LABEL: Expr = Expr::Field("label");
 static OTHER: Expr = Expr::LitString("other");
 
 fn shout(fields: &FieldMap) -> Result<Value> {
-    Ok(fields.get("title").and_then(Value::as_str).map(|t| Value::String(t.to_uppercase())).unwrap_or(Value::Null))
+    Ok(fields
+        .get("title")
+        .and_then(Value::as_str)
+        .map(|t| Value::String(t.to_uppercase()))
+        .unwrap_or(Value::Null))
 }
 
 static POST_DEF: ResourceDef = ResourceDef {
@@ -179,11 +215,27 @@ static POST_DEF: ResourceDef = ResourceDef {
         AttributeDef::optional("label", AttrType::String),
     ],
     relationships: &[
-        rel("author", RelKind::BelongsTo, || &AUTHOR_DEF, "author_id", "id"),
-        rel("comments", RelKind::HasMany, || &COMMENT_DEF, "id", "post_id"),
+        rel(
+            "author",
+            RelKind::BelongsTo,
+            || &AUTHOR_DEF,
+            "author_id",
+            "id",
+        ),
+        rel(
+            "comments",
+            RelKind::HasMany,
+            || &COMMENT_DEF,
+            "id",
+            "post_id",
+        ),
     ],
     actions: &[
-        ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
+        ActionDef::read("read").primary().pagination(
+            ash_core::Pagination::keyset()
+                .countable(ash_core::Countable::Yes)
+                .required(false),
+        ),
         ActionDef::create("create").accept(&["title", "author_id"]),
         ActionDef::update("retitle").accept(&["title"]),
         ActionDef::destroy("destroy"),
@@ -194,7 +246,11 @@ static POST_DEF: ResourceDef = ResourceDef {
         CalculationDef::new(
             "first_label",
             AttrType::String,
-            Expr::IfElse { cond: &IS_FIRST, then_expr: &LABEL, else_expr: &OTHER },
+            Expr::IfElse {
+                cond: &IS_FIRST,
+                then_expr: &LABEL,
+                else_expr: &OTHER,
+            },
         ),
         // Only Rust can compute this.
         CalculationDef::new("shout", AttrType::String, Expr::Custom(shout)),
@@ -211,13 +267,22 @@ static COMMENT_DEF: ResourceDef = ResourceDef {
         AttributeDef::required("body", AttrType::String),
         AttributeDef::required("post_id", AttrType::Uuid),
     ],
-    relationships: &[rel("post", RelKind::BelongsTo, || &POST_DEF, "post_id", "id")],
+    relationships: &[rel(
+        "post",
+        RelKind::BelongsTo,
+        || &POST_DEF,
+        "post_id",
+        "id",
+    )],
     ..AUTHOR_DEF
 };
 
 async fn insert(data: &Counting, def: &ResourceDef, fields: &[(&str, Value)]) -> Uuid {
     let id = Uuid::new_v4();
-    let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    let mut map: FieldMap = fields
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
     map.insert("id".into(), Value::Uuid(id));
     data.create(def, None, Value::from(id), map).await.unwrap();
     id
@@ -228,20 +293,35 @@ async fn seeded() -> (Counting, Uuid) {
     let data = Counting::default();
     let mut first_post = Uuid::nil();
     for a in 0..3 {
-        let author = insert(&data, &AUTHOR_DEF, &[("name", Value::String(format!("A{a}")))]).await;
+        let author = insert(
+            &data,
+            &AUTHOR_DEF,
+            &[("name", Value::String(format!("A{a}")))],
+        )
+        .await;
         for p in 0..2 {
             let post = insert(
                 &data,
                 &POST_DEF,
-                &[("title", Value::String(format!("A{a}P{p}"))), ("author_id", Value::Uuid(author))],
+                &[
+                    ("title", Value::String(format!("A{a}P{p}"))),
+                    ("author_id", Value::Uuid(author)),
+                ],
             )
             .await;
             if first_post.is_nil() {
                 first_post = post;
             }
             for c in 0..2 {
-                insert(&data, &COMMENT_DEF, &[("body", Value::String(format!("A{a}P{p}C{c}"))), ("post_id", Value::Uuid(post))])
-                    .await;
+                insert(
+                    &data,
+                    &COMMENT_DEF,
+                    &[
+                        ("body", Value::String(format!("A{a}P{p}C{c}"))),
+                        ("post_id", Value::Uuid(post)),
+                    ],
+                )
+                .await;
             }
         }
     }
@@ -288,7 +368,11 @@ async fn each_selected_relationship_is_one_read_however_many_records() {
             let title = post["title"].as_str().unwrap();
             let comments = post["comments"].as_array().unwrap();
             assert_eq!(comments.len(), 2);
-            assert!(comments.iter().all(|c| c["body"].as_str().unwrap().starts_with(title)));
+            assert!(
+                comments
+                    .iter()
+                    .all(|c| c["body"].as_str().unwrap().starts_with(title))
+            );
         }
     }
 }
@@ -316,7 +400,12 @@ async fn aliases_and_fragments_are_loaded_as_selected() {
 #[tokio::test]
 async fn a_relationship_loads_through_a_key_a_field_policy_hides() {
     let (data, _) = seeded().await;
-    let page = run(&data, "{ listPosts { results { title authorId author { name } } } }", None).await;
+    let page = run(
+        &data,
+        "{ listPosts { results { title authorId author { name } } } }",
+        None,
+    )
+    .await;
     for post in page["listPosts"]["results"].as_array().unwrap() {
         assert!(post["authorId"].is_null(), "{post}");
         assert!(post["author"]["name"].is_string(), "{post}");
@@ -334,7 +423,12 @@ async fn a_relationship_with_arguments_never_takes_rows_preloaded_without() {
         Some(Actor::new(Uuid::new_v4())),
     )
     .await;
-    for (a, b) in page["listAuthors"]["a"].as_array().unwrap().iter().zip(page["listAuthors"]["b"].as_array().unwrap()) {
+    for (a, b) in page["listAuthors"]["a"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(page["listAuthors"]["b"].as_array().unwrap())
+    {
         assert_eq!(a["posts"].as_array().unwrap().len(), 1, "{a}");
         assert_eq!(b["posts"].as_array().unwrap().len(), 2, "{b}");
     }
@@ -350,7 +444,12 @@ async fn one_response_key_for_two_relationships_keeps_both() {
         Some(Actor::new(Uuid::new_v4())),
     )
     .await;
-    for (a, b) in page["listPosts"]["a"].as_array().unwrap().iter().zip(page["listPosts"]["b"].as_array().unwrap()) {
+    for (a, b) in page["listPosts"]["a"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(page["listPosts"]["b"].as_array().unwrap())
+    {
         assert!(a["x"]["name"].is_string(), "{a}");
         assert_eq!(b["x"].as_array().unwrap().len(), 2, "{b}");
     }
@@ -368,8 +467,15 @@ async fn repeated_selections_merge() {
     .await;
     assert_eq!(data.take(), ["Author", "Post", "Post"]);
     for post in page["listPosts"]["results"].as_array().unwrap() {
-        assert!(post["author"]["name"].is_string() && post["author"]["id"].is_string(), "{post}");
-        assert_eq!(post["author"]["posts"].as_array().unwrap().len(), 2, "{post}");
+        assert!(
+            post["author"]["name"].is_string() && post["author"]["id"].is_string(),
+            "{post}"
+        );
+        assert_eq!(
+            post["author"]["posts"].as_array().unwrap().len(),
+            2,
+            "{post}"
+        );
     }
 }
 
@@ -377,10 +483,21 @@ async fn repeated_selections_merge() {
 #[tokio::test]
 async fn a_has_one_with_several_rows_gives_each_record_its_own() {
     let (data, _) = seeded().await;
-    let page = run(&data, "{ listAuthors { results { name onePost { title } } } }", Some(Actor::new(Uuid::new_v4()))).await;
+    let page = run(
+        &data,
+        "{ listAuthors { results { name onePost { title } } } }",
+        Some(Actor::new(Uuid::new_v4())),
+    )
+    .await;
     for author in page["listAuthors"]["results"].as_array().unwrap() {
         let name = author["name"].as_str().unwrap();
-        assert!(author["onePost"]["title"].as_str().unwrap().starts_with(name), "{author}");
+        assert!(
+            author["onePost"]["title"]
+                .as_str()
+                .unwrap()
+                .starts_with(name),
+            "{author}"
+        );
     }
 }
 
@@ -388,12 +505,25 @@ async fn a_has_one_with_several_rows_gives_each_record_its_own() {
 async fn gets_and_mutation_results_load_their_relationships() {
     let (data, post) = seeded().await;
     let actor = Some(Actor::new(Uuid::new_v4()));
-    let got = run(&data, &format!(r#"{{ getPost(id: "{post}") {{ title author {{ name }} comments {{ body }} }} }}"#), actor.clone()).await;
+    let got = run(
+        &data,
+        &format!(
+            r#"{{ getPost(id: "{post}") {{ title author {{ name }} comments {{ body }} }} }}"#
+        ),
+        actor.clone(),
+    )
+    .await;
     assert!(got["getPost"]["author"]["name"].is_string());
     assert_eq!(got["getPost"]["comments"].as_array().unwrap().len(), 2);
 
     let author = got["getPost"]["author"]["name"].clone();
-    let author_id = run(&data, &format!(r#"{{ getPost(id: "{post}") {{ authorId }} }}"#), actor.clone()).await["getPost"]["authorId"].clone();
+    let author_id = run(
+        &data,
+        &format!(r#"{{ getPost(id: "{post}") {{ authorId }} }}"#),
+        actor.clone(),
+    )
+    .await["getPost"]["authorId"]
+        .clone();
     let created = run(
         &data,
         &format!(r#"mutation {{ createPost(input: {{ title: "New", authorId: {author_id} }}) {{ result {{ title author {{ name }} }} errors {{ message }} }} }}"#),
@@ -415,7 +545,10 @@ async fn a_relationship_with_arguments_is_still_shaped_by_them() {
     for author in page["listAuthors"]["results"].as_array().unwrap() {
         let posts = author["posts"].as_array().unwrap();
         assert_eq!(posts.len(), 1);
-        assert!(posts[0]["title"].as_str().unwrap().ends_with("P1"), "{author}");
+        assert!(
+            posts[0]["title"].as_str().unwrap().ends_with("P1"),
+            "{author}"
+        );
     }
     assert_eq!(json!(data.take().len() > 1), json!(true));
 }
@@ -437,7 +570,9 @@ async fn an_update_is_one_atomic_statement() {
 #[tokio::test]
 async fn a_destroy_is_one_atomic_statement() {
     let (data, post) = seeded().await;
-    let mutation = format!(r#"mutation {{ destroyPost(id: "{post}") {{ result {{ title }} errors {{ message }} }} }}"#);
+    let mutation = format!(
+        r#"mutation {{ destroyPost(id: "{post}") {{ result {{ title }} errors {{ message }} }} }}"#
+    );
     let page = run(&data, &mutation, Some(Actor::new(Uuid::new_v4()))).await;
     assert_eq!(page["destroyPost"]["result"]["title"], "A0P0");
     assert_eq!(data.take(), ["atomic destroy"]);
@@ -467,9 +602,19 @@ async fn a_relationship_selected_with_arguments_is_one_read_too() {
 
     for author in page["listAuthors"]["results"].as_array().unwrap() {
         let name = author["name"].as_str().unwrap();
-        assert_eq!(author["latest"], json!([{ "title": format!("{name}P1"), "comments": [{ "body": format!("{name}P1C1") }] }]));
-        assert_eq!(author["earliest"], json!([{ "title": format!("{name}P0") }]));
-        let named = if name == "A1" { json!([{ "title": "A1P0" }]) } else { json!([]) };
+        assert_eq!(
+            author["latest"],
+            json!([{ "title": format!("{name}P1"), "comments": [{ "body": format!("{name}P1C1") }] }])
+        );
+        assert_eq!(
+            author["earliest"],
+            json!([{ "title": format!("{name}P0") }])
+        );
+        let named = if name == "A1" {
+            json!([{ "title": "A1P0" }])
+        } else {
+            json!([])
+        };
         assert_eq!(author["named"], named, "{author}");
     }
 }
@@ -493,7 +638,10 @@ async fn relationship_arguments_may_be_variables() {
     for author in page["listAuthors"]["results"].as_array().unwrap() {
         let posts = author["posts"].as_array().unwrap();
         assert_eq!(posts.len(), 1, "{author}");
-        assert!(posts[0]["title"].as_str().unwrap().ends_with("P1"), "{author}");
+        assert!(
+            posts[0]["title"].as_str().unwrap().ends_with("P1"),
+            "{author}"
+        );
     }
 }
 
@@ -502,12 +650,27 @@ async fn relationship_arguments_may_be_variables() {
 #[tokio::test]
 async fn a_read_selects_only_what_is_asked_for() {
     let (data, _) = seeded().await;
-    run(&data, "{ listPosts(first: 2) { results { title author { name } } } }", Some(Actor::new(Uuid::new_v4()))).await;
-    let strings = |names: &[&str]| Some(names.iter().map(|name| name.to_string()).collect::<Vec<_>>());
+    run(
+        &data,
+        "{ listPosts(first: 2) { results { title author { name } } } }",
+        Some(Actor::new(Uuid::new_v4())),
+    )
+    .await;
+    let strings = |names: &[&str]| {
+        Some(
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>(),
+        )
+    };
     assert_eq!(
         data.take_selects(),
         // And what Post's field policies check: its label.
-        [("Author", strings(&["id", "name"])), ("Post", strings(&["author_id", "id", "label", "title"]))]
+        [
+            ("Author", strings(&["id", "name"])),
+            ("Post", strings(&["author_id", "id", "label", "title"]))
+        ]
     );
 }
 
@@ -516,7 +679,15 @@ async fn a_read_selects_only_what_is_asked_for() {
 #[tokio::test]
 async fn selected_aggregates_load_and_sort_and_filter() {
     let (data, post) = seeded().await;
-    insert(&data, &COMMENT_DEF, &[("body", Value::from("A0P0C2")), ("post_id", Value::Uuid(post))]).await;
+    insert(
+        &data,
+        &COMMENT_DEF,
+        &[
+            ("body", Value::from("A0P0C2")),
+            ("post_id", Value::Uuid(post)),
+        ],
+    )
+    .await;
     let actor = || Some(Actor::new(Uuid::new_v4()));
 
     let page = run(
@@ -530,12 +701,20 @@ async fn selected_aggregates_load_and_sort_and_filter() {
         json!([{ "title": "A0P0", "commentCount": 3 }, { "title": "A0P1", "commentCount": 2 }])
     );
 
-    let page = run(&data, "{ listPosts(filter: { commentCount: { greaterThan: 2 } }) { results { title } } }", actor()).await;
+    let page = run(
+        &data,
+        "{ listPosts(filter: { commentCount: { greaterThan: 2 } }) { results { title } } }",
+        actor(),
+    )
+    .await;
     assert_eq!(page["listPosts"]["results"], json!([{ "title": "A0P0" }]));
 
     // Under a relationship, loaded ahead with its rows.
     let page = run(&data, r#"{ listAuthors(filter: { name: { eq: "A0" } }) { results { posts(sort: [{ field: TITLE }]) { commentCount } } } }"#, actor()).await;
-    assert_eq!(page["listAuthors"]["results"], json!([{ "posts": [{ "commentCount": 3 }, { "commentCount": 2 }] }]));
+    assert_eq!(
+        page["listAuthors"]["results"],
+        json!([{ "posts": [{ "commentCount": 3 }, { "commentCount": 2 }] }])
+    );
 
     let page = run(
         &data,
@@ -543,7 +722,10 @@ async fn selected_aggregates_load_and_sort_and_filter() {
         actor(),
     )
     .await;
-    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Renamed", "commentCount": 3 }));
+    assert_eq!(
+        page["retitlePost"]["result"],
+        json!({ "title": "Renamed", "commentCount": 3 })
+    );
 }
 
 /// A field policy hides an aggregate a mutation's result selects, as it does a read's.
@@ -551,12 +733,25 @@ async fn selected_aggregates_load_and_sort_and_filter() {
 async fn a_mutation_result_hides_what_field_policies_hide() {
     let (data, post) = seeded().await;
     let mutation = |title: &str| {
-        format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "{title}" }}) {{ result {{ title commentCount }} }} }}"#)
+        format!(
+            r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "{title}" }}) {{ result {{ title commentCount }} }} }}"#
+        )
     };
     let page = run(&data, &mutation("Anonymous"), None).await;
-    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Anonymous", "commentCount": null }));
-    let page = run(&data, &mutation("Signed in"), Some(Actor::new(Uuid::new_v4()))).await;
-    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Signed in", "commentCount": 2 }));
+    assert_eq!(
+        page["retitlePost"]["result"],
+        json!({ "title": "Anonymous", "commentCount": null })
+    );
+    let page = run(
+        &data,
+        &mutation("Signed in"),
+        Some(Actor::new(Uuid::new_v4())),
+    )
+    .await;
+    assert_eq!(
+        page["retitlePost"]["result"],
+        json!({ "title": "Signed in", "commentCount": 2 })
+    );
 }
 
 /// A calculation loaded with the record is its value, nil included: the narrowed record
@@ -566,18 +761,35 @@ async fn calculations_load_as_the_record_is_stored() {
     let (data, _) = seeded().await;
     let actor = || Some(Actor::new(Uuid::new_v4()));
     let page = run(&data, r#"{ listPosts(filter: { title: { in: ["A0P0", "A0P1"] } }, sort: [{ field: TITLE }]) { results { firstLabel } } }"#, actor()).await;
-    assert_eq!(page["listPosts"]["results"], json!([{ "firstLabel": null }, { "firstLabel": "other" }]));
+    assert_eq!(
+        page["listPosts"]["results"],
+        json!([{ "firstLabel": null }, { "firstLabel": "other" }])
+    );
     data.take_selects();
 
-    let page = run(&data, r#"{ listPosts(filter: { title: { eq: "A1P0" } }) { results { shout } } }"#, actor()).await;
+    let page = run(
+        &data,
+        r#"{ listPosts(filter: { title: { eq: "A1P0" } }) { results { shout } } }"#,
+        actor(),
+    )
+    .await;
     assert_eq!(page["listPosts"]["results"], json!([{ "shout": "A1P0" }]));
 }
 
 static PROJECT_DEF: ResourceDef = ResourceDef {
     name: "Project",
     table: "projects",
-    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
-    relationships: &[rel("invoices", RelKind::HasMany, || &INVOICE_DEF, "id", "project_id")],
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("name", AttrType::String),
+    ],
+    relationships: &[rel(
+        "invoices",
+        RelKind::HasMany,
+        || &INVOICE_DEF,
+        "id",
+        "project_id",
+    )],
     aggregates: &[AggregateDef::count("invoice_count", "invoices")],
     ..AUTHOR_DEF
 };
@@ -593,7 +805,9 @@ static INVOICE_DEF: ResourceDef = ResourceDef {
     ],
     policies: &[ash_core::PolicyDef::when(
         ash_core::PolicyWhen::ActionType(ash_core::ActionKind::Read),
-        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor {
+            field: "owner_id",
+        })],
     )],
     ..AUTHOR_DEF
 };
@@ -606,9 +820,19 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
     let project = insert(&data, &PROJECT_DEF, &[("name", Value::from("P"))]).await;
     let (mine, theirs) = (Uuid::new_v4(), Uuid::new_v4());
     for owner in [mine, mine, theirs] {
-        insert(&data, &INVOICE_DEF, &[("project_id", Value::Uuid(project)), ("owner_id", Value::Uuid(owner))]).await;
+        insert(
+            &data,
+            &INVOICE_DEF,
+            &[
+                ("project_id", Value::Uuid(project)),
+                ("owner_id", Value::Uuid(owner)),
+            ],
+        )
+        .await;
     }
-    let schema = AshGraphQL::from_resources(&[&PROJECT_DEF, &INVOICE_DEF]).finish::<Counting>().unwrap();
+    let schema = AshGraphQL::from_resources(&[&PROJECT_DEF, &INVOICE_DEF])
+        .finish::<Counting>()
+        .unwrap();
     let res = schema
         .execute(
             Request::new("{ listProjects { results { invoiceCount invoices { id } } } }")
@@ -627,12 +851,22 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
 #[tokio::test]
 async fn a_mutation_result_checks_field_policies_against_the_record_as_stored() {
     let (data, post) = seeded().await;
-    data.update(&POST_DEF, None, Value::from(post), FieldMap::from([("label".to_string(), Value::from("secret"))])).await.unwrap();
+    data.update(
+        &POST_DEF,
+        None,
+        Value::from(post),
+        FieldMap::from([("label".to_string(), Value::from("secret"))]),
+    )
+    .await
+    .unwrap();
     let page = run(
         &data,
         &format!(r#"mutation {{ retitlePost(id: "{post}", input: {{ title: "Labelled" }}) {{ result {{ title commentCount }} }} }}"#),
         Some(Actor::new(Uuid::new_v4())),
     )
     .await;
-    assert_eq!(page["retitlePost"]["result"], json!({ "title": "Labelled", "commentCount": null }));
+    assert_eq!(
+        page["retitlePost"]["result"],
+        json!({ "title": "Labelled", "commentCount": null })
+    );
 }

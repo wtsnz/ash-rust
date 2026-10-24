@@ -31,7 +31,8 @@ where
         None,
         ctx.actor.clone(),
         ctx.metadata.clone(),
-    ).with_tenant(ctx.tenant.clone());
+    )
+    .with_tenant(ctx.tenant.clone());
     crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 
     Ok(result)

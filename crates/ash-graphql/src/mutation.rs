@@ -1,10 +1,12 @@
 use ash_core::create_dynamic;
 use ash_core::destroy_dynamic_by_id;
 
-use crate::redact::redact_record;
 use crate::preload::{load_selected, preload, selected};
+use crate::redact::redact_record;
 use ash_core::update_dynamic_via;
-use ash_core::{ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value};
+use ash_core::{
+    ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value,
+};
 use async_graphql::dynamic::*;
 
 use crate::error::{MUTATION_ERROR, UserError};
@@ -94,7 +96,11 @@ pub fn register_action_payload(
                         Ok(record
                             .and_then(|record| ash_core::get_metadata(record, field))
                             .filter(|value| !value.is_null())
-                            .map(|value| FieldValue::value(crate::types::ash_value_to_graphql_value_typed(value, ty))))
+                            .map(|value| {
+                                FieldValue::value(crate::types::ash_value_to_graphql_value_typed(
+                                    value, ty,
+                                ))
+                            }))
                     })
                 },
             ));
@@ -103,7 +109,9 @@ pub fn register_action_payload(
         // What the written record notes, read from it.
         result = result.field(Field::new("metadata", TypeRef::named(name), |ctx| {
             FieldFuture::new(async move {
-                Ok(payload(&ctx).and_then(|p| p.result.as_ref()).map(|record| FieldValue::borrowed_any(record)))
+                Ok(payload(&ctx)
+                    .and_then(|p| p.result.as_ref())
+                    .map(|record| FieldValue::borrowed_any(record)))
             })
         }));
     }
@@ -121,8 +129,12 @@ pub fn register_action_payload(
                 TypeRef::named_nn_list_nn(MUTATION_ERROR),
                 |ctx| {
                     FieldFuture::new(async move {
-                        let errors = payload(&ctx).map(|p| p.errors.as_slice()).unwrap_or_default();
-                        Ok(Some(FieldValue::list(errors.iter().map(|e| FieldValue::borrowed_any(e)))))
+                        let errors = payload(&ctx)
+                            .map(|p| p.errors.as_slice())
+                            .unwrap_or_default();
+                        Ok(Some(FieldValue::list(
+                            errors.iter().map(|e| FieldValue::borrowed_any(e)),
+                        )))
                     })
                 },
             )),
@@ -158,7 +170,11 @@ pub fn register_action_input(
 fn failed(err: &AshError) -> Option<FieldValue<'static>> {
     Some(FieldValue::owned_any(MutationPayload {
         result: None,
-        errors: err.each().into_iter().map(UserError::from_ash_error).collect(),
+        errors: err
+            .each()
+            .into_iter()
+            .map(UserError::from_ash_error)
+            .collect(),
     }))
 }
 
@@ -205,9 +221,16 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                     return Ok(match create_dynamic(ash, resource, action, input).await {
                         Ok(mut stored) => {
                             let fields = selected(ctx.ctx.field(), Some("result"));
-                            load_selected(ash, resource, &fields, std::slice::from_mut(&mut stored)).await?;
+                            load_selected(
+                                ash,
+                                resource,
+                                &fields,
+                                std::slice::from_mut(&mut stored),
+                            )
+                            .await?;
                             redact_record(resource, ash.actor.as_ref(), &mut stored);
-                            preload(ash, resource, fields, std::slice::from_mut(&mut stored)).await?;
+                            preload(ash, resource, fields, std::slice::from_mut(&mut stored))
+                                .await?;
                             succeeded(Some(stored))
                         }
                         Err(e) => failed(&e),
@@ -224,31 +247,49 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                 // the record's visibility and the action's validations and policies checked
                 // in it, else (and always under an optimistic lock) reading the record first.
                 if action.kind == ActionKind::Update {
-                    return Ok(match update_dynamic_via(ash, resource, None, action, id, input).await {
-                        Ok(mut updated) => {
-                            let fields = selected(ctx.ctx.field(), Some("result"));
-                            load_selected(ash, resource, &fields, std::slice::from_mut(&mut updated)).await?;
-                            redact_record(resource, ash.actor.as_ref(), &mut updated);
-                            preload(ash, resource, fields, std::slice::from_mut(&mut updated)).await?;
-                            succeeded(Some(updated))
-                        }
-                        Err(e) => failed(&e),
-                    });
+                    return Ok(
+                        match update_dynamic_via(ash, resource, None, action, id, input).await {
+                            Ok(mut updated) => {
+                                let fields = selected(ctx.ctx.field(), Some("result"));
+                                load_selected(
+                                    ash,
+                                    resource,
+                                    &fields,
+                                    std::slice::from_mut(&mut updated),
+                                )
+                                .await?;
+                                redact_record(resource, ash.actor.as_ref(), &mut updated);
+                                preload(ash, resource, fields, std::slice::from_mut(&mut updated))
+                                    .await?;
+                                succeeded(Some(updated))
+                            }
+                            Err(e) => failed(&e),
+                        },
+                    );
                 }
 
                 // A destroy runs by id too, as AshGraphql's bulk destroy does: as one
                 // statement where it can, else reading the record first. Either way an
                 // archived record or another tenant's is not found.
-                Ok(match destroy_dynamic_by_id(ash, resource, action, id).await {
-                    Ok(mut destroyed) => {
-                        let fields = selected(ctx.ctx.field(), Some("result"));
-                        load_selected(ash, resource, &fields, std::slice::from_mut(&mut destroyed)).await?;
-                        redact_record(resource, ash.actor.as_ref(), &mut destroyed);
-                        preload(ash, resource, fields, std::slice::from_mut(&mut destroyed)).await?;
-                        succeeded(Some(destroyed))
-                    }
-                    Err(e) => failed(&e),
-                })
+                Ok(
+                    match destroy_dynamic_by_id(ash, resource, action, id).await {
+                        Ok(mut destroyed) => {
+                            let fields = selected(ctx.ctx.field(), Some("result"));
+                            load_selected(
+                                ash,
+                                resource,
+                                &fields,
+                                std::slice::from_mut(&mut destroyed),
+                            )
+                            .await?;
+                            redact_record(resource, ash.actor.as_ref(), &mut destroyed);
+                            preload(ash, resource, fields, std::slice::from_mut(&mut destroyed))
+                                .await?;
+                            succeeded(Some(destroyed))
+                        }
+                        Err(e) => failed(&e),
+                    },
+                )
             })
         },
     );
@@ -261,7 +302,11 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
         let required = fields.iter().any(|(_, _, required)| *required);
         field = field.argument(InputValue::new(
             "input",
-            if required { TypeRef::named_nn(input) } else { TypeRef::named(input) },
+            if required {
+                TypeRef::named_nn(input)
+            } else {
+                TypeRef::named(input)
+            },
         ));
     }
     field

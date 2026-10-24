@@ -6,39 +6,39 @@ use uuid::Uuid;
 use crate::error::{AuthError, Result};
 
 ash_core::resource! {
-    AshToken {
-        table "ash_tokens";
+AshToken {
+    table "ash_tokens";
 
-    attributes {
-        id: Uuid [pk];
-        jti: String;
-        subject: Uuid;
-        purpose: String;
-        expires_at: i64;
-        revoked: bool = false;
-        extra: Option<String>;
+attributes {
+    id: Uuid [pk];
+    jti: String;
+    subject: Uuid;
+    purpose: String;
+    expires_at: i64;
+    revoked: bool = false;
+    extra: Option<String>;
+}
+
+actions {
+    create store {
+        primary;
+        accept [jti, subject, purpose, expires_at, revoked, extra];
     }
 
-    actions {
-        create store {
-            primary;
-            accept [jti, subject, purpose, expires_at, revoked, extra];
-        }
-
-        read read {
-            primary;
-        }
-
-        update revoke {
-            primary;
-            change set(revoked, true);
-        }
-
-        destroy destroy {
-            primary;
-        }
+    read read {
+        primary;
     }
-    }}
+
+    update revoke {
+        primary;
+        change set(revoked, true);
+    }
+
+    destroy destroy {
+        primary;
+    }
+}
+}}
 
 /// Persistent token store backed by an Ash `DataLayer` (e.g. SQLite, PostgreSQL, Memory).
 #[derive(Clone)]
@@ -147,7 +147,10 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
         } else {
             for token in existing {
                 if !token.revoked {
-                    token.revoke_on(&self.context).await.map_err(AuthError::Core)?;
+                    token
+                        .revoke_on(&self.context)
+                        .await
+                        .map_err(AuthError::Core)?;
                 }
             }
         }
@@ -157,8 +160,8 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
 
     /// Revoke all active refresh tokens for a given subject (user ID).
     pub async fn revoke_all_for_subject(&self, subject: Uuid) -> Result<usize> {
-        let filter = Filter::eq("subject", Value::Uuid(subject))
-            & Filter::eq("revoked", Value::Bool(false));
+        let filter =
+            Filter::eq("subject", Value::Uuid(subject)) & Filter::eq("revoked", Value::Bool(false));
 
         let tokens = AshToken::query(&self.context)
             .filter(filter)
@@ -168,7 +171,10 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
 
         let count = tokens.len();
         for token in tokens {
-            token.revoke_on(&self.context).await.map_err(AuthError::Core)?;
+            token
+                .revoke_on(&self.context)
+                .await
+                .map_err(AuthError::Core)?;
         }
 
         Ok(count)
@@ -187,7 +193,10 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
 
         let count = expired.len();
         for token in expired {
-            token.destroy_on(&self.context).await.map_err(AuthError::Core)?;
+            token
+                .destroy_on(&self.context)
+                .await
+                .map_err(AuthError::Core)?;
         }
 
         Ok(count)

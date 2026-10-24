@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use uuid::Uuid;
 
-use ash_core::{ChangeContext, Context, CustomChange, Error, FieldMap, Resource, Result, Value, resource};
+use ash_core::{
+    ChangeContext, Context, CustomChange, Error, FieldMap, Resource, Result, Value, resource,
+};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -364,10 +366,7 @@ mod test_sqlite_hooks {
         let ctx = Context::new(sqlite);
         ctx.install(&[&SqliteEntity::DEF]).await.unwrap();
 
-        let entity = SqliteEntity::create(&ctx)
-            .name("widget")
-            .await
-            .unwrap();
+        let entity = SqliteEntity::create(&ctx).name("widget").await.unwrap();
 
         assert_eq!(entity.name, "SQLITE: widget");
         assert_eq!(entity.version, Some(99));

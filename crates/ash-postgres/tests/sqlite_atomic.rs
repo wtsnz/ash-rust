@@ -67,7 +67,11 @@ async fn concurrent_updates_lose_nothing() {
             Err(other) => panic!("{other:?}"),
         }
     }
-    let stored = Counter::query(&ctx).filter(Filter::eq("id", counter.id)).one().await.unwrap();
+    let stored = Counter::query(&ctx)
+        .filter(Filter::eq("id", counter.id))
+        .one()
+        .await
+        .unwrap();
     assert_eq!(stored.hits, 10 - stale);
     assert_eq!(stored.version, 1 + 10 - stale);
 }
@@ -88,14 +92,27 @@ async fn what_must_raise_from_the_record_isnt_atomic() {
     let counter = Counter::create(&ctx).hits(3).await.unwrap();
     let by_id = |action: &str| {
         let action = Counter::DEF.action(action).unwrap();
-        ash_core::update_dynamic_via(&ctx, &Counter::DEF, None, action, counter.id, FieldMap::new())
+        ash_core::update_dynamic_via(
+            &ctx,
+            &Counter::DEF,
+            None,
+            action,
+            counter.id,
+            FieldMap::new(),
+        )
     };
     // By id, what it sets is the stored record's, which only the statement could check.
     let refused = by_id("capped_hit").await;
-    assert!(matches!(refused, Err(Error::MustBeAtomic { .. })), "{refused:?}");
+    assert!(
+        matches!(refused, Err(Error::MustBeAtomic { .. })),
+        "{refused:?}"
+    );
     // Read first, it checks the record as read.
     let invalid = by_id("capped_hit_reading_first").await;
-    assert!(matches!(invalid, Err(Error::Validation { .. })), "{invalid:?}");
+    assert!(
+        matches!(invalid, Err(Error::Validation { .. })),
+        "{invalid:?}"
+    );
     // With the record in hand, what it sets is known, and checked before the statement.
     let known = counter.capped_hit(&ctx).await;
     assert!(matches!(known, Err(Error::Validation { .. })), "{known:?}");
@@ -108,19 +125,19 @@ mod memo {
     resource! {
         Memo {
             table "atomic_memos";
-    
+
             attributes {
                 id: Uuid [pk];
                 owner_id: Uuid;
                 text: String;
             }
-    
+
             actions {
                 create create { primary; accept [owner_id, text]; }
                 read read { primary; }
                 update edit { accept [text]; }
             }
-    
+
             policies {
                 policy action_type(create) | action_type(read) {
                     authorize_if always;
@@ -144,10 +161,13 @@ async fn write_policies_filter_the_statement() {
     let edit = Memo::DEF.action("edit").unwrap();
     let input = |text: &str| FieldMap::from([("text".to_string(), ash_core::Value::from(text))]);
 
-    let edited = ash_core::update_dynamic_via(&ctx, &Memo::DEF, None, edit, memo.id, input("b")).await.unwrap();
+    let edited = ash_core::update_dynamic_via(&ctx, &Memo::DEF, None, edit, memo.id, input("b"))
+        .await
+        .unwrap();
     assert_eq!(edited.get("text"), Some(&ash_core::Value::from("b")));
     // A stranger's update changes nothing, and is refused as the policies refuse it.
     let stranger = ctx.with_actor(ash_core::Actor::new(Uuid::new_v4()));
-    let refused = ash_core::update_dynamic_via(&stranger, &Memo::DEF, None, edit, memo.id, input("c")).await;
+    let refused =
+        ash_core::update_dynamic_via(&stranger, &Memo::DEF, None, edit, memo.id, input("c")).await;
     assert!(matches!(refused, Err(Error::Forbidden)), "{refused:?}");
 }

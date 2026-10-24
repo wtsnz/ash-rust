@@ -27,7 +27,10 @@ async fn tickets_survive_reopen() {
     assert_eq!(listed[0].id, opened.id);
     assert_eq!(listed[0].subject, "Printer is jammed");
     assert_eq!(listed[0].estimate.as_ref().map(Float::as_str), Some("1.5"));
-    assert_eq!(listed[0].due_on.as_ref().map(Date::as_str), Some("2024-02-29"));
+    assert_eq!(
+        listed[0].due_on.as_ref().map(Date::as_str),
+        Some("2024-02-29")
+    );
     assert_eq!(
         listed[0].attachment.as_ref().map(Binary::as_bytes),
         Some(b"hello".as_slice())

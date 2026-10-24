@@ -4,43 +4,43 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    Account {
-        table "accounts";
+Account {
+    table "accounts";
 
-    attributes {
-        id: Uuid [pk];
-        email: String;
-        org_id: Uuid;
-        slug: String;
-        display_name: String;
-        points: i64;
+attributes {
+    id: Uuid [pk];
+    email: String;
+    org_id: Uuid;
+    slug: String;
+    display_name: String;
+    points: i64;
+}
+
+identities {
+    identity unique_email: [email], message: "Email is already registered";
+    identity org_slug: [org_id, slug];
+}
+
+actions {
+    create register {
+        primary;
+        accept [email, org_id, slug, display_name, points];
     }
 
-    identities {
-        identity unique_email: [email], message: "Email is already registered";
-        identity org_slug: [org_id, slug];
+    read read {
+        primary;
     }
 
-    actions {
-        create register {
-            primary;
-            accept [email, org_id, slug, display_name, points];
-        }
-
-        read read {
-            primary;
-        }
-
-        update update_profile {
-            primary;
-            accept [display_name, points];
-        }
-
-        update change_email {
-            accept [email];
-        }
+    update update_profile {
+        primary;
+        accept [display_name, points];
     }
-    }}
+
+    update change_email {
+        accept [email];
+    }
+}
+}}
 
 #[tokio::main(flavor = "current_thread")]
 #[test]
@@ -70,7 +70,11 @@ async fn test_identities_conflict_detection_in_memory() {
         .expect_err("should reject duplicate email");
 
     match err_email {
-        Error::IdentityConflict { identity, fields, message } => {
+        Error::IdentityConflict {
+            identity,
+            fields,
+            message,
+        } => {
             assert_eq!(identity, "unique_email");
             assert_eq!(fields, vec!["email"]);
             assert_eq!(message, "Email is already registered");
@@ -89,7 +93,9 @@ async fn test_identities_conflict_detection_in_memory() {
         .expect_err("should reject duplicate org_slug");
 
     match err_slug {
-        Error::IdentityConflict { identity, fields, .. } => {
+        Error::IdentityConflict {
+            identity, fields, ..
+        } => {
             assert_eq!(identity, "org_slug");
             assert_eq!(fields, vec!["org_id", "slug"]);
         }
@@ -126,27 +132,39 @@ async fn test_identities_get_by_and_find_by_helpers() {
         .expect("create bob");
 
     // Test single-key identity helpers
-    let bob_found = Account::get_by_unique_email(&ctx, "bob@example.com").await.expect("get_by email");
+    let bob_found = Account::get_by_unique_email(&ctx, "bob@example.com")
+        .await
+        .expect("get_by email");
     assert_eq!(bob_found.display_name, "Bob");
 
-    let bob_opt = Account::find_by_unique_email(&ctx, "bob@example.com").await.expect("find_by email");
+    let bob_opt = Account::find_by_unique_email(&ctx, "bob@example.com")
+        .await
+        .expect("find_by email");
     assert!(bob_opt.is_some());
     assert_eq!(bob_opt.unwrap().email, "bob@example.com");
 
-    let missing_bob = Account::find_by_unique_email(&ctx, "unknown@example.com").await.expect("find_by missing");
+    let missing_bob = Account::find_by_unique_email(&ctx, "unknown@example.com")
+        .await
+        .expect("find_by missing");
     assert!(missing_bob.is_none());
 
     let missing_err = Account::get_by_unique_email(&ctx, "unknown@example.com").await;
     assert!(matches!(missing_err, Err(Error::NotFound)));
 
     // Test composite-key identity helpers
-    let bob_composite = Account::get_by_org_slug(&ctx, org_id, "bob-slug").await.expect("get_by org_slug");
+    let bob_composite = Account::get_by_org_slug(&ctx, org_id, "bob-slug")
+        .await
+        .expect("get_by org_slug");
     assert_eq!(bob_composite.email, "bob@example.com");
 
-    let bob_comp_opt = Account::find_by_org_slug(&ctx, org_id, "bob-slug").await.expect("find_by org_slug");
+    let bob_comp_opt = Account::find_by_org_slug(&ctx, org_id, "bob-slug")
+        .await
+        .expect("find_by org_slug");
     assert!(bob_comp_opt.is_some());
 
-    let wrong_org = Account::find_by_org_slug(&ctx, Uuid::new_v4(), "bob-slug").await.expect("find_by wrong org");
+    let wrong_org = Account::find_by_org_slug(&ctx, Uuid::new_v4(), "bob-slug")
+        .await
+        .expect("find_by wrong org");
     assert!(wrong_org.is_none());
 }
 
@@ -186,7 +204,9 @@ async fn test_upsert_in_memory() {
     assert_eq!(acc2.slug, "carol"); // preserved original slug!
 
     // Verify row in database
-    let fetched = Account::get_by_unique_email(&ctx, "carol@example.com").await.expect("fetch carol");
+    let fetched = Account::get_by_unique_email(&ctx, "carol@example.com")
+        .await
+        .expect("fetch carol");
     assert_eq!(fetched.display_name, "Carol Updated");
     assert_eq!(fetched.points, 999);
 
@@ -203,8 +223,8 @@ async fn test_upsert_in_memory() {
 
     let comp_upsert2 = Account::register(&ctx)
         .email("emp2@org.com") // different email
-        .org_id(org)           // same org
-        .slug("lead-dev")      // same slug -> conflicts on org_slug!
+        .org_id(org) // same org
+        .slug("lead-dev") // same slug -> conflicts on org_slug!
         .display_name("Lead Dev 2")
         .points(99)
         .upsert_on(Account::org_slug, &["display_name", "points"])
@@ -221,7 +241,9 @@ async fn test_upsert_in_memory() {
 #[test]
 async fn test_identities_and_upsert_in_sqlite() {
     let db = Sqlite::memory().await.expect("sqlite memory");
-    db.install_resources(&[&Account::DEF]).await.expect("install schema");
+    db.install_resources(&[&Account::DEF])
+        .await
+        .expect("install schema");
     let ctx = Context::new(db);
     let org = Uuid::new_v4();
 
@@ -246,7 +268,11 @@ async fn test_identities_and_upsert_in_sqlite() {
         .expect_err("should reject duplicate email in sqlite");
 
     match conflict_err {
-        Error::IdentityConflict { identity, fields, message } => {
+        Error::IdentityConflict {
+            identity,
+            fields,
+            message,
+        } => {
             assert_eq!(identity, "unique_email");
             assert_eq!(fields, vec!["email"]);
             assert_eq!(message, "Email is already registered");
@@ -294,7 +320,9 @@ async fn test_identities_and_upsert_in_sqlite() {
     assert_eq!(comp2.points, 888);
 
     // 5. Verify get_by helper against SQLite
-    let re_read = Account::get_by_unique_email(&ctx, "dave@example.com").await.expect("get_by dave in sqlite");
+    let re_read = Account::get_by_unique_email(&ctx, "dave@example.com")
+        .await
+        .expect("get_by dave in sqlite");
     assert_eq!(re_read.display_name, "Dave Upserted");
     assert_eq!(re_read.points, 777);
 }
@@ -335,13 +363,22 @@ async fn memory_identities_follow_nulls_and_skip_partial_predicates() {
     let ctx = Context::new(Memory::new());
 
     // NULLS NOT DISTINCT: a second null nickname collides with the first.
-    Handle::create(&ctx).email("a@example.com").await.expect("first null nickname");
+    Handle::create(&ctx)
+        .email("a@example.com")
+        .await
+        .expect("first null nickname");
     let err = Handle::create(&ctx)
         .email("b@example.com")
         .await
         .expect_err("second null nickname should collide");
     assert!(
-        matches!(err, Error::IdentityConflict { identity: "one_nickname", .. }),
+        matches!(
+            err,
+            Error::IdentityConflict {
+                identity: "one_nickname",
+                ..
+            }
+        ),
         "unexpected error: {err:?}"
     );
 
@@ -361,7 +398,10 @@ async fn memory_identities_follow_nulls_and_skip_partial_predicates() {
         .upsert_on(Handle::live_email, &["nickname"])
         .await
         .expect_err("upsert on a partial identity should be rejected");
-    assert!(matches!(err, Error::Invalid(_)), "unexpected error: {err:?}");
+    assert!(
+        matches!(err, Error::Invalid(_)),
+        "unexpected error: {err:?}"
+    );
 }
 
 /// As in Ash, an update checks an identity only when it changes one of the identity's
@@ -385,7 +425,8 @@ async fn memory_updates_check_only_the_identities_they_change() {
     };
     let (first, first_row) = row("shared@example.com", "first");
     let (second, second_row) = row("shared@example.com", "second");
-    let table = std::collections::HashMap::from([(first.into(), first_row), (second.into(), second_row)]);
+    let table =
+        std::collections::HashMap::from([(first.into(), first_row), (second.into(), second_row)]);
     let ctx = Context::new(Memory::from_tables(std::collections::HashMap::from([(
         "Account".to_string(),
         table,
@@ -414,7 +455,13 @@ async fn memory_updates_check_only_the_identities_they_change() {
         .await
         .expect_err("a changed email that clashes is refused");
     assert!(
-        matches!(err, Error::IdentityConflict { identity: "unique_email", .. }),
+        matches!(
+            err,
+            Error::IdentityConflict {
+                identity: "unique_email",
+                ..
+            }
+        ),
         "{err:?}"
     );
 }

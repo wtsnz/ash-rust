@@ -37,8 +37,13 @@ pub fn rpc_channel_router<D: TransactionSupport + 'static>(
     rpc: Rpc<D>,
     context: impl Fn(&HeaderMap, &HashMap<String, String>) -> Context<D> + Send + Sync + 'static,
 ) -> Router {
-    let served = Arc::new(Served { rpc, context: Arc::new(context) });
-    Router::new().route("/socket/websocket", get(upgrade::<D>)).with_state(served)
+    let served = Arc::new(Served {
+        rpc,
+        context: Arc::new(context),
+    });
+    Router::new()
+        .route("/socket/websocket", get(upgrade::<D>))
+        .with_state(served)
 }
 
 async fn upgrade<D: TransactionSupport + 'static>(
@@ -87,7 +92,10 @@ impl Frame {
 
     /// The reply to this message, framed as it was.
     fn reply(&self, status: &str, response: Json) -> String {
-        self.message("phx_reply", json!({ "status": status, "response": response }))
+        self.message(
+            "phx_reply",
+            json!({ "status": status, "response": response }),
+        )
     }
 
     fn message(&self, event: &str, payload: Json) -> String {
@@ -100,7 +108,11 @@ impl Frame {
     }
 }
 
-async fn serve<D: TransactionSupport + 'static>(mut socket: WebSocket, served: Arc<Served<D>>, ctx: Context<D>) {
+async fn serve<D: TransactionSupport + 'static>(
+    mut socket: WebSocket,
+    served: Arc<Served<D>>,
+    ctx: Context<D>,
+) {
     let mut joined: Vec<String> = Vec::new();
     while let Some(Ok(message)) = socket.recv().await {
         let text = match message {
@@ -120,7 +132,9 @@ async fn serve<D: TransactionSupport + 'static>(mut socket: WebSocket, served: A
                 }
                 replies.push(frame.reply("ok", json!({})));
             }
-            (_, "phx_join") => replies.push(frame.reply("error", json!({ "reason": "unmatched topic" }))),
+            (_, "phx_join") => {
+                replies.push(frame.reply("error", json!({ "reason": "unmatched topic" })))
+            }
             (topic, _) if !joined.iter().any(|joined| joined == topic) => {
                 replies.push(frame.reply("error", json!({ "reason": "unmatched topic" })))
             }
@@ -129,8 +143,12 @@ async fn serve<D: TransactionSupport + 'static>(mut socket: WebSocket, served: A
                 replies.push(frame.reply("ok", json!({})));
                 replies.push(frame.message("phx_close", json!({})));
             }
-            (_, "run") => replies.push(frame.reply("ok", served.rpc.run(&ctx, &frame.payload).await)),
-            (_, "validate") => replies.push(frame.reply("ok", served.rpc.validate(&ctx, &frame.payload).await)),
+            (_, "run") => {
+                replies.push(frame.reply("ok", served.rpc.run(&ctx, &frame.payload).await))
+            }
+            (_, "validate") => {
+                replies.push(frame.reply("ok", served.rpc.validate(&ctx, &frame.payload).await))
+            }
             (_, event) => replies.push(frame.reply(
                 "error",
                 json!({ "reason": format!("Unknown event: {event}"), "payload": frame.payload }),

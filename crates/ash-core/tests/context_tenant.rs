@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 use ash_core::{
-    resource, ChangeContext, Context, CustomChange, CustomValidation, Error,
-    Notification, Result, SyncFnNotifier, ValidationContext, Value,
+    ChangeContext, Context, CustomChange, CustomValidation, Error, Notification, Result,
+    SyncFnNotifier, ValidationContext, Value, resource,
 };
 use ash_memory::Memory;
 
@@ -29,7 +29,8 @@ pub mod tenant_models {
     impl CustomChange for AutoAssignTenantChange {
         fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()> {
             if let Some(tenant) = ctx.tenant {
-                ctx.fields.insert("tenant_id".to_string(), Value::String(tenant.to_string()));
+                ctx.fields
+                    .insert("tenant_id".to_string(), Value::String(tenant.to_string()));
             }
             Ok(())
         }
@@ -209,7 +210,10 @@ async fn test_notification_carries_tenant_and_metadata() {
         .unwrap();
 
     assert_eq!(doc.title, "Notification Test");
-    assert!(notified.load(Ordering::SeqCst), "notifier should have received notification with tenant & metadata");
+    assert!(
+        notified.load(Ordering::SeqCst),
+        "notifier should have received notification with tenant & metadata"
+    );
 }
 
 #[tokio::test]

@@ -77,7 +77,11 @@ use membership_mod::Membership;
 async fn scenario<D: DataLayer>(ctx: Context<D>) {
     let tenant = Uuid::from_u128(7);
     for code in ["a", "b"] {
-        Account::create(&ctx).tenant_id(tenant).code(code).await.unwrap();
+        Account::create(&ctx)
+            .tenant_id(tenant)
+            .code(code)
+            .await
+            .unwrap();
         Membership::create(&ctx)
             .tenant_id(tenant)
             .code(code)
@@ -86,9 +90,17 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
             .unwrap();
     }
 
-    for membership in Membership::query(&ctx).load_rel(Membership::account).all().await.unwrap() {
+    for membership in Membership::query(&ctx)
+        .load_rel(Membership::account)
+        .all()
+        .await
+        .unwrap()
+    {
         let account = membership.account.loaded().unwrap().as_ref().unwrap();
-        assert_eq!(account.code, membership.code, "belongs_to must match every key column");
+        assert_eq!(
+            account.code, membership.code,
+            "belongs_to must match every key column"
+        );
     }
 
     let accounts = Account::query(&ctx)
@@ -105,7 +117,11 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
             .iter()
             .map(|m| m.label.as_str())
             .collect();
-        assert_eq!(labels, [format!("for {}", account.code)], "has_many by full key");
+        assert_eq!(
+            labels,
+            [format!("for {}", account.code)],
+            "has_many by full key"
+        );
         assert_eq!(account.member_count, Some(1));
     }
 

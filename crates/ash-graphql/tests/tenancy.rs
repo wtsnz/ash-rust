@@ -36,7 +36,8 @@ resource! {
 #[tokio::test]
 async fn graphql_stays_inside_the_tenant() {
     let pubsub = PubSub::new();
-    let base = Context::new(Memory::new()).with_notifier(Arc::new(PubSubNotifier::new(Arc::new(pubsub.clone()))));
+    let base = Context::new(Memory::new())
+        .with_notifier(Arc::new(PubSubNotifier::new(Arc::new(pubsub.clone()))));
     let acme = base.clone().with_tenant("acme");
     let globex = base.clone().with_tenant("globex");
     let ours = Shipment::create(&acme).label("ours").await.unwrap();
@@ -46,15 +47,27 @@ async fn graphql_stays_inside_the_tenant() {
         .with_pubsub(pubsub)
         .finish::<Memory>()
         .unwrap();
-    let run = |ctx: &Context<Memory>, query: String| schema.execute(Request::new(query).data(ctx.clone()));
+    let run = |ctx: &Context<Memory>, query: String| {
+        schema.execute(Request::new(query).data(ctx.clone()))
+    };
 
     let listed = run(&acme, "{ listShipments { results { label } } }".into()).await;
     assert!(listed.errors.is_empty(), "{:?}", listed.errors);
-    assert_eq!(listed.data.into_json().unwrap()["listShipments"]["results"], serde_json::json!([{ "label": "ours" }]));
+    assert_eq!(
+        listed.data.into_json().unwrap()["listShipments"]["results"],
+        serde_json::json!([{ "label": "ours" }])
+    );
 
-    let got = run(&acme, format!(r#"{{ getShipment(id: "{}") {{ label }} }}"#, theirs.id)).await;
+    let got = run(
+        &acme,
+        format!(r#"{{ getShipment(id: "{}") {{ label }} }}"#, theirs.id),
+    )
+    .await;
     assert!(got.errors.is_empty(), "{:?}", got.errors);
-    assert_eq!(got.data.into_json().unwrap()["getShipment"], serde_json::Value::Null);
+    assert_eq!(
+        got.data.into_json().unwrap()["getShipment"],
+        serde_json::Value::Null
+    );
 
     // Without a tenant, a tenant-scoped read is refused, as it is outside GraphQL.
     let refused = run(&base, "{ listShipments { results { label } } }".into()).await;
@@ -63,7 +76,10 @@ async fn graphql_stays_inside_the_tenant() {
     // Subscribers only hear about their own tenant. A subscription starts listening when
     // it is first polled, so poll each before anything changes.
     let listen = |ctx: &Context<Memory>| {
-        let mut stream = schema.execute_stream(Request::new("subscription { shipmentUpdated { updated { label } } }").data(ctx.clone()));
+        let mut stream = schema.execute_stream(
+            Request::new("subscription { shipmentUpdated { updated { label } } }")
+                .data(ctx.clone()),
+        );
         tokio::spawn(async move {
             let first = stream.next().await.unwrap();
             first.data.into_json().unwrap()["shipmentUpdated"]["updated"]["label"].clone()
@@ -72,8 +88,20 @@ async fn graphql_stays_inside_the_tenant() {
     let acme_hears = listen(&acme);
     let globex_hears = listen(&globex);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    Shipment::get(&globex, theirs.id).await.unwrap().relabel_on(&globex).label("moved").await.unwrap();
-    Shipment::get(&acme, ours.id).await.unwrap().relabel_on(&acme).label("kept").await.unwrap();
+    Shipment::get(&globex, theirs.id)
+        .await
+        .unwrap()
+        .relabel_on(&globex)
+        .label("moved")
+        .await
+        .unwrap();
+    Shipment::get(&acme, ours.id)
+        .await
+        .unwrap()
+        .relabel_on(&acme)
+        .label("kept")
+        .await
+        .unwrap();
 
     let wait = |task| tokio::time::timeout(std::time::Duration::from_secs(5), task);
     assert_eq!(wait(acme_hears).await.unwrap().unwrap(), "kept");

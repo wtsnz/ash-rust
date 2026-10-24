@@ -83,8 +83,14 @@ async fn test_multi_instance_sqlite_routing() {
     let audit_sqlite = Sqlite::memory().await.unwrap();
 
     // 2. Install schemas in their respective DBs only
-    primary_sqlite.install_resources(&[&Customer::DEF]).await.unwrap();
-    audit_sqlite.install_resources(&[&AuditLog::DEF]).await.unwrap();
+    primary_sqlite
+        .install_resources(&[&Customer::DEF])
+        .await
+        .unwrap();
+    audit_sqlite
+        .install_resources(&[&AuditLog::DEF])
+        .await
+        .unwrap();
 
     // 3. Build StoreRegistry routing by StoreTag
     let registry = StoreRegistry::new()
@@ -123,8 +129,13 @@ async fn test_multi_instance_sqlite_routing() {
     assert_eq!(direct_customers.len(), 1);
 
     // Audit db does NOT contain customers table
-    let audit_query = Customer::query(&Context::new(audit_sqlite.clone())).all().await;
-    assert!(audit_query.is_err(), "Customer table should not exist in audit db");
+    let audit_query = Customer::query(&Context::new(audit_sqlite.clone()))
+        .all()
+        .await;
+    assert!(
+        audit_query.is_err(),
+        "Customer table should not exist in audit db"
+    );
 
     // Invariant 3: AuditLog creates only in audit_sqlite
     let audit = AuditLog::create(&ctx)
@@ -141,12 +152,20 @@ async fn test_multi_instance_sqlite_routing() {
         .unwrap();
     assert_eq!(direct_audits.len(), 1);
 
-    let primary_query = AuditLog::query(&Context::new(primary_sqlite.clone())).all().await;
-    assert!(primary_query.is_err(), "AuditLog table should not exist in primary db");
+    let primary_query = AuditLog::query(&Context::new(primary_sqlite.clone()))
+        .all()
+        .await;
+    assert!(
+        primary_query.is_err(),
+        "AuditLog table should not exist in primary db"
+    );
 
     // Invariant 4: Multi pipeline spanning multiple stores atomically
     ctx.multi()
-        .create("new_customer", Customer::create(&ctx).email("bob@example.com").name("Bob"))
+        .create(
+            "new_customer",
+            Customer::create(&ctx).email("bob@example.com").name("Bob"),
+        )
         .create_from("log_entry", |ctx, res| {
             let c: &Customer = res.get("new_customer").unwrap();
             AuditLog::create(ctx)
@@ -236,7 +255,11 @@ async fn test_mixed_sqlite_and_memory_store_routing() {
 
     let ctx = Context::new(registry);
 
-    let account = Account::create(&ctx).username("charlie").call().await.unwrap();
+    let account = Account::create(&ctx)
+        .username("charlie")
+        .call()
+        .await
+        .unwrap();
     let session = SessionToken::create(&ctx)
         .token("xyz_secret")
         .account_id(account.id)
@@ -264,13 +287,25 @@ struct MockKeyValueLayer {
 }
 
 impl DataLayer for MockKeyValueLayer {
-    async fn create(&self, _res: &ResourceDef, _tenant: Option<&str>, id: ash_core::Value, fields: FieldMap) -> ash_core::Result<FieldMap> {
+    async fn create(
+        &self,
+        _res: &ResourceDef,
+        _tenant: Option<&str>,
+        id: ash_core::Value,
+        fields: FieldMap,
+    ) -> ash_core::Result<FieldMap> {
         let mut map = self.storage.lock().unwrap();
         map.insert(id, fields.clone());
         Ok(fields)
     }
 
-    async fn update(&self, _res: &ResourceDef, _tenant: Option<&str>, id: ash_core::Value, fields: FieldMap) -> ash_core::Result<FieldMap> {
+    async fn update(
+        &self,
+        _res: &ResourceDef,
+        _tenant: Option<&str>,
+        id: ash_core::Value,
+        fields: FieldMap,
+    ) -> ash_core::Result<FieldMap> {
         let mut map = self.storage.lock().unwrap();
         if let Some(existing) = map.get_mut(&id) {
             for (k, v) in fields.clone() {
@@ -282,13 +317,22 @@ impl DataLayer for MockKeyValueLayer {
         }
     }
 
-    async fn destroy(&self, _res: &ResourceDef, _tenant: Option<&str>, id: ash_core::Value) -> ash_core::Result<()> {
+    async fn destroy(
+        &self,
+        _res: &ResourceDef,
+        _tenant: Option<&str>,
+        id: ash_core::Value,
+    ) -> ash_core::Result<()> {
         let mut map = self.storage.lock().unwrap();
         map.remove(&id);
         Ok(())
     }
 
-    async fn run_query(&self, _res: &ResourceDef, _query: &CompiledQuery) -> ash_core::Result<Vec<FieldMap>> {
+    async fn run_query(
+        &self,
+        _res: &ResourceDef,
+        _query: &CompiledQuery,
+    ) -> ash_core::Result<Vec<FieldMap>> {
         let map = self.storage.lock().unwrap();
         Ok(map.values().cloned().collect())
     }
@@ -397,11 +441,16 @@ async fn test_missing_store_diagnostic_error() {
     let registry = StoreRegistry::new().with_store::<PrimaryDb, _>(Memory::new());
     let ctx = Context::new(registry);
 
-    let err = Orphan::create(&ctx).name("lonely").call().await.unwrap_err();
+    let err = Orphan::create(&ctx)
+        .name("lonely")
+        .call()
+        .await
+        .unwrap_err();
 
     let err_msg = err.to_string();
     assert!(
-        err_msg.contains("no data layer registered for store `UnregisteredDb` on resource `Orphan`"),
+        err_msg
+            .contains("no data layer registered for store `UnregisteredDb` on resource `Orphan`"),
         "expected clear diagnostic error, got: {err_msg}"
     );
 }

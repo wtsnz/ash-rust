@@ -353,7 +353,11 @@ async fn typed_records_hold_hidden_fields_whatever_their_type() {
     let ctx = Context::new(Memory::new());
     let admin = ctx.with_actor(Actor::new(Uuid::new_v4()).with_role("admin"));
     let clerk = ctx.with_actor(Actor::new(Uuid::new_v4()).with_role("clerk"));
-    let created = Payslip::create(&admin).employee("Ada").salary(100).await.unwrap();
+    let created = Payslip::create(&admin)
+        .employee("Ada")
+        .salary(100)
+        .await
+        .unwrap();
     assert_eq!(created.salary, 100);
 
     let seen = Payslip::query(&clerk).all().await.unwrap();

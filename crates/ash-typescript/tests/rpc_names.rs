@@ -62,8 +62,15 @@ async fn fields_and_arguments_go_by_their_client_names() {
     )
     .await;
     // The argument arrived under its own name, and set the postcode.
-    assert_eq!(created, json!({ "success": true, "data": { "line1": "1 Main St", "zip": "94105" } }));
-    run(&ctx, json!({ "action": "create_place", "input": { "line1": "2 Side St", "zip": "10001" } })).await;
+    assert_eq!(
+        created,
+        json!({ "success": true, "data": { "line1": "1 Main St", "zip": "94105" } })
+    );
+    run(
+        &ctx,
+        json!({ "action": "create_place", "input": { "line1": "2 Side St", "zip": "10001" } }),
+    )
+    .await;
 
     let listed = run(
         &ctx,
@@ -71,10 +78,22 @@ async fn fields_and_arguments_go_by_their_client_names() {
     )
     .await;
     assert_eq!(listed["data"], json!([{ "zip": "10001" }]));
-    let got = run(&ctx, json!({ "action": "get_place", "getBy": { "zip": "94105" }, "fields": ["line1"] })).await;
+    let got = run(
+        &ctx,
+        json!({ "action": "get_place", "getBy": { "zip": "94105" }, "fields": ["line1"] }),
+    )
+    .await;
     assert_eq!(got["data"], json!({ "line1": "1 Main St" }));
 
     // Errors name the field as the client does.
-    let invalid = run(&ctx, json!({ "action": "create_place", "input": { "line1": "x" } })).await;
-    assert_eq!(invalid["errors"][0]["fields"], json!(["line1"]), "{invalid}");
+    let invalid = run(
+        &ctx,
+        json!({ "action": "create_place", "input": { "line1": "x" } }),
+    )
+    .await;
+    assert_eq!(
+        invalid["errors"][0]["fields"],
+        json!(["line1"]),
+        "{invalid}"
+    );
 }

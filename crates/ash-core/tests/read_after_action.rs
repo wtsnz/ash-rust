@@ -56,6 +56,10 @@ async fn a_read_runs_its_after_action_on_what_it_found() {
     Book::query(&ctx).all().await.unwrap();
     assert_eq!(SEEN.load(Ordering::SeqCst), 2);
 
-    let refused = Book::query(&ctx).action("counted").argument("refuse", true).all().await;
+    let refused = Book::query(&ctx)
+        .action("counted")
+        .argument("refuse", true)
+        .all()
+        .await;
     assert!(matches!(refused, Err(Error::Invalid(_))), "{refused:?}");
 }

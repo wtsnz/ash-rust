@@ -10,41 +10,41 @@ use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
 resource! {
-    Product {
-        table "products";
+Product {
+    table "products";
 
-    attributes {
-        id: Uuid [pk];
-        sku: String;
-        title: String;
-        price: i64;
-        category: String;
+attributes {
+    id: Uuid [pk];
+    sku: String;
+    title: String;
+    price: i64;
+    category: String;
+}
+
+identities {
+    identity unique_sku [sku];
+}
+
+actions {
+    create create {
+        primary;
+        accept [sku, title, price, category];
     }
 
-    identities {
-        identity unique_sku [sku];
+    read read {
+        primary;
     }
 
-    actions {
-        create create {
-            primary;
-            accept [sku, title, price, category];
-        }
-
-        read read {
-            primary;
-        }
-
-        update update {
-            primary;
-            accept [title, price, category];
-        }
-
-        destroy destroy {
-            primary;
-        }
+    update update {
+        primary;
+        accept [title, price, category];
     }
-    }}
+
+    destroy destroy {
+        primary;
+    }
+}
+}}
 
 async fn setup_sqlite() -> Context<Sqlite> {
     let sqlite = Sqlite::memory().await.unwrap();
@@ -113,7 +113,9 @@ async fn test_bulk_create_chunked_batches() {
     });
 
     let opts = BulkCreateOptions::new().batch_size(10);
-    let res = Product::bulk_create_with_opts(&ctx, "create", items, opts).await.unwrap();
+    let res = Product::bulk_create_with_opts(&ctx, "create", items, opts)
+        .await
+        .unwrap();
     assert_eq!(res.count, 25);
     assert_eq!(res.records.len(), 25);
 }
@@ -147,7 +149,9 @@ async fn test_bulk_create_with_upsert() {
     ];
 
     let opts = BulkCreateOptions::new().upsert("unique_sku", &["title", "price"]);
-    let res = Product::bulk_create_with_opts(&ctx, "create", items, opts).await.unwrap();
+    let res = Product::bulk_create_with_opts(&ctx, "create", items, opts)
+        .await
+        .unwrap();
     assert_eq!(res.count, 2);
 
     let p1 = Product::query(&ctx)
@@ -175,11 +179,31 @@ async fn test_bulk_destroy_memory_and_sqlite() {
     let sql_ctx = setup_sqlite().await;
 
     // Test Memory
-    let p1 = Product::create(&mem_ctx).sku("M1").title("T1").price(10).category("C").await.unwrap();
-    let p2 = Product::create(&mem_ctx).sku("M2").title("T2").price(10).category("C").await.unwrap();
-    let p3 = Product::create(&mem_ctx).sku("M3").title("T3").price(10).category("C").await.unwrap();
+    let p1 = Product::create(&mem_ctx)
+        .sku("M1")
+        .title("T1")
+        .price(10)
+        .category("C")
+        .await
+        .unwrap();
+    let p2 = Product::create(&mem_ctx)
+        .sku("M2")
+        .title("T2")
+        .price(10)
+        .category("C")
+        .await
+        .unwrap();
+    let p3 = Product::create(&mem_ctx)
+        .sku("M3")
+        .title("T3")
+        .price(10)
+        .category("C")
+        .await
+        .unwrap();
 
-    let res = Product::bulk_destroy(&mem_ctx, &[p1.id, p2.id]).await.unwrap();
+    let res = Product::bulk_destroy(&mem_ctx, &[p1.id, p2.id])
+        .await
+        .unwrap();
     assert_eq!(res.count, 2);
 
     let remaining = Product::query(&mem_ctx).load().await.unwrap();
@@ -187,11 +211,31 @@ async fn test_bulk_destroy_memory_and_sqlite() {
     assert_eq!(remaining[0].id, p3.id);
 
     // Test Sqlite
-    let s1 = Product::create(&sql_ctx).sku("S1").title("T1").price(10).category("C").await.unwrap();
-    let s2 = Product::create(&sql_ctx).sku("S2").title("T2").price(10).category("C").await.unwrap();
-    let s3 = Product::create(&sql_ctx).sku("S3").title("T3").price(10).category("C").await.unwrap();
+    let s1 = Product::create(&sql_ctx)
+        .sku("S1")
+        .title("T1")
+        .price(10)
+        .category("C")
+        .await
+        .unwrap();
+    let s2 = Product::create(&sql_ctx)
+        .sku("S2")
+        .title("T2")
+        .price(10)
+        .category("C")
+        .await
+        .unwrap();
+    let s3 = Product::create(&sql_ctx)
+        .sku("S3")
+        .title("T3")
+        .price(10)
+        .category("C")
+        .await
+        .unwrap();
 
-    let res = Product::bulk_destroy(&sql_ctx, &[s1.id, s3.id]).await.unwrap();
+    let res = Product::bulk_destroy(&sql_ctx, &[s1.id, s3.id])
+        .await
+        .unwrap();
     assert_eq!(res.count, 2);
 
     let remaining = Product::query(&sql_ctx).load().await.unwrap();
@@ -415,7 +459,9 @@ async fn test_bulk_create_stop_on_error_false() {
     ];
 
     let opts = BulkCreateOptions::new().stop_on_error(false);
-    let res = Product::bulk_create_with_opts(&ctx, "create", items, opts).await.unwrap();
+    let res = Product::bulk_create_with_opts(&ctx, "create", items, opts)
+        .await
+        .unwrap();
 
     assert_eq!(res.count, 2);
     assert_eq!(res.records.len(), 2);
@@ -430,12 +476,15 @@ async fn test_bulk_create_stop_on_error_false() {
 async fn bulk_updates_each_record<D: ash_core::TransactionSupport + 'static>(ctx: Context<D>) {
     let updates = Arc::new(AtomicUsize::new(0));
     let heard = updates.clone();
-    let ctx = ctx.with_notifier(Arc::new(SyncFnNotifier::new("updates", move |notification| {
-        if notification.action_kind == ash_core::ActionKind::Update {
-            heard.fetch_add(1, Ordering::SeqCst);
-        }
-        Ok(())
-    })));
+    let ctx = ctx.with_notifier(Arc::new(SyncFnNotifier::new(
+        "updates",
+        move |notification| {
+            if notification.action_kind == ash_core::ActionKind::Update {
+                heard.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(())
+        },
+    )));
     let created = Product::bulk_create(
         &ctx,
         (1..=4).map(|i| {
@@ -453,7 +502,12 @@ async fn bulk_updates_each_record<D: ash_core::TransactionSupport + 'static>(ctx
     // Each its own price; the third also moves category, and a stale copy's title isn't
     // written back.
     let mut stale = created.records.clone();
-    let renamed = stale[1].clone().update_on(&ctx).title("Renamed".to_string()).await.unwrap();
+    let renamed = stale[1]
+        .clone()
+        .update_on(&ctx)
+        .title("Renamed".to_string())
+        .await
+        .unwrap();
     assert_eq!(renamed.title, "Renamed");
     stale[2].category = "Stale".into();
     let inputs = stale.into_iter().enumerate().map(|(i, product)| {
@@ -466,7 +520,11 @@ async fn bulk_updates_each_record<D: ash_core::TransactionSupport + 'static>(ctx
     });
     let result = Product::bulk_update(&ctx, "update", inputs).await.unwrap();
     assert_eq!(result.count, 4);
-    assert_eq!(updates.load(Ordering::SeqCst), 5, "the rename, then one per row");
+    assert_eq!(
+        updates.load(Ordering::SeqCst),
+        5,
+        "the rename, then one per row"
+    );
 
     let mut stored = Product::query(&ctx).load().await.unwrap();
     stored.sort_by_key(|p| p.price);
@@ -494,10 +552,23 @@ async fn bulk_updates_each_record<D: ash_core::TransactionSupport + 'static>(ctx
         (product, input)
     });
     let opts = ash_core::BulkUpdateOptions::new().stop_on_error(false);
-    let result = Product::bulk_update_with_opts(&ctx, "update", inputs, opts).await.unwrap();
-    assert_eq!((result.count, result.error_count), (3, 1), "{:?}", result.errors);
+    let result = Product::bulk_update_with_opts(&ctx, "update", inputs, opts)
+        .await
+        .unwrap();
+    assert_eq!(
+        (result.count, result.error_count),
+        (3, 1),
+        "{:?}",
+        result.errors
+    );
     let prices: Vec<i64> = {
-        let mut prices: Vec<i64> = Product::query(&ctx).load().await.unwrap().iter().map(|p| p.price).collect();
+        let mut prices: Vec<i64> = Product::query(&ctx)
+            .load()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| p.price)
+            .collect();
         prices.sort_unstable();
         prices
     };

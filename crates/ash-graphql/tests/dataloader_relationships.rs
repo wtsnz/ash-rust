@@ -1,6 +1,6 @@
 use ash_core::{
-    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind, RelationshipDef,
-    ResourceDef, Value,
+    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
+    RelationshipDef, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -101,13 +101,17 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
     let mut a1 = FieldMap::new();
     a1.insert("id".into(), Value::Uuid(author1_id));
     a1.insert("name".into(), Value::String("Alice".into()));
-    data.create(&AUTHOR_DEF, None, Value::from(author1_id), a1).await.unwrap();
+    data.create(&AUTHOR_DEF, None, Value::from(author1_id), a1)
+        .await
+        .unwrap();
 
     let author2_id = Uuid::new_v4();
     let mut a2 = FieldMap::new();
     a2.insert("id".into(), Value::Uuid(author2_id));
     a2.insert("name".into(), Value::String("Bob".into()));
-    data.create(&AUTHOR_DEF, None, Value::from(author2_id), a2).await.unwrap();
+    data.create(&AUTHOR_DEF, None, Value::from(author2_id), a2)
+        .await
+        .unwrap();
 
     // Alice's posts
     for i in 1..=2 {
@@ -116,7 +120,9 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Alice Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author1_id));
-        data.create(&POST_DEF, None, Value::from(p_id), p).await.unwrap();
+        data.create(&POST_DEF, None, Value::from(p_id), p)
+            .await
+            .unwrap();
     }
 
     // Bob's posts
@@ -126,7 +132,9 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Bob Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author2_id));
-        data.create(&POST_DEF, None, Value::from(p_id), p).await.unwrap();
+        data.create(&POST_DEF, None, Value::from(p_id), p)
+            .await
+            .unwrap();
     }
 
     (author1_id, author2_id)
@@ -155,9 +163,15 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
     "#;
 
     let dataloader1 = AshGraphQL::create_dataloader(ctx.clone());
-    let req = Request::new(query_authors).data(ctx.clone()).data(dataloader1);
+    let req = Request::new(query_authors)
+        .data(ctx.clone())
+        .data(dataloader1);
     let res = schema.execute(req).await;
-    assert!(res.errors.is_empty(), "Errors in listAuthors: {:?}", res.errors);
+    assert!(
+        res.errors.is_empty(),
+        "Errors in listAuthors: {:?}",
+        res.errors
+    );
     let val = res.data.into_json().unwrap();
     let authors = val["listAuthors"]["results"].as_array().unwrap();
     assert_eq!(authors.len(), 2);
@@ -168,7 +182,10 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
         assert_eq!(posts.len(), 2);
         for p in posts {
             let title = p["title"].as_str().unwrap();
-            assert!(title.starts_with(name), "Post title should match author name");
+            assert!(
+                title.starts_with(name),
+                "Post title should match author name"
+            );
         }
     }
 
@@ -187,7 +204,11 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
     let dataloader2 = AshGraphQL::create_dataloader(ctx.clone());
     let req = Request::new(query_posts).data(ctx).data(dataloader2);
     let res = schema.execute(req).await;
-    assert!(res.errors.is_empty(), "Errors in listPosts: {:?}", res.errors);
+    assert!(
+        res.errors.is_empty(),
+        "Errors in listPosts: {:?}",
+        res.errors
+    );
     let val = res.data.into_json().unwrap();
     let posts = val["listPosts"]["results"].as_array().unwrap();
     assert_eq!(posts.len(), 4);
@@ -195,7 +216,10 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
     for post in posts {
         let title = post["title"].as_str().unwrap();
         let author_name = post["author"]["name"].as_str().unwrap();
-        assert!(title.starts_with(author_name), "Post author should match title");
+        assert!(
+            title.starts_with(author_name),
+            "Post author should match title"
+        );
     }
 }
 
@@ -222,7 +246,9 @@ async fn test_nested_relationship_filtering() {
         }
     "#;
 
-    let res = schema.execute(Request::new(query_posts_by_author).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(query_posts_by_author).data(ctx.clone()))
+        .await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let posts = val["listPosts"]["results"].as_array().unwrap();
@@ -240,11 +266,12 @@ async fn test_nested_relationship_filtering() {
         }
     "#;
 
-    let res = schema.execute(Request::new(query_authors_by_post).data(ctx)).await;
+    let res = schema
+        .execute(Request::new(query_authors_by_post).data(ctx))
+        .await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let authors = val["listAuthors"]["results"].as_array().unwrap();
     assert_eq!(authors.len(), 1);
     assert_eq!(authors[0]["name"], "Bob");
 }
-

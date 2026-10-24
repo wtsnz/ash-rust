@@ -7,41 +7,41 @@ use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 use ash_sqlite::Sqlite;
 
 resource! {
-    Article {
-        table "articles";
+Article {
+    table "articles";
 
-    attributes {
-        id: Uuid [pk];
-        title: String;
-        content: String;
-        views: i64;
-        archived: bool;
-        tag: Option<String>;
+attributes {
+    id: Uuid [pk];
+    title: String;
+    content: String;
+    views: i64;
+    archived: bool;
+    tag: Option<String>;
+}
+
+actions {
+    read read {
+        primary;
     }
 
-    actions {
-        read read {
-            primary;
-        }
-
-        create publish {
-            primary;
-            // Leap 1: DRY Action `accept [field1, field2]` without repeating types!
-            accept [title, content, tag];
-            change set(views = 0);
-            change set(archived = false);
-        }
-
-        update archive {
-            // Leap 1: DRY Action `accept [field]` on update!
-            accept [archived];
-        }
-
-        destroy delete {
-            primary;
-        }
+    create publish {
+        primary;
+        // Leap 1: DRY Action `accept [field1, field2]` without repeating types!
+        accept [title, content, tag];
+        change set(views = 0);
+        change set(archived = false);
     }
-    }}
+
+    update archive {
+        // Leap 1: DRY Action `accept [field]` on update!
+        accept [archived];
+    }
+
+    destroy delete {
+        primary;
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_leap1_and_leap2_dry_accept_and_zero_import_operators() {
@@ -208,9 +208,7 @@ async fn test_leap5_fluid_multi_in_memory() {
 async fn test_leap5_fluid_multi_in_sqlite_transaction() {
     let data = Sqlite::memory().await.expect("sqlite init");
     let ctx = Context::new(data);
-    ctx.install(&[&Article::DEF])
-        .await
-        .expect("install schema");
+    ctx.install(&[&Article::DEF]).await.expect("install schema");
 
     // Leap 5: ctx.multi().commit() executes inside an atomic SQLite transaction!
     let results = ctx

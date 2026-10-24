@@ -62,7 +62,8 @@ async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
 
     let listed = schema
         .execute(
-            Request::new("{ listTickets { results { title } } }").data(ctx.clone().with_actor(viewer.clone())),
+            Request::new("{ listTickets { results { title } } }")
+                .data(ctx.clone().with_actor(viewer.clone())),
         )
         .await;
     assert!(listed.errors.is_empty(), "{:?}", listed.errors);
@@ -89,7 +90,8 @@ async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
     assert!(created.errors.is_empty(), "{:?}", created.errors);
     let created_json = created.data.into_json().unwrap();
     assert_eq!(
-        created_json["createTicket"]["errors"], serde_json::json!([]),
+        created_json["createTicket"]["errors"],
+        serde_json::json!([]),
         "create must succeed so the subscription has a chance to leak: {created_json}"
     );
 

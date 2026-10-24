@@ -1,16 +1,22 @@
-use std::time::Duration;
 use ash_core::{ActionDef, AttrType, AttributeDef, Context, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
-use std::sync::Arc;
 use async_graphql::Request;
 use futures_util::StreamExt;
+use std::sync::Arc;
+use std::time::Duration;
 
 static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
     AttributeDef::required("title", AttrType::String),
-    AttributeDef::optional("status", AttrType::Atom { one_of: &["OPEN", "CLOSED"], name: Some("TicketStatus") }),
+    AttributeDef::optional(
+        "status",
+        AttrType::Atom {
+            one_of: &["OPEN", "CLOSED"],
+            name: Some("TicketStatus"),
+        },
+    ),
 ];
 
 static TICKET_ACTIONS: &[ActionDef] = &[
@@ -116,7 +122,9 @@ async fn test_phase6_subscription_stream_with_pubsub() {
         }
     "#;
 
-    let res = schema.execute(Request::new(mutation).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(mutation).data(ctx.clone()))
+        .await;
     assert!(res.errors.is_empty(), "Mutation errors: {:?}", res.errors);
 
     // Receive from subscription stream
@@ -132,7 +140,10 @@ async fn test_phase6_subscription_stream_with_pubsub() {
         event.errors
     );
     let event_json = event.data.into_json().unwrap();
-    assert_eq!(event_json["ticketCreated"]["created"]["title"], "Urgent Outage");
+    assert_eq!(
+        event_json["ticketCreated"]["created"]["title"],
+        "Urgent Outage"
+    );
     assert_eq!(event_json["ticketCreated"]["created"]["status"], "OPEN");
 }
 
@@ -147,12 +158,16 @@ async fn each_write_is_heard_once() {
         .finish::<Memory>()
         .unwrap();
 
-    let mut stream =
-        schema.execute_stream(Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()));
+    let mut stream = schema.execute_stream(
+        Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()),
+    );
     let heard = tokio::spawn(async move {
         let mut titles = Vec::new();
-        while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(300), stream.next()).await {
-            titles.push(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"].clone());
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(300), stream.next()).await
+        {
+            titles
+                .push(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"].clone());
         }
         titles
     });
@@ -160,12 +175,21 @@ async fn each_write_is_heard_once() {
 
     // A `PubSub` in the request data, which mutations used to publish to themselves,
     // doesn't publish the change again.
-    let mutation = r#"mutation { createTicket(input: { title: "From GraphQL" }) { errors { code } } }"#;
-    let res = schema.execute(Request::new(mutation).data(ctx.clone()).data(pubsub.clone())).await;
+    let mutation =
+        r#"mutation { createTicket(input: { title: "From GraphQL" }) { errors { code } } }"#;
+    let res = schema
+        .execute(
+            Request::new(mutation)
+                .data(ctx.clone())
+                .data(pubsub.clone()),
+        )
+        .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     let mut input = ash_core::FieldMap::new();
     input.insert("title".into(), ash_core::Value::String("From Rust".into()));
-    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+        .await
+        .unwrap();
 
     assert_eq!(heard.await.unwrap(), ["From GraphQL", "From Rust"]);
 }
@@ -231,7 +255,10 @@ async fn test_phase6_subscription_filtered() {
         .expect("Stream ended unexpectedly");
 
     let event_json = event.data.into_json().unwrap();
-    assert_eq!(event_json["ticketCreated"]["created"]["title"], "Resolved Ticket");
+    assert_eq!(
+        event_json["ticketCreated"]["created"]["title"],
+        "Resolved Ticket"
+    );
     assert_eq!(event_json["ticketCreated"]["created"]["status"], "CLOSED");
 }
 
@@ -258,7 +285,9 @@ async fn test_phase6_subscription_updated_and_destroyed() {
             }
         }
     "#;
-    let res = schema.execute(Request::new(create_mutation).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(create_mutation).data(ctx.clone()))
+        .await;
     let ticket_id = res.data.into_json().unwrap()["createTicket"]["result"]["id"]
         .as_str()
         .unwrap()
@@ -290,7 +319,9 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         }}
     "#
     );
-    let res_up = schema.execute(Request::new(&update_mut).data(ctx.clone())).await;
+    let res_up = schema
+        .execute(Request::new(&update_mut).data(ctx.clone()))
+        .await;
     assert!(res_up.errors.is_empty());
 
     let event_up = tokio::time::timeout(Duration::from_secs(2), update_handle)
@@ -299,8 +330,14 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         .expect("Join error")
         .expect("Stream ended unexpectedly");
     let event_up_json = event_up.data.into_json().unwrap();
-    assert_eq!(event_up_json["ticketUpdated"]["updated"]["title"], "Updated Title");
-    assert_eq!(event_up_json["ticketUpdated"]["updated"]["status"], "CLOSED");
+    assert_eq!(
+        event_up_json["ticketUpdated"]["updated"]["title"],
+        "Updated Title"
+    );
+    assert_eq!(
+        event_up_json["ticketUpdated"]["updated"]["status"],
+        "CLOSED"
+    );
 
     // Subscribe to ticketDestroyed
     let destroy_sub = format!(
@@ -325,7 +362,9 @@ async fn test_phase6_subscription_updated_and_destroyed() {
         }}
     "#
     );
-    let res_del = schema.execute(Request::new(&destroy_mut).data(ctx.clone())).await;
+    let res_del = schema
+        .execute(Request::new(&destroy_mut).data(ctx.clone()))
+        .await;
     assert!(res_del.errors.is_empty());
 
     let event_del = tokio::time::timeout(Duration::from_secs(2), destroy_handle)
@@ -380,7 +419,10 @@ async fn test_phase6_axum_router_endpoints() {
     assert_eq!(res_post.status(), StatusCode::OK);
     let post_body = res_post.into_body().collect().await.unwrap().to_bytes();
     let res_json: serde_json::Value = serde_json::from_slice(&post_body).unwrap();
-    assert_eq!(res_json["data"]["__typename"], "RootQueryType", "{res_json}");
+    assert_eq!(
+        res_json["data"]["__typename"], "RootQueryType",
+        "{res_json}"
+    );
 }
 
 /// The router serves subscriptions at `/graphql/ws`, the endpoint its GraphiQL points at,
@@ -400,17 +442,25 @@ async fn router_serves_subscriptions_over_websocket() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, ash_graphql::axum::graphql_router(schema)).await.unwrap();
+        axum::serve(listener, ash_graphql::axum::graphql_router(schema))
+            .await
+            .unwrap();
     });
 
-    let mut request = format!("ws://{addr}/graphql/ws").into_client_request().unwrap();
-    request
-        .headers_mut()
-        .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse().unwrap());
+    let mut request = format!("ws://{addr}/graphql/ws")
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "graphql-transport-ws".parse().unwrap(),
+    );
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
     let send = |value: serde_json::Value| Message::Text(value.to_string().into());
-    socket.send(send(serde_json::json!({ "type": "connection_init" }))).await.unwrap();
+    socket
+        .send(send(serde_json::json!({ "type": "connection_init" })))
+        .await
+        .unwrap();
     let ack = read_message(&mut socket).await;
     assert_eq!(ack["type"], "connection_ack");
     socket
@@ -424,26 +474,40 @@ async fn router_serves_subscriptions_over_websocket() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let mut input = ash_core::FieldMap::new();
-    input.insert("title".into(), ash_core::Value::String("Over the wire".into()));
-    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    input.insert(
+        "title".into(),
+        ash_core::Value::String("Over the wire".into()),
+    );
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+        .await
+        .unwrap();
 
     let next = read_message(&mut socket).await;
     assert_eq!(next["type"], "next", "{next}");
     assert_eq!(next["id"], "1");
-    assert_eq!(next["payload"]["data"]["ticketCreated"]["created"]["title"], "Over the wire");
+    assert_eq!(
+        next["payload"]["data"]["ticketCreated"]["created"]["title"],
+        "Over the wire"
+    );
 }
 
 #[cfg(feature = "axum")]
 async fn read_message<S>(socket: &mut S) -> serde_json::Value
 where
     S: futures_util::Stream<
-            Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>,
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
         > + Unpin,
 {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
     loop {
-        match tokio::time::timeout(Duration::from_secs(5), socket.next()).await.unwrap() {
+        match tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+        {
             Some(Ok(Message::Text(text))) => return serde_json::from_str(&text).unwrap(),
             Some(Ok(_)) => continue,
             other => panic!("socket closed: {other:?}"),
@@ -471,15 +535,26 @@ async fn null_subscription_arguments_mean_none() {
 
     let mut input = ash_core::FieldMap::new();
     input.insert("title".into(), ash_core::Value::String("Unfiltered".into()));
-    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+        .await
+        .unwrap();
 
-    let event = tokio::time::timeout(Duration::from_secs(2), heard).await.unwrap().unwrap().unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(2), heard)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert!(event.errors.is_empty(), "{:?}", event.errors);
-    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"], "Unfiltered");
+    assert_eq!(
+        event.data.into_json().unwrap()["ticketCreated"]["created"]["title"],
+        "Unfiltered"
+    );
 }
 
 async fn next<S: futures_util::Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
-    tokio::time::timeout(Duration::from_secs(2), stream.next()).await.unwrap()
+    tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
 }
 
 /// A subscriber that falls further behind than the pubsub buffers is told how many events
@@ -498,11 +573,14 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
         async move {
             let mut input = ash_core::FieldMap::new();
             input.insert("title".into(), ash_core::Value::String(title));
-            ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+            ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+                .await
+                .unwrap();
         }
     };
-    let mut stream =
-        schema.execute_stream(Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()));
+    let mut stream = schema.execute_stream(
+        Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()),
+    );
 
     // Subscribed: the first create is heard.
     let first = tokio::spawn(async move {
@@ -512,7 +590,10 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     create("First".into()).await;
     let (mut stream, event) = first.await.unwrap();
-    assert_eq!(event.unwrap().data.into_json().unwrap()["ticketCreated"]["created"]["title"], "First");
+    assert_eq!(
+        event.unwrap().data.into_json().unwrap()["ticketCreated"]["created"]["title"],
+        "First"
+    );
 
     // Twenty creates while the subscriber isn't reading overflow its buffer of four.
     for i in 0..20 {
@@ -521,28 +602,39 @@ async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
     let lagged = next(&mut stream).await.expect("told it fell behind");
     assert_eq!(lagged.errors.len(), 1, "{:?}", lagged);
     let error = lagged.errors[0].extensions.as_ref().expect("extensions");
-    assert_eq!(error.get("code"), Some(&async_graphql::Value::from("MISSED_EVENTS")));
+    assert_eq!(
+        error.get("code"),
+        Some(&async_graphql::Value::from("MISSED_EVENTS"))
+    );
     assert_eq!(error.get("missed"), Some(&async_graphql::Value::from(16)));
 
     // The subscription ends there; a new one hears what happens next.
     assert!(next(&mut stream).await.is_none());
-    let mut stream =
-        schema.execute_stream(Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()));
+    let mut stream = schema.execute_stream(
+        Request::new("subscription { ticketCreated { created { title } } }").data(ctx.clone()),
+    );
     let later = tokio::spawn(async move { next(&mut stream).await });
     tokio::time::sleep(Duration::from_millis(50)).await;
     create("Later".into()).await;
     let event = later.await.unwrap().unwrap();
-    assert_eq!(event.data.into_json().unwrap()["ticketCreated"]["created"]["title"], "Later");
+    assert_eq!(
+        event.data.into_json().unwrap()["ticketCreated"]["created"]["title"],
+        "Later"
+    );
 }
 
 #[cfg(feature = "axum")]
-type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Serves `schema` on a socket, with the hub its shared subscriptions run in.
 #[cfg(feature = "axum")]
 async fn serve_shared(
     schema: async_graphql::dynamic::Schema,
-) -> (std::net::SocketAddr, Arc<ash_graphql::axum::SubscriptionHub>) {
+) -> (
+    std::net::SocketAddr,
+    Arc<ash_graphql::axum::SubscriptionHub>,
+) {
     let hub = Arc::new(ash_graphql::axum::SubscriptionHub::default());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -556,13 +648,19 @@ async fn serve_shared(
 async fn connect(addr: std::net::SocketAddr, protocol: &str) -> Socket {
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-    let mut request = format!("ws://{addr}/graphql/ws").into_client_request().unwrap();
+    let mut request = format!("ws://{addr}/graphql/ws")
+        .into_client_request()
+        .unwrap();
     request
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", protocol.parse().unwrap());
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     socket
-        .send(Message::Text(serde_json::json!({ "type": "connection_init" }).to_string().into()))
+        .send(Message::Text(
+            serde_json::json!({ "type": "connection_init" })
+                .to_string()
+                .into(),
+        ))
         .await
         .unwrap();
     assert_eq!(read_message(&mut socket).await["type"], "connection_ack");
@@ -573,7 +671,9 @@ async fn connect(addr: std::net::SocketAddr, protocol: &str) -> Socket {
 async fn send_json(socket: &mut Socket, value: serde_json::Value) {
     use futures_util::SinkExt;
     socket
-        .send(tokio_tungstenite::tungstenite::Message::Text(value.to_string().into()))
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            value.to_string().into(),
+        ))
         .await
         .unwrap();
 }
@@ -583,7 +683,11 @@ async fn send_json(socket: &mut Socket, value: serde_json::Value) {
 async fn streams(hub: &ash_graphql::axum::SubscriptionHub, expected: usize) {
     let started = std::time::Instant::now();
     while hub.streams() != expected {
-        assert!(started.elapsed() < Duration::from_secs(5), "{} streams, not {expected}", hub.streams());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{} streams, not {expected}",
+            hub.streams()
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -608,7 +712,11 @@ async fn subscribers_to_the_same_subscription_share_one_execution() {
     for i in 0..20 {
         let mut socket = connect(addr, "graphql-transport-ws").await;
         let id = format!("watch-{i}");
-        send_json(&mut socket, serde_json::json!({ "id": id, "type": "subscribe", "payload": { "query": created } })).await;
+        send_json(
+            &mut socket,
+            serde_json::json!({ "id": id, "type": "subscribe", "payload": { "query": created } }),
+        )
+        .await;
         sockets.push(socket);
     }
     let mut other = connect(addr, "graphql-transport-ws").await;
@@ -621,18 +729,30 @@ async fn subscribers_to_the_same_subscription_share_one_execution() {
 
     let mut input = ash_core::FieldMap::new();
     input.insert("title".into(), ash_core::Value::String("Shared".into()));
-    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+        .await
+        .unwrap();
     for (i, socket) in sockets.iter_mut().enumerate() {
         let next = read_message(socket).await;
         assert_eq!(next["id"], format!("watch-{i}"));
-        assert_eq!(next["payload"]["data"]["ticketCreated"]["created"]["title"], "Shared", "{next}");
+        assert_eq!(
+            next["payload"]["data"]["ticketCreated"]["created"]["title"], "Shared",
+            "{next}"
+        );
     }
-    assert_eq!(read_message(&mut other).await["payload"]["data"]["ticketCreated"]["created"]["status"], serde_json::Value::Null);
+    assert_eq!(
+        read_message(&mut other).await["payload"]["data"]["ticketCreated"]["created"]["status"],
+        serde_json::Value::Null
+    );
 
     // Completing one subscriber leaves the stream to the rest; the last one stops it.
     let mut last = sockets.pop().unwrap();
     for (i, socket) in sockets.iter_mut().enumerate() {
-        send_json(socket, serde_json::json!({ "id": format!("watch-{i}"), "type": "complete" })).await;
+        send_json(
+            socket,
+            serde_json::json!({ "id": format!("watch-{i}"), "type": "complete" }),
+        )
+        .await;
     }
     streams(&hub, 2).await;
     drop(last.close(None).await);
@@ -657,10 +777,15 @@ async fn the_older_graphql_ws_protocol_still_works() {
 
     let mut input = ash_core::FieldMap::new();
     input.insert("title".into(), ash_core::Value::String("Legacy".into()));
-    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+        .await
+        .unwrap();
     let data = read_message(&mut socket).await;
     assert_eq!(data["type"], "data", "{data}");
-    assert_eq!(data["payload"]["data"]["ticketCreated"]["created"]["title"], "Legacy");
+    assert_eq!(
+        data["payload"]["data"]["ticketCreated"]["created"]["title"],
+        "Legacy"
+    );
 }
 
 /// A mutation sent over the socket runs for each sender: only subscriptions are shared.
@@ -677,9 +802,17 @@ async fn mutations_over_the_socket_are_not_shared() {
     let mutation = r#"mutation { createTicket(input: { title: "Twice" }) { errors { code } } }"#;
     for _ in 0..2 {
         let mut socket = connect(addr, "graphql-transport-ws").await;
-        send_json(&mut socket, serde_json::json!({ "id": "m", "type": "subscribe", "payload": { "query": mutation } })).await;
+        send_json(
+            &mut socket,
+            serde_json::json!({ "id": "m", "type": "subscribe", "payload": { "query": mutation } }),
+        )
+        .await;
         let next = read_message(&mut socket).await;
-        assert_eq!(next["payload"]["data"]["createTicket"]["errors"], serde_json::json!([]), "{next}");
+        assert_eq!(
+            next["payload"]["data"]["createTicket"]["errors"],
+            serde_json::json!([]),
+            "{next}"
+        );
         assert_eq!(read_message(&mut socket).await["type"], "complete");
     }
     use ash_core::DataLayer;
@@ -694,10 +827,21 @@ async fn mutations_over_the_socket_are_not_shared() {
 static BOARD_DEF: ResourceDef = ResourceDef {
     name: "Board",
     table: "boards",
-    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
-    relationships: &[ash_core::RelationshipDef::has_many("cards", || &CARD_DEF, "board_id")],
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("name", AttrType::String),
+    ],
+    relationships: &[ash_core::RelationshipDef::has_many(
+        "cards",
+        || &CARD_DEF,
+        "board_id",
+    )],
     actions: &[
-        ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
+        ActionDef::read("read").primary().pagination(
+            ash_core::Pagination::keyset()
+                .countable(ash_core::Countable::Yes)
+                .required(false),
+        ),
         ActionDef::create("create").accept(&["name"]),
         ActionDef::update("rename").accept(&["name"]),
     ],
@@ -705,7 +849,9 @@ static BOARD_DEF: ResourceDef = ResourceDef {
     // How many cards a board has is for signed-in readers only.
     field_policies: &[ash_core::FieldPolicyDef::new(
         "card_count",
-        &[ash_core::PolicyEffect::AuthorizeIf(ash_core::Check::ActorPresent)],
+        &[ash_core::PolicyEffect::AuthorizeIf(
+            ash_core::Check::ActorPresent,
+        )],
     )],
     ..TICKET_DEF
 };
@@ -718,8 +864,19 @@ static CARD_DEF: ResourceDef = ResourceDef {
         AttributeDef::required("title", AttrType::String),
         AttributeDef::required("board_id", AttrType::Uuid),
     ],
-    relationships: &[ash_core::RelationshipDef::belongs_to("board", || &BOARD_DEF, "board_id")],
-    actions: &[ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)), ActionDef::create("create").accept(&["title", "board_id"])],
+    relationships: &[ash_core::RelationshipDef::belongs_to(
+        "board",
+        || &BOARD_DEF,
+        "board_id",
+    )],
+    actions: &[
+        ActionDef::read("read").primary().pagination(
+            ash_core::Pagination::keyset()
+                .countable(ash_core::Countable::Yes)
+                .required(false),
+        ),
+        ActionDef::create("create").accept(&["title", "board_id"]),
+    ],
     ..TICKET_DEF
 };
 
@@ -734,19 +891,29 @@ async fn a_subscription_loads_what_it_selects() {
         .finish::<Memory>()
         .unwrap();
     let field = |map: &[(&str, ash_core::Value)]| -> ash_core::FieldMap {
-        map.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        map.iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     };
-    let board = ash_core::create_dynamic(&ctx, &BOARD_DEF, &BOARD_DEF.actions[1], field(&[("name", "Todo".into())]))
-        .await
-        .unwrap();
+    let board = ash_core::create_dynamic(
+        &ctx,
+        &BOARD_DEF,
+        &BOARD_DEF.actions[1],
+        field(&[("name", "Todo".into())]),
+    )
+    .await
+    .unwrap();
     let board_id = board.get("id").cloned().unwrap();
     let card = |title: &str| field(&[("title", title.into()), ("board_id", board_id.clone())]);
-    ash_core::create_dynamic(&ctx, &CARD_DEF, &CARD_DEF.actions[1], card("one")).await.unwrap();
+    ash_core::create_dynamic(&ctx, &CARD_DEF, &CARD_DEF.actions[1], card("one"))
+        .await
+        .unwrap();
 
     // Each stream subscribes when first polled.
     let signed_in = ctx.with_actor(ash_core::Actor::new(uuid::Uuid::new_v4()));
     let mut cards = schema.execute_stream(
-        Request::new("subscription { cardCreated { created { title board { name cardCount } } } }").data(signed_in.clone()),
+        Request::new("subscription { cardCreated { created { title board { name cardCount } } } }")
+            .data(signed_in.clone()),
     );
     let board_updates = "subscription { boardUpdated { updated { name cardCount } } }";
     let mut boards = schema.execute_stream(Request::new(board_updates).data(signed_in));
@@ -756,7 +923,9 @@ async fn a_subscription_loads_what_it_selects() {
     let anonymous = tokio::spawn(async move { next(&mut anonymous).await });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    ash_core::create_dynamic(&ctx, &CARD_DEF, &CARD_DEF.actions[1], card("two")).await.unwrap();
+    ash_core::create_dynamic(&ctx, &CARD_DEF, &CARD_DEF.actions[1], card("two"))
+        .await
+        .unwrap();
     let created = cards.await.unwrap().expect("a card event");
     assert!(created.errors.is_empty(), "{:?}", created.errors);
     assert_eq!(
@@ -768,9 +937,15 @@ async fn a_subscription_loads_what_it_selects() {
         ash_core::Value::Uuid(id) => *id,
         other => panic!("{other:?}"),
     };
-    ash_core::update_dynamic(&ctx, &BOARD_DEF, &BOARD_DEF.actions[2], id, field(&[("name", "Doing".into())]))
-        .await
-        .unwrap();
+    ash_core::update_dynamic(
+        &ctx,
+        &BOARD_DEF,
+        &BOARD_DEF.actions[2],
+        id,
+        field(&[("name", "Doing".into())]),
+    )
+    .await
+    .unwrap();
     let renamed = boards.await.unwrap().expect("a board event");
     assert!(renamed.errors.is_empty(), "{:?}", renamed.errors);
     assert_eq!(

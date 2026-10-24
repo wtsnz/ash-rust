@@ -75,9 +75,7 @@ pub async fn demo() -> ash_core::Result<()> {
     print_tickets(as_bob.list_tickets().load().await?);
 
     println!("Alice assigns it to herself.");
-    let ticket = as_alice
-        .assign_ticket(&ticket, alice.id)
-        .await?;
+    let ticket = as_alice.assign_ticket(&ticket, alice.id).await?;
     println!("  {ticket}");
 
     println!("\nBob's queue after assign:");

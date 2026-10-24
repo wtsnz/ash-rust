@@ -195,7 +195,9 @@ async fn test_multi_sqlite_rollback_on_failure() {
     let multi = Multi::new()
         .create("rep", rep_cs)
         .run("bomb", |_ctx, _results| async move {
-            Err::<(), _>(Error::Invalid("database constraint or network error".into()))
+            Err::<(), _>(Error::Invalid(
+                "database constraint or network error".into(),
+            ))
         });
 
     let err = as_customer.run_multi(multi).await.unwrap_err();

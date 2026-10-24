@@ -32,55 +32,55 @@ mod engineer {
 use engineer::Engineer;
 
 resource! {
-    /// Ticket resource representation
-    Ticket {
-        table "tickets";
+/// Ticket resource representation
+Ticket {
+    table "tickets";
 
-    attributes {
-        id: Uuid [pk];
-        /// Short summary shown in the queue
-        title: String;
-        status: String;
-        assignee: Option<String>;
-        engineer_id: Option<Uuid>;
+attributes {
+    id: Uuid [pk];
+    /// Short summary shown in the queue
+    title: String;
+    status: String;
+    assignee: Option<String>;
+    engineer_id: Option<Uuid>;
+}
+
+relationships {
+    belongs_to engineer: Engineer [fk: engineer_id];
+}
+
+actions {
+    /// Creates a new ticket
+    create create {
+        primary;
+        accept [title];
+        change set(status = "open");
     }
 
-    relationships {
-        belongs_to engineer: Engineer [fk: engineer_id];
+    /// Primary read action
+    read read {
+        primary;
     }
 
-    actions {
-        /// Creates a new ticket
-        create create {
-            primary;
-            accept [title];
-            change set(status = "open");
-        }
-
-        /// Primary read action
-        read read {
-            primary;
-        }
-
-        /// Assigns a ticket to an engineer
-        update assign {
-            accept [assignee, engineer_id];
-            change set(status = "in_progress");
-        }
-
-        /// Closes and deletes a ticket
-        destroy close {
-            primary;
-        }
-
-        generic summarize {
-            /// Extra notes included in the summary
-            argument notes: String;
-            returns String;
-            run |input| async move { Ok(input.notes) };
-        }
+    /// Assigns a ticket to an engineer
+    update assign {
+        accept [assignee, engineer_id];
+        change set(status = "in_progress");
     }
-    }}
+
+    /// Closes and deletes a ticket
+    destroy close {
+        primary;
+    }
+
+    generic summarize {
+        /// Extra notes included in the summary
+        argument notes: String;
+        returns String;
+        run |input| async move { Ok(input.notes) };
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_action_target_conversions() {

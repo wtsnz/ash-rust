@@ -15,14 +15,20 @@ use supportdesk::server::router;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required")?;
-    let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4000);
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(4000);
     // The pool's size, and how long a statement waits for a connection before it fails (no
     // limit by default), from the environment: what the saturation benchmark varies.
     let mut pool = ash_postgres::PoolSettings::default();
     if let Some(size) = std::env::var("POOL_SIZE").ok().and_then(|v| v.parse().ok()) {
         pool.size = size;
     }
-    pool.wait_timeout = std::env::var("POOL_WAIT_MS").ok().and_then(|v| v.parse().ok()).map(std::time::Duration::from_millis);
+    pool.wait_timeout = std::env::var("POOL_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(std::time::Duration::from_millis);
     let db = ash_postgres::Postgres::connect_with_pool(url.parse()?, pool).await?;
     let resources: Vec<&ash_core::ResourceDef> = supportdesk::DESK_DEF.resources.to_vec();
     db.install(&resources).await?;
@@ -32,8 +38,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut seeded_ms = 0;
     if let Ok(path) = std::env::var("FIXTURE") {
         let started = Instant::now();
-        let tables: Vec<String> = resources.iter().map(|r| format!("\"{}\"", r.table)).collect();
-        db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", "))).await?;
+        let tables: Vec<String> = resources
+            .iter()
+            .map(|r| format!("\"{}\"", r.table))
+            .collect();
+        db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", ")))
+            .await?;
         let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         supportdesk::fixture::load(&ctx, &fixture).await?;
         seeded_ms = started.elapsed().as_millis() as u64;
