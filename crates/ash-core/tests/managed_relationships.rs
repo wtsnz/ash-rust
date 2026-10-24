@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, FieldMap, ManagedRelType, Resource, Result, Value, resource};
+use ash_core::{Error, FieldMap, ManagedRelType, Resource, Result, Value, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -344,7 +344,7 @@ use user_mod::User;
 
 #[tokio::test]
 async fn test_managed_has_many_create_on_parent_create() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Create an Order and manage LineItem creation inside the same action
     let order = Order::create(&ctx)
@@ -377,7 +377,7 @@ async fn test_managed_has_many_create_on_parent_create() -> Result<()> {
 
 #[tokio::test]
 async fn test_managed_has_many_direct_control_on_parent_update() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Initial order with 2 items: item1 and item2
     let order = Order::create(&ctx).customer("Bob").await?;
@@ -448,7 +448,7 @@ async fn test_managed_has_many_direct_control_on_parent_update() -> Result<()> {
 
 #[tokio::test]
 async fn test_managed_has_many_direct_control_nilify() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let team = Team::create(&ctx).name("Lakers").await?;
     let p1 = Player::create(&ctx)
@@ -484,7 +484,7 @@ async fn test_managed_has_many_direct_control_nilify() -> Result<()> {
 
 #[tokio::test]
 async fn test_managed_belongs_to_create() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // When User is created, nested Profile is created first and its ID is linked to user.profile_id
     let user = User::create(&ctx)
@@ -507,7 +507,7 @@ async fn test_managed_belongs_to_create() -> Result<()> {
 
 #[tokio::test]
 async fn test_managed_many_to_many_create_and_direct_control() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Create article with two new tags
     let article = Article::create(&ctx)
@@ -549,7 +549,7 @@ async fn test_managed_many_to_many_create_and_direct_control() -> Result<()> {
 
 #[tokio::test]
 async fn test_action_dsl_change_manage_relationship() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Action declares:
     // create create_with_items {
@@ -584,7 +584,7 @@ async fn test_action_dsl_change_manage_relationship() -> Result<()> {
 #[tokio::test]
 async fn test_managed_relationship_atomic_rollback_on_child_error() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
     ctx.install(&[&Order::DEF, &LineItem::DEF]).await?;
 
     // Attempt to create Order with one valid item and one item that fails validation (price = -10)

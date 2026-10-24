@@ -272,7 +272,8 @@ fn id_of(record: &FieldMap) -> Uuid {
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert!(data.can_update_atomically(&COUNTER));
     let owner = Uuid::new_v4();
-    let ctx = Context::new(data).with_actor(Actor::new(owner));
+    let ctx_runtime = ash_core::Runtime::new(data);
+    let ctx = ctx_runtime.bind(Some(Actor::new(owner)), None);
     let created = counter(&ctx, owner).await;
     let id = id_of(&created);
 
@@ -332,7 +333,10 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     }
 
     // Policies are checked against the stored record: only the owner updates it.
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let forbidden = update_dynamic(&stranger, &COUNTER, action("bump"), id, FieldMap::new()).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
     // A counter with no owner relates to no one: a policy that can't be met forbids.
@@ -472,12 +476,16 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
 async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert!(data.can_destroy_atomically(&COUNTER));
     let owner = Uuid::new_v4();
-    let ctx = Context::new(data).with_actor(Actor::new(owner));
+    let ctx_runtime = ash_core::Runtime::new(data);
+    let ctx = ctx_runtime.bind(Some(Actor::new(owner)), None);
     let removable = counter(&ctx, owner).await;
     let id = id_of(&removable);
 
     // Policies are checked against the stored record: only the owner destroys it.
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let forbidden = destroy_dynamic_by_id(&stranger, &COUNTER, action("remove"), id).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
     // It returns the record as it was deleted, and then there's none.
@@ -597,8 +605,12 @@ async fn destroys_run_atomically_in_memory() {
 /// forbidden. As one statement, or reading first.
 async fn read_scope_scenario<D: DataLayer + Clone + 'static>(data: D) {
     let owner = Uuid::new_v4();
-    let ctx = Context::new(data).with_actor(Actor::new(owner));
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let ctx_runtime = ash_core::Runtime::new(data);
+    let ctx = ctx_runtime.bind(Some(Actor::new(owner)), None);
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let create = |name: &'static str| {
         ash_core::create_dynamic(
             &ctx,

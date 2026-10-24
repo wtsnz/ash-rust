@@ -1,7 +1,7 @@
 //! Bulk creates take the same steps as single creates: they join the context's tenant
 //! and run the hooks their action's changes register.
 
-use ash_core::{BulkCreateOptions, Context, Error, FieldMap, Result, Value, resource};
+use ash_core::{BulkCreateOptions, Error, FieldMap, Result, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -51,8 +51,9 @@ fn labels(labels: &[&str]) -> Vec<FieldMap> {
 
 #[tokio::test]
 async fn bulk_creates_join_the_tenant() {
-    let ctx = Context::new(Memory::new());
-    let acme = ctx.clone().with_tenant("acme");
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
+    let acme = ctx_runtime.bind(ctx.actor().cloned(), Some(("acme").into()));
     let packed = ash_core::bulk_create::<Crate, _, _, _>(
         &acme,
         "pack",
@@ -71,7 +72,7 @@ async fn bulk_creates_join_the_tenant() {
         "the before_action hook ran for each row"
     );
     assert!(
-        Crate::query(&ctx.clone().with_tenant("globex"))
+        Crate::query(&ctx_runtime.bind(ctx.actor().cloned(), Some(("globex").into())))
             .all()
             .await
             .unwrap()

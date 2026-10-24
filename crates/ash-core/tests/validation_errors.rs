@@ -2,7 +2,7 @@
 //! (`must have length of between %{min} and %{max}`), and every one that fails
 //! reported, a create's and an update's alike.
 
-use ash_core::{Context, Error, Value, resource};
+use ash_core::{Error, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ fn messages(err: &Error) -> Vec<(String, String)> {
 
 #[tokio::test]
 async fn every_failed_validation_is_reported_with_its_template_and_vars() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let err = Item::create(&ctx)
         .name("x")
         .qty(9)

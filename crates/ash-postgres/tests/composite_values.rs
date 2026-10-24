@@ -1,7 +1,7 @@
 //! Typed maps and unions are stored as JSON and read back as their types, in every data
 //! layer, as Ash stores a typed map and a union (`{type, value}`).
 
-use ash_core::{AshTypedMap, AshUnion, Context, DataLayer, Filter, Resource, resource};
+use ash_core::{AshTypedMap, AshUnion, DataLayer, Filter, Resource, resource};
 use ash_memory::Memory;
 use ash_postgres::Postgres;
 use ash_sqlite::Sqlite;
@@ -41,7 +41,7 @@ resource! {
 }
 
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let run = Uuid::new_v4();
     let origin = Point {
         x: 1,

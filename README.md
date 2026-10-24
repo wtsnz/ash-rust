@@ -66,7 +66,7 @@ uuid = { version = "1", features = ["v4"] }
 ### 1. Define a Resource
 
 ```rust
-use ash_core::{Context, resource};
+use ash_core::{resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -115,7 +115,7 @@ resource! {
 ```rust
 #[tokio::main]
 async fn main() -> ash_core::Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create task using generated typed builder
     let task = Task::create(&ctx)

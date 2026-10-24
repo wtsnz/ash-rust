@@ -113,6 +113,7 @@ async fn full_voyage<D: FleetDb>(h: Harness<D>) {
     assert!(matches!(err, Error::Forbidden), "{err:?}");
 
     let reservation = ops::reserve_berth(
+        h.app.runtime(),
         ada,
         ship.id,
         h.sol.port("PZZ").id,

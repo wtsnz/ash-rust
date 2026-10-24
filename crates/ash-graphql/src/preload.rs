@@ -1,3 +1,6 @@
+// Raw engine queries migrate to executable plans in the next step.
+#![allow(deprecated)]
+
 //! Relationships loaded ahead, as AshGraphql loads them: before the fields of a query's
 //! records resolve, its selection is read, and each relationship it selects is loaded for
 //! every record at once, one read per relationship, nested selections in turn. The
@@ -222,8 +225,8 @@ pub(crate) async fn load_selected<D: DataLayer>(
         select: Some(load.select),
         aggregates: load.aggregates,
         calculations: load.calculations,
-        tenant: ash.tenant.clone(),
-        actor: ash.actor.clone(),
+        tenant: ash.tenant().map(str::to_owned),
+        actor: ash.authorization_actor().cloned(),
         ..CompiledQuery::default()
     };
     let mut loaded = ash
@@ -232,7 +235,7 @@ pub(crate) async fn load_selected<D: DataLayer>(
         .await
         .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     for row in &mut loaded {
-        crate::redact::redact_record(resource, ash.actor.as_ref(), row);
+        crate::redact::redact_record(resource, ash.authorization_actor(), row);
     }
     for record in records.iter_mut() {
         if let Some(row) = loaded.iter().find(|row| row.get(pk) == record.get(pk)) {
@@ -290,7 +293,7 @@ pub(crate) fn preload<'a, D: DataLayer>(
                     let arguments = field.arguments()?;
                     let query = related_query(
                         (rel.destination)(),
-                        ash.actor.as_ref(),
+                        ash.authorization_actor(),
                         arguments.iter().map(|(name, value)| (name.as_str(), value)),
                     )?;
                     wanted.push(Wanted {
@@ -330,7 +333,7 @@ pub(crate) fn preload<'a, D: DataLayer>(
                 let counts: Vec<usize> = related.iter().map(Vec::len).collect();
                 let mut rows: Vec<FieldMap> = related.into_iter().flatten().collect();
                 for row in &mut rows {
-                    redact_record(destination, ash.actor.as_ref(), row);
+                    redact_record(destination, ash.authorization_actor(), row);
                 }
                 preload(ash, destination, children, &mut rows).await?;
 

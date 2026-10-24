@@ -1,6 +1,6 @@
 use ash_core::{
-    AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
-    RelationshipDef, ResourceDef, Value,
+    AttrType, AttributeDef, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind, RelationshipDef,
+    ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -144,7 +144,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
 async fn test_phase5_dataloader_belongs_to_and_has_many() {
     let memory = Memory::new();
     let (_alice_id, _bob_id) = seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let resources = &[&AUTHOR_DEF, &POST_DEF];
     let schema = AshGraphQL::from_resources(resources)
@@ -227,7 +227,7 @@ async fn test_phase5_dataloader_belongs_to_and_has_many() {
 async fn test_nested_relationship_filtering() {
     let memory = Memory::new();
     let (_alice_id, _bob_id) = seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let resources = &[&AUTHOR_DEF, &POST_DEF];
     let schema = AshGraphQL::from_resources(resources)

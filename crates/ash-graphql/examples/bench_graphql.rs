@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
+    ActionDef, AttrType, AttributeDef, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
     RelationshipDef, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -245,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("========================================================\n");
 
     let mem = Memory::new();
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
 
     // Seed 5 authors
     let mut author_ids = Vec::new();
@@ -400,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // 7. Full Axum HTTP POST Roundtrip (Routing + Deserialization + Execution + Serialization)
-    let app = ash_graphql::axum::graphql_router(schema.clone());
+    let app = ash_graphql::axum::graphql_router(schema.clone(), ctx.clone());
     let http_payload = serde_json::json!({
         "query": "query { listTickets(first: 20) { results { id title status priority } } }"
     })
@@ -441,7 +441,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create(&USER_DEF, None, Value::from(mut_author_id), mut_u)
         .await?;
 
-    let mut_ctx = Context::new(mut_mem);
+    let mut_ctx = ash_core::Runtime::new(mut_mem).bootstrap();
     let mut_schema =
         AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF]).finish_with_context(mut_ctx)?;
 
@@ -502,7 +502,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
     }
 
-    let sqlite_ctx = Context::new(sqlite_db);
+    let sqlite_ctx = ash_core::Runtime::new(sqlite_db).bootstrap();
     let sqlite_schema = AshGraphQL::from_resources(&[&SQLITE_USER_DEF, &SQLITE_TICKET_DEF])
         .with_dataloader()
         .finish_with_context(sqlite_ctx)?;

@@ -45,7 +45,7 @@ resource! {
 async fn sqlite() -> Context<Sqlite> {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Counter::DEF]).await.unwrap();
-    Context::new(sqlite)
+    ash_core::Runtime::new(sqlite).bootstrap()
 }
 
 #[tokio::test]
@@ -156,7 +156,8 @@ async fn write_policies_filter_the_statement() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Memo::DEF]).await.unwrap();
     let owner = Uuid::new_v4();
-    let ctx = Context::new(sqlite).with_actor(ash_core::Actor::new(owner));
+    let ctx_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = ctx_runtime.bind(Some(ash_core::Actor::new(owner)), None);
     let memo = Memo::create(&ctx).owner_id(owner).text("a").await.unwrap();
     let edit = Memo::DEF.action("edit").unwrap();
     let input = |text: &str| FieldMap::from([("text".to_string(), ash_core::Value::from(text))]);
@@ -166,7 +167,10 @@ async fn write_policies_filter_the_statement() {
         .unwrap();
     assert_eq!(edited.get("text"), Some(&ash_core::Value::from("b")));
     // A stranger's update changes nothing, and is refused as the policies refuse it.
-    let stranger = ctx.with_actor(ash_core::Actor::new(Uuid::new_v4()));
+    let stranger = ctx_runtime.bind(
+        Some(ash_core::Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let refused =
         ash_core::update_dynamic_via(&stranger, &Memo::DEF, None, edit, memo.id, input("c")).await;
     assert!(matches!(refused, Err(Error::Forbidden)), "{refused:?}");

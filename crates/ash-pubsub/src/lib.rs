@@ -265,6 +265,13 @@ pub trait ContextPubSubExt<D> {
     fn with_pubsub(self, pubsub: Arc<PubSub>) -> Self;
 }
 
+// Runtime notifiers are inherited by every context it binds.
+impl<D> ContextPubSubExt<D> for ash_core::Runtime<D> {
+    fn with_pubsub(self, pubsub: Arc<PubSub>) -> Self {
+        self.with_notifier(Arc::new(PubSubNotifier::new(pubsub)))
+    }
+}
+
 impl<D> ContextPubSubExt<D> for ash_core::Context<D> {
     fn with_pubsub(self, pubsub: Arc<PubSub>) -> Self {
         let notifier = Arc::new(PubSubNotifier::new(pubsub));

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use ash_core::{ActionDef, AttrType, AttributeDef, Context, DomainDef, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, DomainDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -271,7 +271,9 @@ main().then(
 #[tokio::test(flavor = "multi_thread")]
 async fn generated_live_queries_stay_in_sync_over_websocket() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let mut seed = ash_core::FieldMap::new();
     seed.insert("title".into(), ash_core::Value::String("Seeded".into()));
     seed.insert("priority".into(), ash_core::Value::Int(3));
@@ -280,14 +282,18 @@ async fn generated_live_queries_stay_in_sync_over_websocket() {
         .unwrap();
     let schema = AshGraphQL::from_domain(&DOMAIN)
         .with_pubsub(pubsub)
-        .finish_with_context(ctx)
+        .finish_with_context(ctx.clone())
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket_ctx = ctx.clone();
     tokio::spawn(async move {
-        axum::serve(listener, ash_graphql::axum::graphql_router(schema))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            ash_graphql::axum::graphql_router(schema, socket_ctx),
+        )
+        .await
+        .unwrap();
     });
 
     let dir = tempfile::tempdir().unwrap();
@@ -399,7 +405,9 @@ async fn a_live_query_that_falls_behind_catches_up() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
     let pubsub = PubSub::with_capacity(1);
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let open = |title: String| {
         let ctx = ctx.clone();
         async move {
@@ -418,10 +426,14 @@ async fn a_live_query_that_falls_behind_catches_up() {
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket_ctx = ctx.clone();
     tokio::spawn(async move {
-        axum::serve(listener, ash_graphql::axum::graphql_router(schema))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            ash_graphql::axum::graphql_router(schema, socket_ctx),
+        )
+        .await
+        .unwrap();
     });
 
     let dir = tempfile::tempdir().unwrap();

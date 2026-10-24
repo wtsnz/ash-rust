@@ -10,17 +10,17 @@ use kanban::{
 #[tokio::test]
 async fn test_board_template_multi_and_aggregates() {
     let mem = Memory::new();
-    let workspaces = Workspaces::new(mem.clone());
-    let kanban = Kanban::new(mem);
+    let workspaces_runtime = ash_core::Runtime::new(mem.clone());
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
+    let kanban_runtime = ash_core::Runtime::new(mem);
 
     let alice = workspaces
         .register_user("Alice", "alice@test.com")
         .await
         .unwrap();
-    let as_alice = kanban.with_actor(actor_user(alice.id));
+    let as_alice = Kanban::from_context(kanban_runtime.bind(Some(actor_user(alice.id)), None));
 
-    let ws = workspaces
-        .with_actor(actor_user(alice.id))
+    let ws = Workspaces::from_context(workspaces_runtime.bind(Some(actor_user(alice.id)), None))
         .create_workspace("Product Org", "prod-org")
         .await
         .unwrap();
@@ -129,7 +129,8 @@ async fn test_board_template_multi_and_aggregates() {
 async fn test_move_card_multi_and_activity_comment() {
     let mem = Memory::new();
     let user_id = uuid::Uuid::new_v4();
-    let kanban = Kanban::new(mem).with_actor(actor_user(user_id));
+    let kanban_runtime = ash_core::Runtime::new(mem);
+    let kanban = Kanban::from_context(kanban_runtime.bind(Some(actor_user(user_id)), None));
 
     let board = kanban
         .create_board(uuid::Uuid::new_v4(), "Sprint 42", None)

@@ -89,7 +89,7 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
 
 #[tokio::test]
 async fn one_to_one_both_ways_in_memory() {
-    scenario(Context::new(Memory::new())).await;
+    scenario(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -99,5 +99,5 @@ async fn one_to_one_both_ways_in_sqlite() {
         .install_resources(&[&Pilot::DEF, &License::DEF])
         .await
         .unwrap();
-    scenario(Context::new(sqlite)).await;
+    scenario(ash_core::Runtime::new(sqlite).bootstrap()).await;
 }

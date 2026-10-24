@@ -17,6 +17,19 @@ use super::pagination::{
 use super::read::scope_read;
 use super::relations::attach_relationships;
 
+/// Query shape bound to its context's immutable execution identity.
+///
+/// ```compile_fail
+/// fn switch<R: ash_core::Resource, D: ash_core::DataLayer>(ctx: &ash_core::Context<D>) {
+///     let _ = ash_core::query::<R, D>(ctx).tenant("another-tenant");
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn clear<R: ash_core::Resource, D: ash_core::DataLayer>(ctx: &ash_core::Context<D>) {
+///     let _ = ash_core::query::<R, D>(ctx).without_tenant();
+/// }
+/// ```
 pub struct Query<'a, R, D> {
     ctx: &'a Context<D>,
     action: Option<&'static str>,
@@ -29,7 +42,6 @@ pub struct Query<'a, R, D> {
     loads: Vec<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-    tenant: Option<String>,
     _resource: PhantomData<R>,
 }
 
@@ -47,7 +59,6 @@ impl<'a, R, D> Clone for Query<'a, R, D> {
             loads: self.loads.clone(),
             limit: self.limit,
             offset: self.offset,
-            tenant: self.tenant.clone(),
             _resource: PhantomData,
         }
     }
@@ -71,21 +82,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self
     }
 
-    /// Set or override the tenant on this query.
-    pub fn tenant(mut self, tenant: impl Into<String>) -> Self {
-        self.tenant = Some(tenant.into());
-        self
-    }
-
-    /// Clear the tenant on this query.
-    pub fn without_tenant(mut self) -> Self {
-        self.tenant = None;
-        self
-    }
-
     /// Retrieve the current tenant on this query, if set.
     pub fn get_tenant(&self) -> Option<&str> {
-        self.tenant.as_deref()
+        self.ctx.tenant()
     }
 
     pub fn filter(mut self, filter: Filter) -> Self {
@@ -159,14 +158,11 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         action: &crate::action::ActionDef,
         query: CompiledQuery,
     ) -> Result<CompiledQuery> {
-        let tenant = self
-            .tenant
-            .clone()
-            .or_else(|| self.ctx.tenant().map(str::to_string));
+        let tenant = self.ctx.tenant().map(str::to_owned);
         scope_read(
             &R::DEF,
             action,
-            self.ctx.actor.as_ref(),
+            self.ctx.authorization_actor(),
             &self.arguments,
             CompiledQuery { tenant, ..query },
         )
@@ -220,20 +216,20 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 // A typed record holds every attribute.
                 select: None,
                 actor: None,
+                tenant: None,
                 calculations,
                 calculation_args: this.calculation_args.clone(),
                 aggregates,
                 limit: this.limit,
                 offset: this.offset,
-                tenant: None,
             },
         )?;
-        let mut rows = this.ctx.data.run_query(&R::DEF, &query).await?;
+        let mut rows = this.ctx.raw_data().run_query(&R::DEF, &query).await?;
         super::read::after_read(action, &this.arguments, &mut rows)?;
 
         let mut records = Vec::with_capacity(rows.len());
         for mut row in rows {
-            crate::policy::redact_fields(&R::DEF, this.ctx.actor.as_ref(), &mut row)?;
+            crate::policy::redact_fields(&R::DEF, this.ctx.authorization_actor(), &mut row)?;
             for operand in &operands {
                 row.remove(*operand);
             }
@@ -274,7 +270,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         query.limit = None;
         query.offset = None;
         query.sort.clear();
-        self.ctx.data.count(&R::DEF, &query).await
+        self.ctx.raw_data().count(&R::DEF, &query).await
     }
 
     pub async fn page_offset(
@@ -295,7 +291,6 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             loads: Vec::new(),
             limit: None,
             offset: None,
-            tenant: self.tenant.clone(),
             _resource: PhantomData::<R>,
         });
 
@@ -512,7 +507,6 @@ pub fn query<R: Resource, D: DataLayer>(ctx: &Context<D>) -> Query<'_, R, D> {
         loads: Vec::new(),
         limit: None,
         offset: None,
-        tenant: ctx.tenant.clone(),
         _resource: PhantomData,
     }
 }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use ash_core::{
     ActionDef, Actor, AggregateDef, AttrType, AttributeDef, CalculationDef, Check, CompiledQuery,
-    Context, DataLayer, Expr, FieldMap, FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind,
+    DataLayer, Expr, FieldMap, FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind,
     RelationshipDef, ResourceDef, Result, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -333,10 +333,7 @@ async fn run(data: &Counting, query: &str, actor: Option<Actor>) -> Json {
     let schema = AshGraphQL::from_resources(&[&AUTHOR_DEF, &POST_DEF, &COMMENT_DEF])
         .finish::<Counting>()
         .unwrap();
-    let mut ctx = Context::new(data.clone());
-    if let Some(actor) = actor {
-        ctx = ctx.with_actor(actor);
-    }
+    let ctx = ash_core::Runtime::new(data.clone()).bind(actor, None);
     let res = schema.execute(Request::new(query).data(ctx)).await;
     // Fields a policy hides are null, and reported so.
     let forbidden = |e: &async_graphql::ServerError| e.message == "forbidden field";
@@ -630,7 +627,7 @@ async fn relationship_arguments_may_be_variables() {
         "query($limit: Int, $sort: [PostSortInput]) { listAuthors { results { posts(limit: $limit, sort: $sort) { title } } } }",
     )
     .variables(async_graphql::Variables::from_json(json!({ "limit": 1, "sort": [{ "field": "TITLE", "order": "DESC" }] })))
-    .data(Context::new(data.clone()).with_actor(Actor::new(Uuid::new_v4())));
+    .data(ash_core::Runtime::new(data.clone()).bind(Some(Actor::new(Uuid::new_v4())), None));
     let res = schema.execute(request).await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     assert_eq!(data.take(), ["Author", "Post"]);
@@ -836,7 +833,7 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
     let res = schema
         .execute(
             Request::new("{ listProjects { results { invoiceCount invoices { id } } } }")
-                .data(Context::new(data.clone()).with_actor(Actor::new(mine))),
+                .data(ash_core::Runtime::new(data.clone()).bind(Some(Actor::new(mine)), None)),
         )
         .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);

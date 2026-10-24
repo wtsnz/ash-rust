@@ -23,23 +23,21 @@ use crate::{Agent, AuditEvent, DESK_DEF, Ticket};
 
 /// The context a request runs in: `base`, in the tenant `x-org` names, acting as the
 /// agent `x-actor` and `x-role` describe.
-pub fn request_context<D>(base: &Context<D>, headers: &HeaderMap) -> Context<D> {
+pub fn request_context<D>(base: &ash_core::Runtime<D>, headers: &HeaderMap) -> Context<D> {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-    let mut ctx = base.clone();
-    if let Some(org) = header("x-org") {
-        ctx = ctx.with_tenant(org);
-    }
-    if let (Some(id), Some(role)) = (
+    let tenant = header("x-org").map(str::to_owned);
+    let actor = match (
         header("x-actor").and_then(|id| Uuid::parse_str(id).ok()),
         header("x-role"),
     ) {
-        ctx = ctx.with_actor(Actor::new(id).with_role(role));
-    }
-    ctx
+        (Some(id), Some(role)) => Some(Actor::new(id).with_role(role)),
+        _ => None,
+    };
+    base.bind(actor, tenant)
 }
 
 /// GraphQL requests and subscriptions run as their headers say.
-struct Headers<D>(Context<D>);
+struct Headers<D>(ash_core::Runtime<D>);
 
 impl<D: Send + Sync + 'static> RequestData for Headers<D> {
     fn apply(
@@ -51,8 +49,7 @@ impl<D: Send + Sync + 'static> RequestData for Headers<D> {
         let scope = format!(
             "{}|{}",
             ctx.tenant().unwrap_or_default(),
-            ctx.actor
-                .as_ref()
+            ctx.actor()
                 .map(|a| format!("{}:{}", a.id, a.role().unwrap_or_default()))
                 .unwrap_or_default()
         );
@@ -61,14 +58,14 @@ impl<D: Send + Sync + 'static> RequestData for Headers<D> {
 }
 
 struct App<D> {
-    base: Context<D>,
+    base: ash_core::Runtime<D>,
     seeded_ms: u64,
 }
 
 /// The API over `base`, whose notifier publishes to `pubsub`. `seeded_ms` is how long
 /// loading the fixture took, for `GET /health/seeded`.
 pub fn router<D: TransactionSupport + 'static>(
-    base: Context<D>,
+    base: ash_core::Runtime<D>,
     pubsub: PubSub,
     seeded_ms: u64,
 ) -> Result<Router, async_graphql::dynamic::SchemaError> {
@@ -76,7 +73,7 @@ pub fn router<D: TransactionSupport + 'static>(
         .with_pubsub(pubsub)
         .with_dataloader()
         .mutation_action::<Ticket, D>("route_ticket", "route")
-        .finish_with_context(base.clone())?;
+        .finish_with_context(base.bootstrap())?;
     let graphql = ash_graphql::axum::graphql_router_with(
         schema,
         Arc::new(SubscriptionHub::default()),

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ash_core::{Actor, Context, Resource, resource};
+use ash_core::{Actor, Resource, resource};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -138,8 +138,12 @@ async fn quiet(stream: &mut (impl futures_util::Stream + Unpin)) -> bool {
 #[tokio::test]
 async fn a_subscriber_hears_nothing_from_another_context_tenant() {
     let pubsub = PubSub::new();
-    let base = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
-    let (a, b) = (base.with_tenant("a"), base.with_tenant("b"));
+    let base_runtime = ash_core::Runtime::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let base = base_runtime.bootstrap();
+    let (a, b) = (
+        base_runtime.bind(base.actor().cloned(), Some(("a").into())),
+        base_runtime.bind(base.actor().cloned(), Some(("b").into())),
+    );
     let schema = AshGraphQL::from_resources(&[&Isolated::DEF])
         .with_pubsub(pubsub)
         .finish::<Memory>()
@@ -166,8 +170,12 @@ async fn a_subscriber_hears_nothing_from_another_context_tenant() {
 #[tokio::test]
 async fn a_subscriber_reads_fields_as_its_own_policies_allow() {
     let pubsub = PubSub::new();
-    let base = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
-    let admin = base.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", "admin"));
+    let base_runtime = ash_core::Runtime::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let base = base_runtime.bootstrap();
+    let admin = base_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_attr("role", "admin")),
+        base.tenant().map(str::to_owned),
+    );
     let schema = AshGraphQL::from_resources(&[&Protected::DEF])
         .with_pubsub(pubsub)
         .finish::<Memory>()
@@ -199,7 +207,7 @@ async fn a_subscriber_reads_fields_as_its_own_policies_allow() {
 
 #[tokio::test]
 async fn a_filter_reaches_only_the_related_rows_the_actor_may_read() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let parent = Parent::create(&ctx).name("a").await.unwrap();
     Child::create(&ctx)
         .parent_id(parent.id)

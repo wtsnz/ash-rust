@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
-use ash_core::{Actor, Context, Error, Resource, SyncFnNotifier, resource};
+use ash_core::{Actor, Error, Resource, SyncFnNotifier, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -89,7 +89,8 @@ policies {
 
 #[tokio::test]
 async fn test_generic_action_send_message_execution() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
     // 1. Call with optional argument provided:
     let is_urgent = CommunicationService::send_message(&ctx)
@@ -113,7 +114,8 @@ async fn test_generic_action_send_message_execution() {
 
 #[tokio::test]
 async fn test_generic_action_numeric_computation() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
     let total = CommunicationService::calculate_total(&ctx)
         .quantity(5)
@@ -135,7 +137,8 @@ async fn test_generic_action_numeric_computation() {
 
 #[tokio::test]
 async fn test_generic_action_dynamic_runner() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
     // Action defined without an inline run block, supplied at call time via `.run(...)`:
     let result = CommunicationService::dynamic_operation(&ctx)
@@ -152,7 +155,8 @@ async fn test_generic_action_dynamic_runner() {
 
 #[tokio::test]
 async fn test_generic_action_policy_authorization() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
     // 1. Without admin actor: forbidden
     let err = CommunicationService::admin_purge(&ctx)
@@ -164,7 +168,7 @@ async fn test_generic_action_policy_authorization() {
 
     // 2. With admin actor: authorized
     let admin = Actor::new(Uuid::new_v4()).with_attr("role", "admin");
-    let admin_ctx = ctx.with_actor(admin);
+    let admin_ctx = ctx_runtime.bind(Some(admin), ctx.tenant().map(str::to_owned));
 
     let purged = CommunicationService::admin_purge(&admin_ctx)
         .reason("Scheduled maintenance")
@@ -186,7 +190,8 @@ async fn test_generic_action_notification_dispatch() {
         Ok(())
     });
 
-    let ctx = Context::new(Memory::new()).with_notifier(Arc::new(notifier));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap().with_notifier(Arc::new(notifier));
 
     CommunicationService::send_message(&ctx)
         .recipient("alert@example.com")
@@ -200,7 +205,8 @@ async fn test_generic_action_notification_dispatch() {
 #[tokio::test]
 async fn test_generic_action_in_sqlite_context() {
     let sqlite = Sqlite::memory().await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = ctx_runtime.bootstrap();
     ctx.install(&[&CommunicationService::DEF]).await.unwrap();
 
     let total = CommunicationService::calculate_total(&ctx)

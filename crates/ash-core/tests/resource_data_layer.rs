@@ -1,4 +1,4 @@
-use ash_core::{Context, DataLayerKind, DataLayerRegistry, Resource, SchemaSupport, resource};
+use ash_core::{DataLayerKind, DataLayerRegistry, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -74,7 +74,7 @@ async fn test_resource_bound_data_layer_registry() {
         .register_kind(DataLayerKind::Memory, memory.clone())
         .with_schema_support(sqlite);
 
-    let ctx = Context::new(registry);
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
 
     // Invariant 1: Resource metadata correctly reflects declared data_layer
     assert_eq!(User::DEF.data_layer, DataLayerKind::Sqlite);
@@ -111,7 +111,7 @@ async fn test_resource_bound_data_layer_registry() {
     assert_eq!(loaded_sessions[0].id, session.id);
 
     // Invariant 4: Direct query to Memory reveals Session exists there, but User does not
-    let mem_ctx = Context::new(memory);
+    let mem_ctx = ash_core::Runtime::new(memory).bootstrap();
     let mem_sessions = Session::query(&mem_ctx).all().await.unwrap();
     assert_eq!(mem_sessions.len(), 1);
 

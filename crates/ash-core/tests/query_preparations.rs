@@ -1,4 +1,4 @@
-use ash_core::{Context, Resource, SchemaSupport, resource};
+use ash_core::{Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -53,7 +53,7 @@ pub use post::Post;
 #[test]
 async fn test_query_preparations_in_memory() {
     let data = Memory::new();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     // Create several posts
     Post::create(&ctx)
@@ -156,7 +156,7 @@ async fn test_query_preparations_in_memory() {
 async fn test_query_preparations_in_sqlite() {
     let data = Sqlite::memory().await.unwrap();
     data.install_resources(&[&Post::DEF]).await.unwrap();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     // Create test posts
     Post::create(&ctx)

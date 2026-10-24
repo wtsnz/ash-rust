@@ -1,5 +1,5 @@
 use ash_core::{Binary, CiString, Date, Float};
-use helpdesk::{Ticket, actor_customer, open_sqlite};
+use helpdesk::{Ticket, actor_customer, open_sqlite_runtime};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -8,8 +8,8 @@ async fn tickets_survive_reopen() {
     let db = dir.path().join("helpdesk.db");
     let customer = Uuid::new_v4();
 
-    let ctx = open_sqlite(&db).await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(customer));
+    let ctx = open_sqlite_runtime(&db).await.unwrap();
+    let as_customer = ctx.bind(Some(actor_customer(customer)), None);
     let opened = Ticket::open(&as_customer)
         .subject("Printer is jammed")
         .estimate(Float::parse("1.5").unwrap())
@@ -20,8 +20,8 @@ async fn tickets_survive_reopen() {
         .unwrap();
     drop(ctx);
 
-    let ctx = open_sqlite(&db).await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(customer));
+    let ctx = open_sqlite_runtime(&db).await.unwrap();
+    let as_customer = ctx.bind(Some(actor_customer(customer)), None);
     let listed = Ticket::query(&as_customer).load().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, opened.id);

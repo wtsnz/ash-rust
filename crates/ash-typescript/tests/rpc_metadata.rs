@@ -79,7 +79,7 @@ async fn run(ctx: &Context<Memory>, request: Json) -> Json {
 
 #[tokio::test]
 async fn a_write_shows_its_metadata_beside_its_data() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(&ctx, json!({ "action": "create_item", "input": { "name": "a", "tags": ["x", "y"] }, "fields": ["name"] })).await;
     assert_eq!(
         created,
@@ -109,7 +109,7 @@ async fn a_write_shows_its_metadata_beside_its_data() {
 
 #[tokio::test]
 async fn a_read_merges_the_metadata_asked_for_into_its_records() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     for name in ["b", "a", "c"] {
         run(
             &ctx,

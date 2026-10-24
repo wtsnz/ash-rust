@@ -178,7 +178,7 @@ async fn setup_memory_benchmark_data(
     Vec<Uuid>,
     async_graphql::dynamic::Schema,
 ) {
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
     let mut author_ids = Vec::new();
 
     // Create 5 authors
@@ -397,7 +397,7 @@ fn bench_axum_http_roundtrip(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mem = Memory::new();
     let (_, _, _, schema) = rt.block_on(setup_memory_benchmark_data(&mem));
-    let app = ash_graphql::axum::graphql_router(schema);
+    let app = ash_graphql::axum::graphql_router(schema, ash_core::Runtime::new(mem).bootstrap());
     let mut group = c.benchmark_group("graphql_http");
 
     let payload = serde_json::json!({
@@ -459,7 +459,7 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
                 .unwrap();
         }
 
-        let ctx = Context::new(db);
+        let ctx = ash_core::Runtime::new(db).bootstrap();
         let s = AshGraphQL::from_resources(&[&SQLITE_USER_DEF, &SQLITE_TICKET_DEF])
             .with_dataloader()
             .finish_with_context(ctx.clone())

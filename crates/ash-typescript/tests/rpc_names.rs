@@ -55,7 +55,7 @@ async fn run(ctx: &Context<Memory>, request: Json) -> Json {
 
 #[tokio::test]
 async fn fields_and_arguments_go_by_their_client_names() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(
         &ctx,
         json!({ "action": "create_place", "input": { "line1": "1 Main St", "remark": "94105" }, "fields": ["line1", "zip"] }),

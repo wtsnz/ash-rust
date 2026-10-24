@@ -228,7 +228,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                                 std::slice::from_mut(&mut stored),
                             )
                             .await?;
-                            redact_record(resource, ash.actor.as_ref(), &mut stored);
+                            redact_record(resource, ash.authorization_actor(), &mut stored);
                             preload(ash, resource, fields, std::slice::from_mut(&mut stored))
                                 .await?;
                             succeeded(Some(stored))
@@ -258,7 +258,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                                     std::slice::from_mut(&mut updated),
                                 )
                                 .await?;
-                                redact_record(resource, ash.actor.as_ref(), &mut updated);
+                                redact_record(resource, ash.authorization_actor(), &mut updated);
                                 preload(ash, resource, fields, std::slice::from_mut(&mut updated))
                                     .await?;
                                 succeeded(Some(updated))
@@ -282,7 +282,7 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                                 std::slice::from_mut(&mut destroyed),
                             )
                             .await?;
-                            redact_record(resource, ash.actor.as_ref(), &mut destroyed);
+                            redact_record(resource, ash.authorization_actor(), &mut destroyed);
                             preload(ash, resource, fields, std::slice::from_mut(&mut destroyed))
                                 .await?;
                             succeeded(Some(destroyed))

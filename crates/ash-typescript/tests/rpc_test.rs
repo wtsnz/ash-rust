@@ -1,7 +1,7 @@
 //! AshTypescript's RPC run on ash-rust: what each kind of action answers, in
 //! `AshTypescript.Rpc.run_action`'s shape, and the errors it fails with.
 
-use ash_core::{Actor, Context, Value};
+use ash_core::{Actor, Value};
 use ash_memory::Memory;
 use ash_typescript::rpc::{Identity, Rpc};
 use serde_json::{Value as Json, json};
@@ -236,7 +236,7 @@ fn rpc() -> Rpc<Memory> {
 }
 
 struct Blog {
-    ctx: Context<Memory>,
+    runtime: ash_core::Runtime<Memory>,
     rpc: Rpc<Memory>,
     writer: Uuid,
     published: Vec<Uuid>,
@@ -247,13 +247,14 @@ impl Blog {
     /// Three published posts by one writer, scored 1 to 3, the first two with an editor's
     /// note, the second with two notes, and a draft only an editor reads.
     async fn new() -> Self {
-        let ctx = Context::new(Memory::new());
+        let runtime = ash_core::Runtime::new(Memory::new());
+        let ctx = runtime.bootstrap();
         let writer = Writer::create(&ctx)
             .id(Uuid::new_v4())
             .name("Ada")
             .await
             .unwrap();
-        let editor = ctx.with_actor(editor());
+        let editor = runtime.bind(Some(editor()), None);
         let mut published = Vec::new();
         for score in 1..=3 {
             let note = match score {
@@ -286,7 +287,7 @@ impl Blog {
             .unwrap()
             .id;
         Self {
-            ctx,
+            runtime,
             rpc: rpc(),
             writer: writer.id,
             published,
@@ -295,7 +296,9 @@ impl Blog {
     }
 
     async fn run(&self, actor: Actor, request: Json) -> Json {
-        self.rpc.run(&self.ctx.with_actor(actor), &request).await
+        self.rpc
+            .run(&self.runtime.bind(Some(actor), None), &request)
+            .await
     }
 }
 
@@ -886,7 +889,7 @@ async fn requests_validate_without_running() {
         let blog = &blog;
         async move {
             blog.rpc
-                .validate(&blog.ctx.with_actor(actor), &request)
+                .validate(&blog.runtime.bind(Some(actor), None), &request)
                 .await
         }
     };
@@ -963,7 +966,7 @@ async fn errors_pass_through_the_error_handler() {
             Some(failure)
         })
         .show_raised_errors(true);
-    let ctx = blog.ctx.with_actor(reader());
+    let ctx = blog.runtime.bind(Some(reader()), None);
     let unknown = rpc
         .run(&ctx, &json!({ "action": "list_posts", "fields": ["nope"] }))
         .await;

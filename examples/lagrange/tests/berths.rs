@@ -20,6 +20,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
     let dust_devil = h.sol.ship("Dust Devil").id;
 
     let held = ops::reserve_berth(
+        h.app.runtime(),
         ada,
         long_haul,
         ceres,
@@ -33,6 +34,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
     // Another line can't take an overlapping window, though it can't see the hold.
     assert!(BerthReservation::query(mae).all().await.unwrap().is_empty());
     let err = ops::reserve_berth(
+        h.app.runtime(),
         mae,
         dust_devil,
         ceres,
@@ -46,6 +48,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
 
     // Back to back is fine, and so is another berth.
     ops::reserve_berth(
+        h.app.runtime(),
         mae,
         dust_devil,
         ceres,
@@ -56,6 +59,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
     .await
     .unwrap();
     ops::reserve_berth(
+        h.app.runtime(),
         mae,
         dust_devil,
         ceres,
@@ -69,6 +73,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
     // Releasing a hold frees its window.
     held.release_on(ada).await.unwrap();
     let freed = ops::reserve_berth(
+        h.app.runtime(),
         mae,
         dust_devil,
         ceres,
@@ -96,6 +101,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
 
     // A window must end after it starts, and a 48,000 t tanker needs heavy-lift clamps.
     let err = ops::reserve_berth(
+        h.app.runtime(),
         ada,
         long_haul,
         ceres,
@@ -111,6 +117,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
     );
     let behemoth = h.sol.ship("Behemoth").id;
     let err = ops::reserve_berth(
+        h.app.runtime(),
         ada,
         behemoth,
         ceres,
@@ -122,6 +129,7 @@ async fn windows_do_not_overlap<D: FleetDb>(h: Harness<D>) {
     .unwrap_err();
     assert!(err.to_string().contains("too heavy"), "{err}");
     ops::reserve_berth(
+        h.app.runtime(),
         ada,
         behemoth,
         ceres,
@@ -145,8 +153,10 @@ async fn racing_dispatchers_get_one_berth<D: FleetDb>(h: Harness<D>) {
         };
         let ctx = h.ctx(dispatcher).clone();
         let ship = h.sol.ship(ship).id;
+        let runtime = h.app.runtime().clone();
         tokio::spawn(async move {
             ops::reserve_berth(
+                &runtime,
                 &ctx,
                 ship,
                 ceres,
@@ -185,6 +195,7 @@ async fn postgres_backs_the_rule_up<D: FleetDb>(h: Harness<D>) {
     let ada = h.ctx("Ada");
     let ship = h.sol.ship("Long Haul").id;
     ops::reserve_berth(
+        h.app.runtime(),
         ada,
         ship,
         ceres,
@@ -214,6 +225,7 @@ async fn recoding_a_berth_moves_its_holds<D: FleetDb>(h: Harness<D>) {
     }
     let ceres = h.sol.port("PZZ").id;
     let hold = ops::reserve_berth(
+        h.app.runtime(),
         h.ctx("Ada"),
         h.sol.ship("Long Haul").id,
         ceres,

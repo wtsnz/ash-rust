@@ -1,4 +1,4 @@
-use ash_core::{ActionDef, AttrType, AttributeDef, Context, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -54,7 +54,10 @@ async fn test_phase6_subscription_stream_with_pubsub() {
     let pubsub = PubSub::new();
     let memory = Memory::new();
     // Writes publish through the context's notifier.
-    let ctx = Context::new(memory).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(memory);
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
@@ -152,7 +155,10 @@ async fn test_phase6_subscription_stream_with_pubsub() {
 #[tokio::test]
 async fn each_write_is_heard_once() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
         .finish::<Memory>()
@@ -199,7 +205,10 @@ async fn test_phase6_subscription_filtered() {
     let pubsub = PubSub::new();
     let memory = Memory::new();
     // Writes publish through the context's notifier.
-    let ctx = Context::new(memory).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(memory);
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
@@ -267,7 +276,10 @@ async fn test_phase6_subscription_updated_and_destroyed() {
     let pubsub = PubSub::new();
     let memory = Memory::new();
     // Writes publish through the context's notifier.
-    let ctx = Context::new(memory).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(memory);
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub.clone())
@@ -389,7 +401,8 @@ async fn test_phase6_axum_router_endpoints() {
         .finish::<Memory>()
         .expect("Failed to build schema");
 
-    let app = ash_graphql::axum::graphql_router(schema);
+    let app =
+        ash_graphql::axum::graphql_router(schema, ash_core::Runtime::new(_memory).bootstrap());
 
     // 1. GET /graphiql returns HTML
     let req_graphiql = HttpRequest::builder()
@@ -434,17 +447,24 @@ async fn router_serves_subscriptions_over_websocket() {
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub)
         .finish_with_context(ctx.clone())
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket_ctx = ctx.clone();
     tokio::spawn(async move {
-        axum::serve(listener, ash_graphql::axum::graphql_router(schema))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            ash_graphql::axum::graphql_router(schema, socket_ctx),
+        )
+        .await
+        .unwrap();
     });
 
     let mut request = format!("ws://{addr}/graphql/ws")
@@ -519,7 +539,10 @@ where
 #[tokio::test]
 async fn null_subscription_arguments_mean_none() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub)
         .finish::<Memory>()
@@ -563,7 +586,10 @@ async fn next<S: futures_util::Stream + Unpin>(stream: &mut S) -> Option<S::Item
 #[tokio::test]
 async fn a_subscriber_that_falls_behind_is_told_what_it_missed() {
     let pubsub = PubSub::with_capacity(4);
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub)
         .finish::<Memory>()
@@ -631,6 +657,7 @@ type Socket =
 #[cfg(feature = "axum")]
 async fn serve_shared(
     schema: async_graphql::dynamic::Schema,
+    context: ash_core::Context<Memory>,
 ) -> (
     std::net::SocketAddr,
     Arc<ash_graphql::axum::SubscriptionHub>,
@@ -638,7 +665,7 @@ async fn serve_shared(
     let hub = Arc::new(ash_graphql::axum::SubscriptionHub::default());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = ash_graphql::axum::graphql_router_with_hub(schema, hub.clone());
+    let router = ash_graphql::axum::graphql_router_with_hub(schema, hub.clone(), context);
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     (addr, hub)
 }
@@ -700,12 +727,15 @@ async fn streams(hub: &ash_graphql::axum::SubscriptionHub, expected: usize) {
 #[tokio::test(flavor = "multi_thread")]
 async fn subscribers_to_the_same_subscription_share_one_execution() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub)
         .finish_with_context(ctx.clone())
         .unwrap();
-    let (addr, hub) = serve_shared(schema).await;
+    let (addr, hub) = serve_shared(schema, ctx.clone()).await;
 
     let created = "subscription { ticketCreated { created { title } } }";
     let mut sockets = Vec::new();
@@ -764,12 +794,15 @@ async fn subscribers_to_the_same_subscription_share_one_execution() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_older_graphql_ws_protocol_still_works() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub)
         .finish_with_context(ctx.clone())
         .unwrap();
-    let (addr, hub) = serve_shared(schema).await;
+    let (addr, hub) = serve_shared(schema, ctx.clone()).await;
     let mut socket = connect(addr, "graphql-ws").await;
     send_json(&mut socket, serde_json::json!({ "id": "1", "type": "start", "payload": { "query": "subscription { ticketCreated { created { title } } }" } })).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -791,14 +824,19 @@ async fn the_older_graphql_ws_protocol_still_works() {
 /// A mutation sent over the socket runs for each sender: only subscriptions are shared.
 #[cfg(feature = "axum")]
 #[tokio::test(flavor = "multi_thread")]
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn mutations_over_the_socket_are_not_shared() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .with_pubsub(pubsub)
         .finish_with_context(ctx.clone())
         .unwrap();
-    let (addr, _) = serve_shared(schema).await;
+    let (addr, _) = serve_shared(schema, ctx.clone()).await;
     let mutation = r#"mutation { createTicket(input: { title: "Twice" }) { errors { code } } }"#;
     for _ in 0..2 {
         let mut socket = connect(addr, "graphql-transport-ws").await;
@@ -885,7 +923,10 @@ static CARD_DEF: ResourceDef = ResourceDef {
 #[tokio::test]
 async fn a_subscription_loads_what_it_selects() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let schema = AshGraphQL::from_resources(&[&BOARD_DEF, &CARD_DEF])
         .with_pubsub(pubsub)
         .finish::<Memory>()
@@ -910,7 +951,10 @@ async fn a_subscription_loads_what_it_selects() {
         .unwrap();
 
     // Each stream subscribes when first polled.
-    let signed_in = ctx.with_actor(ash_core::Actor::new(uuid::Uuid::new_v4()));
+    let signed_in = ctx_runtime.bind(
+        Some(ash_core::Actor::new(uuid::Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let mut cards = schema.execute_stream(
         Request::new("subscription { cardCreated { created { title board { name cardCount } } } }")
             .data(signed_in.clone()),

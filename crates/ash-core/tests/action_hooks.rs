@@ -1,9 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use uuid::Uuid;
 
-use ash_core::{
-    ChangeContext, Context, CustomChange, Error, FieldMap, Resource, Result, Value, resource,
-};
+use ash_core::{ChangeContext, CustomChange, Error, FieldMap, Resource, Result, Value, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -96,7 +94,7 @@ mod test_shorthand_and_custom_change {
 
     #[tokio::test]
     async fn test_shorthand_hooks_in_memory() {
-        let ctx = Context::new(Memory::new());
+        let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
         let article = ShorthandArticle::create(&ctx)
             .title("   declarative hooks   ")
@@ -188,7 +186,7 @@ mod test_elixir_change_hooks {
 
     #[tokio::test]
     async fn test_elixir_style_hooks_on_update() {
-        let ctx = Context::new(Memory::new());
+        let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
         let post = ElixirPost::create(&ctx)
             .title("Post 1")
@@ -274,7 +272,7 @@ mod test_destroy_action_hooks {
 
     #[tokio::test]
     async fn test_destroy_action_lifecycle_success() {
-        let ctx = Context::new(Memory::new());
+        let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
         let doc = Document::create(&ctx)
             .title("Doc 1")
@@ -294,7 +292,7 @@ mod test_destroy_action_hooks {
 
     #[tokio::test]
     async fn test_destroy_action_before_hook_aborts() {
-        let ctx = Context::new(Memory::new());
+        let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
         let doc = Document::create(&ctx)
             .title("Doc Protected")
@@ -363,7 +361,7 @@ mod test_sqlite_hooks {
     #[tokio::test]
     async fn test_sqlite_action_hooks() {
         let sqlite = Sqlite::memory().await.unwrap();
-        let ctx = Context::new(sqlite);
+        let ctx = ash_core::Runtime::new(sqlite).bootstrap();
         ctx.install(&[&SqliteEntity::DEF]).await.unwrap();
 
         let entity = SqliteEntity::create(&ctx).name("widget").await.unwrap();

@@ -427,8 +427,8 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
 
         impl #resource_ident {
             /// Initialize an `AuthStrategy` configured for this resource.
-            pub fn auth_strategy() -> ::ash_authentication::AuthStrategy<Self> {
-                ::ash_authentication::AuthStrategy::new(&<Self as ::ash_core::Resource>::DEF)
+            pub fn auth_strategy<D>(runtime: &::ash_core::Runtime<D>) -> ::ash_authentication::AuthStrategy<Self> {
+                ::ash_authentication::AuthStrategy::new(runtime)
             }
         }
     };

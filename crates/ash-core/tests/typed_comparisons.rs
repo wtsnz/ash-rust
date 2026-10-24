@@ -141,10 +141,12 @@ mod host {
 use host::Host;
 
 #[tokio::test]
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
-    use ash_core::{Changeset, Context};
+    use ash_core::Changeset;
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let mut input = FieldMap::new();
     input.insert("address".into(), Value::String("10.0.0.1/32".into()));
     input.insert("embedding".into(), Value::String("[1.0, 2.50]".into()));

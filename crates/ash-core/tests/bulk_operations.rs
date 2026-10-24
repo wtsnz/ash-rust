@@ -48,13 +48,13 @@ actions {
 
 async fn setup_sqlite() -> Context<Sqlite> {
     let sqlite = Sqlite::memory().await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
     ctx.install(&[&Product::DEF]).await.unwrap();
     ctx
 }
 
 fn setup_memory() -> Context<Memory> {
-    Context::new(Memory::new())
+    ash_core::Runtime::new(Memory::new()).bootstrap()
 }
 
 #[tokio::test]

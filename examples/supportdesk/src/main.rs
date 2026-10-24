@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.install(&resources).await?;
 
     let pubsub = PubSub::new();
-    let ctx = ash_core::Context::new(db.clone()).with_pubsub(std::sync::Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(db.clone()).with_pubsub(std::sync::Arc::new(pubsub.clone()));
     let mut seeded_ms = 0;
     if let Ok(path) = std::env::var("FIXTURE") {
         let started = Instant::now();

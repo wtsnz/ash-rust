@@ -104,7 +104,9 @@ where
     D: DataLayer + TransactionSupport + Clone + Send + Sync + 'static,
 {
     let crew = seed::contexts(app, sol);
-    let customs = crew["Chen"].clone().with_tenant(voyage.line.clone());
+    let customs = app
+        .runtime()
+        .bind(crew["Chen"].actor().cloned(), Some(voyage.line.clone()));
     ops::clear_customs(&customs, voyage.id).await?;
     ops::launch(&crew[captain], voyage.id, at("2187-02-01T06:00:00Z")?).await?;
     writeln!(
@@ -267,6 +269,7 @@ where
 
     let window = (at("2187-02-11T12:00:00Z")?, at("2187-02-12T12:00:00Z")?);
     let held = ops::reserve_berth(
+        app.runtime(),
         &crew["Mae"],
         sol.ship("Dust Devil").id,
         sol.port("OLY").id,
@@ -277,6 +280,7 @@ where
     .await?;
     // Helios wants the same berth for the same window and is turned away.
     if ops::reserve_berth(
+        app.runtime(),
         &crew["Ada"],
         sol.ship("Tin Kettle").id,
         sol.port("OLY").id,
@@ -290,6 +294,7 @@ where
         summary.berth_refusals += 1;
     }
     let ceres_berth = ops::reserve_berth(
+        app.runtime(),
         &crew["Ada"],
         sol.ship("Long Haul").id,
         sol.port("PZZ").id,
@@ -316,7 +321,9 @@ where
     .ok();
 
     // Thursday: customs refuses the unsealed fuel, seals it, and clears both voyages.
-    let customs = crew["Chen"].clone().with_tenant(HELIOS);
+    let customs = app
+        .runtime()
+        .bind(crew["Chen"].actor().cloned(), Some(HELIOS.into()));
     let refused = ops::clear_customs(&customs, long_haul.id).await.is_err();
     let seal = ash_core::Binary::from_bytes(*b"SOL-CUSTOMS 2187-01-29 #4471");
     Container::get(&customs, fuel.id)
@@ -351,7 +358,7 @@ where
         summary.containers_delivered +=
             closed.iter().filter_map(|c| c.container_count).sum::<i64>();
     }
-    let audit = Context::new(app.registry());
+    let audit = ash_core::Runtime::new(app.registry()).bootstrap();
     summary.audit_events = OpsEvent::query(&audit).count().await?;
     writeln!(log, "Week done: {summary:?}").ok();
     Ok((summary, log))

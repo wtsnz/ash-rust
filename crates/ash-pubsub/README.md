@@ -37,7 +37,7 @@ It decouples side-effects and event distribution from resource business logic, e
 
 ```rust
 use std::sync::Arc;
-use ash_core::{Context, resource};
+use ash_core::{resource};
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 use uuid::Uuid;
@@ -72,7 +72,7 @@ async fn main() -> ash_core::Result<()> {
     let pubsub = Arc::new(PubSub::new());
 
     // 2. Attach PubSub notifier to context
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::clone(&pubsub));
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap().with_pubsub(Arc::clone(&pubsub));
 
     // 3. Subscribe to typed event streams
     let mut sub_all = Order::subscribe_all(&pubsub);

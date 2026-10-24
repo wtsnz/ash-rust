@@ -1,7 +1,7 @@
 //! A plain `f64` is a float attribute, as Ash's `:float` is a native float: typed setters,
 //! filters, sorts and reads all use the number, on every data layer.
 
-use ash_core::{Context, DataLayer, Error, Float, Resource, SchemaSupport, resource};
+use ash_core::{DataLayer, Error, Float, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ resource! {
 }
 
 async fn floats_round_trip<D: DataLayer>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let capitol = Beacon::place(&ctx)
         .name("Capitol")
         .lat(30.2747)

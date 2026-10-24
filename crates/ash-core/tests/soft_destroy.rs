@@ -92,6 +92,8 @@ use folder_mod::Folder;
 use note_mod::Note;
 
 /// Every stored note, archived or not, straight from the data layer.
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn stored_notes<D: DataLayer>(ctx: &Context<D>) -> Vec<(String, Option<String>)> {
     let mut rows: Vec<(String, Option<String>)> = ctx
         .data
@@ -213,8 +215,8 @@ async fn bulk_scenario<D: TransactionSupport + 'static>(ctx: Context<D>) {
 
 #[tokio::test]
 async fn soft_destroy_and_cascade_destroy_in_memory() {
-    scenario(Context::new(Memory::new())).await;
-    bulk_scenario(Context::new(Memory::new())).await;
+    scenario(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    bulk_scenario(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -222,7 +224,7 @@ async fn soft_destroy_and_cascade_destroy_in_sqlite() {
     async fn sqlite() -> Context<Sqlite> {
         let sqlite = Sqlite::memory().await.unwrap();
         sqlite.install(&[&Folder::DEF, &Note::DEF]).await.unwrap();
-        Context::new(sqlite)
+        ash_core::Runtime::new(sqlite).bootstrap()
     }
     scenario(sqlite().await).await;
     bulk_scenario(sqlite().await).await;

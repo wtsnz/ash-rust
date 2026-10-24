@@ -20,9 +20,9 @@ pub use crate::ws::{Hub as SubscriptionHub, SHARED_BUFFER};
 /// socket), an app attaches them here: typically a `Context` with the request's actor and
 /// tenant, which every resolver reads as the request's.
 pub trait RequestData: Send + Sync + 'static {
-    /// `request`, with what `headers` say it runs as attached, and a scope naming that
-    /// (the tenant and the actor, say): subscribers share a stream only within one scope,
-    /// so one never hears what another may not see.
+    /// Attach a Runtime-bound context resolved from `headers`. Return a sharing key
+    /// that distinguishes every authorization scope. Until groups own a bound Scope,
+    /// executions sharing a key use the first member's context.
     fn apply(
         &self,
         headers: &HeaderMap,
@@ -30,7 +30,19 @@ pub trait RequestData: Send + Sync + 'static {
     ) -> (async_graphql::Request, String);
 }
 
-/// Every request runs as the schema's context says.
+/// Bind an explicit context for every request, for bootstrap and single-scope servers.
+/// Production applications should resolve identity in their own `RequestData`.
+impl<D: Send + Sync + 'static> RequestData for ash_core::Context<D> {
+    fn apply(
+        &self,
+        _headers: &HeaderMap,
+        request: async_graphql::Request,
+    ) -> (async_graphql::Request, String) {
+        (request.data(self.clone()), String::new())
+    }
+}
+
+/// No binding is supplied. Network requests fail instead of using a schema default.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SchemaContext;
 
@@ -55,7 +67,10 @@ pub async fn graphql_handler(
     State(schema): State<Arc<Schema>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    schema.execute(req.into_inner()).await.into()
+    schema
+        .execute(req.into_inner().data(crate::request::RequireBoundContext))
+        .await
+        .into()
 }
 
 /// [`graphql_handler`], running the request as its [`RequestData`] says.
@@ -65,7 +80,11 @@ async fn graphql_handler_with(
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     let (request, _) = served.request_data.apply(&headers, req.into_inner());
-    served.schema.execute(request).await.into()
+    served
+        .schema
+        .execute(request.data(crate::request::RequireBoundContext))
+        .await
+        .into()
 }
 
 /// Handler serving the interactive GraphiQL IDE.
@@ -89,14 +108,21 @@ pub async fn graphiql_handler() -> impl IntoResponse {
 ///   `graphql-transport-ws`, subscribers to the same subscription share one execution:
 ///   each event is resolved and serialized once for all of them, as Absinthe
 ///   deduplicates AshGraphql's subscriptions.
-pub fn graphql_router(schema: Schema) -> Router {
-    graphql_router_with_hub(schema, Arc::new(SubscriptionHub::default()))
+pub fn graphql_router<D: Send + Sync + 'static>(
+    schema: Schema,
+    context: ash_core::Context<D>,
+) -> Router {
+    graphql_router_with_hub(schema, Arc::new(SubscriptionHub::default()), context)
 }
 
 /// [`graphql_router`], with the [`SubscriptionHub`] its shared subscriptions run in, to
 /// see how many are running.
-pub fn graphql_router_with_hub(schema: Schema, hub: Arc<SubscriptionHub>) -> Router {
-    graphql_router_with(schema, hub, Arc::new(SchemaContext))
+pub fn graphql_router_with_hub<D: Send + Sync + 'static>(
+    schema: Schema,
+    hub: Arc<SubscriptionHub>,
+    context: ash_core::Context<D>,
+) -> Router {
+    graphql_router_with(schema, hub, Arc::new(context))
 }
 
 /// [`graphql_router_with_hub`], each request and subscription running as `request_data`

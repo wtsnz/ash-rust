@@ -32,7 +32,8 @@ use ash_memory::Memory;
 
 let pubsub = PubSub::new();
 // Writes publish their changes through the context's notifier.
-let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+let runtime = ash_core::Runtime::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+let ctx = runtime.bind(None, None);
 
 // Build schema from an Ash Domain definition
 let schema = AshGraphQL::builder(&Helpdesk::DEF)
@@ -43,7 +44,7 @@ let schema = AshGraphQL::builder(&Helpdesk::DEF)
 
 // Mount directly onto an Axum router
 #[cfg(feature = "axum")]
-let app = ash_graphql::axum::graphql_router(schema);
+let app = ash_graphql::axum::graphql_router(schema, ctx);
 ```
 
 ## Features
@@ -181,7 +182,7 @@ let schema = AshGraphQL::from_resources(&[&AUTHOR_DEF, &POST_DEF])
     .finish::<Memory>()?;
 
 // Relationships load as this actor in this tenant, batched.
-let req = Request::new(query).data(ctx.with_actor(actor));
+let req = Request::new(query).data(runtime.bind(Some(actor), ctx.tenant().map(str::to_owned)));
 let res = schema.execute(req).await;
 ```
 
@@ -250,7 +251,7 @@ WebSocket at `/graphql/ws` (`graphql-transport-ws` or the older `graphql-ws` pro
 use axum::Router;
 use ash_graphql::axum::graphql_router;
 
-let app = graphql_router(schema);
+let app = graphql_router(schema, ctx);
 let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
 axum::serve(listener, app).await.unwrap();
 ```

@@ -1,3 +1,6 @@
+// Raw engine queries migrate to executable plans in the next step.
+#![allow(deprecated)]
+
 //! Pages, as AshGraphql returns a paginated read: a keyset page, `KeysetPageOf<Resource> {
 //! count, results, startKeyset, endKeyset }`, paged with `first` / `after` and `last` /
 //! `before`, or an offset page, `PageOf<Resource> { count, results, hasNextPage, ... }`,
@@ -317,25 +320,25 @@ pub(crate) fn scoped_read<D: DataLayer>(
     let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
         Some(filter) => Some(parse_resource_filter(
             resource,
-            ash.actor.as_ref(),
+            ash.authorization_actor(),
             filter.as_value(),
         )?),
         None => None,
     };
     let sort = match ctx.args.get("sort").filter(|value| !value.is_null()) {
-        Some(sort) => parse_resource_sort(resource, ash.actor.as_ref(), sort.as_value())?,
+        Some(sort) => parse_resource_sort(resource, ash.authorization_actor(), sort.as_value())?,
         None => Vec::new(),
     };
     let query = scope_read(
         resource,
         action,
-        ash.actor.as_ref(),
+        ash.authorization_actor(),
         &arguments,
         CompiledQuery {
             filter,
             sort,
             calculation_args: calculation_arguments(resource, &arguments),
-            tenant: ash.tenant.clone(),
+            tenant: ash.tenant().map(str::to_owned),
             ..CompiledQuery::default()
         },
     )
@@ -497,7 +500,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                 }
                 after_read(action, &arguments, &mut records)?;
                 for record in &mut records {
-                    redact_record(resource, ash.actor.as_ref(), record);
+                    redact_record(resource, ash.authorization_actor(), record);
                 }
                 preload(
                     &ash,
@@ -611,7 +614,7 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
                 }
                 after_read(action, &arguments, &mut records)?;
                 for record in &mut records {
-                    redact_record(resource, ash.actor.as_ref(), record);
+                    redact_record(resource, ash.authorization_actor(), record);
                 }
                 preload(&ash, resource, fields, &mut records).await?;
                 Ok(Some(FieldValue::owned_any(OffsetPage {

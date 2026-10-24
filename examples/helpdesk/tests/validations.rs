@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, resource};
+use ash_core::{Error, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -43,7 +43,7 @@ policies {
 #[tokio::test]
 async fn validation_present_and_string_length() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     // 1. Valid product creation succeeds
     let product = Product::create(&ctx)
@@ -135,7 +135,7 @@ async fn validation_present_and_string_length() {
 #[tokio::test]
 async fn validation_one_of() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     // 1. Allowed category succeeds
     let p = Product::create(&ctx)
@@ -169,7 +169,7 @@ async fn validation_one_of() {
 #[tokio::test]
 async fn validation_numericality() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     // 1. Negative or zero price fails min
     let err = Product::create(&ctx)
@@ -215,7 +215,7 @@ async fn validation_numericality() {
 #[tokio::test]
 async fn change_set_new_preserves_caller_value_or_defaults() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     // 1. Without providing status: set_new defaults to "draft"
     let p1 = Product::create(&ctx)
@@ -246,8 +246,10 @@ async fn helpdesk_ticket_and_representative_validations() {
     use helpdesk::{Helpdesk, Ticket, actor_customer};
 
     let mem = Memory::new();
-    let desk = Helpdesk::new(mem);
-    let as_customer = desk.with_actor(actor_customer(Uuid::new_v4()));
+    let desk_runtime = ash_core::Runtime::new(mem);
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(Uuid::new_v4())), None));
 
     // 1. Subject with 1 character fails string_length(min: 2)
     let err = Ticket::open(&as_customer).subject("x").await.unwrap_err();

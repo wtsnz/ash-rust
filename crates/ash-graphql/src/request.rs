@@ -15,48 +15,45 @@ use async_graphql::{Request, ServerResult};
 
 use crate::dataloader::AshBatchLoader;
 
-/// `context`, acting as `actor` when it carries no actor of its own.
-fn acting_as<'a, D>(context: &'a Context<D>, actor: Option<&Actor>) -> Cow<'a, Context<D>> {
-    match (&context.actor, actor) {
-        (None, Some(actor)) => Cow::Owned(context.with_actor(actor.clone())),
-        _ => Cow::Borrowed(context),
-    }
-}
-
-/// The request's `Context<D>`, acting as an `Actor` given alongside it when the
-/// context carries none. Every resolver runs as this context, so lists, gets,
-/// relationships, field redaction and subscriptions agree on the actor and tenant.
+/// The request's bound context. Identity is never filled from separate request data.
 pub(crate) fn request_context<'a, D: Send + Sync + 'static>(
     ctx: &ResolverContext<'a>,
 ) -> async_graphql::Result<Cow<'a, Context<D>>> {
     let context = ctx.ctx.data::<Context<D>>()?;
-    Ok(acting_as(context, ctx.ctx.data_opt::<Actor>()))
+    Ok(Cow::Borrowed(context))
 }
 
-/// The actor the request reads as: its context's, or an `Actor` on its own for a
-/// schema run without a `Context<D>`.
+/// The policy identity of the bound scope, including explicit system authority.
 pub(crate) fn request_actor<'a, D: Send + Sync + 'static>(
     ctx: &ResolverContext<'a>,
 ) -> Option<&'a Actor> {
     ctx.ctx
         .data_opt::<Context<D>>()
-        .and_then(|context| context.actor.as_ref())
-        .or_else(|| ctx.ctx.data_opt::<Actor>())
+        .and_then(|context| context.authorization_actor())
 }
+
+/// Network adapters require request-local binding, even when the schema has a default.
+pub(crate) struct RequireBoundContext;
 
 /// Gives each request its own [`AshBatchLoader`], bound to the context that request
 /// runs as, so batched relationship loads see what the request may see.
-pub(crate) struct RequestDataLoader<D>(PhantomData<fn() -> D>);
+pub(crate) struct RequestDataLoader<D> {
+    enabled: bool,
+    marker: PhantomData<fn() -> D>,
+}
 
 impl<D> RequestDataLoader<D> {
-    pub(crate) fn new() -> Self {
-        Self(PhantomData)
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            marker: PhantomData,
+        }
     }
 }
 
 impl<D: DataLayer + Clone + 'static> ExtensionFactory for RequestDataLoader<D> {
     fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(Self::new())
+        Arc::new(Self::new(self.enabled))
     }
 }
 
@@ -75,13 +72,23 @@ impl<D: DataLayer + Clone + 'static> Extension for RequestDataLoader<D> {
         request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
+        if request_data::<RequireBoundContext>(&request).is_some()
+            && request_data::<Context<D>>(&request).is_none()
+        {
+            return Err(async_graphql::ServerError::new(
+                "request context was not bound by the server adapter",
+                None,
+            ));
+        }
+        if !self.enabled {
+            return next.run(ctx, request).await;
+        }
         // A loader the caller supplied is theirs to bind.
         if request_data::<DataLoader<AshBatchLoader<D>>>(&request).is_some() {
             return next.run(ctx, request).await;
         }
         let context = request_data::<Context<D>>(&request).or_else(|| ctx.data_opt::<Context<D>>());
-        let actor = request_data::<Actor>(&request).or_else(|| ctx.data_opt::<Actor>());
-        let loader = context.map(|context| acting_as(context, actor).into_owned());
+        let loader = context.cloned();
         let request = match loader {
             Some(context) => request.data(crate::AshGraphQL::create_dataloader(context)),
             None => request,

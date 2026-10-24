@@ -78,8 +78,8 @@ async fn destroy_child<D: DataLayer>(
                     cascade,
                 ))
                 .await?;
-                ctx.data
-                    .destroy(dest_def, ctx.tenant.as_deref(), child_id)
+                ctx.raw_data()
+                    .destroy(dest_def, ctx.tenant(), child_id)
                     .await?;
             }
         }
@@ -133,12 +133,12 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
         };
         let filter = Filter::and([Some(related), read_filter].into_iter().flatten());
         let rows = ctx
-            .data
+            .raw_data()
             .run_query(
                 dest_def,
                 &CompiledQuery {
                     filter: Some(filter),
-                    tenant: ctx.tenant.clone(),
+                    tenant: ctx.tenant().map(str::to_owned),
                     ..CompiledQuery::default()
                 },
             )
@@ -256,12 +256,12 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                         continue;
                     };
                     let rows = ctx
-                        .data
+                        .raw_data()
                         .run_query(
                             dest_def,
                             &CompiledQuery {
                                 filter: Some(filter),
-                                tenant: ctx.tenant.clone(),
+                                tenant: ctx.tenant().map(str::to_owned),
                                 ..CompiledQuery::default()
                             },
                         )
@@ -280,12 +280,12 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                         continue;
                     };
                     let rows = ctx
-                        .data
+                        .raw_data()
                         .run_query(
                             dest_def,
                             &CompiledQuery {
                                 filter: Some(filter),
-                                tenant: ctx.tenant.clone(),
+                                tenant: ctx.tenant().map(str::to_owned),
                                 ..CompiledQuery::default()
                             },
                         )
@@ -302,12 +302,12 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                         continue;
                     };
                     let rows = ctx
-                        .data
+                        .raw_data()
                         .run_query(
                             dest_def,
                             &CompiledQuery {
                                 filter: Some(filter),
-                                tenant: ctx.tenant.clone(),
+                                tenant: ctx.tenant().map(str::to_owned),
                                 ..CompiledQuery::default()
                             },
                         )
@@ -319,8 +319,8 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                         for column in rel.destination_columns() {
                             patch.insert(column.to_string(), Value::Null);
                         }
-                        ctx.data
-                            .update(dest_def, ctx.tenant.as_deref(), child_id, patch)
+                        ctx.raw_data()
+                            .update(dest_def, ctx.tenant(), child_id, patch)
                             .await?;
                     }
                 }
@@ -338,12 +338,12 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                         OnDelete::Nothing => {}
                         OnDelete::Restrict => {
                             let rows = ctx
-                                .data
+                                .raw_data()
                                 .run_query(
                                     through_def,
                                     &CompiledQuery {
                                         filter: Some(filter),
-                                        tenant: ctx.tenant.clone(),
+                                        tenant: ctx.tenant().map(str::to_owned),
                                         ..CompiledQuery::default()
                                     },
                                 )
@@ -358,12 +358,12 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                         }
                         OnDelete::Cascade => {
                             let rows = ctx
-                                .data
+                                .raw_data()
                                 .run_query(
                                     through_def,
                                     &CompiledQuery {
                                         filter: Some(filter),
-                                        tenant: ctx.tenant.clone(),
+                                        tenant: ctx.tenant().map(str::to_owned),
                                         ..CompiledQuery::default()
                                     },
                                 )
@@ -489,10 +489,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                             } else {
                                 child_fields.extend(link.iter().cloned());
                                 generate_pk(dest_def, &mut child_fields);
-                                ctx.data
+                                ctx.raw_data()
                                     .create(
                                         dest_def,
-                                        ctx.tenant.as_deref(),
+                                        ctx.tenant(),
                                         crate::pipeline::new_pk(dest_def, &child_fields)?,
                                         child_fields,
                                     )
@@ -503,12 +503,12 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                     ManagedRelType::DirectControl => {
                         let filter = rel.destination_filter(&parent).unwrap_or(Filter::False);
                         let existing_rows = ctx
-                            .data
+                            .raw_data()
                             .run_query(
                                 dest_def,
                                 &CompiledQuery {
                                     filter: Some(filter),
-                                    tenant: ctx.tenant.clone(),
+                                    tenant: ctx.tenant().map(str::to_owned),
                                     ..CompiledQuery::default()
                                 },
                             )
@@ -549,13 +549,8 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     .await?;
                                 } else {
                                     child_fields.extend(link.iter().cloned());
-                                    ctx.data
-                                        .update(
-                                            dest_def,
-                                            ctx.tenant.as_deref(),
-                                            child_id,
-                                            child_fields,
-                                        )
+                                    ctx.raw_data()
+                                        .update(dest_def, ctx.tenant(), child_id, child_fields)
                                         .await?;
                                 }
                             } else {
@@ -575,10 +570,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     child_fields.extend(link.iter().cloned());
                                     generate_pk(dest_def, &mut child_fields);
                                     let stored = ctx
-                                        .data
+                                        .raw_data()
                                         .create(
                                             dest_def,
-                                            ctx.tenant.as_deref(),
+                                            ctx.tenant(),
                                             crate::pipeline::new_pk(dest_def, &child_fields)?,
                                             child_fields,
                                         )
@@ -613,13 +608,8 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                         for (column, _) in &link {
                                             updated.insert(column.clone(), Value::Null);
                                         }
-                                        ctx.data
-                                            .update(
-                                                dest_def,
-                                                ctx.tenant.as_deref(),
-                                                existing_id,
-                                                updated,
-                                            )
+                                        ctx.raw_data()
+                                            .update(dest_def, ctx.tenant(), existing_id, updated)
                                             .await?;
                                     }
                                 } else if let Some(destroy_act) = child_destroy_action {
@@ -632,8 +622,8 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     ))
                                     .await?;
                                 } else {
-                                    ctx.data
-                                        .destroy(dest_def, ctx.tenant.as_deref(), existing_id)
+                                    ctx.raw_data()
+                                        .destroy(dest_def, ctx.tenant(), existing_id)
                                         .await?;
                                 }
                             }
@@ -656,12 +646,12 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                         ManagedRelType::DirectControl => {
                             let join_filter = Filter::eq(source_fk, parent_id.clone());
                             let existing_joins = ctx
-                                .data
+                                .raw_data()
                                 .run_query(
                                     through_def,
                                     &CompiledQuery {
                                         filter: Some(join_filter),
-                                        tenant: ctx.tenant.clone(),
+                                        tenant: ctx.tenant().map(str::to_owned),
                                         ..CompiledQuery::default()
                                     },
                                 )
@@ -710,10 +700,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
                                         let stored = ctx
-                                            .data
+                                            .raw_data()
                                             .create(
                                                 dest_def,
-                                                ctx.tenant.as_deref(),
+                                                ctx.tenant(),
                                                 crate::pipeline::new_pk(dest_def, &child_fields)?,
                                                 child_fields,
                                             )
@@ -729,10 +719,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     join_fields.insert(source_fk.to_string(), parent_id.clone());
                                     join_fields.insert(dest_fk.to_string(), target_id);
                                     generate_pk(through_def, &mut join_fields);
-                                    ctx.data
+                                    ctx.raw_data()
                                         .create(
                                             through_def,
-                                            ctx.tenant.as_deref(),
+                                            ctx.tenant(),
                                             crate::pipeline::new_pk(through_def, &join_fields)?,
                                             join_fields,
                                         )
@@ -764,8 +754,8 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                         ))
                                         .await?;
                                     } else {
-                                        ctx.data
-                                            .destroy(through_def, ctx.tenant.as_deref(), join_id)
+                                        ctx.raw_data()
+                                            .destroy(through_def, ctx.tenant(), join_id)
                                             .await?;
                                     }
                                 }
@@ -799,10 +789,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
                                         let stored = ctx
-                                            .data
+                                            .raw_data()
                                             .create(
                                                 dest_def,
-                                                ctx.tenant.as_deref(),
+                                                ctx.tenant(),
                                                 crate::pipeline::new_pk(dest_def, &child_fields)?,
                                                 child_fields,
                                             )
@@ -816,10 +806,10 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                 join_fields.insert(source_fk.to_string(), parent_id.clone());
                                 join_fields.insert(dest_fk.to_string(), target_id);
                                 generate_pk(through_def, &mut join_fields);
-                                ctx.data
+                                ctx.raw_data()
                                     .create(
                                         through_def,
-                                        ctx.tenant.as_deref(),
+                                        ctx.tenant(),
                                         crate::pipeline::new_pk(through_def, &join_fields)?,
                                         join_fields,
                                     )

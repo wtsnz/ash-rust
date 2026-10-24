@@ -9,9 +9,7 @@
 //! - Web Dashboard & Overview: http://127.0.0.1:4000/
 //! - GraphiQL Interactive IDE: http://127.0.0.1:4000/graphiql
 
-use ash_core::{
-    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, ResourceDef, Value,
-};
+use ash_core::{ActionDef, AttrType, AttributeDef, DataLayer, FieldMap, ResourceDef, Value};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -272,14 +270,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Writes publish their changes to subscriptions through the context's notifier.
-    let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(mem)
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF, &REP_DEF])
         .with_pubsub(pubsub)
         .with_dataloader()
-        .finish_with_context(ctx)?;
+        .finish_with_context(ctx.clone())?;
 
-    let app = ash_graphql::axum::graphql_router(schema).route("/", get(dashboard_landing));
+    let app = ash_graphql::axum::graphql_router(schema, ctx).route("/", get(dashboard_landing));
 
     let addr = "127.0.0.1:4000";
     let listener = tokio::net::TcpListener::bind(addr).await?;

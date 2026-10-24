@@ -79,8 +79,12 @@ async fn archival_resources_migrate_and_archive(db: TestDb) {
 
     db.migrate(&project.migrations()).await.unwrap();
     match &db.db {
-        Db::Sqlite(sqlite) => archive_and_restore(Context::new(sqlite.clone())).await,
-        Db::Postgres(pg) => archive_and_restore(Context::new(pg.ash.clone())).await,
+        Db::Sqlite(sqlite) => {
+            archive_and_restore(ash_core::Runtime::new(sqlite.clone()).bootstrap()).await
+        }
+        Db::Postgres(pg) => {
+            archive_and_restore(ash_core::Runtime::new(pg.ash.clone()).bootstrap()).await
+        }
     }
     db.rollback(&project.migrations()).await.unwrap();
     assert!(db.schema().await.tables.is_empty());

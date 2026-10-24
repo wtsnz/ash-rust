@@ -231,11 +231,10 @@ async fn live_voyage_updates<D: FleetDb>(h: Harness<D>) {
     let schema = lagrange::server::schema(&h.app).unwrap();
     // A subscription starts listening when first polled, so poll before anything moves.
     let listen = |name: &str| {
-        let ctx = h
-            .app
-            .registry_context()
-            .with_actor(h.ctx(name).actor.clone().unwrap())
-            .with_tenant(h.ctx(name).tenant().unwrap().to_string());
+        let ctx = h.app.registry_runtime().bind(
+            h.ctx(name).actor().cloned(),
+            h.ctx(name).tenant().map(str::to_owned),
+        );
         let mut stream = schema.execute_stream(
             async_graphql::Request::new("subscription { voyageUpdated { updated { id status } } }")
                 .data(ctx),

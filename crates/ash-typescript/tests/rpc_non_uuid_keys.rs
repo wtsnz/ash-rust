@@ -69,7 +69,7 @@ async fn run(ctx: &Context<Memory>, request: Json) -> Json {
 
 #[tokio::test]
 async fn an_integer_key_is_given_as_a_number() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(
         &ctx,
         json!({ "action": "create_tally", "input": { "label": "a" }, "fields": ["id", "label"] }),
@@ -115,7 +115,7 @@ async fn an_integer_key_is_given_as_a_number() {
 
 #[tokio::test]
 async fn a_text_key_is_given_as_itself() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(
         &ctx,
         json!({ "action": "create_country", "input": { "code": "NZ", "name": "New Zealand" }, "fields": ["code", "name"] }),

@@ -228,7 +228,7 @@ fn test_typescript_codegen_and_tsc_typecheck() {
 #[tokio::test]
 async fn test_rust_resource_and_context_dsl() {
     let mem = ash_memory::Memory::new();
-    let ctx = ash_core::Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     // 1. Create representative using Action builder DSL
     let rep = astro_helpdesk::Representative::create(&ctx)

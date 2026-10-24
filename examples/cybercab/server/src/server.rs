@@ -30,8 +30,8 @@ pub fn router<D: DataLayer + Clone + Send + Sync + 'static>(
     let schema = AshGraphQL::from_resources(&resources())
         .with_pubsub(pubsub)
         .with_dataloader()
-        .finish_with_context(ctx)?;
-    Ok(ash_graphql::axum::graphql_router(schema)
+        .finish_with_context(ctx.clone())?;
+    Ok(ash_graphql::axum::graphql_router(schema, ctx)
         .route("/health", get(|| async { "OK" }))
         .layer(CorsLayer::permissive()))
 }
@@ -75,7 +75,9 @@ pub fn typescript_sdk() -> Result<String, ash_typescript::CodegenError> {
 /// A notifier-carrying context for the simulation and the API to share.
 pub fn context<D>(data: D, pubsub: &PubSub) -> Context<D> {
     use ash_pubsub::ContextPubSubExt;
-    Context::new(data).with_pubsub(Arc::new(pubsub.clone()))
+    ash_core::Runtime::new(data)
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()))
 }
 
 /// Connects to Postgres at `url`, installs the command center's tables, and empties them,

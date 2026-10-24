@@ -4,11 +4,10 @@
 use std::sync::Arc;
 
 use ash_authentication::AuthStrategy;
-use ash_core::{Actor, Context, DataLayer, Notifier, Resource, Result, StoreRegistry};
+use ash_core::{Context, DataLayer, Notifier, Resource, Result, Runtime, StoreRegistry};
 use ash_mailer::{Email, EmailNotifier, Mailer};
 use ash_pubsub::{PubSub, PubSubNotifier};
 use ash_sqlite::Sqlite;
-use uuid::Uuid;
 
 use crate::telemetry::{AuditNotifier, TelemetryStore};
 use crate::{Contract, CrewMember, Transponder};
@@ -23,7 +22,7 @@ pub struct Lagrange<D> {
     telemetry: Sqlite,
     pubsub: PubSub,
     notifiers: Vec<Arc<dyn Notifier>>,
-    base: Context<D>,
+    base: Runtime<D>,
 }
 
 impl<D> Lagrange<D>
@@ -34,16 +33,16 @@ where
     /// audit log in the telemetry database, and, for deliveries, emailed to the shipper.
     pub fn new(fleet: D, telemetry: Sqlite, mailer: impl Mailer) -> Self {
         let pubsub = PubSub::new();
-        let audit = AuditNotifier::new(Context::new(Self::registry_for(
-            fleet.clone(),
-            telemetry.clone(),
-        )));
+        let audit = AuditNotifier::new(
+            ash_core::Runtime::new(Self::registry_for(fleet.clone(), telemetry.clone()))
+                .bootstrap(),
+        );
         let notifiers: Vec<Arc<dyn Notifier>> = vec![
             Arc::new(PubSubNotifier::new(Arc::new(pubsub.clone()))),
             Arc::new(audit),
             Arc::new(delivery_notices(mailer)),
         ];
-        let base = attach(&notifiers, Context::new(fleet.clone()));
+        let base = attach(&notifiers, Runtime::new(fleet.clone()));
         Self {
             fleet,
             telemetry,
@@ -56,7 +55,7 @@ where
     /// A context on both databases, with the same notifiers as the fleet context. The
     /// GraphQL API runs on it.
     pub fn registry_context(&self) -> Context<StoreRegistry> {
-        attach(&self.notifiers, Context::new(self.registry()))
+        self.registry_runtime().bootstrap()
     }
 
     fn registry_for(fleet: D, telemetry: Sqlite) -> StoreRegistry {
@@ -85,23 +84,30 @@ where
 
     /// The fleet context with no one signed in.
     pub fn anonymous(&self) -> Context<D> {
-        self.base.clone()
+        self.base.bootstrap()
     }
 
     /// The port authority, which runs the shared map and bypasses line policies.
     pub fn port_authority(&self) -> Context<D> {
-        self.base
-            .clone()
-            .with_actor(Actor::new(Uuid::nil()).with_role("port_authority"))
+        self.base.system().bind(
+            Some(ash_core::Actor::new(uuid::Uuid::nil()).with_role("port_authority")),
+            None,
+        )
+    }
+
+    /// Trusted fleet authority used by seeds and multi-scope workflows.
+    pub fn runtime(&self) -> &Runtime<D> {
+        &self.base
+    }
+
+    pub fn registry_runtime(&self) -> Runtime<StoreRegistry> {
+        attach(&self.notifiers, Runtime::new(self.registry()))
     }
 
     /// Acts as `crew` within their line.
     pub fn as_crew(&self, crew: &CrewMember) -> Context<D> {
-        let actor = CrewMember::auth_strategy().to_actor(crew);
-        self.base
-            .clone()
-            .with_actor(actor)
-            .with_tenant(crew.line.clone())
+        let actor = CrewMember::auth_strategy(&self.base).to_actor(crew);
+        self.base.bind(Some(actor), Some(crew.line.clone()))
     }
 
     /// The crew member with this email and password in the adapter-selected line.
@@ -111,8 +117,8 @@ where
         email: &str,
         password: &str,
     ) -> Result<CrewMember> {
-        CrewMember::auth_strategy()
-            .sign_in_with_password(&self.base.clone().with_tenant(line), email, password)
+        CrewMember::auth_strategy(&self.base)
+            .sign_in_with_password(&self.base.bind(None, Some(line.into())), email, password)
             .await
             .map_err(|_| ash_core::Error::Forbidden)
     }
@@ -126,18 +132,19 @@ where
     /// A transponder signs in with its API key. Its context writes telemetry through the
     /// registry, so pings land in the telemetry database.
     pub async fn transponder(&self, line: &str, api_key: &str) -> Result<Context<StoreRegistry>> {
-        let strategy: AuthStrategy<Transponder> = Transponder::auth_strategy();
+        let strategy: AuthStrategy<Transponder> = Transponder::auth_strategy(&self.base);
         let transponder = strategy
-            .authenticate_api_key(&self.base.clone().with_tenant(line), api_key)
+            .authenticate_api_key(&self.base.bind(None, Some(line.into())), api_key)
             .await
             .map_err(|_| ash_core::Error::Forbidden)?;
-        Ok(Context::new(self.registry())
-            .with_actor(strategy.to_actor(&transponder))
-            .with_tenant(transponder.line.clone()))
+        Ok(ash_core::Runtime::new(self.registry()).bind(
+            Some(strategy.to_actor(&transponder)),
+            Some(transponder.line.clone()),
+        ))
     }
 }
 
-fn attach<T>(notifiers: &[Arc<dyn Notifier>], ctx: Context<T>) -> Context<T> {
+fn attach<T>(notifiers: &[Arc<dyn Notifier>], ctx: Runtime<T>) -> Runtime<T> {
     notifiers
         .iter()
         .fold(ctx, |ctx, notifier| ctx.with_notifier(Arc::clone(notifier)))

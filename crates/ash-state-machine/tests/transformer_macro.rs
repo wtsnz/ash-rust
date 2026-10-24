@@ -23,7 +23,7 @@
 //! 4. **Runtime Introspection**:
 //!    - `Order::DEF.extension::<StateMachineDef>()` retrieves the state machine metadata.
 
-use ash_core::{Context, Error, Resource};
+use ash_core::{Error, Resource};
 use ash_memory::Memory;
 use ash_state_machine::{InvalidTransition, StateMachineDef, state_machine};
 use uuid::Uuid;
@@ -66,7 +66,7 @@ actions {
 
 #[tokio::test]
 async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create: verify auto-injected initial state "pending"
     let order = Order::create(&ctx).amount(250).await.expect("create order");
@@ -128,7 +128,7 @@ async fn test_pattern2_transformer_macro_lifecycle_and_helpers() {
 
 #[tokio::test]
 async fn test_pattern2_transformer_macro_cancellation_flow() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let order = Order::create(&ctx).amount(500).await.expect("create order");
 
@@ -185,7 +185,7 @@ mod ticket_module {
 
     #[tokio::test]
     async fn test_pattern2_auto_synthesized_actions_and_custom_accept() {
-        let ctx = Context::new(Memory::new());
+        let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
         let ticket = Ticket::create(&ctx)
             .title("Bug in checkout")
@@ -261,7 +261,7 @@ async fn test_transformer_keeps_documented_and_short_form_actions() {
     assert!(Ticket::DEF.attribute("status").is_some());
     assert!(Ticket::DEF.attribute("status_note").is_some());
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let ticket = Ticket::create(&ctx).await.expect("create ticket");
     assert_eq!(ticket.current_state(), "open");
     let closed = Ticket::close(&ctx, ticket.id).await.expect("close ticket");

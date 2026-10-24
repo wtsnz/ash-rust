@@ -286,7 +286,7 @@ impl Scope {
         transaction: BulkTransaction,
         stop_on_error: bool,
     ) -> Self {
-        let can = ctx.data.can_transact();
+        let can = ctx.raw_data().can_transact();
         Self {
             per_batch: can && transaction == BulkTransaction::Batch,
             whole: can && transaction == BulkTransaction::All,
@@ -520,8 +520,8 @@ where
                         .map(|(id, changeset)| (id.clone(), changeset.take_fields()))
                         .collect();
                     let stored = ctx
-                        .data
-                        .bulk_create(&R::DEF, ctx.tenant.as_deref(), tuples)
+                        .raw_data()
+                        .bulk_create(&R::DEF, ctx.tenant(), tuples)
                         .await?;
                     stored.into_iter().map(Ok).collect()
                 };
@@ -558,9 +558,10 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
         // Fetch existing records for authorization, cascading deletes, and notifications.
         // Tenant scope must match Query::load so knowing a UUID is not enough to delete across tenants.
         let id_filter = Filter::In(pk.to_string(), ids);
-        let (filter, tenant) = visible_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
+        let (filter, tenant) =
+            visible_scope(&R::DEF, Some(id_filter), ctx.tenant().map(str::to_owned))?;
         let rows = ctx
-            .data
+            .raw_data()
             .run_query(
                 &R::DEF,
                 &CompiledQuery {
@@ -711,8 +712,8 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         }
                     }
                 } else {
-                    ctx.data
-                        .bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids)
+                    ctx.raw_data()
+                        .bulk_destroy(&R::DEF, ctx.tenant(), &ids)
                         .await?;
                 }
                 finish_rows(&ctx, batch, existing, notify, scope.transactional()).await
@@ -811,8 +812,8 @@ where
                     }
                     stored
                 } else {
-                    ctx.data
-                        .bulk_update(&R::DEF, ctx.tenant.as_deref(), writes)
+                    ctx.raw_data()
+                        .bulk_update(&R::DEF, ctx.tenant(), writes)
                         .await?
                 };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await

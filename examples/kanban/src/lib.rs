@@ -230,7 +230,11 @@ pub fn add_checklist_items_multi<D: ash_core::DataLayer + 'static>(
 
 pub async fn open_sqlite_app(
     path: impl AsRef<Path>,
-) -> Result<(Workspaces<Sqlite>, Kanban<Sqlite>)> {
+) -> Result<(
+    ash_core::Runtime<Sqlite>,
+    Workspaces<Sqlite>,
+    Kanban<Sqlite>,
+)> {
     if let Some(parent) = path.as_ref().parent()
         && !parent.as_os_str().is_empty()
     {
@@ -239,13 +243,15 @@ pub async fn open_sqlite_app(
         })?;
     }
     let db = Sqlite::file(path).await?;
-    let workspaces = Workspaces::new(db.clone());
-    let kanban = Kanban::new(db);
+    let workspaces_runtime = ash_core::Runtime::new(db.clone());
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
+    let kanban_runtime = ash_core::Runtime::new(db);
+    let kanban = Kanban::from_context(kanban_runtime.bootstrap());
 
     workspaces.install().await?;
     kanban.install().await?;
 
-    Ok((workspaces, kanban))
+    Ok((workspaces_runtime, workspaces, kanban))
 }
 
 pub async fn demo() -> Result<()> {
@@ -254,8 +260,9 @@ pub async fn demo() -> Result<()> {
     println!("=== Kanban / Trello Example on ash-rust ===");
 
     let mem = Memory::new();
-    let workspaces = Workspaces::new(mem.clone());
-    let kanban = Kanban::new(mem);
+    let workspaces_runtime = ash_core::Runtime::new(mem.clone());
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
+    let kanban_runtime = ash_core::Runtime::new(mem);
 
     // 1. Register users
     let alice = workspaces
@@ -268,7 +275,8 @@ pub async fn demo() -> Result<()> {
     );
 
     // 2. Create Workspace with Alice as owner and Admin member via Multi
-    let as_alice = workspaces.with_actor(actor_user(alice.id));
+    let as_alice =
+        Workspaces::from_context(workspaces_runtime.bind(Some(actor_user(alice.id)), None));
     let ws_multi =
         workspace_with_owner_multi(&as_alice.ctx, alice.id, "Acme Engineering", "acme-eng")?;
     let ws_results = as_alice.run_multi(ws_multi).await?;
@@ -288,7 +296,8 @@ pub async fn demo() -> Result<()> {
     println!("Added Bob as workspace member");
 
     // 3. Create a Board with default lists and welcome card via atomic Multi pipeline
-    let as_alice_kanban = kanban.with_actor(actor_user(alice.id));
+    let as_alice_kanban =
+        Kanban::from_context(kanban_runtime.bind(Some(actor_user(alice.id)), None));
     let board_multi = board_template_multi(
         &as_alice_kanban.ctx,
         workspace.id,

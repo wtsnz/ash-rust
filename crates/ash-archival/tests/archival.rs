@@ -99,6 +99,8 @@ pub mod comment_mod {
 use comment_mod::Comment;
 use post_mod::Post;
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn stored_rows<D: DataLayer>(ctx: &Context<D>, resource: &ash_core::ResourceDef) -> usize {
     ctx.data
         .run_query(resource, &CompiledQuery::default())
@@ -237,21 +239,21 @@ fn archive_settings_are_registered() {
 
 #[tokio::test]
 async fn archival_in_memory() {
-    scenario(Context::new(Memory::new())).await;
+    scenario(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
 async fn archival_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Post::DEF, &Comment::DEF]).await.unwrap();
-    scenario(Context::new(sqlite)).await;
+    scenario(ash_core::Runtime::new(sqlite).bootstrap()).await;
 }
 
 #[tokio::test]
 async fn graphql_destroy_archives_and_lists_hide_archived() {
     use async_graphql::Request;
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let post = Post::create(&ctx).title("Via GraphQL").await.unwrap();
     let schema = ash_graphql::AshGraphQL::from_resources(&[&Post::DEF, &Comment::DEF])
         .finish::<Memory>()

@@ -71,7 +71,7 @@ impl Guards {
         let Ok((filter, tenant)) = crate::pipeline::apply_tenant_scope(
             resource,
             Some(Filter::eq(pk, id.clone())),
-            ctx.tenant.clone(),
+            ctx.tenant().map(str::to_owned),
         ) else {
             return Error::NotFound;
         };
@@ -81,7 +81,7 @@ impl Guards {
             limit: Some(1),
             ..Default::default()
         };
-        let stored = match ctx.data.run_query(resource, &query).await {
+        let stored = match ctx.raw_data().run_query(resource, &query).await {
             Ok(rows) => rows.into_iter().next(),
             Err(err) => return err,
         };
@@ -115,7 +115,7 @@ pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
     let mut query = atomic_query(ctx, resource, action, id, scope)?;
     query.filter = crate::pipeline::and_filters(query.filter, guards.cloned());
     Ok(ctx
-        .data
+        .raw_data()
         .update_atomic(resource, &query, update)
         .await?
         .into_iter()
@@ -135,7 +135,7 @@ pub(crate) async fn run_atomic_destroy<D: crate::data_layer::DataLayer>(
 ) -> Result<Option<FieldMap>> {
     let query = atomic_query(ctx, resource, action, id, scope)?;
     Ok(ctx
-        .data
+        .raw_data()
         .destroy_atomic(resource, &query, conditions)
         .await?
         .into_iter()
@@ -193,7 +193,7 @@ fn atomic_query<D>(
     let (filter, tenant) = crate::pipeline::apply_tenant_scope(
         resource,
         Some(Filter::eq(pk, id.clone())),
-        ctx.tenant.clone(),
+        ctx.tenant().map(str::to_owned),
     )?;
     let filter = match scope {
         Some(scope) => crate::pipeline::and_filters(filter, Some(scope.clone())),
@@ -205,7 +205,7 @@ fn atomic_query<D>(
     Ok(crate::data_layer::CompiledQuery {
         filter,
         tenant,
-        actor: ctx.actor.clone(),
+        actor: ctx.authorization_actor().cloned(),
         limit: Some(1),
         ..crate::data_layer::CompiledQuery::default()
     })
@@ -214,6 +214,7 @@ fn atomic_query<D>(
 /// What a planned update starts from.
 pub(crate) struct PlanInput<'a> {
     pub actor: Option<&'a Actor>,
+    pub authorization_actor: Option<&'a Actor>,
     pub tenant: Option<&'a str>,
     /// Values set outright: the accepted input, or what a changeset already changes.
     pub sets: FieldMap,
@@ -259,6 +260,7 @@ pub(crate) fn plan_update(
     }
     let PlanInput {
         actor,
+        authorization_actor,
         tenant,
         mut sets,
         arguments,
@@ -378,7 +380,7 @@ pub(crate) fn plan_update(
     // The write policies, against the record as stored, as Ash authorizes an atomic update.
     // Policies no record passes refuse it once its validations have passed on what it
     // sets, as Ash validates a changeset's input before authorizing it.
-    let allowed = write_filter(resource, action, actor)?;
+    let allowed = write_filter(resource, action, authorization_actor)?;
     if !matches!(allowed, Filter::True | Filter::False) {
         if can_raise {
             update.conditions.push(AtomicCondition::failing_with(

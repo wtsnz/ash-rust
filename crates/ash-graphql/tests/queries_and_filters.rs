@@ -1,6 +1,6 @@
 use ash_core::{
-    ActionDef, ArgumentDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, Filter,
-    PreparationDef, ResourceDef, Value,
+    ActionDef, ArgumentDef, AttrType, AttributeDef, DataLayer, FieldMap, Filter, PreparationDef,
+    ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -107,7 +107,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
 async fn test_phase2_get_query_by_id() {
     let memory = Memory::new();
     let (id1, _, _) = seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
@@ -143,7 +143,7 @@ async fn test_phase2_get_query_by_id() {
 async fn test_phase2_list_query_with_filters() {
     let memory = Memory::new();
     let (_, _, _) = seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
@@ -207,7 +207,7 @@ async fn test_phase2_list_query_with_filters() {
 async fn test_list_query_with_text_filters() {
     let memory = Memory::new();
     seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
@@ -257,7 +257,7 @@ async fn test_list_query_with_text_filters() {
 async fn test_phase2_list_query_with_sorting_and_pagination() {
     let memory = Memory::new();
     let (_, _, _) = seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
@@ -320,7 +320,7 @@ async fn test_phase2_list_query_with_sorting_and_pagination() {
 async fn test_phase2_read_query_with_action_arguments() {
     let memory = Memory::new();
     let (_id1, _id2, _id3) = seed_data(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()

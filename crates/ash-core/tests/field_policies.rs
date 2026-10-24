@@ -1,4 +1,4 @@
-use ash_core::{Actor, Context, Resource, resource};
+use ash_core::{Actor, Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -104,8 +104,8 @@ async fn test_relationship_loading_enforces_field_redaction() {
     let bob = Actor::new(bob_id).with_role("member");
 
     let mem = Memory::new();
-    let admin_ctx = Context::new(mem.clone()).with_actor(admin);
-    let bob_ctx = Context::new(mem.clone()).with_actor(bob);
+    let admin_ctx = ash_core::Runtime::new(mem.clone()).bind(Some(admin), None);
+    let bob_ctx = ash_core::Runtime::new(mem.clone()).bind(Some(bob), None);
 
     // 1. Admin creates Alice's profile with sensitive salary and SSN
     let alice_profile = UserProfile::create(&admin_ctx)
@@ -176,7 +176,7 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
     let bob = Actor::new(bob_id).with_role("member");
 
     let mem = Memory::new();
-    let admin_ctx = Context::new(mem.clone()).with_actor(admin);
+    let admin_ctx = ash_core::Runtime::new(mem.clone()).bind(Some(admin), None);
 
     // 1. Admin creates profile for Alice
     let alice_profile = UserProfile::create(&admin_ctx)
@@ -192,7 +192,7 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
 
     // 2. Alice reads own profile:
     // Should see ssn (relates to actor alice_id), but salary should be redacted to None (requires admin)!
-    let alice_ctx = Context::new(mem.clone()).with_actor(alice.clone());
+    let alice_ctx = ash_core::Runtime::new(mem.clone()).bind(Some(alice.clone()), None);
     let fetched_by_alice = UserProfile::query(&alice_ctx)
         .first()
         .await
@@ -208,7 +208,7 @@ async fn test_field_policies_redaction_and_authorization_in_memory() {
 
     // 3. Bob reads Alice's profile:
     // Neither ssn nor salary are permitted for Bob -> both redacted to None!
-    let bob_ctx = Context::new(mem.clone()).with_actor(bob.clone());
+    let bob_ctx = ash_core::Runtime::new(mem.clone()).bind(Some(bob.clone()), None);
     let fetched_by_bob = UserProfile::query(&bob_ctx)
         .first()
         .await
@@ -261,7 +261,7 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
     let admin = Actor::new(admin_id).with_role("admin");
     let user = Actor::new(user_id).with_role("member");
 
-    let admin_ctx = Context::new(sqlite.clone()).with_actor(admin);
+    let admin_ctx = ash_core::Runtime::new(sqlite.clone()).bind(Some(admin), None);
 
     let profile = UserProfile::create(&admin_ctx)
         .user_id(user_id)
@@ -272,7 +272,7 @@ async fn test_field_policies_redaction_and_authorization_in_sqlite() {
         .unwrap();
 
     // User context in SQLite
-    let user_ctx = Context::new(sqlite.clone()).with_actor(user);
+    let user_ctx = ash_core::Runtime::new(sqlite.clone()).bind(Some(user), None);
 
     let user_view = ash_core::get::<UserProfile, _>(&user_ctx, profile.id)
         .await
@@ -350,9 +350,16 @@ use payslip_mod::{Payslip, PayslipActions};
 // puts `%Ash.ForbiddenField{}` there. Written back, it's left as stored.
 #[tokio::test]
 async fn typed_records_hold_hidden_fields_whatever_their_type() {
-    let ctx = Context::new(Memory::new());
-    let admin = ctx.with_actor(Actor::new(Uuid::new_v4()).with_role("admin"));
-    let clerk = ctx.with_actor(Actor::new(Uuid::new_v4()).with_role("clerk"));
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
+    let admin = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_role("admin")),
+        ctx.tenant().map(str::to_owned),
+    );
+    let clerk = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_role("clerk")),
+        ctx.tenant().map(str::to_owned),
+    );
     let created = Payslip::create(&admin)
         .employee("Ada")
         .salary(100)

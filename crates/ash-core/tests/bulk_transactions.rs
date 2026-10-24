@@ -57,15 +57,17 @@ async fn sensors<D: TransactionSupport + SchemaSupport + 'static>(
 ) -> (Context<D>, Vec<Reading>, Arc<AtomicUsize>) {
     let notified = Arc::new(AtomicUsize::new(0));
     let heard = notified.clone();
-    let ctx = Context::new(data).with_notifier(Arc::new(SyncFnNotifier::new(
-        "updates",
-        move |notification| {
-            if notification.action_kind == ash_core::ActionKind::Update {
-                heard.fetch_add(1, Ordering::SeqCst);
-            }
-            Ok(())
-        },
-    )));
+    let ctx = ash_core::Runtime::new(data)
+        .bootstrap()
+        .with_notifier(Arc::new(SyncFnNotifier::new(
+            "updates",
+            move |notification| {
+                if notification.action_kind == ash_core::ActionKind::Update {
+                    heard.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(())
+            },
+        )));
     ctx.install(&[&Reading::DEF]).await.unwrap();
     let mut readings = Vec::new();
     for sensor in ["a", "b", "c"] {

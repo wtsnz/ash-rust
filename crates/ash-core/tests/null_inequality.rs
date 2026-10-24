@@ -28,11 +28,11 @@ actions {
 #[tokio::test]
 async fn test_null_inequality_identical_in_memory_and_sqlite() {
     let mem = Memory::new();
-    let mem_ctx = Context::new(mem);
+    let mem_ctx = ash_core::Runtime::new(mem).bootstrap();
 
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Document::DEF]).await.unwrap();
-    let sql_ctx = Context::new(sqlite);
+    let sql_ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     async fn seed<D: ash_core::DataLayer>(ctx: &Context<D>) {
         Document::create(ctx)

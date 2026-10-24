@@ -35,7 +35,7 @@ It translates high-level Ash resource definitions, filters, calculations, and re
 ## Quick Example
 
 ```rust
-use ash_core::{Context, SchemaSupport, resource};
+use ash_core::{SchemaSupport, resource};
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
@@ -75,7 +75,7 @@ async fn main() -> ash_core::Result<()> {
     // 2. Automatically generate and install tables
     db.install_resources(&[&Customer::DEF]).await?;
 
-    let ctx = Context::new(db);
+    let ctx = ash_core::Runtime::new(db).bootstrap();
 
     // 3. Create a record
     let customer = Customer::register(&ctx)

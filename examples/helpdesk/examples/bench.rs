@@ -61,8 +61,9 @@ async fn main() {
 
     // Benchmark 1: Ticket.open
     {
-        let desk = Helpdesk::new(Memory::new());
-        let customer = desk.with_actor(actor_customer(Uuid::new_v4()));
+        let desk_runtime = ash_core::Runtime::new(Memory::new());
+        let customer =
+            Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(Uuid::new_v4())), None));
         run_bench(
             "Ticket.open (validate + changeset + in-memory)",
             Duration::from_secs(2),
@@ -76,7 +77,8 @@ async fn main() {
 
     // Benchmark 2: Representative.create
     {
-        let desk = Helpdesk::new(Memory::new());
+        let desk_runtime = ash_core::Runtime::new(Memory::new());
+        let desk = Helpdesk::from_context(desk_runtime.bootstrap());
         run_bench(
             "Representative.create (validate + in-memory)",
             Duration::from_secs(2),
@@ -90,8 +92,9 @@ async fn main() {
 
     // Benchmark 3: Ticket.read (filter status == open, 100+ records)
     {
-        let desk = Helpdesk::new(Memory::new());
-        let customer = desk.with_actor(actor_customer(Uuid::new_v4()));
+        let desk_runtime = ash_core::Runtime::new(Memory::new());
+        let customer =
+            Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(Uuid::new_v4())), None));
         for i in 1..=100 {
             customer
                 .open_ticket(&format!("Ticket number {i}"))

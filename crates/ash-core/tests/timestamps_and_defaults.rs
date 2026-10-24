@@ -1,4 +1,4 @@
-use ash_core::{Context, Resource, SchemaSupport, resource};
+use ash_core::{Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -46,7 +46,7 @@ pub use article::{Article, ArticleActions};
 #[test]
 async fn test_timestamps_and_defaults_in_memory() {
     let memory = Memory::new();
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     // 1. Create with defaults and automatic timestamps
     let created = Article::publish(&ctx)
@@ -107,7 +107,7 @@ async fn test_timestamps_and_defaults_in_memory() {
 async fn test_timestamps_and_defaults_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install_resources(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     // 1. Create in SQLite with auto timestamps and defaults
     let created = Article::publish(&ctx)

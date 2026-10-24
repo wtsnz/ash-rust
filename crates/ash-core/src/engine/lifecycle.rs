@@ -176,11 +176,11 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
         Some(read) => Some(read),
         None => super::atomic::finding_read(resource, action)?,
     };
-    let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
+    let scope = super::atomic::read_scope(resource, read, ctx.authorization_actor())?;
     let can = if action.soft {
-        ctx.data.can_update_atomically(resource)
+        ctx.raw_data().can_update_atomically(resource)
     } else {
-        ctx.data.can_destroy_atomically(resource)
+        ctx.raw_data().can_destroy_atomically(resource)
     };
     let atomic = !action.has_optimistic_lock() && can;
     if atomic {
@@ -190,13 +190,14 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
                     resource,
                     action,
                     super::atomic::PlanInput {
-                        actor: ctx.actor.as_ref(),
+                        actor: ctx.actor(),
+                        authorization_actor: ctx.authorization_actor(),
                         tenant: ctx.tenant(),
                         sets: accepted,
                         arguments: &arguments,
                         expected_versions: None,
                         collect_hooks: true,
-                        can_raise: ctx.data.can_raise_atomically(resource),
+                        can_raise: ctx.raw_data().can_raise_atomically(resource),
                     },
                 )?;
                 Ok((plan, arguments))
@@ -267,19 +268,22 @@ async fn read_visible<D: DataLayer>(
     let by_id = Some(Filter::eq(pk, id.clone()));
     let (filter, tenant) = match scope {
         Some(scope) => {
-            let (filter, tenant) =
-                crate::pipeline::apply_tenant_scope(resource, by_id, ctx.tenant.clone())?;
+            let (filter, tenant) = crate::pipeline::apply_tenant_scope(
+                resource,
+                by_id,
+                ctx.tenant().map(str::to_owned),
+            )?;
             (crate::pipeline::and_filters(filter, Some(scope)), tenant)
         }
-        None => crate::pipeline::visible_scope(resource, by_id, ctx.tenant.clone())?,
+        None => crate::pipeline::visible_scope(resource, by_id, ctx.tenant().map(str::to_owned))?,
     };
-    ctx.data
+    ctx.raw_data()
         .run_query(
             resource,
             &CompiledQuery {
                 filter,
                 tenant,
-                actor: ctx.actor.clone(),
+                actor: ctx.authorization_actor().cloned(),
                 ..CompiledQuery::default()
             },
         )
@@ -337,21 +341,22 @@ pub async fn update_dynamic_via<D: DataLayer>(
         Some(read) => Some(read),
         None => super::atomic::finding_read(resource, action)?,
     };
-    let scope = super::atomic::read_scope(resource, read, ctx.actor.as_ref())?;
-    if !action.has_optimistic_lock() && ctx.data.can_update_atomically(resource) {
+    let scope = super::atomic::read_scope(resource, read, ctx.authorization_actor())?;
+    if !action.has_optimistic_lock() && ctx.raw_data().can_update_atomically(resource) {
         let planned = crate::pipeline::split_input(resource, action, input.clone()).and_then(
             |(accepted, arguments)| {
                 let plan = super::atomic::plan_update(
                     resource,
                     action,
                     super::atomic::PlanInput {
-                        actor: ctx.actor.as_ref(),
+                        actor: ctx.actor(),
+                        authorization_actor: ctx.authorization_actor(),
                         tenant: ctx.tenant(),
                         sets: accepted,
                         arguments: &arguments,
                         expected_versions: None,
                         collect_hooks: true,
-                        can_raise: ctx.data.can_raise_atomically(resource),
+                        can_raise: ctx.raw_data().can_raise_atomically(resource),
                     },
                 )?;
                 Ok((plan, arguments))
@@ -415,12 +420,13 @@ where
 }
 
 /// Data-layer insert with no action pipeline. Manual persist uses this to also store locally.
+#[deprecated(note = "raw insert bypasses action policies; use a Runtime-bound create action")]
 pub async fn insert<R: Resource, D: DataLayer>(ctx: &Context<D>, record: &R) -> Result<R> {
     let fields = record.to_fields();
     let id = crate::pipeline::new_pk(&R::DEF, &fields)?;
     let stored = ctx
-        .data
-        .create(&R::DEF, ctx.tenant.as_deref(), id, fields)
+        .raw_data()
+        .create(&R::DEF, ctx.tenant(), id, fields)
         .await?;
     R::from_fields(&stored)
 }

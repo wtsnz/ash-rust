@@ -116,11 +116,11 @@ use kid::Kid;
 use note::Note;
 
 /// Two tenants of their own, as Postgres keeps earlier runs' rows.
-fn tenants<D>(ctx: &Context<D>) -> (Context<D>, Context<D>) {
+fn tenants<D>(runtime: &ash_core::Runtime<D>) -> (Context<D>, Context<D>) {
     let run = Uuid::new_v4().simple().to_string();
     (
-        ctx.with_tenant(format!("a-{run}")),
-        ctx.with_tenant(format!("b-{run}")),
+        runtime.bind(None, Some(format!("a-{run}"))),
+        runtime.bind(None, Some(format!("b-{run}"))),
     )
 }
 
@@ -128,8 +128,10 @@ fn code() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
-async fn identities_and_upserts<D: TransactionSupport + Clone + 'static>(ctx: &Context<D>) {
-    let (a, b) = tenants(ctx);
+async fn identities_and_upserts<D: TransactionSupport + Clone + 'static>(
+    runtime: &ash_core::Runtime<D>,
+) {
+    let (a, b) = tenants(runtime);
     let mine = Note::create(&a).text("same").code(code()).await.unwrap();
     // The same text in another tenant is another record; twice in one tenant, a conflict.
     let theirs = Note::create(&b).text("same").code(code()).await.unwrap();
@@ -153,7 +155,7 @@ async fn identities_and_upserts<D: TransactionSupport + Clone + 'static>(ctx: &C
     );
 
     // An upsert finds only its own tenant's record.
-    let (c, d) = tenants(ctx);
+    let (c, d) = tenants(runtime);
     let first = Note::create(&c).text("up").code(code()).await.unwrap();
     let other = Note::create(&d)
         .text("up")
@@ -162,11 +164,13 @@ async fn identities_and_upserts<D: TransactionSupport + Clone + 'static>(ctx: &C
         .await
         .unwrap();
     assert_ne!(first.id, other.id, "{other:?}");
-    assert_eq!(other.org, d.tenant.clone().unwrap());
+    assert_eq!(other.org, d.tenant().unwrap());
 }
 
-async fn writes_stay_in_their_tenant<D: TransactionSupport + Clone + 'static>(ctx: &Context<D>) {
-    let (a, b) = tenants(ctx);
+async fn writes_stay_in_their_tenant<D: TransactionSupport + Clone + 'static>(
+    runtime: &ash_core::Runtime<D>,
+) {
+    let (a, b) = tenants(runtime);
     let note = Note::create(&a).text("old").code(code()).await.unwrap();
     let text = || FieldMap::from([("text".to_string(), Value::from("changed"))]);
 
@@ -231,9 +235,10 @@ async fn failed_managed_create<D: TransactionSupport + Clone + 'static>(
 
 #[tokio::test]
 async fn tenant_guards_in_memory() {
-    let ctx = Context::new(Memory::new());
-    identities_and_upserts(&ctx).await;
-    writes_stay_in_their_tenant(&ctx).await;
+    let runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = runtime.bootstrap();
+    identities_and_upserts(&runtime).await;
+    writes_stay_in_their_tenant(&runtime).await;
     failed_managed_create(&ctx, false).await;
 }
 
@@ -244,9 +249,10 @@ async fn tenant_guards_in_sqlite() {
         .install(&[&Note::DEF, &Family::DEF, &Kid::DEF])
         .await
         .unwrap();
-    let ctx = Context::new(sqlite);
-    identities_and_upserts(&ctx).await;
-    writes_stay_in_their_tenant(&ctx).await;
+    let runtime = ash_core::Runtime::new(sqlite);
+    let ctx = runtime.bootstrap();
+    identities_and_upserts(&runtime).await;
+    writes_stay_in_their_tenant(&runtime).await;
     failed_managed_create(&ctx, true).await;
 }
 
@@ -268,8 +274,9 @@ async fn tenant_guards_in_postgres() {
     pg.install(&[&Note::DEF, &Family::DEF, &Kid::DEF])
         .await
         .unwrap();
-    let ctx = Context::new(pg);
-    identities_and_upserts(&ctx).await;
-    writes_stay_in_their_tenant(&ctx).await;
+    let runtime = ash_core::Runtime::new(pg);
+    let ctx = runtime.bootstrap();
+    identities_and_upserts(&runtime).await;
+    writes_stay_in_their_tenant(&runtime).await;
     failed_managed_create(&ctx, true).await;
 }

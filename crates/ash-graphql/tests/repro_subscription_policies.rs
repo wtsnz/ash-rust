@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ash_core::{Actor, Context, Resource, resource};
+use ash_core::{Actor, Resource, resource};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::PubSub;
@@ -51,7 +51,8 @@ use ticket::Ticket;
 #[tokio::test]
 async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let schema = AshGraphQL::from_resources(&[&Ticket::DEF])
         .with_pubsub(pubsub.clone())
         .finish::<Memory>()
@@ -63,15 +64,14 @@ async fn subscription_does_not_emit_rows_the_actor_cannot_read() {
     let listed = schema
         .execute(
             Request::new("{ listTickets { results { title } } }")
-                .data(ctx.clone().with_actor(viewer.clone())),
+                .data(ctx_runtime.bind(Some(viewer.clone()), ctx.tenant().map(str::to_owned))),
         )
         .await;
     assert!(listed.errors.is_empty(), "{:?}", listed.errors);
 
     let mut stream = schema.execute_stream(
         Request::new("subscription { ticketCreated { created { title ownerId } } }")
-            .data(ctx.clone())
-            .data(viewer.clone()),
+            .data(ctx_runtime.bind(Some(viewer.clone()), ctx.tenant().map(str::to_owned))),
     );
     let pending = tokio::spawn(async move { stream.next().await });
     tokio::time::sleep(Duration::from_millis(50)).await;

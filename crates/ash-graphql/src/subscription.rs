@@ -50,7 +50,7 @@ fn subscriber<D: DataLayer + 'static>(
     let tenant = ctx
         .ctx
         .data_opt::<Context<D>>()
-        .and_then(|context| context.tenant.clone());
+        .and_then(|context| context.tenant().map(str::to_owned));
     (request_actor::<D>(ctx).cloned(), tenant)
 }
 
@@ -118,7 +118,7 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                                 std::slice::from_mut(&mut record),
                             )
                             .await?;
-                            redact_record(resource, ash.actor.as_ref(), &mut record);
+                            redact_record(resource, ash.authorization_actor(), &mut record);
                             preload(&ash, resource, fields, std::slice::from_mut(&mut record))
                                 .await?;
                             Some(FieldValue::owned_any(record))

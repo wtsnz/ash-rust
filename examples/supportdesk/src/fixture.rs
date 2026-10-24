@@ -259,13 +259,18 @@ fn fields(resource: &ResourceDef, record: &Map<String, Json>) -> FieldMap {
 }
 
 /// Loads `fixture` through each resource's `seed` action, as an admin of each org.
-pub async fn load<D: TransactionSupport + 'static>(ctx: &Context<D>, fixture: &Json) -> Result<()> {
+pub async fn load<D: TransactionSupport + 'static>(
+    runtime: &ash_core::Runtime<D>,
+    fixture: &Json,
+) -> Result<()> {
     let records = |key: &str| fixture[key].as_array().cloned().unwrap_or_default();
     let admin = ash_core::Actor::new(Uuid::nil()).with_role("admin");
-    let ctx = ctx.with_actor(admin);
+    let ctx = runtime.system().bind(Some(admin.clone()), None);
     seed::<Org, D>(&ctx, &records("orgs")).await?;
     for org in ORGS {
-        let tenant = ctx.clone().with_tenant(*org);
+        let tenant = runtime
+            .system()
+            .bind(Some(admin.clone()), Some((*org).into()));
         let of_org = |key: &str| -> Vec<Json> {
             records(key)
                 .into_iter()

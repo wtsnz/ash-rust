@@ -34,7 +34,9 @@ domain! {
 
 pub const HELPDESK: DomainDef = HELPDESK_DEF;
 
-pub async fn open_sqlite(path: impl AsRef<Path>) -> ash_core::Result<Helpdesk<Sqlite>> {
+pub async fn open_sqlite_runtime(
+    path: impl AsRef<Path>,
+) -> ash_core::Result<ash_core::Runtime<Sqlite>> {
     if let Some(parent) = path.as_ref().parent()
         && !parent.as_os_str().is_empty()
     {
@@ -43,25 +45,36 @@ pub async fn open_sqlite(path: impl AsRef<Path>) -> ash_core::Result<Helpdesk<Sq
         })?;
     }
     let db = Sqlite::file(path).await?;
-    let desk = Helpdesk::new(db);
+    let desk_runtime = ash_core::Runtime::new(db);
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     desk.install().await?;
-    Ok(desk)
+    Ok(desk_runtime)
+}
+
+pub async fn open_sqlite(path: impl AsRef<Path>) -> ash_core::Result<Helpdesk<Sqlite>> {
+    Ok(Helpdesk::from_context(
+        open_sqlite_runtime(path).await?.bootstrap(),
+    ))
 }
 
 pub async fn demo() -> ash_core::Result<()> {
     use ash_memory::Memory;
     use uuid::Uuid;
 
-    let desk = Helpdesk::new(Memory::new());
+    let desk_runtime = ash_core::Runtime::new(Memory::new());
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     let alice = desk.create_representative("Alice").await?;
     let bob = desk.create_representative("Bob").await?;
 
     let customer_id = Uuid::new_v4();
     let other_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
-    let as_other = desk.with_actor(actor_customer(other_id));
-    let as_alice = desk.with_actor(actor_representative(alice.id));
-    let as_bob = desk.with_actor(actor_representative(bob.id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
+    let as_other = Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(other_id)), None));
+    let as_alice =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(alice.id)), None));
+    let as_bob =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(bob.id)), None));
 
     println!("Alice and Bob join the desk.");
     println!("Customer opens a ticket.");

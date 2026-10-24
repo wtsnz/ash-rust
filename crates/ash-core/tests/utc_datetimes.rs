@@ -1,9 +1,7 @@
 //! UTC datetimes are stored in UTC at their precision, as Ash's `:utc_datetime` and
 //! `:utc_datetime_usec` are, so every data layer orders, compares and returns them alike.
 
-use ash_core::{
-    Context, DataLayer, Filter, Resource, UtcDateTime, UtcDateTimeUsec, Value, resource,
-};
+use ash_core::{DataLayer, Filter, Resource, UtcDateTime, UtcDateTimeUsec, Value, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -31,7 +29,7 @@ fn at(raw: &str) -> UtcDateTime {
 }
 
 async fn datetimes_are_stored_in_utc<D: DataLayer>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     // 23:30 UTC, written with an offset that puts it on the next day.
     Shift::create(&ctx)
         .label("late")

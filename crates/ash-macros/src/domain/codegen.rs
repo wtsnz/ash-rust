@@ -220,7 +220,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
 
             pub fn new(data_layer: D) -> Self {
                 Self {
-                    ctx: ::ash_core::Context::new(data_layer),
+                    ctx: ::ash_core::Runtime::new(data_layer).bootstrap(),
                 }
             }
 
@@ -230,7 +230,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
 
             pub fn from_arc(data: ::std::sync::Arc<D>) -> Self {
                 Self {
-                    ctx: ::ash_core::Context::from_arc(data),
+                    ctx: ::ash_core::Runtime::from_arc(data).bootstrap(),
                 }
             }
 
@@ -242,24 +242,8 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
                 self.ctx
             }
 
-            pub fn with_actor(&self, actor: ::ash_core::Actor) -> Self {
-                Self {
-                    ctx: self.ctx.with_actor(actor),
-                }
-            }
-
-            pub fn as_actor(&self, actor: ::ash_core::Actor) -> Self {
-                self.with_actor(actor)
-            }
-
-            pub fn without_actor(&self) -> Self {
-                Self {
-                    ctx: self.ctx.without_actor(),
-                }
-            }
-
             pub fn actor(&self) -> ::std::option::Option<&::ash_core::Actor> {
-                self.ctx.actor.as_ref()
+                self.ctx.actor()
             }
         }
 
@@ -302,7 +286,7 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
 
         impl<D: ::ash_core::SchemaSupport> #domain_name<D> {
             pub async fn install(&self) -> ::ash_core::Result<()> {
-                self.ctx.data.install_resources(Self::DEF.resources).await
+                self.ctx.install(Self::DEF.resources).await
             }
         }
 

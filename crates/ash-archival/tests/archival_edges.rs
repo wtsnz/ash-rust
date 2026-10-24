@@ -188,6 +188,8 @@ pub mod card_mod {
 }
 use card_mod::Card;
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn stored<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ash_core::ResourceDef,
@@ -214,6 +216,8 @@ async fn sqlite() -> Sqlite {
     sqlite
 }
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>) {
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     // Timestamps have one-second resolution, so start from an old one.
@@ -243,9 +247,10 @@ async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>
 }
 
 async fn soft_destroy_keeps_fields_the_actor_cannot_read<D: DataLayer + Clone>(data: D) {
-    let admin =
-        Context::new(data.clone()).with_actor(Actor::new(Uuid::new_v4()).with_role("admin"));
-    let member = Context::new(data).with_actor(Actor::new(Uuid::new_v4()).with_role("member"));
+    let admin = ash_core::Runtime::new(data.clone())
+        .bind(Some(Actor::new(Uuid::new_v4()).with_role("admin")), None);
+    let member = ash_core::Runtime::new(data)
+        .bind(Some(Actor::new(Uuid::new_v4()).with_role("member")), None);
     let created = Payroll::create(&admin)
         .name("Ada")
         .salary(100)
@@ -336,20 +341,22 @@ async fn archived_records_are_out_of_reach<D: ash_core::TransactionSupport + 'st
 
 #[tokio::test]
 async fn edges_in_memory() {
-    soft_destroy_bumps_version_and_updated_at(Context::new(Memory::new())).await;
+    soft_destroy_bumps_version_and_updated_at(ash_core::Runtime::new(Memory::new()).bootstrap())
+        .await;
     soft_destroy_keeps_fields_the_actor_cannot_read(Memory::new()).await;
-    cascades_stop_at_cycles(Context::new(Memory::new())).await;
-    hard_deletes_remove_archival_children(Context::new(Memory::new())).await;
-    archived_records_are_out_of_reach(Context::new(Memory::new())).await;
+    cascades_stop_at_cycles(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    hard_deletes_remove_archival_children(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    archived_records_are_out_of_reach(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
 async fn edges_in_sqlite() {
-    soft_destroy_bumps_version_and_updated_at(Context::new(sqlite().await)).await;
+    soft_destroy_bumps_version_and_updated_at(ash_core::Runtime::new(sqlite().await).bootstrap())
+        .await;
     soft_destroy_keeps_fields_the_actor_cannot_read(sqlite().await).await;
-    cascades_stop_at_cycles(Context::new(sqlite().await)).await;
-    hard_deletes_remove_archival_children(Context::new(sqlite().await)).await;
-    archived_records_are_out_of_reach(Context::new(sqlite().await)).await;
+    cascades_stop_at_cycles(ash_core::Runtime::new(sqlite().await).bootstrap()).await;
+    hard_deletes_remove_archival_children(ash_core::Runtime::new(sqlite().await).bootstrap()).await;
+    archived_records_are_out_of_reach(ash_core::Runtime::new(sqlite().await).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -360,7 +367,9 @@ async fn bulk_notify_false_covers_cascaded_children() {
         sink.lock().unwrap().push(notification.clone());
         Ok(())
     }));
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
     let parent = Node::create(&ctx).id(Uuid::from_u128(1)).await.unwrap();
     Node::create(&ctx)
         .id(Uuid::from_u128(2))
@@ -387,7 +396,7 @@ async fn bulk_notify_false_covers_cascaded_children() {
 
 #[tokio::test]
 async fn multi_destroy_returns_the_archived_record() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     let results = ctx
         .run_multi(Multi::new().destroy("archived", "destroy", ledger))
@@ -402,7 +411,7 @@ async fn multi_destroy_returns_the_archived_record() {
 async fn graphql_cannot_destroy_an_archived_record_again() {
     use async_graphql::Request;
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     let id = ledger.id;
     let schema = ash_graphql::AshGraphQL::from_resources(&[&Ledger::DEF])

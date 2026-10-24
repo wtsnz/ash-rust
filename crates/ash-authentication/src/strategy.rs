@@ -1,3 +1,6 @@
+// Raw writes and engine queries migrate to executable plans in later steps.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use ash_core::Result as CoreResult;
@@ -31,10 +34,12 @@ pub struct AuthStrategy<R: Resource> {
 
 impl<R: Resource> AuthStrategy<R> {
     /// Create an `AuthStrategy` for an authenticable resource.
-    pub fn new(resource_def: &'static ResourceDef) -> Self {
+    pub fn new<D>(runtime: &ash_core::Runtime<D>) -> Self {
+        let resource_def = &R::DEF;
+        let credential_read = runtime.credential_reads::<R>();
         Self {
             resource_def,
-            credential_read: CredentialReadPermit::new(resource_def),
+            credential_read,
             password_service: PasswordService::new(),
             api_key_service: ApiKeyService::default(),
             jwt_service: None,
@@ -194,7 +199,7 @@ impl<R: Resource> AuthStrategy<R> {
             _ => None,
         };
 
-        let token = jwt.sign_token(user_id, role, ctx.tenant.clone())?;
+        let token = jwt.sign_token(user_id, role, ctx.tenant().map(str::to_owned))?;
         Ok((record, token))
     }
 
@@ -221,7 +226,7 @@ impl<R: Resource> AuthStrategy<R> {
             _ => None,
         };
 
-        let pair = jwt.sign_token_pair(user_id, role, ctx.tenant.clone())?;
+        let pair = jwt.sign_token_pair(user_id, role, ctx.tenant().map(str::to_owned))?;
 
         // Persist refresh token in database
         let refresh_claims = jwt.verify_token_with_purpose(&pair.refresh_token, "refresh")?;
@@ -277,7 +282,7 @@ impl<R: Resource> AuthStrategy<R> {
         };
 
         // Issue new token pair
-        let pair = jwt.sign_token_pair(user.id(), role, ctx.tenant.clone())?;
+        let pair = jwt.sign_token_pair(user.id(), role, ctx.tenant().map(str::to_owned))?;
 
         // Store new refresh token
         let new_refresh_claims = jwt.verify_token_with_purpose(&pair.refresh_token, "refresh")?;
@@ -379,7 +384,7 @@ impl<R: Resource> AuthStrategy<R> {
             .data
             .update(
                 self.resource_def,
-                ctx.tenant.as_deref(),
+                ctx.tenant(),
                 user_id.into(),
                 update_fields,
             )
@@ -422,7 +427,7 @@ impl<R: Resource> AuthStrategy<R> {
         let user = R::from_fields(&user_raw).map_err(AuthError::Core)?;
 
         // 2. Generate reset token
-        let reset_token = jwt.sign_reset_token(user.id(), ctx.tenant.clone())?;
+        let reset_token = jwt.sign_reset_token(user.id(), ctx.tenant().map(str::to_owned))?;
 
         // 3. Store reset token in DatabaseTokenStore
         let claims = jwt.verify_token_with_purpose(&reset_token, "password_reset")?;
@@ -500,7 +505,7 @@ impl<R: Resource> AuthStrategy<R> {
             .data
             .update(
                 self.resource_def,
-                ctx.tenant.as_deref(),
+                ctx.tenant(),
                 claims.sub.into(),
                 update_fields,
             )
@@ -548,7 +553,7 @@ impl<R: Resource> AuthStrategy<R> {
             .ok_or(AuthError::InvalidCredentials)
     }
 
-    /// Convert an authenticated record into an `ash_core::Actor` ready to be placed on `Context.actor`.
+    /// Convert an authenticated record into an `ash_core::Actor` ready for `Runtime::bind`.
     pub fn to_actor(&self, record: &R) -> Actor {
         let mut actor = Actor::new(record.id());
         for (k, v) in record.to_fields() {

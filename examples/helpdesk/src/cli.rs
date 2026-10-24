@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::representative::fields as rep;
 use crate::ticket::fields as t;
 use crate::ticket::{Status, actor_customer, actor_representative};
-use crate::{Representative, Ticket, open_sqlite};
+use crate::{Representative, Ticket, open_sqlite_runtime};
 
 #[derive(Parser)]
 #[command(name = "helpdesk", about = "File-backed helpdesk on ash-core + SQLite")]
@@ -97,37 +97,39 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             Ok(())
         }
         Command::Rep(cmd) => {
-            let ctx = open_sqlite(&cli.db).await?;
+            let runtime = open_sqlite_runtime(&cli.db).await?;
+            let ctx = runtime.bootstrap();
             run_rep(&ctx, cmd).await
         }
         Command::Ticket(cmd) => {
-            let ctx = open_sqlite(&cli.db).await?;
+            let runtime = open_sqlite_runtime(&cli.db).await?;
             let actor_id = cli.actor.ok_or_else(|| {
                 ash_core::Error::Invalid(
                     "ticket commands need --as <uuid> (try `helpdesk new-id`)".into(),
                 )
             })?;
-            let ctx = with_actor(&ctx, actor_id, cli.role).await?;
+            let ctx = with_actor(&runtime, actor_id, cli.role).await?;
             run_ticket(&ctx, cmd).await
         }
     }
 }
 
 async fn with_actor(
-    ctx: &Context<Sqlite>,
+    runtime: &ash_core::Runtime<Sqlite>,
     id: Uuid,
     role: Option<Role>,
 ) -> ash_core::Result<Context<Sqlite>> {
+    let ctx = runtime.bootstrap();
     let actor = match role {
         Some(Role::Customer) => actor_customer(id),
         Some(Role::Representative) => actor_representative(id),
-        None => match ash_core::get::<Representative, _>(ctx, id).await {
+        None => match ash_core::get::<Representative, _>(&ctx, id).await {
             Ok(_) => actor_representative(id),
             Err(ash_core::Error::NotFound) => actor_customer(id),
             Err(err) => return Err(err),
         },
     };
-    Ok(ctx.with_actor(actor))
+    Ok(runtime.bind(Some(actor), None))
 }
 
 async fn run_rep(ctx: &Context<Sqlite>, cmd: RepCommand) -> ash_core::Result<()> {

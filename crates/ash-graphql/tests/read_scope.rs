@@ -105,17 +105,17 @@ mod berth {
 
 struct Harbour {
     schema: async_graphql::dynamic::Schema,
+    runtime: ash_core::Runtime<Memory>,
     acme: Context<Memory>,
-    globex: Context<Memory>,
 }
 
 impl Harbour {
     async fn new() -> Self {
-        let base = Context::new(Memory::new());
-        let acme = base.with_tenant("acme");
-        let globex = base.with_tenant("globex");
+        let runtime = ash_core::Runtime::new(Memory::new());
+        let acme = runtime.bind(None, Some("acme".into()));
+        let globex = runtime.bind(None, Some("globex".into()));
         // Field policies guard writes too, so the harbourmaster writes the notes.
-        let north = Dock::create(&acme.with_actor(role("harbourmaster")))
+        let north = Dock::create(&runtime.bind(Some(role("harbourmaster")), Some("acme".into())))
             .name("North")
             .notes("keys under the mat")
             .await
@@ -144,8 +144,8 @@ impl Harbour {
             .unwrap();
         Self {
             schema,
+            runtime,
             acme,
-            globex,
         }
     }
 
@@ -177,7 +177,9 @@ async fn relationships_load_as_the_request_reads() {
     let h = Harbour::new().await;
 
     // The harbourmaster sees the notes, and only the open berth.
-    let harbourmaster = h.acme.with_actor(role("harbourmaster"));
+    let harbourmaster = h
+        .runtime
+        .bind(Some(role("harbourmaster")), Some("acme".into()));
     assert_eq!(
         h.as_(&harbourmaster, DOCKS).await["listDocks"]["results"],
         json!([{
@@ -188,7 +190,7 @@ async fn relationships_load_as_the_request_reads() {
     );
 
     // A clerk reads the same docks without the notes.
-    let clerk = h.acme.with_actor(role("clerk"));
+    let clerk = h.runtime.bind(Some(role("clerk")), Some("acme".into()));
     assert_eq!(
         h.as_(&clerk, DOCKS).await["listDocks"]["results"][0]["notes"],
         Value::Null
@@ -202,7 +204,9 @@ async fn relationships_load_as_the_request_reads() {
     );
 
     // Another tenant's berth can't reach acme's dock.
-    let globex = h.globex.with_actor(role("harbourmaster"));
+    let globex = h
+        .runtime
+        .bind(Some(role("harbourmaster")), Some("globex".into()));
     assert_eq!(
         h.as_(&globex, berths).await["listBerths"]["results"],
         json!([{ "code": "C", "dock": null }])
@@ -210,24 +214,18 @@ async fn relationships_load_as_the_request_reads() {
 }
 
 #[tokio::test]
-async fn an_actor_given_alongside_the_context_acts_for_it() {
+async fn an_actor_given_alongside_the_context_cannot_replace_bound_identity() {
     let h = Harbour::new().await;
     let request = Request::new(DOCKS)
         .data(h.acme.clone())
         .data(role("harbourmaster"));
     let docks = h.run(request).await;
-    assert_eq!(
-        docks["listDocks"]["results"][0]["notes"],
-        "keys under the mat"
-    );
-    assert_eq!(
-        docks["listDocks"]["results"][0]["berths"][0]["dock"]["name"],
-        "North"
-    );
+    assert!(docks["listDocks"]["results"][0]["notes"].is_null());
+    assert!(docks["listDocks"]["results"][0]["berths"][0]["dock"].is_null());
 }
 
 #[tokio::test]
-async fn mutations_run_as_the_actor_given_alongside_the_context() {
+async fn mutations_run_as_the_bound_actor() {
     let h = Harbour::new().await;
     // Only the harbourmaster may read a dock's notes; anyone may write them, since field
     // policies govern reads, as in Ash. The mutation's result is read as the actor.
@@ -236,9 +234,10 @@ async fn mutations_run_as_the_actor_given_alongside_the_context() {
     } }"#;
     let created = h
         .run(
-            Request::new(mutation)
-                .data(h.acme.clone())
-                .data(role("harbourmaster")),
+            Request::new(mutation).data(
+                h.runtime
+                    .bind(Some(role("harbourmaster")), Some("acme".into())),
+            ),
         )
         .await;
     assert_eq!(
@@ -246,11 +245,7 @@ async fn mutations_run_as_the_actor_given_alongside_the_context() {
         "{created}"
     );
     let clerk = h
-        .run(
-            Request::new(mutation)
-                .data(h.acme.clone())
-                .data(role("clerk")),
-        )
+        .run(Request::new(mutation).data(h.runtime.bind(Some(role("clerk")), Some("acme".into()))))
         .await;
     assert_eq!(clerk["createDock"]["result"]["name"], "South", "{clerk}");
     assert!(
@@ -282,7 +277,9 @@ async fn filters_read_hidden_fields_as_null() {
     let by_notes = r#"{ listDocks(filter: { notes: { eq: "keys under the mat" } }) { count results { name } } }"#;
     let berths_by_notes = r#"{ listBerths(filter: { dock: { notes: { eq: "keys under the mat" } } }) { results { code } } }"#;
 
-    let deckhand = harbour.acme.with_actor(role("deckhand"));
+    let deckhand = harbour
+        .runtime
+        .bind(Some(role("deckhand")), Some("acme".into()));
     assert_eq!(
         harbour.as_(&deckhand, by_notes).await,
         json!({ "listDocks": { "count": 0, "results": [] } })
@@ -298,7 +295,9 @@ async fn filters_read_hidden_fields_as_null() {
         json!({ "listDocks": { "results": [{ "name": "North" }] } })
     );
 
-    let harbourmaster = harbour.acme.with_actor(role("harbourmaster"));
+    let harbourmaster = harbour
+        .runtime
+        .bind(Some(role("harbourmaster")), Some("acme".into()));
     assert_eq!(
         harbour.as_(&harbourmaster, by_notes).await,
         json!({ "listDocks": { "count": 1, "results": [{ "name": "North" }] } })

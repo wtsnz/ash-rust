@@ -73,9 +73,7 @@ impl<D> AshBatchLoader<D> {
     /// Whether this loader reads as `ctx` does: the same actor and tenant, on the same
     /// data layer. A loader serving another context must not answer for this one.
     pub fn serves(&self, ctx: &Context<D>) -> bool {
-        self.ctx.actor == ctx.actor
-            && self.ctx.tenant == ctx.tenant
-            && Arc::ptr_eq(&self.ctx.data, &ctx.data)
+        self.ctx.same_execution(ctx)
     }
 }
 

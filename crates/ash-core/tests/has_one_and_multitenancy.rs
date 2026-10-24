@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, Filter, RelKind, Resource, SchemaSupport, resource};
+use ash_core::{Error, Filter, RelKind, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -108,7 +108,7 @@ async fn test_has_one_metadata_and_loading() {
     assert_eq!(user_rel.destination_attribute, "user_id");
 
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     let u = User::create(&ctx).name("Alice").call().await.unwrap();
     let p = Profile::create(&ctx)
@@ -140,7 +140,7 @@ async fn test_has_one_metadata_and_loading() {
 #[test]
 async fn test_has_one_cascading_delete() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     let u = User::create(&ctx).name("Bob").call().await.unwrap();
     let _p = Profile::create(&ctx)
@@ -165,7 +165,7 @@ async fn test_has_one_cascading_delete() {
 #[test]
 async fn test_relational_filter_has_one() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     let u1 = User::create(&ctx).name("Alice").call().await.unwrap();
     let _p1 = Profile::create(&ctx)
@@ -210,7 +210,7 @@ async fn test_attribute_multitenancy() {
     let mem = Memory::new();
 
     // 1. Context without tenant should fail with TenantRequired on create
-    let no_tenant_ctx = Context::new(mem.clone());
+    let no_tenant_ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
     let err = TenantDoc::create(&no_tenant_ctx)
         .title("Secret Doc")
         .call()
@@ -223,7 +223,7 @@ async fn test_attribute_multitenancy() {
     );
 
     // 2. Context with tenant automatically populates tenant_id on create
-    let tenant_a_ctx = Context::new(mem.clone()).with_tenant("org_alpha");
+    let tenant_a_ctx = ash_core::Runtime::new(mem.clone()).bind(None, Some(("org_alpha").into()));
     let doc_a = TenantDoc::create(&tenant_a_ctx)
         .title("Alpha Plan")
         .call()
@@ -231,7 +231,7 @@ async fn test_attribute_multitenancy() {
         .unwrap();
     assert_eq!(doc_a.tenant_id, "org_alpha");
 
-    let tenant_b_ctx = Context::new(mem.clone()).with_tenant("org_beta");
+    let tenant_b_ctx = ash_core::Runtime::new(mem.clone()).bind(None, Some(("org_beta").into()));
     let doc_b = TenantDoc::create(&tenant_b_ctx)
         .title("Beta Plan")
         .call()
@@ -264,7 +264,7 @@ async fn test_has_one_and_relational_filter_in_sqlite() {
         .install_resources(&[&User::DEF, &Profile::DEF])
         .await
         .unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     let u1 = User::create(&ctx).name("Carol").call().await.unwrap();
     let _p1 = Profile::create(&ctx)

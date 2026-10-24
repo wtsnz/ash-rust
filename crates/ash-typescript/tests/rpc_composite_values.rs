@@ -73,7 +73,7 @@ async fn run(ctx: &Context<Memory>, request: Json) -> Json {
 }
 
 async fn seeded() -> Context<Memory> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(
         &ctx,
         json!({

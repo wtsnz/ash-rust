@@ -25,7 +25,7 @@ It provides the abstractions for static resource metadata, action pipelines, val
 - **Preparations Engine**: Query preparations on read actions that inject default filters, sorting, limits, and offsets.
 - **Expressions & Calculations**: Rich AST (`Expr`) supporting arithmetic, SQL string functions, coalesce, conditionals, and custom functions.
 - **Type-Safe Multi-Store Routing (`StoreRegistry` / `StoreTag`)**: Route operations across multiple instances of the same database engine (e.g. primary vs audit SQLite) or 3rd-party data layers with zero core changes and optional compile-time presence verification (`HasStore`).
-- **Tenant & Context Metadata**: First-class tenant isolation (`ctx.with_tenant(...)`, `query.tenant(...)`, `action.tenant(...)`) and arbitrary request metadata propagation to `ValidationContext`, `ChangeContext`, generic actions, and `Notification` payloads.
+- **Tenant & Context Metadata**: Runtime-bound tenant isolation (`runtime.bind(actor, tenant)`) and arbitrary request metadata propagation to `ValidationContext`, `ChangeContext`, generic actions, and `Notification` payloads.
 - **Transactional Pipelines (`Multi`)**: Composable atomic batches inspired by `Ash.Multi`. Steps can create, update, destroy, or compute derived data, guaranteeing all-or-nothing rollback on failure.
 - **Bulk & Batch Operations**: High-throughput `bulk_create` and `bulk_destroy` with chunking, upserting, cascading deletes, and chunked query streaming.
 - **Declarative Action Lifecycle Hooks**: `before_action`, `after_action`, and `after_transaction` hooks at the action level, via `Change`, and inside `CustomChange` plugins.
@@ -61,7 +61,7 @@ It provides the abstractions for static resource metadata, action pipelines, val
 ## Quick Example
 
 ```rust
-use ash_core::{Context, Resource, resource};
+use ash_core::{Runtime, Resource, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -102,7 +102,7 @@ resource! {
 
 #[tokio::main]
 async fn main() -> ash_core::Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create a record using generated action builder
     let article = Article::publish(&ctx)

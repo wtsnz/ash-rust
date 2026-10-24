@@ -79,12 +79,13 @@ pub mod booking {
 /// writes by id, aggregates and filters through a relationship, loads, and writes in a
 /// transaction.
 pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(
-    ctx: Context<D>,
+    runtime: ash_core::Runtime<D>,
     acme: &str,
     globex: &str,
 ) {
-    let acme = ctx.with_tenant(acme);
-    let globex = ctx.with_tenant(globex);
+    let ctx = runtime.bootstrap();
+    let acme = runtime.bind(None, Some(acme.into()));
+    let globex = runtime.bind(None, Some(globex.into()));
     let leo = Port::create(&ctx).code("LEO").await.unwrap();
     let ours = Booking::create(&acme)
         .port_id(leo.id)
@@ -178,7 +179,7 @@ pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(
 
 #[tokio::test]
 async fn memory_keeps_tenants_apart() {
-    tenants_stay_apart(Context::new(Memory::new()), "acme", "globex").await;
+    tenants_stay_apart(ash_core::Runtime::new(Memory::new()), "acme", "globex").await;
 }
 
 #[tokio::test]
@@ -188,9 +189,10 @@ async fn sqlite_refuses_context_tenancy() {
         .install_resources(&[&Port::DEF, &Booking::DEF])
         .await
         .unwrap();
-    let ctx = Context::new(sqlite);
+    let runtime = ash_core::Runtime::new(sqlite);
+    let ctx = runtime.bootstrap();
     let leo = Port::create(&ctx).code("LEO").await.unwrap();
-    let acme = ctx.with_tenant("acme");
+    let acme = runtime.bind(None, Some("acme".into()));
     let err = Booking::create(&acme)
         .port_id(leo.id)
         .tonnes(10)

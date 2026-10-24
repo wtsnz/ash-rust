@@ -87,6 +87,7 @@ async fn test_phase1_type_reflection_and_schema_assembly() {
 
 #[tokio::test]
 async fn test_phase1_field_resolver_and_policy_redaction() {
+    let runtime = ash_core::Runtime::new(ash_memory::Memory::new());
     // Construct schema with a custom top-level query returning a Ticket
     let mut query = Object::new("Query");
     let ticket_id = Uuid::new_v4();
@@ -130,7 +131,9 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
     "#;
 
     // 1. Unauthenticated request (no actor) -> secret_notes must be redacted (null)
-    let res = schema.execute(Request::new(gql_query)).await;
+    let res = schema
+        .execute(Request::new(gql_query).data(runtime.bootstrap()))
+        .await;
     // Reported as AshGraphql reports a field a policy hides: a `forbidden_field` error
     // at its path.
     let [error] = &res.errors[..] else {
@@ -159,7 +162,7 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
 
     // 2. Authenticated request (actor present) -> secret_notes must be visible
     let actor = Actor::new(Uuid::new_v4());
-    let req = Request::new(gql_query).data(actor);
+    let req = Request::new(gql_query).data(runtime.bind(Some(actor), None));
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();

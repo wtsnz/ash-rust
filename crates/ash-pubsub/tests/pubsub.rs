@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-use ash_core::{ActionKind, Context, resource};
+use ash_core::{ActionKind, resource};
 use ash_memory::Memory;
 use ash_pubsub::{PubSub, PubSubNotifier, topic_matches};
 
@@ -60,7 +60,9 @@ fn test_topic_pattern_matching_rules() {
 async fn test_pubsub_topic_and_wildcard_subscriptions() {
     let pubsub = Arc::new(PubSub::new());
     let notifier = Arc::new(PubSubNotifier::new(Arc::clone(&pubsub)));
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     // Subscribe with wildcard: "order:*"
     let mut sub_all = pubsub.subscribe("order:*");
@@ -115,7 +117,9 @@ async fn test_pubsub_deduplicated_multi_topic_delivery() {
     let mut sub_all = pubsub.subscribe("order:*");
 
     let notifier = Arc::new(PubSubNotifier::new(Arc::clone(&pubsub)));
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     let _order = Order::create(&ctx)
         .customer("Charlie")
@@ -146,7 +150,9 @@ async fn test_pubsub_custom_topic_formatting() {
         PubSubNotifier::new(Arc::clone(&pubsub))
             .with_topics(|notif| vec![format!("events.{}.{}", notif.resource, notif.action)]),
     );
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     let mut sub = pubsub.subscribe("events.Order.create");
 
@@ -168,8 +174,9 @@ async fn test_pubsub_custom_topic_formatting() {
 #[tokio::test]
 async fn subscribers_share_one_notification() {
     let pubsub = Arc::new(PubSub::new());
-    let ctx =
-        Context::new(Memory::new()).with_notifier(Arc::new(PubSubNotifier::new(pubsub.clone())));
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(Arc::new(PubSubNotifier::new(pubsub.clone())));
     let mut first = pubsub.subscribe("order:*");
     let mut second = pubsub.subscribe("order:*");
 

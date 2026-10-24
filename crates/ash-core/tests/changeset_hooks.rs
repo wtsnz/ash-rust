@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use ash_core::{Context, Error, Resource, Result, resource};
+use ash_core::{Error, Resource, Result, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -38,7 +38,7 @@ actions {
 
 #[tokio::test]
 async fn test_before_action_mutates_attributes() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Hook intercepts and auto-computes slug from title
     let article = Article::create(&ctx)
@@ -65,7 +65,7 @@ async fn test_before_action_mutates_attributes() -> Result<()> {
 
 #[tokio::test]
 async fn test_before_action_can_abort_action() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let res = Article::create(&ctx)
         .title("Forbidden Title")
@@ -91,7 +91,7 @@ async fn test_before_action_can_abort_action() -> Result<()> {
 
 #[tokio::test]
 async fn test_after_action_receives_persisted_record() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let captured_id = Arc::new(Mutex::new(None));
     let captured_id_clone = Arc::clone(&captured_id);
 
@@ -114,7 +114,7 @@ async fn test_after_action_receives_persisted_record() -> Result<()> {
 
 #[tokio::test]
 async fn test_after_transaction_on_success_and_failure() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let success_called = Arc::new(AtomicBool::new(false));
     let success_called_clone = Arc::clone(&success_called);
@@ -158,7 +158,7 @@ async fn test_after_transaction_on_success_and_failure() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_lifecycle_hooks() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let article = Article::create(&ctx)
         .title("Draft")
@@ -190,7 +190,7 @@ async fn test_update_lifecycle_hooks() -> Result<()> {
 
 #[tokio::test]
 async fn test_multiple_hooks_execution_order() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let order = Arc::new(Mutex::new(Vec::new()));
 
@@ -231,7 +231,7 @@ async fn test_multiple_hooks_execution_order() -> Result<()> {
 #[tokio::test]
 async fn test_hooks_with_sqlite_backend() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
     ctx.install(&[&Article::DEF]).await?;
 
     let tx_count = Arc::new(AtomicUsize::new(0));

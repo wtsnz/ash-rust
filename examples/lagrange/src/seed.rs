@@ -181,12 +181,16 @@ where
         (RED_DUST, "Sally", Role::Shipper),
         (CUSTOMS, "Chen", Role::Customs),
     ] {
-        let member = CrewMember::register_with_password(&authority.clone().with_tenant(line))
-            .email(ci(&format!("{}@{line}.example", first.to_lowercase())))
-            .name(first)
-            .role(role)
-            .password(PASSWORD)
-            .await?;
+        let member = CrewMember::register_with_password(
+            &app.runtime()
+                .system()
+                .bind(authority.actor().cloned(), Some(line.into())),
+        )
+        .email(ci(&format!("{}@{line}.example", first.to_lowercase())))
+        .name(first)
+        .role(role)
+        .password(PASSWORD)
+        .await?;
         crew.insert(first, member);
     }
 

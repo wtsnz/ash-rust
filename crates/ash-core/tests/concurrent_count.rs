@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ash_core::{CompiledQuery, Context, DataLayer, FieldMap, ResourceDef, Result, resource};
+use ash_core::{CompiledQuery, DataLayer, FieldMap, ResourceDef, Result, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -90,7 +90,7 @@ impl DataLayer for Slow {
 #[tokio::test]
 async fn a_counted_page_reads_its_count_alongside_the_page() {
     let slow = Slow::default();
-    let ctx = Context::new(slow.clone());
+    let ctx = ash_core::Runtime::new(slow.clone()).bootstrap();
     for i in 0..5 {
         Note::create(&ctx).body(format!("note {i}")).await.unwrap();
     }

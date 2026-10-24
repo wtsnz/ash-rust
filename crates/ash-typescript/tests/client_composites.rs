@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-use ash_core::{AshTypedMap, AshUnion, Context, Resource, resource};
+use ash_core::{AshTypedMap, AshUnion, Resource, resource};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_typescript::{TypeScriptConfig, TypeScriptGenerator};
@@ -81,7 +81,7 @@ async fn the_client_selects_and_types_composite_values() {
         .find_map(|line| line.trim().strip_prefix("let fields = \""))
         .and_then(|rest| rest.strip_suffix("\";"))
         .unwrap();
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&Parcel::DEF])
         .finish::<Memory>()
         .unwrap();

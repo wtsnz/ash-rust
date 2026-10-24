@@ -4,7 +4,7 @@
 //! rows after, as Ash does without lateral joins. One scenario, the same answers.
 
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, PerKey,
+    ActionDef, AttrType, AttributeDef, CompiledQuery, DataLayer, FieldMap, Filter, PerKey,
     PreparationDef, RelatedQuery, RelationshipDef, ResourceDef, Sort, Value, load_related_query,
 };
 use ash_memory::Memory;
@@ -150,6 +150,8 @@ fn texts(rows: &[FieldMap], field: &str) -> Vec<String> {
         .collect()
 }
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn scenario<D: DataLayer + Clone>(data: D) {
     let a = insert(&data, &SHELF, &[("name", Value::from("a"))]).await;
     let b = insert(&data, &SHELF, &[("name", Value::from("b"))]).await;
@@ -180,7 +182,7 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         )
         .await;
     }
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let shelves = [a.clone(), b.clone(), empty, a.clone()];
     let load = |relationship: &'static str, query: RelatedQuery| {
         let ctx = ctx.clone();

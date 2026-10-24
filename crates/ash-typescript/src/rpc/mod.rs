@@ -38,6 +38,9 @@
 //! client's filters and sorts guarded by field policies, and fields the actor may not
 //! read redacted.
 
+// Raw writes and engine queries migrate to executable plans in later steps.
+#![allow(deprecated)]
+
 mod codegen;
 mod error;
 pub mod fields;
@@ -763,7 +766,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
 
         // What it selects.
         let rules = Rules {
-            actor: ctx.actor.as_ref(),
+            actor: ctx.authorization_actor(),
             enable_filter: options.enable_filter,
             enable_sort: options.enable_sort,
             loads: &options.loads,
@@ -1039,14 +1042,19 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
         let query = CompiledQuery {
             filter: Some(filter),
-            tenant: ctx.tenant.clone(),
+            tenant: ctx.tenant().map(str::to_owned),
             limit: Some(1),
             select: Some(vec![pk.to_string()]),
             ..CompiledQuery::default()
         };
-        let scoped =
-            ash_core::scope_read(resource, read, ctx.actor.as_ref(), &FieldMap::new(), query)
-                .map_err(|e| self.failure(e))?;
+        let scoped = ash_core::scope_read(
+            resource,
+            read,
+            ctx.authorization_actor(),
+            &FieldMap::new(),
+            query,
+        )
+        .map_err(|e| self.failure(e))?;
         let rows = ctx
             .data
             .run_query(resource, &scoped)
@@ -1073,11 +1081,17 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let base = CompiledQuery {
             filter: Some(Filter::and(get_by)),
             sort: prepared_sort(rpc.action),
-            tenant: ctx.tenant.clone(),
+            tenant: ctx.tenant().map(str::to_owned),
             ..CompiledQuery::default()
         };
-        let scoped = ash_core::scope_read(resource, rpc.action, ctx.actor.as_ref(), &input, base)
-            .map_err(|e| self.failure(e))?;
+        let scoped = ash_core::scope_read(
+            resource,
+            rpc.action,
+            ctx.authorization_actor(),
+            &input,
+            base,
+        )
+        .map_err(|e| self.failure(e))?;
         let rows = read_rows(
             ctx,
             resource,
@@ -1113,7 +1127,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         shown: &[Shown],
     ) -> Result<Json, Failure> {
         let (resource, action) = (rpc.resource, rpc.action);
-        let actor = ctx.actor.as_ref();
+        let actor = ctx.authorization_actor();
         let mut filters = Vec::new();
         if let Some(filter) = request.get("filter").filter(|value| !value.is_null()) {
             let filter = filter_input(resource, &self.names.filter(resource, filter))
@@ -1140,7 +1154,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let base = CompiledQuery {
             filter: Some(Filter::and(filters)),
             sort,
-            tenant: ctx.tenant.clone(),
+            tenant: ctx.tenant().map(str::to_owned),
             ..CompiledQuery::default()
         };
         let scoped = ash_core::scope_read(resource, action, actor, &input, base)
@@ -1359,8 +1373,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         };
         let query = CompiledQuery {
             filter: Some(Filter::eq(pk.name, id)),
-            tenant: ctx.tenant.clone(),
-            actor: ctx.actor.clone(),
+            tenant: ctx.tenant().map(str::to_owned),
+            actor: ctx.authorization_actor().cloned(),
             calculation_args: selection.calculation_args.clone(),
             ..CompiledQuery::default()
         };
@@ -1864,7 +1878,7 @@ async fn read_rows<D: DataLayer>(
     };
     let mut rows = ctx.data.run_query(resource, &query).await?;
     for row in &mut rows {
-        ash_core::redact_fields(resource, ctx.actor.as_ref(), row)?;
+        ash_core::redact_fields(resource, ctx.authorization_actor(), row)?;
     }
     Ok(rows)
 }
@@ -2001,7 +2015,8 @@ pub mod axum {
     }
 
     /// The RPC endpoints for `rpc`, each request in the context `context` makes of its
-    /// headers.
+    /// headers. Bind it through Runtime in trusted request setup; request payloads
+    /// cannot replace its actor or tenant.
     pub fn rpc_router<D: TransactionSupport + 'static>(
         rpc: Rpc<D>,
         context: impl Fn(&HeaderMap) -> Context<D> + Send + Sync + 'static,

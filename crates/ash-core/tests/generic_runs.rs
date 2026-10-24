@@ -2,7 +2,7 @@
 //! (`transaction;`, Ash's `transaction? true`), and runnable by name with its input as
 //! values (`Resource::run_generic`), as an API serving actions by name runs it.
 
-use ash_core::{Actor, Context, Error, FieldMap, Resource, Value, resource};
+use ash_core::{Actor, Error, FieldMap, Resource, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -76,7 +76,8 @@ fn writer() -> Actor {
 
 #[tokio::test]
 async fn a_generic_action_runs_in_its_transaction() {
-    let ctx = Context::new(Memory::new()).with_actor(writer());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bind(Some(writer()), None);
     let failed = Entry::pair(&ctx).fail(true).call().await;
     assert!(matches!(failed, Err(Error::Invalid(_))), "{failed:?}");
     assert_eq!(Entry::query(&ctx).count().await.unwrap(), 0, "rolled back");
@@ -86,7 +87,8 @@ async fn a_generic_action_runs_in_its_transaction() {
 
 #[tokio::test]
 async fn generic_actions_run_by_name() {
-    let ctx = Context::new(Memory::new()).with_actor(writer());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bind(Some(writer()), None);
     let mut input = FieldMap::new();
     input.insert("word".into(), Value::from("hi"));
     assert_eq!(
@@ -115,8 +117,10 @@ async fn generic_actions_run_by_name() {
         matches!(missing, Err(Error::Missing { ref field }) if field == "word"),
         "{missing:?}"
     );
-    let stranger =
-        ctx.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", Value::from("reader")));
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_attr("role", Value::from("reader"))),
+        ctx.tenant().map(str::to_owned),
+    );
     let forbidden = Entry::run_generic(&stranger, "noop", FieldMap::new()).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
 }

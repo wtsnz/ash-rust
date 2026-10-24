@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Uuid;
 
-use ash_core::{
-    ActionKind, Context, Error, Resource, ResourceExt, Result, SyncFnNotifier, resource,
-};
+use ash_core::{ActionKind, Error, Resource, ResourceExt, Result, SyncFnNotifier, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -365,7 +363,9 @@ async fn test_cascading_delete_multi_level_in_memory() -> Result<()> {
         Ok(())
     }));
 
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     let author = Author::create(&ctx).name("J.K. Rowling").await?;
 
@@ -411,7 +411,7 @@ async fn test_cascading_delete_multi_level_in_memory() -> Result<()> {
 
 #[tokio::test]
 async fn test_restrict_delete_prevents_parent_deletion() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let engineering = Department::create(&ctx).name("Engineering").await?;
     let emp = Employee::create(&ctx)
@@ -448,7 +448,7 @@ async fn test_restrict_delete_prevents_parent_deletion() -> Result<()> {
 
 #[tokio::test]
 async fn test_nilify_delete_clears_foreign_key() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let team = Team::create(&ctx).name("Warriors").await?;
     let player1 = Player::create(&ctx)
@@ -477,7 +477,7 @@ async fn test_nilify_delete_clears_foreign_key() -> Result<()> {
 
 #[tokio::test]
 async fn test_many_to_many_cascades_join_rows() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let article = Article::create(&ctx).title("Rust Async").await?;
     let tag_rust = Tag::create(&ctx).label("rust").await?;
@@ -509,7 +509,7 @@ async fn test_many_to_many_cascades_join_rows() -> Result<()> {
 #[tokio::test]
 async fn test_cascading_delete_in_sqlite() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
     ctx.install(&[&Author::DEF, &Post::DEF, &Comment::DEF])
         .await?;
 

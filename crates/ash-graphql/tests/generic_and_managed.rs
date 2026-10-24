@@ -121,7 +121,7 @@ async fn data(ctx: &Context<Memory>, query: &str) -> Value {
 
 #[tokio::test]
 async fn generic_actions_run_as_queries_and_mutations() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     assert_eq!(
         data(&ctx, r#"{ shout(word: "hey") }"#).await,
         json!({ "shout": "HEY" })
@@ -171,7 +171,7 @@ async fn generic_actions_run_as_queries_and_mutations() {
 
 #[tokio::test]
 async fn managed_relationships_take_input_objects() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let sdl = schema().sdl();
     // What the destination's create takes, but the key the relationship sets.
     assert!(

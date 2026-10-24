@@ -4,7 +4,7 @@
 //! default, `JsonString`; ash-rust answers an object, as AshGraphql's `json_type: :json`
 //! does. GAPS.md row 30 says why.)
 
-use ash_core::{Context, FieldMap, Resource, resource};
+use ash_core::{FieldMap, Resource, resource};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -29,7 +29,7 @@ resource! {
 }
 
 async fn create(input: &str) -> Value {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&Profile::DEF])
         .finish::<Memory>()
         .unwrap();
@@ -59,7 +59,7 @@ async fn a_map_is_taken_as_an_object_or_as_json_text() {
 
 #[tokio::test]
 async fn json_text_for_a_map_must_hold_an_object() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&Profile::DEF])
         .finish::<Memory>()
         .unwrap();

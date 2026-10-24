@@ -12,7 +12,8 @@
 //!
 //! Queries and mutations sent over the socket run for their sender alone. Every frame
 //! matches async-graphql's own handler: `next` for each response, errors included, then
-//! `complete`. The older `graphql-ws` protocol is still served by that handler.
+//! `complete`. The older `graphql-ws` protocol uses `data` frames and unshared streams,
+//! with the same application context binder.
 //!
 //! Buffers are bounded. A subscriber that falls more than [`SHARED_BUFFER`] events behind
 //! its stream, because its connection is slow, is told how many it missed
@@ -25,7 +26,7 @@ use std::sync::{Arc, Mutex, Weak};
 use async_graphql::dynamic::Schema;
 use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{Request, Variables};
-use async_graphql_axum::{GraphQLProtocol, GraphQLWebSocket};
+use async_graphql_axum::GraphQLProtocol;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::Response;
@@ -42,9 +43,9 @@ pub const SHARED_BUFFER: usize = 4096;
 const CONNECTION_BUFFER: usize = 1024;
 
 /// Upgrades a request to `/graphql/ws`: `graphql-transport-ws` with shared subscriptions
-/// when the client offers it, otherwise async-graphql's handler for `graphql-ws`.
+/// when the client offers it, otherwise unshared streams for `graphql-ws`.
 pub(crate) fn upgrade(
-    protocol: GraphQLProtocol,
+    _protocol: GraphQLProtocol,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
     schema: Schema,
@@ -60,11 +61,11 @@ pub(crate) fn upgrade(
     if transport_ws {
         upgrade
             .protocols(["graphql-transport-ws"])
-            .on_upgrade(move |socket| serve(socket, schema, hub, headers, request_data))
+            .on_upgrade(move |socket| serve(socket, schema, hub, headers, request_data, false))
     } else {
         upgrade
             .protocols(["graphql-ws"])
-            .on_upgrade(move |socket| GraphQLWebSocket::new(socket, schema, protocol).serve())
+            .on_upgrade(move |socket| serve(socket, schema, hub, headers, request_data, true))
     }
 }
 
@@ -287,29 +288,38 @@ fn missed(count: u64) -> String {
     .to_string()
 }
 
+enum SubscriptionProtocol {
+    Transport { scope: String },
+    Legacy,
+}
+
 /// Runs one subscription for a connection until it completes or is cancelled.
 async fn subscribe(
     id: String,
     payload: SubscribePayload,
     request: Request,
-    scope: String,
+    protocol: SubscriptionProtocol,
     schema: Schema,
     hub: Arc<Hub>,
     out: mpsc::Sender<Message>,
 ) {
-    match payload.key(&scope) {
+    let (next_kind, key) = match protocol {
+        SubscriptionProtocol::Transport { scope } => ("next", payload.key(&scope)),
+        SubscriptionProtocol::Legacy => ("data", None),
+    };
+    match key {
         Some(key) => {
             let mut member = hub.join(&schema, key, request);
             loop {
                 match member.recv().await {
                     Ok(Frame::Next(json)) => {
-                        if out.send(frame(&id, "next", Some(&json))).await.is_err() {
+                        if out.send(frame(&id, next_kind, Some(&json))).await.is_err() {
                             return;
                         }
                     }
                     Ok(Frame::Complete) | Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(count)) => {
-                        let _ = out.send(frame(&id, "next", Some(&missed(count)))).await;
+                        let _ = out.send(frame(&id, next_kind, Some(&missed(count)))).await;
                         break;
                     }
                 }
@@ -320,7 +330,7 @@ async fn subscribe(
             let mut stream = schema.execute_stream(request);
             while let Some(response) = stream.next().await {
                 let json = serde_json::to_string(&response).expect("a response serializes");
-                if out.send(frame(&id, "next", Some(&json))).await.is_err() {
+                if out.send(frame(&id, next_kind, Some(&json))).await.is_err() {
                     return;
                 }
             }
@@ -329,13 +339,14 @@ async fn subscribe(
     let _ = out.send(frame(&id, "complete", None)).await;
 }
 
-/// Speaks `graphql-transport-ws` on one connection.
+/// Speaks either supported protocol through the same application binder.
 async fn serve(
     socket: WebSocket,
     schema: Schema,
     hub: Arc<Hub>,
     headers: HeaderMap,
     request_data: Arc<dyn crate::axum::RequestData>,
+    legacy: bool,
 ) {
     let (mut sink, mut incoming) = socket.split();
     let (out, mut queued) = mpsc::channel::<Message>(CONNECTION_BUFFER);
@@ -387,7 +398,7 @@ async fn serve(
                 };
                 let _ = out.send(Message::Text(pong.into())).await;
             }
-            "subscribe" => {
+            "subscribe" | "start" if (message.kind == "start") == legacy => {
                 if !acknowledged {
                     let _ = out.send(close(4401, "Unauthorized")).await;
                     break;
@@ -405,22 +416,28 @@ async fn serve(
                     previous.abort();
                 }
                 let (request, scope) = request_data.apply(&headers, payload.request());
+                let request = request.data(crate::request::RequireBoundContext);
                 let task = tokio::spawn(subscribe(
                     id.clone(),
                     payload,
                     request,
-                    scope,
+                    if legacy {
+                        SubscriptionProtocol::Legacy
+                    } else {
+                        SubscriptionProtocol::Transport { scope }
+                    },
                     schema.clone(),
                     Arc::clone(&hub),
                     out.clone(),
                 ));
                 subscriptions.insert(id, task);
             }
-            "complete" => {
+            "complete" | "stop" if (message.kind == "stop") == legacy => {
                 if let Some(task) = message.id.and_then(|id| subscriptions.remove(&id)) {
                     task.abort();
                 }
             }
+            "connection_terminate" if legacy => break,
             _ => {}
         }
     }

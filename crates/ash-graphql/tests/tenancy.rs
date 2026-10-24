@@ -36,10 +36,11 @@ resource! {
 #[tokio::test]
 async fn graphql_stays_inside_the_tenant() {
     let pubsub = PubSub::new();
-    let base = Context::new(Memory::new())
+    let base_runtime = ash_core::Runtime::new(Memory::new())
         .with_notifier(Arc::new(PubSubNotifier::new(Arc::new(pubsub.clone()))));
-    let acme = base.clone().with_tenant("acme");
-    let globex = base.clone().with_tenant("globex");
+    let base = base_runtime.bootstrap();
+    let acme = base_runtime.bind(base.actor().cloned(), Some(("acme").into()));
+    let globex = base_runtime.bind(base.actor().cloned(), Some(("globex").into()));
     let ours = Shipment::create(&acme).label("ours").await.unwrap();
     let theirs = Shipment::create(&globex).label("theirs").await.unwrap();
 

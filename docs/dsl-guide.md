@@ -762,7 +762,7 @@ let registry = StoreRegistry::new()
     .with_store::<PrimaryDb, _>(primary_sqlite)
     .with_store::<AuditDb, _>(audit_sqlite);
 
-let ctx = Context::new(registry);
+let ctx = ash_core::Runtime::new(registry).bootstrap();
 ```
 
 `store SqliteStore` / `MemoryStore` / `PostgresStore` also set `ResourceDef.data_layer`. Do not write `data_layer sqlite`.
@@ -803,15 +803,16 @@ resource! {
 `strategy: attribute` (the default if omitted) stamps and filters `attribute` from `ctx.tenant()`. `strategy: context` leaves the tenant to the data layer, as Ash does: Postgres keeps each tenant's rows in its own schema, memory keeps a table per tenant, and SQLite, which has no schemas, refuses (use `strategy: attribute` there). `global: true` skips the tenant requirement. `attribute` may be an identifier or a string.
 
 ```rust
-let ctx = Context::new(data_layer)
-    .with_tenant("tenant_acme")
+let runtime = ash_core::Runtime::new(data_layer);
+let ctx = runtime.bind(None, Some("tenant_acme".into()))
     .with_metadata("trace_id", "trace-12345");
 
 let post = Post::create(&ctx)
     .title("Tenant Post")
     .await?;
 
-let alt_posts = Post::query(&ctx).tenant("tenant_beta").all().await?;
+let beta = runtime.bind(None, Some("tenant_beta".into()));
+let alt_posts = Post::query(&beta).all().await?;
 
 pub struct CheckTenant;
 impl CustomValidation for CheckTenant {

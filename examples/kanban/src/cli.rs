@@ -125,7 +125,7 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             crate::demo().await?;
         }
         Command::User(cmd) => {
-            let (workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
+            let (_runtime, workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             match cmd {
                 UserCommand::Register { name, email } => {
                     let user = workspaces.register_user(name, email).await?;
@@ -147,9 +147,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             }
         }
         Command::Workspace(cmd) => {
-            let (workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
+            let (runtime, _workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             let actor_id = cli.actor.unwrap_or_else(Uuid::new_v4);
-            let as_actor = workspaces.with_actor(actor_user(actor_id));
+            let as_actor =
+                crate::Workspaces::from_context(runtime.bind(Some(actor_user(actor_id)), None));
 
             match cmd {
                 WorkspaceCommand::Create { name, slug, owner } => {
@@ -185,9 +186,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             }
         }
         Command::Board(cmd) => {
-            let (_workspaces, kanban) = open_sqlite_app(&cli.db).await?;
+            let (runtime, _workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             let actor_id = cli.actor.unwrap_or_else(Uuid::new_v4);
-            let as_actor = kanban.with_actor(actor_user(actor_id));
+            let as_actor =
+                crate::Kanban::from_context(runtime.bind(Some(actor_user(actor_id)), None));
 
             match cmd {
                 BoardCommand::Create {
@@ -242,9 +244,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             }
         }
         Command::Card(cmd) => {
-            let (_workspaces, kanban) = open_sqlite_app(&cli.db).await?;
+            let (runtime, _workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             let actor_id = cli.actor.unwrap_or_else(Uuid::new_v4);
-            let as_actor = kanban.with_actor(actor_user(actor_id));
+            let as_actor =
+                crate::Kanban::from_context(runtime.bind(Some(actor_user(actor_id)), None));
 
             match cmd {
                 CardCommand::Create {

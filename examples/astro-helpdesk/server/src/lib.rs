@@ -4,7 +4,7 @@ pub mod ticket;
 pub use representative::{REPRESENTATIVE_DEF, Representative};
 pub use ticket::{TICKET_DEF, Ticket, TicketActions, TicketStatus};
 
-use ash_core::{Context, domain};
+use ash_core::domain;
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -96,7 +96,9 @@ pub async fn build_app() -> Result<Router, Box<dyn std::error::Error>> {
     let mem = Memory::new();
     let pubsub = PubSub::new();
     // Writes publish their changes to subscriptions through the context's notifier.
-    let ctx = Context::new(mem).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(mem)
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
 
     // 1. Seed Representatives using Resource / Context DSL
     let rep1 = Representative::create(&ctx)
@@ -141,9 +143,9 @@ pub async fn build_app() -> Result<Router, Box<dyn std::error::Error>> {
     let schema = AshGraphQL::from_domain(&HELPDESK_DEF)
         .with_pubsub(pubsub)
         .with_dataloader()
-        .finish_with_context(ctx)?;
+        .finish_with_context(ctx.clone())?;
 
-    let app = ash_graphql::axum::graphql_router(schema)
+    let app = ash_graphql::axum::graphql_router(schema, ctx)
         .route("/health", get(health_check))
         .layer(middleware::from_fn(cors_middleware));
 

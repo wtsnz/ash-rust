@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, Resource, SchemaSupport, resource};
+use ash_core::{Error, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -45,7 +45,7 @@ actions {
 #[tokio::main(flavor = "current_thread")]
 #[test]
 async fn test_identities_conflict_detection_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let org1 = Uuid::new_v4();
 
     // 1. Create first account
@@ -119,7 +119,7 @@ async fn test_identities_conflict_detection_in_memory() {
 #[tokio::main(flavor = "current_thread")]
 #[test]
 async fn test_identities_get_by_and_find_by_helpers() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let org_id = Uuid::new_v4();
 
     Account::register(&ctx)
@@ -171,7 +171,7 @@ async fn test_identities_get_by_and_find_by_helpers() {
 #[tokio::main(flavor = "current_thread")]
 #[test]
 async fn test_upsert_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let org = Uuid::new_v4();
 
     // 1. Initial upsert (row does not exist yet -> creates row)
@@ -244,7 +244,7 @@ async fn test_identities_and_upsert_in_sqlite() {
     db.install_resources(&[&Account::DEF])
         .await
         .expect("install schema");
-    let ctx = Context::new(db);
+    let ctx = ash_core::Runtime::new(db).bootstrap();
     let org = Uuid::new_v4();
 
     // 1. Create account in sqlite
@@ -360,7 +360,7 @@ mod nullable {
 async fn memory_identities_follow_nulls_and_skip_partial_predicates() {
     use nullable::Handle;
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // NULLS NOT DISTINCT: a second null nickname collides with the first.
     Handle::create(&ctx)
@@ -427,10 +427,11 @@ async fn memory_updates_check_only_the_identities_they_change() {
     let (second, second_row) = row("shared@example.com", "second");
     let table =
         std::collections::HashMap::from([(first.into(), first_row), (second.into(), second_row)]);
-    let ctx = Context::new(Memory::from_tables(std::collections::HashMap::from([(
+    let ctx = ash_core::Runtime::new(Memory::from_tables(std::collections::HashMap::from([(
         "Account".to_string(),
         table,
-    )])));
+    )])))
+    .bootstrap();
 
     let account = Account::get(&ctx, first).await.unwrap();
     let renamed = account

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ash_core::{Context, Resource, resource};
+use ash_core::{Resource, resource};
 use ash_graphql::AshGraphQL;
 use ash_graphql::axum::{RequestData, SubscriptionHub};
 use ash_memory::Memory;
@@ -40,7 +40,7 @@ resource! {
 }
 
 /// The tenant is the `x-org` header.
-struct ByOrg(Context<Memory>);
+struct ByOrg(ash_core::Runtime<Memory>);
 
 impl RequestData for ByOrg {
     fn apply(
@@ -53,7 +53,7 @@ impl RequestData for ByOrg {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        (request.data(self.0.clone().with_tenant(org.clone())), org)
+        (request.data(self.0.bind(None, Some(org.clone()))), org)
     }
 }
 
@@ -114,10 +114,11 @@ async fn streams(hub: &SubscriptionHub, expected: usize) {
 #[tokio::test(flavor = "multi_thread")]
 async fn requests_run_in_the_tenant_their_headers_name() {
     let pubsub = PubSub::new();
-    let base = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let runtime = ash_core::Runtime::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let base = runtime.bootstrap();
     let (acme, globex) = (
-        base.clone().with_tenant("acme"),
-        base.clone().with_tenant("globex"),
+        runtime.bind(None, Some("acme".into())),
+        runtime.bind(None, Some("globex".into())),
     );
     let ours = Shipment::create(&acme).label("ours").await.unwrap();
     let theirs = Shipment::create(&globex).label("theirs").await.unwrap();
@@ -128,7 +129,7 @@ async fn requests_run_in_the_tenant_their_headers_name() {
         .unwrap();
     let hub = Arc::new(SubscriptionHub::default());
     let router =
-        ash_graphql::axum::graphql_router_with(schema, hub.clone(), Arc::new(ByOrg(base.clone())));
+        ash_graphql::axum::graphql_router_with(schema, hub.clone(), Arc::new(ByOrg(runtime)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });

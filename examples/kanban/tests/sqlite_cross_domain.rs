@@ -9,8 +9,10 @@ use kanban::{
 async fn test_sqlite_two_domains_and_transactions() {
     let db = Sqlite::memory().await.unwrap();
 
-    let workspaces = Workspaces::new(db.clone());
-    let kanban = Kanban::new(db);
+    let workspaces_runtime = ash_core::Runtime::new(db.clone());
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
+    let kanban_runtime = ash_core::Runtime::new(db);
+    let kanban = Kanban::from_context(kanban_runtime.bootstrap());
 
     // Install schemas for both domains into SQLite
     workspaces.install().await.unwrap();
@@ -21,7 +23,8 @@ async fn test_sqlite_two_domains_and_transactions() {
         .register_user("Alice", "alice@corp.com")
         .await
         .unwrap();
-    let as_alice_ws = workspaces.with_actor(actor_user(alice.id));
+    let as_alice_ws =
+        Workspaces::from_context(workspaces_runtime.bind(Some(actor_user(alice.id)), None));
 
     let ws_multi = workspace_with_owner_multi(
         &as_alice_ws.ctx,
@@ -34,7 +37,7 @@ async fn test_sqlite_two_domains_and_transactions() {
     let ws = ws_res.get::<kanban::Workspace>("workspace").unwrap();
 
     // 2. Create board in Kanban domain belonging to the workspace
-    let as_alice_kb = kanban.with_actor(actor_user(alice.id));
+    let as_alice_kb = Kanban::from_context(kanban_runtime.bind(Some(actor_user(alice.id)), None));
     let board_multi = board_template_multi(
         &as_alice_kb.ctx,
         ws.id,

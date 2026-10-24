@@ -6,8 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    AtomicCondition, AtomicUpdate, BulkDestroyOptions, BulkTransaction, CompiledQuery, Context,
-    DataLayer, FieldMap, ResourceDef, Result, TransactionSupport, Value, resource,
+    AtomicCondition, AtomicUpdate, BulkDestroyOptions, BulkTransaction, CompiledQuery, DataLayer,
+    FieldMap, ResourceDef, Result, TransactionSupport, Value, resource,
 };
 use ash_memory::Memory;
 use uuid::Uuid;
@@ -195,7 +195,7 @@ fn moved_on() -> FieldMap {
 #[tokio::test]
 async fn a_stale_record_keeps_its_related_records() {
     let data = Racing::new();
-    let ctx = Context::new(data.clone());
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     let entry = Entry::create(&ctx)
         .ledger_id(ledger.id)
@@ -237,7 +237,7 @@ async fn a_stale_record_is_left_out_of_a_soft_destroy() {
     ] {
         for stop_on_error in [false, true] {
             let data = Racing::new();
-            let ctx = Context::new(data.clone());
+            let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
             let stale = Ledger::create(&ctx).name("Stale").await.unwrap();
             let fresh = Ledger::create(&ctx).name("Fresh").await.unwrap();
 

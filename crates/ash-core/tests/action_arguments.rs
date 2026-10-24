@@ -1,4 +1,4 @@
-use ash_core::{AttrType, Context, Error, FieldMap, Resource, Value, resource};
+use ash_core::{AttrType, Error, FieldMap, Resource, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -35,7 +35,7 @@ actions {
 
 #[tokio::test]
 async fn test_action_arguments_success_and_set_from_arg() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Submit a refund request with required argument `reason`
     let refund = RefundRequest::submit(&ctx)
@@ -53,7 +53,7 @@ async fn test_action_arguments_success_and_set_from_arg() {
 
 #[tokio::test]
 async fn test_action_arguments_validation_failure() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Providing reason with fewer than 5 characters should fail validation
     let err = RefundRequest::submit(&ctx)
@@ -75,7 +75,7 @@ async fn test_action_arguments_validation_failure() {
 
 #[tokio::test]
 async fn test_action_arguments_on_update() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let refund = RefundRequest::submit(&ctx)
         .order_id("ORD-999")
@@ -163,7 +163,7 @@ fn test_arguments_take_their_declared_types() {
 
 #[tokio::test]
 async fn test_list_argument_reaches_the_action() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let mut item = FieldMap::new();
     item.insert("sku".into(), Value::String("A-1".into()));
     let shipment = Shipment::pack(&ctx)
@@ -212,7 +212,7 @@ use defaults::Memo;
 // a dynamic one, and a generic one.
 #[tokio::test]
 async fn arguments_take_their_defaults() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let typed = Memo::write(&ctx).body("hi").await.unwrap();
     assert_eq!(typed.label, "general");
     let given = Memo::write(&ctx).body("hi").label("work").await.unwrap();

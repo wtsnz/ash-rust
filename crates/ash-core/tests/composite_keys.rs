@@ -150,7 +150,7 @@ async fn scenario<D: DataLayer>(ctx: Context<D>) {
 
 #[tokio::test]
 async fn composite_keys_in_memory() {
-    scenario(Context::new(Memory::new())).await;
+    scenario(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -160,5 +160,5 @@ async fn composite_keys_in_sqlite() {
         .install(&[&Account::DEF, &Membership::DEF])
         .await
         .unwrap();
-    scenario(Context::new(sqlite)).await;
+    scenario(ash_core::Runtime::new(sqlite).bootstrap()).await;
 }

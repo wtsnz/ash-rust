@@ -6,7 +6,9 @@ use crate::action::{
     ActionDef, ActionKind, DynamicAfterActionHook, DynamicAfterTransactionHook, ManagedRelType,
     PersistKind,
 };
-use crate::context::Context;
+use std::sync::Arc;
+
+use crate::context::{Context, Scope};
 use crate::data_layer::DataLayer;
 use crate::engine::Cascade;
 use crate::error::{Error, Result};
@@ -37,7 +39,7 @@ pub struct DynamicChangeset {
     action: &'static ActionDef,
     fields: FieldMap,
     arguments: FieldMap,
-    pub tenant: Option<String>,
+    scope: Arc<Scope>,
     pub metadata: FieldMap,
     existing: Option<FieldMap>,
     upsert: Option<(&'static str, Vec<String>)>,
@@ -49,6 +51,7 @@ pub struct DynamicChangeset {
 
 impl DynamicChangeset {
     fn new(
+        scope: Arc<Scope>,
         resource: &'static ResourceDef,
         action: &'static ActionDef,
         fields: FieldMap,
@@ -60,7 +63,7 @@ impl DynamicChangeset {
             action,
             fields,
             arguments,
-            tenant: None,
+            scope,
             metadata: FieldMap::new(),
             existing,
             upsert: None,
@@ -71,13 +74,27 @@ impl DynamicChangeset {
         }
     }
 
+    pub fn tenant(&self) -> Option<&str> {
+        self.scope.tenant()
+    }
+
+    fn require_scope<D>(&self, ctx: &Context<D>) -> Result<()> {
+        if Arc::ptr_eq(&self.scope, &ctx.scope) {
+            Ok(())
+        } else {
+            Err(Error::Invalid(
+                "changeset belongs to a different request scope".into(),
+            ))
+        }
+    }
+
     /// Runs the action's changes, keeping the hooks they register.
     fn apply_changes<D>(&mut self, ctx: &Context<D>) -> Result<()> {
         let mut before_actions = Vec::new();
         apply_changes_with_context(
             &mut self.fields,
             self.action,
-            ctx.actor.as_ref(),
+            ctx.actor(),
             ctx.tenant(),
             ctx.metadata(),
             &self.arguments,
@@ -100,7 +117,7 @@ impl DynamicChangeset {
             self.action,
             self.existing.as_ref(),
             &self.fields,
-            ctx.actor.as_ref(),
+            ctx.actor(),
             ctx.tenant(),
             ctx.metadata(),
             &self.arguments,
@@ -108,8 +125,7 @@ impl DynamicChangeset {
     }
 
     fn with_context<D>(mut self, ctx: &Context<D>) -> Self {
-        self.tenant = ctx.tenant.clone();
-        self.metadata = ctx.metadata.clone();
+        self.metadata = ctx.metadata().clone();
         self.managed_relationships =
             extract_managed_relationships(self.resource, self.action, &self.arguments);
         self
@@ -140,7 +156,14 @@ impl DynamicChangeset {
         let (mut fields, arguments) = split_input(resource, action, input)?;
         fields.extend(forced);
         prepare_create_fields(resource, &mut fields);
-        let mut changeset = Self::new(resource, action, fields, arguments, None);
+        let mut changeset = Self::new(
+            Arc::clone(&ctx.scope),
+            resource,
+            action,
+            fields,
+            arguments,
+            None,
+        );
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), true)?;
         changeset.run_validations(ctx)?;
@@ -197,7 +220,14 @@ impl DynamicChangeset {
                 fields
             }
         };
-        let mut changeset = Self::new(resource, action, fields, arguments, existing);
+        let mut changeset = Self::new(
+            Arc::clone(&ctx.scope),
+            resource,
+            action,
+            fields,
+            arguments,
+            existing,
+        );
         if let Err(error) = changeset.apply_changes(ctx) {
             problems.push(error);
             return problems;
@@ -254,7 +284,14 @@ impl DynamicChangeset {
         fields.extend(accepted.clone());
         fields.extend(forced);
         prepare_update_fields(resource, action, &existing, &mut fields);
-        let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
+        let mut changeset = Self::new(
+            Arc::clone(&ctx.scope),
+            resource,
+            action,
+            fields,
+            arguments,
+            Some(existing),
+        );
         changeset.apply_changes(ctx)?;
         apply_tenant_to_fields(resource, &mut changeset.fields, ctx.tenant(), false)?;
         changeset.run_validations(ctx)?;
@@ -268,7 +305,11 @@ impl DynamicChangeset {
         let existing = changeset.existing.as_ref();
         for fp in resource.field_policies {
             if !accepted.contains_key(fp.field)
-                && !crate::policy::eval_policy_effects(fp.checks, ctx.actor.as_ref(), existing)?
+                && !crate::policy::eval_policy_effects(
+                    fp.checks,
+                    ctx.authorization_actor(),
+                    existing,
+                )?
             {
                 changeset.fields.remove(fp.field);
             }
@@ -299,7 +340,14 @@ impl DynamicChangeset {
         let (accepted, arguments) = crate::pipeline::split_input(resource, action, input)?;
         let mut fields = existing.clone();
         fields.extend(accepted);
-        let mut changeset = Self::new(resource, action, fields, arguments, Some(existing));
+        let mut changeset = Self::new(
+            Arc::clone(&ctx.scope),
+            resource,
+            action,
+            fields,
+            arguments,
+            Some(existing),
+        );
         changeset.apply_changes(ctx)?;
         changeset.run_validations(ctx)?;
         Ok(changeset.with_context(ctx))
@@ -434,6 +482,7 @@ impl DynamicChangeset {
     /// An empty changeset in this one's place, so a hook can take it by value.
     pub(crate) fn take(&mut self) -> Self {
         let empty = Self::new(
+            Arc::clone(&self.scope),
             self.resource,
             self.action,
             FieldMap::new(),
@@ -447,7 +496,12 @@ impl DynamicChangeset {
     /// update or destroy, as in Ash, or the new record for a create.
     pub(crate) fn authorize<D>(&self, ctx: &Context<D>) -> Result<()> {
         let record = self.existing.as_ref().unwrap_or(&self.fields);
-        authorize_write(self.resource, self.action, ctx.actor.as_ref(), Some(record))
+        authorize_write(
+            self.resource,
+            self.action,
+            ctx.authorization_actor(),
+            Some(record),
+        )
     }
 
     /// Persists the write and finishes it.
@@ -466,6 +520,7 @@ impl DynamicChangeset {
         cascade: &'a Cascade,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<FieldMap>> + Send + 'a>> {
         Box::pin(async move {
+            self.require_scope(ctx)?;
             let after_transactions = std::mem::take(&mut self.after_transactions);
             let beyond = self.writes_beyond_record();
             let work = move |ctx: Context<D>| async move {
@@ -518,7 +573,7 @@ impl DynamicChangeset {
             ActionKind::Destroy => self.action.soft,
             _ => false,
         };
-        if !updates || !ctx.data.can_update_atomically(self.resource) {
+        if !updates || !ctx.raw_data().can_update_atomically(self.resource) {
             return Ok(None);
         }
         let planned = if !self.before_actions.is_empty() {
@@ -547,13 +602,14 @@ impl DynamicChangeset {
                 self.resource,
                 self.action,
                 PlanInput {
-                    actor: ctx.actor.as_ref(),
+                    actor: ctx.actor(),
+                    authorization_actor: ctx.authorization_actor(),
                     tenant: ctx.tenant(),
                     sets: self.changes(self.fields.clone()),
                     arguments: &self.arguments,
                     expected_versions,
                     collect_hooks: false,
-                    can_raise: ctx.data.can_raise_atomically(self.resource),
+                    can_raise: ctx.raw_data().can_raise_atomically(self.resource),
                 },
             )?
         };
@@ -637,7 +693,14 @@ impl DynamicChangeset {
         mut plan: AtomicPlan,
         scope: Option<crate::filter::Filter>,
     ) -> Result<FieldMap> {
-        let mut changeset = Self::new(resource, action, FieldMap::new(), arguments, None);
+        let mut changeset = Self::new(
+            Arc::clone(&ctx.scope),
+            resource,
+            action,
+            FieldMap::new(),
+            arguments,
+            None,
+        );
         changeset.after_actions = std::mem::take(&mut plan.after_actions);
         let guards = plan.guards.filter();
         let guarding = plan.guards.clone();
@@ -719,6 +782,7 @@ impl DynamicChangeset {
     /// write policy, managed `belongs_to` records, and the tenant. Returns the record's
     /// primary key.
     pub(crate) async fn prepare<D: DataLayer>(&mut self, ctx: &Context<D>) -> Result<Value> {
+        self.require_scope(ctx)?;
         for hook in std::mem::take(&mut self.before_actions) {
             hook(self)?;
         }
@@ -789,12 +853,12 @@ impl DynamicChangeset {
                 if rel.destination_columns() == [dest_pk] {
                     child_fields
                 } else {
-                    ctx.data
+                    ctx.raw_data()
                         .run_query(
                             dest_def,
                             &crate::data_layer::CompiledQuery {
                                 filter: Some(crate::filter::Filter::eq(dest_pk, cid)),
-                                tenant: ctx.tenant.clone(),
+                                tenant: ctx.tenant().map(str::to_owned),
                                 ..crate::data_layer::CompiledQuery::default()
                             },
                         )
@@ -809,8 +873,8 @@ impl DynamicChangeset {
             } else {
                 generate_pk(dest_def, &mut child_fields);
                 let cid = required_pk(&child_fields, dest_pk)?;
-                ctx.data
-                    .create(dest_def, ctx.tenant.as_deref(), cid, child_fields)
+                ctx.raw_data()
+                    .create(dest_def, ctx.tenant(), cid, child_fields)
                     .await?
             };
             for (source, destination) in rel.key_pairs() {
@@ -853,10 +917,10 @@ impl DynamicChangeset {
             ActionKind::Create => match &self.upsert {
                 Some((identity_name, update_fields)) => {
                     let identity = upsert_identity(self.resource, identity_name)?;
-                    ctx.data
+                    ctx.raw_data()
                         .upsert(
                             self.resource,
-                            ctx.tenant.as_deref(),
+                            ctx.tenant(),
                             id,
                             fields,
                             identity,
@@ -865,8 +929,8 @@ impl DynamicChangeset {
                         .await
                 }
                 None => {
-                    ctx.data
-                        .create(self.resource, ctx.tenant.as_deref(), id, fields)
+                    ctx.raw_data()
+                        .create(self.resource, ctx.tenant(), id, fields)
                         .await
                 }
             },
@@ -926,8 +990,8 @@ impl DynamicChangeset {
         {
             if self.action.kind == ActionKind::Create {
                 let _ = ctx
-                    .data
-                    .destroy(self.resource, ctx.tenant.as_deref(), id)
+                    .raw_data()
+                    .destroy(self.resource, ctx.tenant(), id)
                     .await;
             }
             return Err(err);
@@ -941,7 +1005,7 @@ impl DynamicChangeset {
         // subscriber reads it through its own field policies. Only what the writer gets
         // back is redacted for the writer.
         if notify {
-            let mut metadata = ctx.metadata.clone();
+            let mut metadata = ctx.metadata().clone();
             metadata.extend(self.metadata.clone());
             metadata.extend(self.arguments.clone());
             let notification = crate::notifier::Notification::new(
@@ -951,13 +1015,13 @@ impl DynamicChangeset {
                 id,
                 stored.clone(),
                 self.existing.clone(),
-                ctx.actor.clone(),
+                ctx.actor().cloned(),
                 metadata,
             )
-            .with_tenant(self.tenant.clone().or_else(|| ctx.tenant.clone()));
+            .with_tenant(ctx.tenant().map(str::to_owned));
             crate::notifier::dispatch_notification(ctx, self.resource, notification).await?;
         }
-        crate::policy::redact_fields(self.resource, ctx.actor.as_ref(), &mut stored)?;
+        crate::policy::redact_fields(self.resource, ctx.authorization_actor(), &mut stored)?;
         Ok(stored)
     }
 }

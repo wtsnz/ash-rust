@@ -57,17 +57,7 @@ impl<R: Resource> Changeset<R> {
     }
 
     pub fn tenant(&self) -> Option<&str> {
-        self.inner.tenant.as_deref()
-    }
-
-    pub fn with_tenant(mut self, tenant: impl Into<String>) -> Self {
-        self.inner.tenant = Some(tenant.into());
-        self
-    }
-
-    pub fn without_tenant(mut self) -> Self {
-        self.inner.tenant = None;
-        self
+        self.inner.tenant()
     }
 
     pub fn metadata(&self) -> &FieldMap {

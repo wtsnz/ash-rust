@@ -6,7 +6,8 @@ use kanban::{Workspace, Workspaces, actor_user, workspace_with_owner_multi};
 #[tokio::test]
 async fn test_workspace_creation_and_membership_aggregates() {
     let mem = Memory::new();
-    let workspaces = Workspaces::new(mem);
+    let workspaces_runtime = ash_core::Runtime::new(mem);
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
 
     // 1. Register users
     let alice = workspaces
@@ -22,7 +23,8 @@ async fn test_workspace_creation_and_membership_aggregates() {
         .await
         .unwrap();
 
-    let as_alice = workspaces.with_actor(actor_user(alice.id));
+    let as_alice =
+        Workspaces::from_context(workspaces_runtime.bind(Some(actor_user(alice.id)), None));
 
     // 2. Atomic workspace + owner enrollment
     let multi =
@@ -64,13 +66,15 @@ async fn test_workspace_creation_and_membership_aggregates() {
 #[tokio::test]
 async fn test_workspace_member_role_validation() {
     let mem = Memory::new();
-    let workspaces = Workspaces::new(mem);
+    let workspaces_runtime = ash_core::Runtime::new(mem);
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
 
     let alice = workspaces
         .register_user("Alice", "alice@test.com")
         .await
         .unwrap();
-    let as_alice = workspaces.with_actor(actor_user(alice.id));
+    let as_alice =
+        Workspaces::from_context(workspaces_runtime.bind(Some(actor_user(alice.id)), None));
 
     let ws = as_alice
         .create_workspace("Engineering", "eng")

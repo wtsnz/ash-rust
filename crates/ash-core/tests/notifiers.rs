@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use ash_core::{
-    ActionKind, Context, Multi, Notification, Resource, SchemaSupport, SyncFnNotifier, resource,
+    ActionKind, Multi, Notification, Resource, SchemaSupport, SyncFnNotifier, resource,
 };
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
@@ -64,7 +64,9 @@ async fn test_standalone_crud_notifications() {
         Ok(())
     }));
 
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     // 1. Create action
     let order = Order::create(&ctx)
@@ -130,7 +132,9 @@ async fn test_multi_atomic_rollback_discards_notifications_in_memory() {
         Ok(())
     }));
 
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     let cs1 = Order::create(&ctx)
         .customer("Charlie")
@@ -173,7 +177,9 @@ async fn test_multi_success_dispatches_all_notifications_in_sqlite() {
         Ok(())
     }));
 
-    let ctx = Context::new(sqlite).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(sqlite)
+        .bootstrap()
+        .with_notifier(notifier);
 
     let cs1 = Order::create(&ctx)
         .customer("Elena")

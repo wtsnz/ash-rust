@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    CompiledQuery, Context, DataLayer, Error, FieldMap, HasStore, IdentityDef, Resource,
-    ResourceDef, SchemaSupport, StoreRegistry, StoreTag, resource,
+    CompiledQuery, DataLayer, Error, FieldMap, HasStore, IdentityDef, Resource, ResourceDef,
+    SchemaSupport, StoreRegistry, StoreTag, resource,
 };
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
@@ -99,7 +99,7 @@ async fn test_multi_instance_sqlite_routing() {
         .with_schema_support(primary_sqlite.clone())
         .with_schema_support(audit_sqlite.clone());
 
-    let ctx = Context::new(registry);
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
 
     // Invariant 1: Resource metadata contains StoreTag reflection
     assert_eq!(Customer::DEF.store_name(), "PrimaryDb");
@@ -122,14 +122,15 @@ async fn test_multi_instance_sqlite_routing() {
     assert_eq!(loaded[0].id, cust.id);
 
     // Direct check on primary db
-    let direct_customers = Customer::query(&Context::new(primary_sqlite.clone()))
-        .all()
-        .await
-        .unwrap();
+    let direct_customers =
+        Customer::query(&ash_core::Runtime::new(primary_sqlite.clone()).bootstrap())
+            .all()
+            .await
+            .unwrap();
     assert_eq!(direct_customers.len(), 1);
 
     // Audit db does NOT contain customers table
-    let audit_query = Customer::query(&Context::new(audit_sqlite.clone()))
+    let audit_query = Customer::query(&ash_core::Runtime::new(audit_sqlite.clone()).bootstrap())
         .all()
         .await;
     assert!(
@@ -146,15 +147,16 @@ async fn test_multi_instance_sqlite_routing() {
 
     assert_eq!(audit.action, "CustomerCreated");
 
-    let direct_audits = AuditLog::query(&Context::new(audit_sqlite.clone()))
+    let direct_audits = AuditLog::query(&ash_core::Runtime::new(audit_sqlite.clone()).bootstrap())
         .all()
         .await
         .unwrap();
     assert_eq!(direct_audits.len(), 1);
 
-    let primary_query = AuditLog::query(&Context::new(primary_sqlite.clone()))
-        .all()
-        .await;
+    let primary_query =
+        AuditLog::query(&ash_core::Runtime::new(primary_sqlite.clone()).bootstrap())
+            .all()
+            .await;
     assert!(
         primary_query.is_err(),
         "AuditLog table should not exist in primary db"
@@ -253,7 +255,7 @@ async fn test_mixed_sqlite_and_memory_store_routing() {
         .with_store::<PersistentStore, _>(sqlite)
         .with_store::<EphemeralStore, _>(memory);
 
-    let ctx = Context::new(registry);
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
 
     let account = Account::create(&ctx)
         .username("charlie")
@@ -384,7 +386,7 @@ pub use kv_res::KeyValueItem;
 async fn test_third_party_external_data_layer_mock() {
     let kv_store = MockKeyValueLayer::default();
     let registry = StoreRegistry::new().with_store::<KeyValueDb, _>(kv_store.clone());
-    let ctx = Context::new(registry);
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
 
     let item = KeyValueItem::create(&ctx)
         .key("api_key")
@@ -439,7 +441,7 @@ pub use orphan_res::Orphan;
 async fn test_missing_store_diagnostic_error() {
     // Registry without UnregisteredDb and without default
     let registry = StoreRegistry::new().with_store::<PrimaryDb, _>(Memory::new());
-    let ctx = Context::new(registry);
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
 
     let err = Orphan::create(&ctx)
         .name("lonely")
@@ -487,7 +489,7 @@ pub use default_res::DefaultTarget;
 async fn test_fallback_to_default_store() {
     let memory = Memory::new();
     let registry = StoreRegistry::new().with_default(memory);
-    let ctx = Context::new(registry);
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
 
     assert_eq!(DefaultTarget::DEF.store_name(), "DefaultStore");
 

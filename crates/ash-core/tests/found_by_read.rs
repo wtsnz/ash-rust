@@ -3,7 +3,7 @@
 //! input, its arguments for its changes and validations.
 
 use ash_core::{
-    Context, DataLayer, Error, FieldMap, Resource, Value, destroy_dynamic_via, update_dynamic,
+    DataLayer, Error, FieldMap, Resource, Value, destroy_dynamic_via, update_dynamic,
     update_dynamic_via,
 };
 use ash_memory::Memory;
@@ -51,7 +51,7 @@ fn input(pairs: &[(&str, Value)]) -> FieldMap {
 }
 
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let def = &Ticket::DEF;
     let action = |name: &str| def.action(name).unwrap();
     let archived = Ticket::create(&ctx)

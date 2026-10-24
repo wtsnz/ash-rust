@@ -32,7 +32,8 @@ struct Served<D> {
 
 /// The Phoenix socket for `rpc` at `/socket/websocket`, each connection running in the
 /// context `context` makes of its headers and params, as an `AshTypescriptRpcChannel`
-/// runs actions as its socket's actor and tenant.
+/// runs actions as its socket's actor and tenant. Bind the context through Runtime
+/// in trusted connection setup; channel payloads cannot replace that scope.
 pub fn rpc_channel_router<D: TransactionSupport + 'static>(
     rpc: Rpc<D>,
     context: impl Fn(&HeaderMap, &HashMap<String, String>) -> Context<D> + Send + Sync + 'static,

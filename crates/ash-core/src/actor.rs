@@ -8,6 +8,7 @@ use crate::value::{ConstValue, Value};
 pub struct Actor {
     pub id: Uuid,
     attributes: HashMap<String, Value>,
+    system: bool,
 }
 
 impl Actor {
@@ -15,7 +16,29 @@ impl Actor {
         Self {
             id,
             attributes: HashMap::new(),
+            system: false,
         }
+    }
+
+    pub(crate) fn system() -> Self {
+        Self {
+            system: true,
+            ..Self::new(Uuid::nil())
+        }
+    }
+
+    pub(crate) fn into_request_actor(mut self) -> Self {
+        self.system = false;
+        self
+    }
+
+    pub(crate) fn into_system(mut self) -> Self {
+        self.system = true;
+        self
+    }
+
+    pub(crate) fn is_system(&self) -> bool {
+        self.system
     }
 
     pub fn with(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {

@@ -1,7 +1,7 @@
 //! Auth tests that encode the behavior we want. They fail on the current crate.
 
 use ash_authentication::{AuthError, authentication};
-use ash_core::{Context, Result};
+use ash_core::Result;
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -40,7 +40,8 @@ actions {
 
 #[tokio::test]
 async fn unconfirmed_user_cannot_sign_in() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
     User::register_with_password(&ctx)
         .email("unconfirmed@example.com")
@@ -49,7 +50,7 @@ async fn unconfirmed_user_cannot_sign_in() -> Result<()> {
         .await
         .expect("register");
 
-    let err = User::auth_strategy()
+    let err = User::auth_strategy(&ctx_runtime)
         .sign_in_with_password(&ctx, "unconfirmed@example.com", "strong-password-123")
         .await
         .expect_err("prevent_unconfirmed_sign_in is true and confirmed_at is unset");
@@ -66,7 +67,7 @@ mod http {
     use std::sync::Arc;
 
     use ash_authentication::{JwtService, auth_router};
-    use ash_core::{Context, DataLayer, Resource, Result, Value};
+    use ash_core::{DataLayer, Resource, Result, Value};
     use ash_memory::Memory;
     use axum::Router;
     use axum::http::StatusCode;
@@ -86,8 +87,11 @@ mod http {
         }
     }
 
-    async fn app() -> (Router, Context<Memory>, Arc<JwtService>) {
-        let ctx = Context::new(Memory::new());
+    // This regression deliberately inspects or mutates raw backend state.
+    #[allow(deprecated)]
+    async fn app() -> (Router, ash_core::Runtime<Memory>, Arc<JwtService>) {
+        let ctx_runtime = ash_core::Runtime::new(Memory::new());
+        let ctx = ctx_runtime.bootstrap();
         let jwt = Arc::new(JwtService::new(
             "repro-auth-gaps-secret-key-at-least-32-bytes",
         ));
@@ -107,12 +111,12 @@ mod http {
             .await
             .expect("mark fixture user confirmed so HTTP tests can sign in");
 
-        let strategy = User::auth_strategy();
+        let strategy = User::auth_strategy(&ctx_runtime);
         let routes = auth_router(strategy, jwt.clone(), ctx.clone());
         let router = Router::new()
             .nest("/auth", routes)
             .with_state(AppState { jwt: jwt.clone() });
-        (router, ctx, jwt)
+        (router, ctx_runtime, jwt)
     }
 
     async fn json_body(res: axum::http::Response<axum::body::Body>) -> serde_json::Value {
@@ -148,8 +152,9 @@ mod http {
 
     #[tokio::test]
     async fn refresh_token_is_rejected_as_bearer() -> Result<()> {
-        let (app, ctx, jwt) = app().await;
-        let (_user, pair) = User::auth_strategy()
+        let (app, ctx_runtime, jwt) = app().await;
+        let ctx = ctx_runtime.bootstrap();
+        let (_user, pair) = User::auth_strategy(&ctx_runtime)
             .with_jwt_service((*jwt).clone())
             .sign_in_with_password_and_token_pair(&ctx, "will@example.com", "correct-horse-battery")
             .await

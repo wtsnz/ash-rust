@@ -287,9 +287,9 @@ async fn null_and_many_versions<D: TransactionSupport + Clone + 'static>(ctx: Co
 
 #[tokio::test]
 async fn optimistic_locks_in_memory() {
-    scenario(Context::new(Memory::new())).await;
-    the_increment_is_set_last(Context::new(Memory::new())).await;
-    null_and_many_versions(Context::new(Memory::new())).await;
+    scenario(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    the_increment_is_set_last(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    null_and_many_versions(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -299,7 +299,7 @@ async fn optimistic_locks_in_sqlite() {
         .install(&[&BankAccount::DEF, &Draft::DEF])
         .await
         .unwrap();
-    scenario(Context::new(sqlite.clone())).await;
-    the_increment_is_set_last(Context::new(sqlite.clone())).await;
-    null_and_many_versions(Context::new(sqlite)).await;
+    scenario(ash_core::Runtime::new(sqlite.clone()).bootstrap()).await;
+    the_increment_is_set_last(ash_core::Runtime::new(sqlite.clone()).bootstrap()).await;
+    null_and_many_versions(ash_core::Runtime::new(sqlite).bootstrap()).await;
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 #[cfg(feature = "axum")]
 use ash_authentication::{AuthUser, auth_router};
 use ash_authentication::{JwtService, authentication};
-use ash_core::{Context, Resource, Result, Value};
+use ash_core::{Resource, Result, Value};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -47,7 +47,8 @@ actions {
 
 #[tokio::test]
 async fn test_declarative_authentication_registration_and_sign_in() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
     // Verify AuthenticationDef was injected into resource extensions
     let ext = User::DEF
@@ -70,7 +71,7 @@ async fn test_declarative_authentication_registration_and_sign_in() -> Result<()
     assert!(hash.starts_with("$argon2id$"));
 
     // 2. Test successful sign in with password strategy
-    let strategy = User::auth_strategy();
+    let strategy = User::auth_strategy(&ctx_runtime);
     let auth_user = strategy
         .sign_in_with_password(&ctx, "alice@example.com", "super-secret-password-123")
         .await
@@ -104,9 +105,10 @@ async fn test_declarative_authentication_registration_and_sign_in() -> Result<()
 
 #[tokio::test]
 async fn test_api_key_authentication() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
 
-    let strategy = User::auth_strategy();
+    let strategy = User::auth_strategy(&ctx_runtime);
     let api_key_service = ash_authentication::ApiKeyService::new("ash_test_");
     let (raw_key, key_hash) = api_key_service.generate_api_key();
 
@@ -148,7 +150,8 @@ async fn test_axum_auth_router_and_auth_user_extractor() -> Result<()> {
     use serde_json::json;
     use tower::ServiceExt;
 
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = Arc::new(JwtService::new(
         "test-super-secret-signing-key-for-jwt-tokens-123456",
     ));
@@ -161,7 +164,7 @@ async fn test_axum_auth_router_and_auth_user_extractor() -> Result<()> {
         .await
         .expect("web user registration should succeed");
 
-    let strategy = User::auth_strategy();
+    let strategy = User::auth_strategy(&ctx_runtime);
 
     // App state holding JwtService for extractor
     #[derive(Clone)]
@@ -280,9 +283,10 @@ async fn test_axum_auth_router_and_auth_user_extractor() -> Result<()> {
 
 #[tokio::test]
 async fn test_token_pair_and_database_token_store_rotation() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = JwtService::new("test-super-secret-rotation-key-1234567890");
-    let strategy = User::auth_strategy().with_jwt_service(jwt_service);
+    let strategy = User::auth_strategy(&ctx_runtime).with_jwt_service(jwt_service);
 
     let _user: User = User::register_with_password(&ctx)
         .email("rotation_user@example.com")
@@ -332,9 +336,10 @@ async fn test_token_pair_and_database_token_store_rotation() -> Result<()> {
 
 #[tokio::test]
 async fn test_change_password_and_session_invalidation() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = JwtService::new("test-super-secret-password-change-key-123");
-    let strategy = User::auth_strategy().with_jwt_service(jwt_service);
+    let strategy = User::auth_strategy(&ctx_runtime).with_jwt_service(jwt_service);
 
     let user: User = User::register_with_password(&ctx)
         .email("pwd_change@example.com")
@@ -409,9 +414,10 @@ async fn test_change_password_and_session_invalidation() -> Result<()> {
 
 #[tokio::test]
 async fn test_password_reset_flow() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = JwtService::new("test-super-secret-password-reset-key-123");
-    let strategy = User::auth_strategy().with_jwt_service(jwt_service);
+    let strategy = User::auth_strategy(&ctx_runtime).with_jwt_service(jwt_service);
 
     let user: User = User::register_with_password(&ctx)
         .email("reset_user@example.com")
@@ -474,7 +480,8 @@ async fn test_password_reset_flow() -> Result<()> {
 
 #[tokio::test]
 async fn test_database_token_store_prune_expired() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let store = ash_authentication::DatabaseTokenStore::new(ctx.clone());
 
     let user_id = Uuid::new_v4();
@@ -523,9 +530,10 @@ async fn test_sqlite_database_token_store_and_rotation() -> Result<()> {
     db.install(&[&User::DEF, &ash_authentication::AshToken::DEF])
         .await?;
 
-    let ctx = Context::new(db);
+    let ctx_runtime = ash_core::Runtime::new(db);
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = JwtService::new("test-super-secret-sqlite-jwt-key-1234567890");
-    let strategy = User::auth_strategy().with_jwt_service(jwt_service);
+    let strategy = User::auth_strategy(&ctx_runtime).with_jwt_service(jwt_service);
 
     let _user: User = User::register_with_password(&ctx)
         .email("sqlite_user@example.com")
@@ -565,7 +573,8 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
     use serde_json::json;
     use tower::ServiceExt;
 
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = Arc::new(JwtService::new(
         "test-super-secret-lifecycle-jwt-key-1234567890",
     ));
@@ -578,7 +587,7 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         .await
         .expect("user registration should succeed");
 
-    let strategy = User::auth_strategy();
+    let strategy = User::auth_strategy(&ctx_runtime);
 
     #[derive(Clone)]
     struct AppState {
@@ -714,7 +723,7 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
         reset_req_val.get("reset_token").is_none(),
         "reset token must not be returned over HTTP: {reset_req_val}"
     );
-    let (_user, reset_token) = User::auth_strategy()
+    let (_user, reset_token) = User::auth_strategy(&ctx_runtime)
         .with_jwt_service((*jwt_service).clone())
         .request_password_reset(&ctx, "lifecycle_user@example.com")
         .await

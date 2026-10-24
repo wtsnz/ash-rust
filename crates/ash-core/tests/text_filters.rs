@@ -56,10 +56,10 @@ async fn names<D: DataLayer>(ctx: &Context<D>, filter: Filter) -> Vec<String> {
 
 #[tokio::test]
 async fn text_filters_match_in_memory_and_sqlite() {
-    let mem_ctx = Context::new(Memory::new());
+    let mem_ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Contact::DEF]).await.unwrap();
-    let sql_ctx = Context::new(sqlite);
+    let sql_ctx = ash_core::Runtime::new(sqlite).bootstrap();
     seed(&mem_ctx).await;
     seed(&sql_ctx).await;
 

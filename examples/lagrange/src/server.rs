@@ -136,11 +136,10 @@ where
     if let Some(role) = claims.role {
         actor = actor.with_role(role);
     }
-    let mut ctx = ctx.with_actor(actor);
-    if let Some(line) = claims.tenant {
-        ctx = ctx.with_tenant(line);
-    }
-    Ok(ctx)
+    Ok(state
+        .app
+        .registry_runtime()
+        .bind(Some(actor), claims.tenant))
 }
 
 async fn graphql<D>(

@@ -55,7 +55,9 @@ impl<D: FleetDb> Harness<D> {
 
     /// The customs officer, inspecting cargo of `line`.
     pub fn customs(&self, line: &str) -> Context<D> {
-        self.ctx["Chen"].clone().with_tenant(line)
+        self.app
+            .runtime()
+            .bind(self.ctx["Chen"].actor().cloned(), Some(line.into()))
     }
 }
 

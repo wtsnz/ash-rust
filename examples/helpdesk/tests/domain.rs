@@ -16,13 +16,15 @@ async fn domain_metadata_and_validation() {
     assert!(HELPDESK_DEF.validate().is_ok());
     assert_eq!(HELPDESK_DEF.resources.len(), 2);
 
-    let desk = Helpdesk::new(Memory::new());
+    let desk_runtime = ash_core::Runtime::new(Memory::new());
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     assert_eq!(desk.def().name, "Helpdesk");
 }
 
 #[tokio::test]
 async fn domain_code_interfaces_and_lifecycle() {
-    let desk = Helpdesk::new(Memory::new());
+    let desk_runtime = ash_core::Runtime::new(Memory::new());
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
 
     // 1. Code interface: create_representative
     let rep = desk.create_representative("Support Tech").await.unwrap();
@@ -34,8 +36,10 @@ async fn domain_code_interfaces_and_lifecycle() {
 
     // 3. Actors on domain
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
-    let as_rep = desk.with_actor(actor_representative(rep.id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
+    let as_rep =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(rep.id)), None));
 
     // 4. Code interface: open_ticket
     let ticket = as_customer
@@ -69,11 +73,13 @@ async fn domain_code_interfaces_and_lifecycle() {
 
 #[tokio::test]
 async fn domain_deref_to_context() {
-    let desk = Helpdesk::new(Memory::new());
+    let desk_runtime = ash_core::Runtime::new(Memory::new());
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     let rep = desk.create_representative("Bob").await.unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     // &as_customer derefs to &Context<Memory>!
     let ticket = Ticket::open(&as_customer)
@@ -81,7 +87,8 @@ async fn domain_deref_to_context() {
         .await
         .unwrap();
 
-    let as_bob = desk.with_actor(actor_representative(rep.id));
+    let as_bob =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(rep.id)), None));
     let assigned = ticket
         .assign(&as_bob)
         .representative_id(rep.id)
@@ -92,7 +99,8 @@ async fn domain_deref_to_context() {
 
 #[tokio::test]
 async fn domain_default_resource_queries() {
-    let desk = Helpdesk::new(Memory::new());
+    let desk_runtime = ash_core::Runtime::new(Memory::new());
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     desk.create_representative("Alice").await.unwrap();
     desk.create_representative("Bob").await.unwrap();
 
@@ -101,7 +109,8 @@ async fn domain_default_resource_queries() {
     assert_eq!(reps.len(), 2);
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
     as_customer.open_ticket("First").await.unwrap();
     as_customer.open_ticket("Second").await.unwrap();
 
@@ -111,7 +120,8 @@ async fn domain_default_resource_queries() {
 
 #[tokio::test]
 async fn domain_generic_methods() {
-    let desk = Helpdesk::new(Memory::new());
+    let desk_runtime = ash_core::Runtime::new(Memory::new());
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     let rep = desk.create_representative("Charlie").await.unwrap();
 
     // Generic get on domain
@@ -126,7 +136,8 @@ async fn domain_generic_methods() {
 #[tokio::test]
 async fn domain_install_with_schema_support() {
     let sqlite = Sqlite::memory().await.unwrap();
-    let desk = Helpdesk::new(sqlite);
+    let desk_runtime = ash_core::Runtime::new(sqlite);
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
 
     // Installs all domain resources at once via SchemaSupport
     desk.install().await.unwrap();
@@ -135,7 +146,8 @@ async fn domain_install_with_schema_support() {
     assert_eq!(rep.name, "Dave");
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
     let ticket = as_customer.open_ticket("Screen flickers").await.unwrap();
     assert_eq!(ticket.subject, "Screen flickers");
 }

@@ -257,9 +257,9 @@ impl AshGraphQLBuilder {
         if has_subscriptions {
             builder = builder.register(subscription);
         }
-        if self.dataloader_enabled {
-            builder = builder.extension(crate::request::RequestDataLoader::<D>::new());
-        }
+        builder = builder.extension(crate::request::RequestDataLoader::<D>::new(
+            self.dataloader_enabled,
+        ));
         if let Some(ctx) = default_ctx {
             builder = builder.data(ctx);
         }

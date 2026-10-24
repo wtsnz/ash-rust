@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    ActionKind, BulkDestroyOptions, Context, CustomValidation, Error, FieldMap, Notification,
-    Resource, Result, SyncFnNotifier, ValidationContext, Value, create_dynamic, resource,
+    ActionKind, BulkDestroyOptions, CustomValidation, Error, FieldMap, Notification, Resource,
+    Result, SyncFnNotifier, ValidationContext, Value, create_dynamic, resource,
 };
 use ash_memory::Memory;
 use uuid::Uuid;
@@ -181,7 +181,7 @@ use vault::VaultItem;
 
 #[tokio::test]
 async fn create_dynamic_runs_action_changes() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let via_builder = Task::create(&ctx)
         .title("typed path")
@@ -211,7 +211,7 @@ async fn create_dynamic_runs_action_changes() {
 
 #[tokio::test]
 async fn before_action_is_revalidated_before_persist() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let err = draft::Draft::create(&ctx)
         .title("valid at construction")
@@ -226,7 +226,7 @@ async fn before_action_is_revalidated_before_persist() {
 
 #[tokio::test]
 async fn destroy_by_id_runs_action_validations() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let item = VaultItem::create(&ctx)
         .name("secrets")
@@ -250,8 +250,8 @@ async fn destroy_by_id_runs_action_validations() {
 #[tokio::test]
 async fn count_is_scoped_to_tenant() {
     let mem = Memory::new();
-    let alpha = Context::new(mem.clone()).with_tenant("org_alpha");
-    let beta = Context::new(mem).with_tenant("org_beta");
+    let alpha = ash_core::Runtime::new(mem.clone()).bind(None, Some(("org_alpha").into()));
+    let beta = ash_core::Runtime::new(mem).bind(None, Some(("org_beta").into()));
 
     TenantNote::create(&alpha).title("alpha-1").await.unwrap();
     TenantNote::create(&alpha).title("alpha-2").await.unwrap();
@@ -273,8 +273,8 @@ async fn count_is_scoped_to_tenant() {
 #[tokio::test]
 async fn bulk_destroy_does_not_delete_other_tenants_by_id() {
     let mem = Memory::new();
-    let alpha = Context::new(mem.clone()).with_tenant("org_alpha");
-    let beta = Context::new(mem).with_tenant("org_beta");
+    let alpha = ash_core::Runtime::new(mem.clone()).bind(None, Some(("org_alpha").into()));
+    let beta = ash_core::Runtime::new(mem).bind(None, Some(("org_beta").into()));
 
     let foreign = TenantNote::create(&beta)
         .title("beta-secret")
@@ -309,7 +309,9 @@ async fn context_transaction_does_not_notify_on_rollback() {
         Ok(())
     }));
 
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     let failed = ctx
         .transaction(|tx| async move {

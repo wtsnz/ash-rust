@@ -1,4 +1,4 @@
-use ash_core::{ActionDef, ArgumentDef, AttrType, AttributeDef, Context, ResourceDef};
+use ash_core::{ActionDef, ArgumentDef, AttrType, AttributeDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -65,7 +65,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
 #[tokio::test]
 async fn test_phase4_create_update_destroy_mutations_and_errors() {
     let memory = Memory::new();
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()

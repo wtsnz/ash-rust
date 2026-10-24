@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ash_core::{Context, Error, FieldMap, Value, get_metadata, put_metadata, resource};
+use ash_core::{Error, FieldMap, Value, get_metadata, put_metadata, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -45,7 +45,7 @@ fn count_books(arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Resu
 
 #[tokio::test]
 async fn a_read_runs_its_after_action_on_what_it_found() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     Book::create(&ctx).title("one").await.unwrap();
     Book::create(&ctx).title("two").await.unwrap();
 

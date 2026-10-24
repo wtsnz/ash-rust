@@ -124,7 +124,8 @@ pub async fn load_related_query<D: DataLayer>(
             let read = related_read(ctx, dest, None, &query.reading(&columns))?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
             let by = PerKey::Attribute(columns[0]);
-            if columns.len() == 1 && paged(&read) && ctx.data.can_run_query_per_key(dest, &by) {
+            if columns.len() == 1 && paged(&read) && ctx.raw_data().can_run_query_per_key(dest, &by)
+            {
                 let per_key = read_per_key(ctx, dest, &read, &by, &first_values).await?;
                 for (value, rows) in first_values.into_iter().zip(per_key) {
                     groups.insert(vec![value], rows);
@@ -191,7 +192,7 @@ pub async fn load_related_query<D: DataLayer>(
                 destination: dest_on_join,
                 attribute: rel.destination_attribute,
             };
-            if paged(&read) && ctx.data.can_run_query_per_key(dest, &by) {
+            if paged(&read) && ctx.raw_data().can_run_query_per_key(dest, &by) {
                 let per_key = read_per_key(ctx, dest, &read, &by, &source_ids).await?;
                 for (value, rows) in source_ids.into_iter().zip(per_key) {
                     groups.insert(vec![value], rows);
@@ -269,7 +270,7 @@ pub async fn count_related_query<D: DataLayer>(
     let linkable = |columns: &[&str]| -> Result<CompiledQuery> {
         let mut base = unpaged(related_read(ctx, dest, None, &shape)?);
         if let Some(readable) =
-            crate::policy::readable_condition(dest, columns, ctx.actor.as_ref())?
+            crate::policy::readable_condition(dest, columns, ctx.authorization_actor())?
         {
             base.filter = Some(Filter::and(
                 base.filter.take().into_iter().chain([readable]),
@@ -298,7 +299,7 @@ pub async fn count_related_query<D: DataLayer>(
                 let mut read = base.clone();
                 let link = rel.destination_filter(source).expect("a present key links");
                 read.filter = Some(Filter::and(read.filter.take().into_iter().chain([link])));
-                counts.insert(key, ctx.data.count(dest, &read).await?);
+                counts.insert(key, ctx.raw_data().count(dest, &read).await?);
             }
             Ok(keys
                 .into_iter()
@@ -361,7 +362,7 @@ pub async fn count_related_query<D: DataLayer>(
                     ids.iter().cloned().collect(),
                 );
                 read.filter = Some(Filter::and(read.filter.take().into_iter().chain([among])));
-                counts.insert(source_id.clone(), ctx.data.count(dest, &read).await?);
+                counts.insert(source_id.clone(), ctx.raw_data().count(dest, &read).await?);
             }
             Ok(keys
                 .into_iter()
@@ -422,9 +423,12 @@ async fn read_per_key<D: DataLayer>(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let mut per_key = ctx.data.run_query_per_key(dest, read, by, keys).await?;
+    let mut per_key = ctx
+        .raw_data()
+        .run_query_per_key(dest, read, by, keys)
+        .await?;
     for row in per_key.iter_mut().flatten() {
-        crate::policy::redact_fields(dest, ctx.actor.as_ref(), row)?;
+        crate::policy::redact_fields(dest, ctx.authorization_actor(), row)?;
     }
     Ok(per_key)
 }
@@ -461,7 +465,7 @@ fn related_read<D>(
     super::read::scope_read(
         dest,
         dest.default_read(),
-        ctx.actor.as_ref(),
+        ctx.authorization_actor(),
         &FieldMap::new(),
         CompiledQuery {
             filter: match Filter::and([filter, shape.filter.clone()].into_iter().flatten()) {
@@ -475,7 +479,7 @@ fn related_read<D>(
             aggregates: shape.aggregates.clone(),
             calculations: shape.calculations.clone(),
             calculation_args: shape.calculation_args.clone(),
-            tenant: ctx.tenant.clone(),
+            tenant: ctx.tenant().map(str::to_owned),
             ..CompiledQuery::default()
         },
     )
@@ -503,9 +507,9 @@ async fn read_batch<D: DataLayer>(
         Some(filter) => Filter::and([by_key, filter]),
         None => by_key,
     });
-    related.rows = ctx.data.run_query(dest, &read).await?;
+    related.rows = ctx.raw_data().run_query(dest, &read).await?;
     for row in &mut related.rows {
-        crate::policy::redact_fields(dest, ctx.actor.as_ref(), row)?;
+        crate::policy::redact_fields(dest, ctx.authorization_actor(), row)?;
     }
     Ok(related)
 }

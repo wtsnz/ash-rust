@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use ash_core::{Context, Resource, ResourceExt, resource};
+use ash_core::{Resource, ResourceExt, resource};
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 use ash_sqlite::Sqlite;
@@ -45,7 +45,7 @@ actions {
 
 #[tokio::test]
 async fn test_leap1_and_leap2_dry_accept_and_zero_import_operators() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Leap 1: Action builder accepts values with types inferred from attributes!
     // Optional field `tag` accepts both `&str`, `Some(...)`, and `None`
@@ -87,7 +87,9 @@ async fn test_leap3_typed_pubsub_ergonomics() {
     let pubsub = Arc::new(PubSub::new());
 
     // Leap 3: Fluent Context attachment via with_pubsub
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::clone(&pubsub));
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_pubsub(Arc::clone(&pubsub));
 
     // Leap 3: Typed subscription streams on Resource and Record
     let mut sub_all = Article::subscribe_all(&pubsub);
@@ -127,7 +129,7 @@ async fn test_leap3_typed_pubsub_ergonomics() {
 
 #[tokio::test]
 async fn test_leap4_record_lifecycle_helpers() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let article = Article::publish(&ctx)
         .title("Lifecycle Helpers")
@@ -161,7 +163,7 @@ async fn test_leap4_record_lifecycle_helpers() {
 
 #[tokio::test]
 async fn test_leap5_fluid_multi_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Leap 5: ctx.multi() with direct action builders (no .changeset(), no .unwrap()!)
     let results = ctx
@@ -207,7 +209,7 @@ async fn test_leap5_fluid_multi_in_memory() {
 #[tokio::test]
 async fn test_leap5_fluid_multi_in_sqlite_transaction() {
     let data = Sqlite::memory().await.expect("sqlite init");
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     ctx.install(&[&Article::DEF]).await.expect("install schema");
 
     // Leap 5: ctx.multi().commit() executes inside an atomic SQLite transaction!

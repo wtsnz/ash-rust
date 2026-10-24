@@ -1,5 +1,5 @@
-//! Subscriptions/RPC audit item 5: RPC write results and server-owned tenancy.
-//! Each test asserts the secure behaviour, so a failure is a finding. The control is the
+//! RPC write results and server-owned tenancy.
+//! Each test asserts the secure behaviour. The control is the
 //! same user's ordinary RPC read.
 
 use ash_core::{Actor, Context, Value};
@@ -166,9 +166,10 @@ const FIELDS: [&str; 5] = ["name", "secret", "entryCount", "doubled", "firstMemo
 /// its own field policy) is compared with the read rather than asserted null.
 #[tokio::test]
 async fn write_results_respect_field_policies() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let rpc = rpc();
-    let as_viewer = ctx.with_actor(viewer());
+    let as_viewer = ctx_runtime.bind(Some(viewer()), ctx.tenant().map(str::to_owned));
     let target = seeded(&ctx, "doomed").await;
     let renamed = seeded(&ctx, "renamed").await;
 
@@ -230,17 +231,18 @@ async fn write_results_respect_field_policies() {
 /// let it read tenant "b".
 #[tokio::test]
 async fn client_tenant_does_not_override_the_servers_tenant() {
-    let ctx = Context::new(Memory::new());
-    Doc::create(&ctx.with_tenant("a"))
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
+    Doc::create(&ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into())))
         .title("a's doc")
         .await
         .unwrap();
-    Doc::create(&ctx.with_tenant("b"))
+    Doc::create(&ctx_runtime.bind(ctx.actor().cloned(), Some(("b").into())))
         .title("b's doc")
         .await
         .unwrap();
     let rpc = Rpc::new().action::<Doc>("list_docs", "read");
-    let server_ctx = ctx.with_tenant("a");
+    let server_ctx = ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into()));
 
     let control = rpc
         .run(
@@ -283,17 +285,18 @@ async fn channel_payload_tenant_does_not_override_the_sockets_tenant() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let ctx = Context::new(Memory::new());
-    Doc::create(&ctx.with_tenant("a"))
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
+    Doc::create(&ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into())))
         .title("a's doc")
         .await
         .unwrap();
-    Doc::create(&ctx.with_tenant("b"))
+    Doc::create(&ctx_runtime.bind(ctx.actor().cloned(), Some(("b").into())))
         .title("b's doc")
         .await
         .unwrap();
     let rpc = Rpc::new().action::<Doc>("list_docs", "read");
-    let socket_ctx = ctx.with_tenant("a");
+    let socket_ctx = ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into()));
     let app = ash_typescript::rpc::channel::rpc_channel_router(rpc, move |_, _| socket_ctx.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -337,10 +340,14 @@ async fn channel_payload_tenant_does_not_override_the_sockets_tenant() {
 /// find ledgers by values it can't read.
 #[tokio::test]
 async fn filter_and_sort_inputs_are_guarded() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let rpc = rpc();
-    let as_viewer = ctx.with_actor(viewer());
-    let admin = ctx.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", Value::from("admin")));
+    let as_viewer = ctx_runtime.bind(Some(viewer()), ctx.tenant().map(str::to_owned));
+    let admin = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_attr("role", Value::from("admin"))),
+        ctx.tenant().map(str::to_owned),
+    );
     seeded(&ctx, "one").await;
 
     let by_secret = json!({ "action": "list_ledgers", "fields": ["name"], "filter": { "secret": { "eq": "one secret" } } });
@@ -372,9 +379,10 @@ async fn filter_and_sort_inputs_are_guarded() {
 
 #[tokio::test]
 async fn payload_tenant_cannot_rebind_writes_or_validation() {
-    let ctx = Context::new(Memory::new());
-    let a = ctx.clone().with_tenant("a");
-    let b = ctx.clone().with_tenant("b");
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
+    let a = ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into()));
+    let b = ctx_runtime.bind(ctx.actor().cloned(), Some(("b").into()));
     let theirs = Doc::create(&b).title("b's doc").await.unwrap();
     let rpc = Rpc::new()
         .action::<Doc>("create_doc", "create")
@@ -400,12 +408,13 @@ async fn http_payload_tenant_cannot_override_adapter_context() {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    let ctx = Context::new(Memory::new());
-    Doc::create(&ctx.clone().with_tenant("a"))
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
+    Doc::create(&ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into())))
         .title("a's doc")
         .await
         .unwrap();
-    let theirs = Doc::create(&ctx.clone().with_tenant("b"))
+    let theirs = Doc::create(&ctx_runtime.bind(ctx.actor().cloned(), Some(("b").into())))
         .title("b's doc")
         .await
         .unwrap();
@@ -417,7 +426,7 @@ async fn http_payload_tenant_cannot_override_adapter_context() {
             headers["authorization"],
             "Bearer adapter-verified-credential"
         );
-        ctx.clone().with_tenant("a")
+        ctx_runtime.bind(ctx.actor().cloned(), Some(("a").into()))
     });
     for (path, request, success) in [
         (

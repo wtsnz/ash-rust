@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, Resource, SchemaSupport, resource};
+use ash_core::{Error, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -104,7 +104,7 @@ fn test_embedded_standalone_build_and_validations() {
 #[tokio::main(flavor = "current_thread")]
 #[test]
 async fn test_embedded_in_parent_resource_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let addr = Address::build_create()
         .street("742 Evergreen Terrace")
@@ -142,7 +142,7 @@ async fn test_embedded_in_parent_resource_sqlite_json_roundtrip() {
     db.install_resources(&[&Customer::DEF])
         .await
         .expect("install schema");
-    let ctx = Context::new(db);
+    let ctx = ash_core::Runtime::new(db).bootstrap();
 
     let addr = Address::build_create()
         .street("221B Baker Street")

@@ -82,7 +82,9 @@ fn recording() -> (Context<Memory>, Arc<Mutex<Vec<Notification>>>) {
         Ok(())
     });
     (
-        Context::new(Memory::new()).with_notifier(Arc::new(notifier)),
+        ash_core::Runtime::new(Memory::new())
+            .bootstrap()
+            .with_notifier(Arc::new(notifier)),
         sent,
     )
 }
@@ -119,10 +121,11 @@ async fn every_write_path_notifies_with_its_arguments() {
 
 #[tokio::test]
 async fn updates_authorize_against_the_record_as_it_was() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let owner = Uuid::new_v4();
     let heir = Uuid::new_v4();
-    let as_owner = ctx.with_actor(Actor::new(owner));
+    let as_owner = ctx_runtime.bind(Some(Actor::new(owner)), ctx.tenant().map(str::to_owned));
 
     // The owner may hand a note on, through either path: the policy reads the record
     // being updated, as Ash's does, not the one it would become.
@@ -152,7 +155,10 @@ async fn updates_authorize_against_the_record_as_it_was() {
     .unwrap();
 
     // And someone else may not, whatever they set.
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let err = ash_core::update_dynamic(&stranger, &Note::DEF, action("edit"), dynamic.id, input)
         .await
         .unwrap_err();
@@ -161,7 +167,8 @@ async fn updates_authorize_against_the_record_as_it_was() {
 
 #[tokio::test]
 async fn dynamic_writes_take_only_what_the_action_accepts() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let mut input = note(Uuid::new_v4(), "sneaky");
     input.insert("id".into(), Value::Uuid(Uuid::new_v4()));
     let err = ash_core::create_dynamic(&ctx, &Note::DEF, action("write"), input)
@@ -175,7 +182,8 @@ async fn dynamic_writes_take_only_what_the_action_accepts() {
 
 #[tokio::test]
 async fn bulk_destroys_run_the_destroy_action() {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let owner = Uuid::new_v4();
     let open = Note::write(&ctx)
         .owner_id(owner)
@@ -192,7 +200,7 @@ async fn bulk_destroys_run_the_destroy_action() {
         .unwrap();
 
     let result = ash_core::bulk_destroy::<Note, _, _>(
-        &ctx.with_actor(Actor::new(owner)),
+        &ctx_runtime.bind(Some(Actor::new(owner)), ctx.tenant().map(str::to_owned)),
         "remove",
         &[open.id, locked.id],
         BulkDestroyOptions::default().stop_on_error(false),

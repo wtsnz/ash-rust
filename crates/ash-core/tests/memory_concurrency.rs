@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, Resource, TransactionSupport, resource};
+use ash_core::{Error, Resource, TransactionSupport, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ actions {
 #[tokio::test]
 async fn test_memory_transaction_does_not_discard_concurrent_writes() {
     let mem = Memory::new();
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
 
     // 1. Initial user
     let alice = ConcurrentUser::create(&ctx)
@@ -51,7 +51,7 @@ async fn test_memory_transaction_does_not_discard_concurrent_writes() {
             .transaction(|tx_mem| {
                 let tx_mem = tx_mem.clone();
                 async move {
-                    let tx_ctx = Context::new(tx_mem);
+                    let tx_ctx = ash_core::Runtime::new(tx_mem).bootstrap();
                     // In-transaction write: create Carol
                     let carol = ConcurrentUser::create(&tx_ctx)
                         .name("Carol")
@@ -108,7 +108,7 @@ async fn test_memory_transaction_does_not_discard_concurrent_writes() {
 #[tokio::test]
 async fn test_memory_transaction_detects_concurrent_write_conflict_on_same_record() {
     let mem = Memory::new();
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
 
     // 1. Initial user Dave
     let dave = ConcurrentUser::create(&ctx)
@@ -127,7 +127,7 @@ async fn test_memory_transaction_detects_concurrent_write_conflict_on_same_recor
             .transaction(|tx_mem| {
                 let tx_mem = tx_mem.clone();
                 async move {
-                    let tx_ctx = Context::new(tx_mem);
+                    let tx_ctx = ash_core::Runtime::new(tx_mem).bootstrap();
                     // Update Dave in transaction
                     ConcurrentUser::update(&tx_ctx, dave_id)
                         .name("Dave from Tx")

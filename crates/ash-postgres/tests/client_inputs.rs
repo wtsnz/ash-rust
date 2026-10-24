@@ -4,8 +4,8 @@
 //! nulls last ascending and first descending unless a sort places them otherwise.
 
 use ash_core::{
-    Actor, CompiledQuery, Context, DataLayer, FieldMap, Filter, Resource, Sort, Value,
-    build_keyset_filter, guard_input_filter, guard_input_sort, keyset_sort, redact_fields,
+    Actor, CompiledQuery, DataLayer, FieldMap, Filter, Resource, Sort, Value, build_keyset_filter,
+    guard_input_filter, guard_input_sort, keyset_sort, redact_fields,
 };
 use ash_memory::Memory;
 use ash_postgres::Postgres;
@@ -142,7 +142,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     let [n1, n2, n3, n4, n5] = ids[..] else {
         unreachable!()
     };
-    let ctx = Context::new(data.clone());
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
     for (id, owner, rank, secret) in [
         (n1, a, Some(1), Some("alpha")),
         (n2, a, None, Some("beta")),

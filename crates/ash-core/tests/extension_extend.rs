@@ -18,7 +18,7 @@
 //! - If an extension *needs* to inject attributes or synthesize actions, use Pattern 2 (`#[state_machine] resource!`).
 //! - If an extension only needs to generate companion code or register metadata, Pattern 1 is optimal.
 
-use ash_core::{Context, resource};
+use ash_core::resource;
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -96,7 +96,7 @@ async fn test_pattern1_extend_companion_traits_and_crud() {
     assert_eq!(Product::search_index(), "products_v1");
 
     // 3. Verify normal resource functionality remains 100% operational
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let product = Product::create(&ctx)
         .title("Mechanical Keyboard")
         .price(150)

@@ -23,6 +23,7 @@ fn refused(field: &str, message: impl Into<String>) -> Error {
 /// transaction. A dispatcher racing for the same berth fails on the claim; the berth
 /// can only be held once per window.
 pub async fn reserve_berth<D>(
+    runtime: &ash_core::Runtime<D>,
     ctx: &Context<D>,
     ship_id: Uuid,
     port_id: Uuid,
@@ -34,48 +35,52 @@ where
     D: DataLayer + TransactionSupport + Clone + 'static,
 {
     let berth_code = berth_code.to_string();
-    ctx.transaction(move |tx| async move {
-        let ship = Ship::get(&tx, ship_id).await?;
-        let berth = Berth::get_by_port_code(&tx, port_id, berth_code.clone()).await?;
-        if ship.dry_mass_tonnes > berth.max_mass_tonnes {
-            return Err(refused(
-                "berth",
-                format!(
-                    "{} t is too heavy for berth {} ({} t)",
-                    ship.dry_mass_tonnes, berth.code, berth.max_mass_tonnes
-                ),
-            ));
-        }
+    let actor = ctx.actor().cloned();
+    let tenant = ctx.tenant().map(str::to_owned);
+    runtime
+        .transaction(move |runtime| async move {
+            let tx = runtime.bind(actor, tenant);
+            let ship = Ship::get(&tx, ship_id).await?;
+            let berth = Berth::get_by_port_code(&tx, port_id, berth_code.clone()).await?;
+            if ship.dry_mass_tonnes > berth.max_mass_tonnes {
+                return Err(refused(
+                    "berth",
+                    format!(
+                        "{} t is too heavy for berth {} ({} t)",
+                        ship.dry_mass_tonnes, berth.code, berth.max_mass_tonnes
+                    ),
+                ));
+            }
 
-        // Reservations belong to lines, but a berth is shared: look across all of them.
-        let anyone = tx.clone().without_tenant();
-        let overlapping = BerthReservation::query(&anyone)
-            .filter(
-                BerthReservation::port_id.eq(port_id)
-                    & BerthReservation::berth_code.eq(berth_code.clone())
-                    & BerthReservation::status.eq(ReservationStatus::Active)
-                    & BerthReservation::starts_at.lt(ends_at.clone())
-                    & BerthReservation::ends_at.gt(starts_at.clone()),
-            )
-            .count()
-            .await?;
-        if overlapping > 0 {
-            return Err(refused(
-                "berth",
-                format!("berth {} is already held for that window", berth.code),
-            ));
-        }
+            // Reservations belong to lines, but a berth is shared: look across all of them.
+            let anyone = runtime.system().bind(None, None);
+            let overlapping = BerthReservation::query(&anyone)
+                .filter(
+                    BerthReservation::port_id.eq(port_id)
+                        & BerthReservation::berth_code.eq(berth_code.clone())
+                        & BerthReservation::status.eq(ReservationStatus::Active)
+                        & BerthReservation::starts_at.lt(ends_at.clone())
+                        & BerthReservation::ends_at.gt(starts_at.clone()),
+                )
+                .count()
+                .await?;
+            if overlapping > 0 {
+                return Err(refused(
+                    "berth",
+                    format!("berth {} is already held for that window", berth.code),
+                ));
+            }
 
-        berth.claim_on(&tx).await?;
-        BerthReservation::reserve(&tx)
-            .port_id(port_id)
-            .berth_code(berth_code)
-            .ship_id(ship_id)
-            .starts_at(starts_at)
-            .ends_at(ends_at)
-            .await
-    })
-    .await
+            berth.claim_on(&tx).await?;
+            BerthReservation::reserve(&tx)
+                .port_id(port_id)
+                .berth_code(berth_code)
+                .ship_id(ship_id)
+                .starts_at(starts_at)
+                .ends_at(ends_at)
+                .await
+        })
+        .await
 }
 
 /// Plans a voyage between two ports, with the route computed from the planets'

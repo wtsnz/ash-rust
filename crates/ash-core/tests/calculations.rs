@@ -1,4 +1,4 @@
-use ash_core::{Context, FieldMap, Resource, Result, SchemaSupport, Value, resource};
+use ash_core::{FieldMap, Resource, Result, SchemaSupport, Value, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -59,7 +59,7 @@ pub use item::Item;
 #[test]
 async fn test_calculations_in_memory() {
     let data = Memory::new();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     let _item1 = Item::create(&ctx)
         .name("Laptop")
@@ -167,7 +167,7 @@ async fn test_calculations_in_memory() {
 async fn test_calculations_in_sqlite() {
     let data = Sqlite::memory().await.unwrap();
     data.install_resources(&[&Item::DEF]).await.unwrap();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     Item::create(&ctx)
         .name("Laptop")

@@ -259,7 +259,7 @@ async fn text_keys<D: ash_core::TransactionSupport + Clone + 'static>(ctx: &Cont
 }
 
 async fn scenario<D: ash_core::TransactionSupport + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     integer_keys(&ctx).await;
     text_keys(&ctx).await;
     // A record of nothing but its assigned key.

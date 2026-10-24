@@ -1,4 +1,4 @@
-use ash_core::{ActionDef, AttrType, AttributeDef, Context, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -46,7 +46,7 @@ static DEVICE_DEF: ResourceDef = ResourceDef {
 
 #[tokio::test]
 async fn inet_and_vector_round_trip_through_graphql() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&DEVICE_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
@@ -100,7 +100,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
 
 #[tokio::test]
 async fn float_attributes_are_numbers_in_graphql() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&DEVICE_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");

@@ -1,7 +1,7 @@
 //! A nested page answers as its read does: ordered by the read's prepared sort, with the
 //! primary key only breaking ties, and a count of the rows the page itself would show.
 
-use ash_core::{Actor, Context, Value};
+use ash_core::{Actor, Value};
 use ash_memory::Memory;
 use ash_typescript::rpc::Rpc;
 use serde_json::{Value as Json, json};
@@ -119,7 +119,7 @@ use secret::Secret;
 use shelf::Shelf;
 
 struct Library {
-    ctx: Context<Memory>,
+    runtime: ash_core::Runtime<Memory>,
     rpc: Rpc<Memory>,
     shelf: Uuid,
 }
@@ -127,7 +127,8 @@ struct Library {
 impl Library {
     /// A shelf with items scored 1 to 3 and one secret.
     async fn new() -> Self {
-        let ctx = Context::new(Memory::new());
+        let runtime = ash_core::Runtime::new(Memory::new());
+        let ctx = runtime.bootstrap();
         let shelf = Shelf::create(&ctx).name("Top").await.unwrap().id;
         for score in 1..=3 {
             Item::create(&ctx)
@@ -142,7 +143,7 @@ impl Library {
             .await
             .unwrap();
         Self {
-            ctx,
+            runtime,
             rpc: Rpc::new().get_by::<Shelf>("get_shelf", "read", &["id"]),
             shelf,
         }
@@ -151,7 +152,10 @@ impl Library {
     async fn nested(&self, role: &str, relationship: Json) -> Json {
         let actor = Actor::new(Uuid::new_v4()).with_attr("role", Value::from(role));
         let request = json!({ "action": "get_shelf", "getBy": { "id": self.shelf }, "fields": ["id", relationship] });
-        let response = self.rpc.run(&self.ctx.with_actor(actor), &request).await;
+        let response = self
+            .rpc
+            .run(&self.runtime.bind(Some(actor), None), &request)
+            .await;
         assert_eq!(response["success"], true, "{response}");
         response["data"].clone()
     }

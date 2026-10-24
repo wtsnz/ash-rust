@@ -99,7 +99,7 @@ pub fn compile_read_filter(
     action: &ActionDef,
     actor: Option<&Actor>,
 ) -> Result<Option<Filter>> {
-    if resource.policies.is_empty() {
+    if actor.is_some_and(Actor::is_system) || resource.policies.is_empty() {
         return Ok(None);
     }
 
@@ -151,7 +151,7 @@ pub fn authorize_write(
     actor: Option<&Actor>,
     record: Option<&FieldMap>,
 ) -> Result<()> {
-    if resource.policies.is_empty() {
+    if actor.is_some_and(Actor::is_system) || resource.policies.is_empty() {
         return Ok(());
     }
 
@@ -236,6 +236,9 @@ pub fn eval_policy_effects(
     actor: Option<&Actor>,
     record: Option<&FieldMap>,
 ) -> Result<bool> {
+    if actor.is_some_and(Actor::is_system) {
+        return Ok(true);
+    }
     for effect in effects {
         match effect {
             PolicyEffect::ForbidIf(check) if eval_check(check, actor, record)? => {
@@ -333,6 +336,9 @@ pub fn hidden_fields(
     actor: Option<&Actor>,
     record: &FieldMap,
 ) -> Result<Vec<&'static str>> {
+    if actor.is_some_and(Actor::is_system) {
+        return Ok(Vec::new());
+    }
     let mut hidden = Vec::new();
     for fp in resource.field_policies {
         if !eval_policy_effects(fp.checks, actor, Some(record))? {
@@ -370,6 +376,9 @@ fn field_condition(
     field: &str,
     actor: Option<&Actor>,
 ) -> Result<Option<Filter>> {
+    if actor.is_some_and(Actor::is_system) {
+        return Ok(None);
+    }
     if resource.primary_key().is_some_and(|pk| pk.name == field) {
         return Ok(None);
     }
@@ -484,7 +493,7 @@ pub fn write_filter(
     action: &ActionDef,
     actor: Option<&Actor>,
 ) -> Result<Filter> {
-    if resource.policies.is_empty() {
+    if actor.is_some_and(Actor::is_system) || resource.policies.is_empty() {
         return Ok(Filter::True);
     }
     let applicable: Vec<_> = resource

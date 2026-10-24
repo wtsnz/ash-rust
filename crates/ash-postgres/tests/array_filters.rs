@@ -42,7 +42,7 @@ async fn titles<D: DataLayer>(ctx: &Context<D>, run: Uuid, filter: Filter) -> Ve
 }
 
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let run = Uuid::new_v4();
     let tags = |tags: &[&str]| tags.iter().map(|tag| tag.to_string()).collect::<Vec<_>>();
     Post::create(&ctx)

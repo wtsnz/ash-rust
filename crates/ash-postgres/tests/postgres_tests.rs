@@ -501,7 +501,7 @@ async fn test_postgres_optimistic_locking_stale_record() {
     };
     let _ = pg.execute_sql("DROP TABLE IF EXISTS documents;").await;
     pg.install(&[&DOCUMENT_DEF]).await.unwrap();
-    let ctx = ash_core::Context::new(pg.clone());
+    let ctx = ash_core::Runtime::new(pg.clone()).bootstrap();
     let action = |name: &str| DOCUMENT_DEF.action(name).unwrap();
     let title = |text: &str| ash_core::FieldMap::from([("title".to_string(), Value::from(text))]);
 
@@ -1097,7 +1097,7 @@ mod pg_shift {
 /// and SQLite store them, and compares filter values the same way.
 #[tokio::test]
 async fn test_postgres_datetimes_round_trip_in_utc_at_their_precision() {
-    use ash_core::{Context, Resource, UtcDateTime, UtcDateTimeUsec};
+    use ash_core::{Resource, UtcDateTime, UtcDateTimeUsec};
     use pg_shift::PgShift;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1105,7 +1105,7 @@ async fn test_postgres_datetimes_round_trip_in_utc_at_their_precision() {
         return;
     };
     pg.install(&[&PgShift::DEF]).await.unwrap();
-    let ctx = Context::new(pg);
+    let ctx = ash_core::Runtime::new(pg).bootstrap();
     let run = Uuid::new_v4().to_string();
     let at = |raw: &str| UtcDateTime::parse(raw).unwrap();
     PgShift::create(&ctx)
@@ -1229,12 +1229,13 @@ mod context_tenancy {
     /// writes by id, aggregates and filters through a relationship, loads, and writes in a
     /// transaction.
     pub async fn tenants_stay_apart<D: DataLayer + TransactionSupport + Clone>(
-        ctx: Context<D>,
+        runtime: ash_core::Runtime<D>,
         acme: &str,
         globex: &str,
     ) {
-        let acme = ctx.with_tenant(acme);
-        let globex = ctx.with_tenant(globex);
+        let ctx = runtime.bootstrap();
+        let acme = runtime.bind(None, Some(acme.into()));
+        let globex = runtime.bind(None, Some(globex.into()));
         let leo = Port::create(&ctx).code("LEO").await.unwrap();
         let ours = Booking::create(&acme)
             .port_id(leo.id)
@@ -1342,7 +1343,7 @@ mod context_tenancy {
                 .await
                 .unwrap();
         }
-        tenants_stay_apart(Context::new(pg), &acme, &globex).await;
+        tenants_stay_apart(ash_core::Runtime::new(pg), &acme, &globex).await;
     }
 }
 
@@ -1410,7 +1411,7 @@ mod pg_cycle {
 /// nothing, and the keys hold.
 #[tokio::test]
 async fn test_postgres_installs_tables_that_refer_to_each_other() {
-    use ash_core::{Context, Resource};
+    use ash_core::Resource;
     use pg_cycle::{car::PgCar, driver::PgDriver};
 
     let Some(admin) = get_test_postgres().await else {
@@ -1433,7 +1434,7 @@ async fn test_postgres_installs_tables_that_refer_to_each_other() {
     pg.install(&[&PgCar::DEF, &PgDriver::DEF]).await.unwrap();
     pg.install(&[&PgCar::DEF, &PgDriver::DEF]).await.unwrap();
 
-    let ctx = Context::new(pg);
+    let ctx = ash_core::Runtime::new(pg).bootstrap();
     let driver = PgDriver::create(&ctx)
         .name("Ada".to_string())
         .await
@@ -1565,8 +1566,10 @@ async fn stored_fleet(
 /// a column a row doesn't change keeps what's stored, even a change made since the batch
 /// read it.
 #[tokio::test]
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn test_postgres_bulk_update_writes_each_rows_changes() {
-    use ash_core::{BulkUpdateOptions, Context, FieldMap, Resource};
+    use ash_core::{BulkUpdateOptions, FieldMap, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1574,7 +1577,7 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
         return;
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
-    let ctx = Context::new(pg);
+    let ctx = ash_core::Runtime::new(pg).bootstrap();
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 4).await;
     // An operator recalls one after the batch has read it.
@@ -1627,8 +1630,10 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
 /// that fails rolls back the rest, and no notification goes out for any of them. Without
 /// a transaction, the row fails alone.
 #[tokio::test]
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
-    use ash_core::{BulkTransaction, BulkUpdateOptions, Context, Resource};
+    use ash_core::{BulkTransaction, BulkUpdateOptions, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1637,7 +1642,9 @@ async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
     let notified = std::sync::Arc::new(Counted::default());
-    let ctx = Context::new(pg).with_notifier(notified.clone());
+    let ctx = ash_core::Runtime::new(pg)
+        .bootstrap()
+        .with_notifier(notified.clone());
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
     // One is gone before the batch lands.
@@ -1702,8 +1709,10 @@ async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
 /// `transaction: :batch` rolls back only the batch a failed row is in; `:all` rolls back
 /// the whole action.
 #[tokio::test]
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn test_postgres_bulk_update_transaction_scopes() {
-    use ash_core::{BulkTransaction, BulkUpdateOptions, Context, Resource};
+    use ash_core::{BulkTransaction, BulkUpdateOptions, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1711,7 +1720,7 @@ async fn test_postgres_bulk_update_transaction_scopes() {
         return;
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
-    let ctx = Context::new(pg);
+    let ctx = ash_core::Runtime::new(pg).bootstrap();
     let parked = |run: &str, i: usize| (format!("{run}-{i}"), -97.7, 0, "available".to_string());
     let moved = |run: &str, i: usize| {
         (
@@ -1792,7 +1801,7 @@ async fn test_postgres_counted_page_in_and_out_of_a_transaction() {
         return;
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
-    let ctx = Context::new(pg);
+    let ctx = ash_core::Runtime::new(pg).bootstrap();
     let run = Uuid::new_v4().simple().to_string();
     for i in 0..5 {
         PgVehicle::create(&ctx)
@@ -1820,7 +1829,7 @@ async fn test_postgres_counted_page_in_and_out_of_a_transaction() {
 /// in and out of a transaction.
 #[tokio::test]
 async fn test_postgres_reads_a_page_and_its_count_together() {
-    use ash_core::{CompiledQuery, Context, Resource, Sort};
+    use ash_core::{CompiledQuery, Resource, Sort};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1828,7 +1837,7 @@ async fn test_postgres_reads_a_page_and_its_count_together() {
         return;
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
-    let ctx = Context::new(pg.clone());
+    let ctx = ash_core::Runtime::new(pg.clone()).bootstrap();
     let run = Uuid::new_v4().simple().to_string();
     for i in 0..5 {
         PgVehicle::create(&ctx)
@@ -1871,7 +1880,7 @@ async fn test_postgres_reads_a_page_and_its_count_together() {
 /// Ash's like/ilike reach Postgres as LIKE and ILIKE, wildcards and escapes intact.
 #[tokio::test]
 async fn test_postgres_like_and_ilike() {
-    use ash_core::{Context, Filter, Resource};
+    use ash_core::{Filter, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1879,7 +1888,7 @@ async fn test_postgres_like_and_ilike() {
         return;
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
-    let ctx = Context::new(pg);
+    let ctx = ash_core::Runtime::new(pg).bootstrap();
     let run = Uuid::new_v4().simple().to_string();
     for sign in ["LIKE-A_1", "LIKE-B2", "like-c3"] {
         PgVehicle::create(&ctx)
@@ -1930,7 +1939,7 @@ async fn test_postgres_like_and_ilike() {
 /// Counts run in the database, as `COUNT(*)`: of a filter, and of a page.
 #[tokio::test]
 async fn test_postgres_counts_in_the_database() {
-    use ash_core::{CompiledQuery, Context, DataLayer, Filter, Resource};
+    use ash_core::{CompiledQuery, DataLayer, Filter, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1938,7 +1947,7 @@ async fn test_postgres_counts_in_the_database() {
         return;
     };
     pg.install(&[&PgVehicle::DEF]).await.unwrap();
-    let ctx = Context::new(pg.clone());
+    let ctx = ash_core::Runtime::new(pg.clone()).bootstrap();
     let run = Uuid::new_v4().simple().to_string();
     for (i, status) in ["available", "available", "charging"]
         .into_iter()

@@ -1,4 +1,4 @@
-use ash_core::{Context, Resource, resource};
+use ash_core::{Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -27,7 +27,7 @@ actions {
 
 #[tokio::test]
 async fn test_offset_pagination_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Create 10 articles
     for i in 1..=10 {
@@ -77,7 +77,7 @@ async fn test_offset_pagination_in_memory() {
 async fn test_offset_pagination_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     for i in 1..=7 {
         Article::create(&ctx)
@@ -106,7 +106,7 @@ async fn test_offset_pagination_in_sqlite() {
 
 #[tokio::test]
 async fn test_keyset_pagination_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     for i in 1..=7 {
         Article::create(&ctx)
@@ -159,7 +159,7 @@ async fn test_keyset_pagination_in_memory() {
 async fn test_keyset_pagination_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     for i in 1..=5 {
         Article::create(&ctx)
@@ -198,7 +198,7 @@ async fn test_keyset_pagination_in_sqlite() {
 
 #[tokio::test]
 async fn test_keyset_pagination_with_custom_sort_and_before_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Create 6 articles with known views (including tie to test secondary PK tie-breaker)
     // 500, 400, 300 (A), 300 (B), 200, 100
@@ -320,7 +320,7 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_memory() {
 async fn test_keyset_pagination_with_custom_sort_and_before_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     let a1 = Article::create(&ctx)
         .title("Sqlite 500")
@@ -424,7 +424,7 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_sqlite() {
 async fn test_keyset_pagination_duplicate_keys_across_boundary_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     let a1 = Article::create(&ctx)
         .title("Item 1 (500)")

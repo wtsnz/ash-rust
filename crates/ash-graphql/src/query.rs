@@ -1,3 +1,6 @@
+// Raw engine queries migrate to executable plans in the next step.
+#![allow(deprecated)]
+
 use ash_core::{
     ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, scope_read,
 };
@@ -20,8 +23,14 @@ pub(crate) async fn run_read<D: DataLayer>(
     arguments: &FieldMap,
     query: CompiledQuery,
 ) -> async_graphql::Result<Vec<FieldMap>> {
-    let query = scope_read(resource, action, ctx.actor.as_ref(), arguments, query)
-        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    let query = scope_read(
+        resource,
+        action,
+        ctx.authorization_actor(),
+        arguments,
+        query,
+    )
+    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     let mut records = ctx
         .data
         .run_query(resource, &query)
@@ -76,7 +85,7 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 let query = Load::of(resource, &fields, []).onto(CompiledQuery {
                     filter: Some(Filter::eq(pk_name, id)),
                     limit: Some(1),
-                    tenant: ash.tenant.clone(),
+                    tenant: ash.tenant().map(str::to_owned),
                     ..CompiledQuery::default()
                 });
                 let records =
@@ -84,7 +93,7 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 let Some(mut record) = records.into_iter().next() else {
                     return Ok(None);
                 };
-                redact_record(resource, ash.actor.as_ref(), &mut record);
+                redact_record(resource, ash.authorization_actor(), &mut record);
                 preload(&ash, resource, fields, std::slice::from_mut(&mut record)).await?;
                 Ok(Some(FieldValue::owned_any(record)))
             })
@@ -148,7 +157,7 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
                 .map_err(|e| async_graphql::Error::new(e.to_string()))?;
             crate::pagination::after_read(action, &arguments, &mut records)?;
             for record in &mut records {
-                redact_record(resource, ash.actor.as_ref(), record);
+                redact_record(resource, ash.authorization_actor(), record);
             }
             preload(&ash, resource, fields, &mut records).await?;
             Ok(Some(FieldValue::list(

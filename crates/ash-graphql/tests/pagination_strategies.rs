@@ -54,7 +54,7 @@ fn ranks(songs: &Value) -> Vec<i64> {
 
 #[tokio::test]
 async fn reads_page_as_their_actions_declare() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     for rank in 1..=5 {
         Song::create(&ctx).rank(rank).await.unwrap();
     }

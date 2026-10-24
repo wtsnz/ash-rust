@@ -3,7 +3,7 @@
 //! the data layer runs one, from the record read first where it doesn't. Concurrent
 //! updates lose nothing.
 
-use ash_core::{Context, DataLayer, Resource, resource};
+use ash_core::{DataLayer, Resource, resource};
 use ash_memory::Memory;
 use ash_postgres::Postgres;
 use ash_sqlite::Sqlite;
@@ -43,8 +43,10 @@ resource! {
     }
 }
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let tally = Tally::create(&ctx).name("quiet").views(2).await.unwrap();
     let viewed = tally.view(&ctx).await.unwrap();
     assert_eq!(viewed.views, 3);

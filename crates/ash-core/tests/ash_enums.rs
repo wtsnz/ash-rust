@@ -1,4 +1,4 @@
-use ash_core::{AshEnum, AshType, Context, Resource, resource};
+use ash_core::{AshEnum, AshType, Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -89,7 +89,7 @@ async fn test_ash_enum_traits_and_conversions() {
 #[tokio::test]
 async fn test_ash_enum_in_memory_resource() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
     // 1. Create with default enum status:
     let p1 = Post::create(&ctx)
@@ -136,7 +136,7 @@ async fn test_ash_enum_in_memory_resource() {
 async fn test_ash_enum_in_sqlite_resource() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Post::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     // 1. Create with enum
     let post = Post::create(&ctx)

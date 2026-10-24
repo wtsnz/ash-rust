@@ -1,4 +1,4 @@
-use ash_core::{AttrType, AttributeDef, Context, DataLayer, FieldMap, ResourceDef, Value};
+use ash_core::{AttrType, AttributeDef, DataLayer, FieldMap, ResourceDef, Value};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -53,7 +53,7 @@ async fn seed_tickets(data: &Memory) {
 async fn list_queries_page_by_keyset() {
     let memory = Memory::new();
     seed_tickets(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
@@ -121,7 +121,7 @@ async fn a_list_without_first_pages_as_many_as_a_page_may_hold() {
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     let run = |query: String| {
         let (schema, ctx) = (schema.clone(), ctx.clone());
         async move {
@@ -159,7 +159,7 @@ async fn paging_arguments_that_contradict_are_refused() {
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     for (args, message) in [
         (
             "first: 1, last: 1",
@@ -264,7 +264,7 @@ async fn a_page_reads_its_count_alongside_its_records() {
     let query =
         "{ listTickets(sort: [{ field: PRIORITY }], first: 2) { count results { priority } } }";
     let res = schema
-        .execute(Request::new(query).data(Context::new(slow.clone())))
+        .execute(Request::new(query).data(ash_core::Runtime::new(slow.clone()).bootstrap()))
         .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     let page = res.data.into_json().unwrap()["listTickets"].clone();

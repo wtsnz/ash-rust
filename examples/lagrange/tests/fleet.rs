@@ -17,10 +17,7 @@ async fn crew_sign_in<D: FleetDb>(h: Harness<D>) {
         .await
         .unwrap();
     assert_eq!(ada.tenant(), Some(HELIOS));
-    assert_eq!(
-        ada.actor.as_ref().and_then(|a| a.role()),
-        Some("dispatcher")
-    );
+    assert_eq!(ada.actor().and_then(|a| a.role()), Some("dispatcher"));
     assert!(
         h.app
             .sign_in(HELIOS, "ada@helios-freight.example", "wrong-password!")
@@ -97,7 +94,7 @@ async fn lines_see_their_own_fleet<D: FleetDb>(h: Harness<D>) {
     // fail, so a reader who isn't signed in sees no ships at all.
     assert_eq!(Port::query(&h.app.anonymous()).count().await.unwrap(), 7);
     assert_eq!(Port::query(mae).count().await.unwrap(), 7);
-    let stranger = h.app.anonymous().with_tenant(HELIOS);
+    let stranger = h.app.runtime().bind(None, Some(HELIOS.into()));
     assert!(Ship::query(&stranger).all().await.unwrap().is_empty());
     assert!(matches!(
         Ship::get(&stranger, long_haul.id).await,
@@ -164,6 +161,7 @@ async fn decommissioned_ships_are_archived<D: FleetDb>(h: Harness<D>) {
     let ada = h.ctx("Ada");
     let kettle = h.sol.ship("Tin Kettle");
     let hold = ops::reserve_berth(
+        h.app.runtime(),
         ada,
         kettle.id,
         h.sol.port("SHK").id,

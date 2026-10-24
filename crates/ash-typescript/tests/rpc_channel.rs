@@ -3,7 +3,7 @@
 //! `/rpc/validate` would answer.
 #![cfg(feature = "axum")]
 
-use ash_core::{Context, resource};
+use ash_core::resource;
 use ash_memory::Memory;
 use ash_typescript::rpc::Rpc;
 use futures_util::{SinkExt, StreamExt};
@@ -29,7 +29,7 @@ resource! {
 
 #[tokio::test]
 async fn actions_run_over_the_phoenix_socket() {
-    let base = Context::new(Memory::new());
+    let base = ash_core::Runtime::new(Memory::new()).bootstrap();
     let rpc = Rpc::new()
         .action::<Note>("list_notes", "read")
         .action::<Note>("create_note", "create");

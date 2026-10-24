@@ -71,7 +71,7 @@ async fn run(ctx: &Context<Memory>, query: &str) -> Value {
 
 #[tokio::test]
 async fn composite_values_have_their_own_types() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(
         &ctx,
         r#"mutation {

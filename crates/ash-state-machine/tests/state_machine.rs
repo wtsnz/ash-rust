@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, Resource, resource};
+use ash_core::{Error, Resource, resource};
 use ash_memory::Memory;
 use ash_state_machine::{
     DefaultStateChange, HasStateMachine, InvalidTransition, StateMachineDef, TransitionChange,
@@ -99,7 +99,7 @@ async fn test_state_machine_extension_introspection() {
 
 #[tokio::test]
 async fn test_state_machine_default_initial_and_valid_lifecycle() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create order: status defaults to "draft"
     let order = Order::draft(&ctx)
@@ -140,7 +140,7 @@ async fn test_state_machine_default_initial_and_valid_lifecycle() {
 
 #[tokio::test]
 async fn test_state_machine_invalid_transition_rejected() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let order = Order::draft(&ctx)
         .total(200)
@@ -168,7 +168,7 @@ async fn test_state_machine_invalid_transition_rejected() {
 
 #[tokio::test]
 async fn test_state_machine_multi_source_transition() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Cancel from draft
     let order1 = Order::draft(&ctx).total(50).await.unwrap();

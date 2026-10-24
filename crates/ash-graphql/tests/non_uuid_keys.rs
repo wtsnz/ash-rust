@@ -74,7 +74,7 @@ async fn data(ctx: &Context<Memory>, query: &str) -> Value {
 
 #[tokio::test]
 async fn an_integer_key_is_an_id() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let sdl = schema().sdl();
     assert!(
         sdl.contains("type Tally {\n\tid: ID!\n\tlabel: String!\n"),
@@ -128,7 +128,7 @@ async fn an_integer_key_is_an_id() {
 
 #[tokio::test]
 async fn a_text_key_is_an_id_and_its_own_field() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let sdl = schema().sdl();
     assert!(
         sdl.contains("type Country {\n\tid: ID!\n\tcode: String!\n"),

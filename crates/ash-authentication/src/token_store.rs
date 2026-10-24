@@ -1,3 +1,6 @@
+// Raw writes and engine queries migrate to executable plans in later steps.
+#![allow(deprecated)]
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ash_core::{Context, DataLayer, Filter, Value};
