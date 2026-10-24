@@ -30,8 +30,14 @@ pub fn scope_read(
     let mut prepared_sort = Vec::new();
     for preparation in action.preparations {
         match *preparation {
-            PreparationDef::Filter(build) => filters.push(build()),
-            PreparationDef::FilterWithArgs(build) => filters.push(build(arguments)),
+            PreparationDef::Filter(build) => {
+                let crate::TrustedExpr::Filter(filter) = build();
+                filters.push(filter);
+            }
+            PreparationDef::FilterWithArgs(build) => {
+                let crate::TrustedExpr::Filter(filter) = build(arguments);
+                filters.push(filter);
+            }
             PreparationDef::Sort { field, descending } => prepared_sort.push(Sort {
                 field: field.to_string(),
                 descending,
@@ -54,14 +60,16 @@ pub fn scope_read(
             query.sort.push(sort);
         }
     }
-    for (name, value) in arguments {
-        if resource.attribute(name).is_some() {
-            filters.push(Filter::eq(name.as_str(), value.clone()));
-        }
-    }
+    filters.push(crate::read_plan::argument_filter(resource, arguments));
     filters.extend(query.filter.take());
     filters.extend(compile_read_filter(resource, action, actor)?);
-    let filter = match Filter::and(filters) {
+    let planned = crate::plan_filter(
+        resource,
+        actor,
+        query.tenant.as_deref(),
+        crate::TrustedExpr::Filter(Filter::and(filters)),
+    )?;
+    let filter = match planned {
         Filter::True => None,
         filter => Some(filter),
     };
@@ -112,9 +120,9 @@ pub fn record_visible(
         ..CompiledQuery::default()
     };
     match scope_read(resource, read, actor, &FieldMap::new(), query) {
-        Ok(scoped) => scoped
-            .filter
-            .is_none_or(|filter| filter.matches_on(resource, record)),
+        Ok(scoped) => scoped.filter.is_none_or(|filter| {
+            filter.snapshot_match(resource, record) == crate::FilterMatch::Match
+        }),
         Err(_) => false,
     }
 }

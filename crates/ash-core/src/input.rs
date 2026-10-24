@@ -135,7 +135,14 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
 }
 
 /// A client's filter on `resource`.
-pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filter> {
+pub fn filter_input(
+    resource: &'static ResourceDef,
+    json: &Json,
+) -> Result<crate::ClientExpr<Filter>> {
+    parse_filter(resource, json).map(crate::ClientExpr::new)
+}
+
+fn parse_filter(resource: &'static ResourceDef, json: &Json) -> Result<Filter> {
     let Json::Object(fields) = json else {
         return Err(invalid(format!(
             "a filter on {} must be an object",
@@ -151,9 +158,9 @@ pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filte
             match value {
                 Json::Array(items) => items
                     .iter()
-                    .map(|item| filter_input(resource, item))
+                    .map(|item| parse_filter(resource, item))
                     .collect(),
-                single => Ok(vec![filter_input(resource, single)?]),
+                single => Ok(vec![parse_filter(resource, single)?]),
             }
         };
         match key.as_str() {
@@ -165,7 +172,7 @@ pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filte
                 if let Some(ty) = field_type(resource, name) {
                     filters.extend(field_filter(resource, name, ty, value)?);
                 } else if let Some(rel) = resource.relationship(name) {
-                    let inner = filter_input((rel.destination)(), value)?;
+                    let inner = parse_filter((rel.destination)(), value)?;
                     if inner != Filter::True {
                         filters.push(Filter::related(rel.name, inner));
                     }
@@ -262,8 +269,9 @@ fn field_filter(
 }
 
 /// A client's sort on `resource`: `"-inserted_at,id"`.
-pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
-    text.split(',')
+pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<crate::ClientExpr<Vec<Sort>>> {
+    let sorts = text
+        .split(',')
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(|part| {
@@ -289,7 +297,8 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
                 ..Default::default()
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(crate::ClientExpr::new(sorts))
 }
 
 /// A client's input to `action` on `resource`, as the action takes it: each accepted

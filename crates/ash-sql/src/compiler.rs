@@ -94,7 +94,6 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     calc_args: std::collections::HashMap<String, FieldMap>,
     /// Resources whose primary-read filters are being compiled. A read filter that leads
     /// back to its own resource is not applied again inside itself, which would recurse.
-    applying_read_filters: Vec<&'static str>,
     /// The query's tenant, which also limits the rows read through relationships.
     tenant: Option<String>,
     /// The query's actor, whose read policies limit the related rows aggregates count.
@@ -118,7 +117,6 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             current_calc_args: None,
             current_calc_arguments: &[],
             calc_args: std::collections::HashMap::new(),
-            applying_read_filters: Vec::new(),
             tenant: None,
             actor: None,
             expr_scope: None,
@@ -186,33 +184,6 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 self.dialect.name(),
                 resource.name
             ))
-        })
-    }
-
-    /// What a read of `resource` through a relationship sees, compiled against `alias`:
-    /// the query's tenant, and the primary-read filter unless it is already being
-    /// compiled further out.
-    fn compile_read_filter(
-        &mut self,
-        resource: &'static ResourceDef,
-        alias: &str,
-    ) -> Result<Option<String>> {
-        let mut parts = Vec::new();
-        if let Some(tenant_filter) = resource.tenant_filter(self.tenant.as_deref()) {
-            parts.push(self.compile_filter_scoped(resource, &tenant_filter, Some(alias))?);
-        }
-        if !self.applying_read_filters.contains(&resource.name)
-            && let Some(read_filter) = resource.primary_read_filter()
-        {
-            self.applying_read_filters.push(resource.name);
-            let compiled = self.compile_filter_scoped(resource, &read_filter, Some(alias));
-            self.applying_read_filters.pop();
-            parts.push(compiled?);
-        }
-        Ok(match parts.len() {
-            0 => None,
-            1 => parts.pop(),
-            _ => Some(format!("({})", parts.join(" AND "))),
         })
     }
 
@@ -609,10 +580,21 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 let inner = self.compile_filter_scoped(resource, part, scope_alias)?;
                 Ok(format!("NOT ({inner})"))
             }
-            Filter::Related {
-                relationship,
-                filter,
-            } => {
+            Filter::Client(_) => Err(Error::Invalid(
+                "client expression requires read planning".into(),
+            )),
+            Filter::Related { .. } => {
+                let planned = ash_core::plan_filter(
+                    resource,
+                    self.actor.as_ref(),
+                    self.tenant.as_deref(),
+                    ash_core::TrustedExpr::Filter(filter.clone()),
+                )?;
+                self.compile_filter_scoped(resource, &planned, scope_alias)
+            }
+            Filter::Traversal(node) => {
+                let relationship = node.relationship();
+                let filter = node.filter();
                 let rel = resource.relationship(relationship).ok_or_else(|| {
                     Error::Invalid(format!(
                         "unknown relationship `{relationship}` on {}",
@@ -636,9 +618,6 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 )?;
                 let mut inner_sql =
                     self.compile_filter_scoped(dest_res, filter, Some(&dest_alias))?;
-                if let Some(read_sql) = self.compile_read_filter(dest_res, &dest_alias)? {
-                    inner_sql = format!("({inner_sql} AND {read_sql})");
-                }
 
                 match rel.kind {
                     RelKind::ManyToMany => {
@@ -670,10 +649,9 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                             rel.destination_attribute_on_join_resource
                                 .unwrap_or(rel.destination_attribute),
                         )?;
-                        // An archived join row unlinks the records, as it does for loads.
-                        if let Some(join_sql) =
-                            self.compile_read_filter(through_res, &join_alias)?
-                        {
+                        if let Some(join) = node.join_filter() {
+                            let join_sql =
+                                self.compile_filter_scoped(through_res, join, Some(&join_alias))?;
                             inner_sql = format!("{inner_sql} AND {join_sql}");
                         }
                         Ok(format!(
@@ -738,20 +716,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &'static ResourceDef,
         alias: &str,
     ) -> Result<Option<String>> {
-        let mut parts: Vec<String> = self
-            .compile_read_filter(resource, alias)?
-            .into_iter()
-            .collect();
-        match ash_core::compile_read_filter(resource, resource.default_read(), self.actor.as_ref())
-        {
-            Ok(None) => {}
-            Ok(Some(policy)) => {
-                parts.push(self.compile_filter_scoped(resource, &policy, Some(alias))?)
-            }
-            Err(Error::Forbidden) => parts.push("1=0".to_string()),
-            Err(err) => return Err(err),
+        let filter =
+            ash_core::related_read_filter(resource, self.actor.as_ref(), self.tenant.as_deref())?;
+        if filter == Filter::True {
+            return Ok(None);
         }
-        Ok((!parts.is_empty()).then(|| format!("({})", parts.join(" AND "))))
+        self.compile_filter_scoped(resource, &filter, Some(alias))
+            .map(Some)
     }
 
     pub fn compile_aggregate(
@@ -926,64 +897,26 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         cursor: &KeysetCursor,
         sorts: &[Sort],
     ) -> Result<String> {
-        if sorts.is_empty() {
-            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
-            let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.bind_field(resource, pk, cursor.id.clone());
-            return Ok(format!("{pk_col} > {p}"));
-        }
-
-        let mut conds = Vec::new();
-        for (i, sort) in sorts.iter().enumerate() {
-            let mut prefix_match = Vec::new();
-            for prev in sorts.iter().take(i) {
-                let prev_col = self.sort_operand(resource, prev)?;
-                if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
-                    let p = self.bind_field(resource, &prev.field, val.clone());
-                    prefix_match.push(format!("{prev_col} = {p}"));
-                }
-            }
-
-            let col = self.sort_operand(resource, sort)?;
-            let op = if sort.descending { "<" } else { ">" };
-            if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &sort.field) {
-                let p = self.bind_field(resource, &sort.field, val.clone());
-                let mut branch = format!("{col} {op} {p}");
-                if !prefix_match.is_empty() {
-                    branch = format!("{} AND {branch}", prefix_match.join(" AND "));
-                }
-                conds.push(format!("({branch})"));
-            }
-        }
-
-        // Add deterministic tie-breaker on primary key if not explicitly in sort fields
-        let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
-        if !sorts.iter().any(|s| s.field == pk) {
-            let mut prefix_match = Vec::new();
-            for prev in sorts {
-                let prev_col = self.sort_operand(resource, prev)?;
-                if let Some((_, val)) = cursor.values.iter().find(|(k, _)| k == &prev.field) {
-                    let p = self.bind_field(resource, &prev.field, val.clone());
-                    prefix_match.push(format!("{prev_col} = {p}"));
-                }
-            }
-            let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.bind_field(resource, pk, cursor.id.clone());
-            let mut branch = format!("{pk_col} > {p}");
-            if !prefix_match.is_empty() {
-                branch = format!("{} AND {branch}", prefix_match.join(" AND "));
-            }
-            conds.push(format!("({branch})"));
-        }
-
-        if conds.is_empty() {
-            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
-            let pk_col = column(self.dialect, resource, pk)?;
-            let p = self.bind_field(resource, pk, cursor.id.clone());
-            Ok(format!("{pk_col} > {p}"))
-        } else {
-            Ok(format!("({})", conds.join(" OR ")))
-        }
+        // This API accepts an unsealed, caller-built cursor. Its effective sort has
+        // client field visibility, unlike the Runtime's authenticated cursor path.
+        let sorts = ash_core::keyset_sort(
+            resource,
+            ash_core::plan_client_sort(
+                resource,
+                self.actor.as_ref(),
+                ash_core::ClientExpr::new(sorts.to_vec()),
+            )?,
+        );
+        let values = ash_core::keyset_values(resource, cursor, &sorts);
+        let filter = ash_core::build_keyset_filter(resource, &sorts, &values, true)
+            .ok_or_else(|| Error::Invalid("keyset cursor requires an effective sort".into()))?;
+        let filter = ash_core::plan_filter(
+            resource,
+            self.actor.as_ref(),
+            self.tenant.as_deref(),
+            ash_core::TrustedExpr::Filter(filter),
+        )?;
+        self.compile_filter(resource, &filter)
     }
 
     pub fn compile_select(
@@ -1000,7 +933,18 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         query: &CompiledQuery,
         cursor: Option<&KeysetCursor>,
     ) -> Result<CompiledSql> {
-        self.compile_select_internal(resource, query, cursor)
+        let mut query = query.clone();
+        if cursor.is_some() {
+            query.sort = ash_core::keyset_sort(
+                resource,
+                ash_core::plan_client_sort(
+                    resource,
+                    query.actor.as_ref(),
+                    ash_core::ClientExpr::new(query.sort),
+                )?,
+            );
+        }
+        self.compile_select_internal(resource, &query, cursor)
     }
 
     fn compile_select_internal(
@@ -1111,17 +1055,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             sql.push_str(&where_clauses.join(" AND "));
         }
 
-        let mut all_sorts = query.sort.clone();
-        if cursor.is_some() {
-            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
-            if !all_sorts.iter().any(|s| s.field == pk) {
-                all_sorts.push(Sort {
-                    field: pk.to_string(),
-                    descending: false,
-                    ..Default::default()
-                });
-            }
-        }
+        let all_sorts = query.sort.clone();
         sql.push_str(&self.compile_sort(resource, &all_sorts)?);
 
         if let Some(limit) = query.limit {
@@ -1189,17 +1123,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let agg_sql = self.compile_aggregate(resource, agg)?;
             items.push(format!("{agg_sql} AS {}", ident(self.dialect, agg.name)?));
         }
-        let mut sorts = query.sort.clone();
-        if cursor.is_some() {
-            let pk = resource.primary_key().map(|p| p.name).unwrap_or("id");
-            if !sorts.iter().any(|s| s.field == pk) {
-                sorts.push(Sort {
-                    field: pk.to_string(),
-                    descending: false,
-                    ..Default::default()
-                });
-            }
-        }
+        let sorts = query.sort.clone();
         let mut order = Vec::new();
         for (i, sort) in sorts.iter().enumerate() {
             let alias = ident(self.dialect, &format!("__ash_sort_{i}"))?;

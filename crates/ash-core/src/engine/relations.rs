@@ -37,6 +37,9 @@ pub async fn load_related<D: DataLayer>(
 /// source's rows. What it leaves out, the destination's default read decides.
 #[derive(Clone, Debug, Default)]
 pub struct RelatedQuery {
+    /// Original effective sort for sealing a page before its rows are projected.
+    /// A backward read may use the reversed sort in `sort`.
+    pub cursor_sort: Option<Vec<Sort>>,
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     pub limit: Option<usize>,
@@ -96,7 +99,17 @@ pub async fn load_related_query<D: DataLayer>(
     rows.into_iter()
         .map(|rows| {
             rows.into_iter()
-                .map(|row| ctx.present((rel.destination)(), row.into(), selected.as_deref()))
+                .map(|row| {
+                    let dest = (rel.destination)();
+                    let keyset = query
+                        .cursor_sort
+                        .as_ref()
+                        .map(|sort| ctx.seal_keyset(dest, dest.default_read().name, sort, &row))
+                        .transpose()?;
+                    let mut view = ctx.present(dest, row.into(), selected.as_deref())?;
+                    view.set_keyset(keyset);
+                    Ok(view)
+                })
                 .collect()
         })
         .collect()

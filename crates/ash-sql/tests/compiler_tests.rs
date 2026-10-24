@@ -375,12 +375,15 @@ fn test_keyset_cursor_compilation() {
     let cursor_sql = compiler
         .compile_keyset_cursor(&TICKET_DEF, &cursor, &sorts)
         .unwrap();
-    // Expected format: ("priority" < ? OR ("priority" = ? AND "subject" > ?) OR ("priority" = ? AND "subject" = ? AND "id" > ?))
+    // The core planner supplies lexicographic comparisons, including null ordering.
     assert!(cursor_sql.contains("\"priority\" < ?"));
-    assert!(cursor_sql.contains("\"priority\" = ? AND \"subject\" > ?"));
-    assert!(cursor_sql.contains("\"priority\" = ? AND \"subject\" = ? AND \"id\" > ?"));
+    assert!(cursor_sql.contains("\"subject\" > ?"));
+    assert!(
+        !cursor_sql.contains("\"id\" > ?"),
+        "the unique subject already makes the order stable"
+    );
 
-    // Also test compile_select_with_cursor appends the primary key tie-breaker to ORDER BY
+    // The core planner recognizes that the identity makes this order stable.
     let mut select_compiler = QueryCompiler::new(&dialect);
     let select_query = CompiledQuery {
         sort: sorts,
@@ -392,8 +395,8 @@ fn test_keyset_cursor_compilation() {
     assert!(
         compiled_select
             .sql
-            .contains("ORDER BY \"priority\" DESC NULLS FIRST, \"subject\" ASC NULLS LAST, \"id\" ASC NULLS LAST"),
-        "Cursor queries must order deterministically with PK tie-breaker, got: {}",
+            .contains("ORDER BY \"priority\" DESC NULLS FIRST, \"subject\" ASC NULLS LAST"),
+        "Cursor queries must retain the stable identity sort, got: {}",
         compiled_select.sql
     );
 }
@@ -528,8 +531,9 @@ fn live_folders() -> Filter {
     Filter::and([Filter::is_nil("archived_at"), Filter::ne("name", "hidden")])
 }
 
-static FOLDER_PREPS: &[ash_core::PreparationDef] =
-    &[ash_core::PreparationDef::Filter(live_folders)];
+static FOLDER_PREPS: &[ash_core::PreparationDef] = &[ash_core::PreparationDef::Filter(|| {
+    ash_core::TrustedExpr::Filter(live_folders())
+})];
 
 static FOLDER_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
@@ -610,8 +614,8 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
             values,
             [
                 &Value::String("root".into()),
-                &Value::String("docs".into()),
                 &Value::String("hidden".into()),
+                &Value::String("docs".into()),
                 &Value::String("hidden".into()),
             ]
         );
@@ -781,4 +785,45 @@ fn test_inserts_leave_assigned_keys_to_the_database() {
         "{}",
         compiled.sql()
     );
+}
+
+#[test]
+fn unsealed_cursor_comparisons_use_client_field_visibility() {
+    use ash_core::{Check, FieldPolicyDef, PolicyEffect};
+    static HIDDEN_PRIORITY: &[FieldPolicyDef] = &[FieldPolicyDef::new(
+        "priority",
+        &[PolicyEffect::ForbidIf(Check::Always)],
+    )];
+    let resource = ResourceDef {
+        field_policies: HIDDEN_PRIORITY,
+        ..TICKET_DEF
+    };
+    let cursor = ash_core::KeysetCursor {
+        id: Value::Uuid(Uuid::nil()),
+        values: vec![("priority".into(), Value::Int(3))],
+    };
+    let query = CompiledQuery {
+        sort: vec![Sort {
+            field: "priority".into(),
+            descending: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for compiled in [
+        QueryCompiler::new(&SqliteDialect)
+            .compile_select_with_cursor(&resource, &query, Some(&cursor))
+            .unwrap(),
+        QueryCompiler::new(&PostgresDialect)
+            .compile_select_with_cursor(&resource, &query, Some(&cursor))
+            .unwrap(),
+    ] {
+        assert!(compiled.sql.contains("WHERE 0=1"), "{}", compiled.sql);
+        assert!(
+            !compiled
+                .params
+                .iter()
+                .any(|param| param.value == Value::Int(3))
+        );
+    }
 }

@@ -623,55 +623,7 @@ fn row_matches_filter(
     filter: &Filter,
     row: &FieldMap,
 ) -> bool {
-    eval_filter(tables, tenant, resource, filter, row, None) == Some(true)
-}
-
-/// Resources whose primary-read filters are being applied, innermost first. As in the
-/// SQL compiler, a read filter that leads back to its own resource is not applied again
-/// inside itself, which would recurse.
-struct Applying<'a> {
-    name: &'static str,
-    outer: Option<&'a Applying<'a>>,
-}
-
-fn is_applying(scope: Option<&Applying>, name: &str) -> bool {
-    let mut scope = scope;
-    while let Some(applying) = scope {
-        if applying.name == name {
-            return true;
-        }
-        scope = applying.outer;
-    }
-    false
-}
-
-/// Whether `row` is in the query's tenant and passes `resource`'s primary-read filter,
-/// as every read through a relationship must. The read filter is skipped when it is
-/// already being applied further out.
-fn passes_read_filter(
-    tables: &Tables,
-    tenant: Option<&str>,
-    resource: &'static ResourceDef,
-    row: &FieldMap,
-    scope: Option<&Applying>,
-) -> bool {
-    if let Some(tenant_filter) = resource.tenant_filter(tenant)
-        && eval_filter(tables, tenant, resource, &tenant_filter, row, scope) != Some(true)
-    {
-        return false;
-    }
-    if is_applying(scope, resource.name) {
-        return true;
-    }
-    let Some(read_filter) = resource.primary_read_filter() else {
-        return true;
-    };
-    let inner = Applying {
-        name: resource.name,
-        outer: scope,
-    };
-    let row = with_calculations(resource, &read_filter, row);
-    eval_filter(tables, tenant, resource, &read_filter, &row, Some(&inner)) == Some(true)
+    eval_filter(tables, tenant, resource, filter, row) == Some(true)
 }
 
 /// `row` with the calculations `filter` reads. Stored rows hold none, and the SQL
@@ -704,7 +656,6 @@ fn eval_filter(
     resource: &ResourceDef,
     filter: &Filter,
     row: &FieldMap,
-    scope: Option<&Applying>,
 ) -> Option<bool> {
     let present = |field: &str| row.get(field).filter(|got| !got.is_null());
     let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
@@ -780,21 +731,31 @@ fn eval_filter(
         Filter::And(parts) => all_of(
             parts
                 .iter()
-                .map(|part| eval_filter(tables, tenant, resource, part, row, scope)),
+                .map(|part| eval_filter(tables, tenant, resource, part, row)),
         ),
         Filter::Or(parts) => any_of(
             parts
                 .iter()
-                .map(|part| eval_filter(tables, tenant, resource, part, row, scope)),
+                .map(|part| eval_filter(tables, tenant, resource, part, row)),
         ),
         Filter::Not(inner) => {
-            eval_filter(tables, tenant, resource, inner, row, scope).map(|matched| !matched)
+            eval_filter(tables, tenant, resource, inner, row).map(|matched| !matched)
         }
         // `EXISTS (...)` in SQL: true or false, never unknown.
-        Filter::Related {
-            relationship,
-            filter: rel_filter,
-        } => Some((|| {
+        Filter::Client(_) => None,
+        Filter::Related { .. } => {
+            let planned = ash_core::plan_filter(
+                resource,
+                None,
+                tenant,
+                ash_core::TrustedExpr::Filter(filter.clone()),
+            )
+            .ok()?;
+            eval_filter(tables, tenant, resource, &planned, row)
+        }
+        Filter::Traversal(node) => Some((|| {
+            let relationship = node.relationship();
+            let rel_filter = node.filter();
             let Some(rel) = resource.relationship(relationship) else {
                 return false;
             };
@@ -805,8 +766,7 @@ fn eval_filter(
             };
             let matches = |dest_row: &FieldMap| {
                 let dest_row = with_calculations(dest_res, rel_filter, dest_row);
-                eval_filter(tables, tenant, dest_res, rel_filter, &dest_row, scope) == Some(true)
-                    && passes_read_filter(tables, tenant, dest_res, &dest_row, scope)
+                eval_filter(tables, tenant, dest_res, rel_filter, &dest_row) == Some(true)
             };
 
             match rel.kind {
@@ -843,7 +803,12 @@ fn eval_filter(
                     let matching_dest_ids: Vec<&Value> = through_table
                         .values()
                         .filter(|jr| jr.get(source_on_join) == Some(source_val))
-                        .filter(|jr| passes_read_filter(tables, tenant, through_res, jr, scope))
+                        .filter(|jr| {
+                            node.join_filter().is_none_or(|filter| {
+                                let jr = with_calculations(through_res, filter, jr);
+                                eval_filter(tables, tenant, through_res, filter, &jr) == Some(true)
+                            })
+                        })
                         .filter_map(|jr| jr.get(dest_on_join))
                         .collect();
 
@@ -984,7 +949,7 @@ fn actor_reads(
                     return false;
                 }
             }
-            eval_filter(tables, tenant, resource, filter, &row, None) == Some(true)
+            eval_filter(tables, tenant, resource, filter, &row) == Some(true)
         }
         Err(()) => false,
     }
@@ -992,11 +957,13 @@ fn actor_reads(
 
 /// `resource`'s read policies for `actor`: a filter, none, or `Err` if it may read nothing.
 fn read_policy(
+    tenant: Option<&str>,
     resource: &'static ResourceDef,
     actor: Option<&ash_core::Actor>,
 ) -> Result<std::result::Result<Option<Filter>, ()>> {
-    match ash_core::compile_read_filter(resource, resource.default_read(), actor) {
-        Ok(filter) => Ok(Ok(filter)),
+    match ash_core::related_read_filter(resource, actor, tenant) {
+        Ok(Filter::True) => Ok(Ok(None)),
+        Ok(filter) => Ok(Ok(Some(filter))),
         Err(Error::Forbidden) => Ok(Err(())),
         Err(err) => Err(err),
     }
@@ -1024,12 +991,11 @@ fn apply_aggregates(
             ))
         })?;
         let dest = (rel.destination)();
-        let dest_policy = read_policy(dest, actor)?;
+        let dest_policy = read_policy(tenant, dest, actor)?;
         let dest_rows: Vec<&FieldMap> = tables
             .get(&table_key(dest, tenant))
             .map(|t| {
                 t.values()
-                    .filter(|dest_row| passes_read_filter(tables, tenant, dest, dest_row, None))
                     .filter(|dest_row| actor_reads(tables, tenant, dest, &dest_policy, dest_row))
                     .collect()
             })
@@ -1063,12 +1029,11 @@ fn apply_aggregates(
                 let dest_on_join = rel
                     .destination_attribute_on_join_resource
                     .unwrap_or(rel.destination_attribute);
-                let through_policy = read_policy(through_def, actor)?;
+                let through_policy = read_policy(tenant, through_def, actor)?;
                 let join_rows: Vec<&FieldMap> = tables
                     .get(&table_key(through_def, tenant))
                     .map(|t| {
                         t.values()
-                            .filter(|jr| passes_read_filter(tables, tenant, through_def, jr, None))
                             .filter(|jr| {
                                 actor_reads(tables, tenant, through_def, &through_policy, jr)
                             })

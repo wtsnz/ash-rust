@@ -23,6 +23,7 @@ snapshot = ["dep:ash-sql"]
 ash-graphql = { path = "../ash-graphql", features = ["axum"] }
 ash-macros = { path = "../ash-macros" }
 ash-memory = { path = "../ash-memory" }
+ash-sqlite = { path = "../ash-sqlite" }
 ash-pubsub = { path = "../ash-pubsub" }
 ash-sql = { path = "../ash-sql" }
 axum = "0.8"

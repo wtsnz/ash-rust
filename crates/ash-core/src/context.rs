@@ -24,6 +24,7 @@ pub struct QueuedNotification {
 pub struct Runtime<D> {
     data: Arc<D>,
     system: bool,
+    cursor_key: Arc<crate::cursor::CursorKey>,
     notifiers: Vec<Arc<dyn Notifier>>,
     notification_queue: Option<Arc<Mutex<Vec<QueuedNotification>>>>,
 }
@@ -33,6 +34,7 @@ impl<D> Clone for Runtime<D> {
         Self {
             data: Arc::clone(&self.data),
             system: self.system,
+            cursor_key: Arc::clone(&self.cursor_key),
             notifiers: self.notifiers.clone(),
             notification_queue: self.notification_queue.clone(),
         }
@@ -48,9 +50,17 @@ impl<D> Runtime<D> {
         Self {
             data,
             system: false,
+            cursor_key: Arc::new(crate::cursor::CursorKey::random()),
             notifiers: Vec::new(),
             notification_queue: None,
         }
+    }
+
+    /// Configure a shared production cursor key before binding contexts. Replacing the
+    /// key invalidates earlier cursors. The default is random and Runtime-local.
+    pub fn with_cursor_key(mut self, key: [u8; 32]) -> Self {
+        self.cursor_key = Arc::new(crate::cursor::CursorKey::new(key));
+        self
     }
 
     pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
@@ -71,6 +81,7 @@ impl<D> Runtime<D> {
                 actor,
                 tenant,
                 authorization,
+                cursor_key: Arc::clone(&self.cursor_key),
             }),
             metadata: FieldMap::new(),
             data: Arc::clone(&self.data),
@@ -104,6 +115,7 @@ pub(crate) struct Scope {
     actor: Option<Actor>,
     tenant: Option<String>,
     authorization: Authorization,
+    pub(crate) cursor_key: Arc<crate::cursor::CursorKey>,
 }
 
 #[derive(Debug)]
@@ -385,6 +397,7 @@ impl<D: TransactionSupport> Runtime<D> {
     {
         let notifiers = self.notifiers.clone();
         let system = self.system;
+        let cursor_key = Arc::clone(&self.cursor_key);
         let created_queue = self.notification_queue.is_none();
         let queue = self.notification_queue.clone().unwrap_or_default();
         let tx_queue = Arc::clone(&queue);
@@ -394,6 +407,7 @@ impl<D: TransactionSupport> Runtime<D> {
                 f(Runtime {
                     data: Arc::new(data.clone()),
                     system,
+                    cursor_key,
                     notifiers,
                     notification_queue: Some(tx_queue),
                 })

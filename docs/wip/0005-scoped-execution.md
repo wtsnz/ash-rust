@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1, 2 and 4 implemented, pending review; the rest planned. See §5.
+- **Status**: Proposed. Steps 1 through 4 implemented, pending review; the rest planned. See §5.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -66,7 +66,7 @@ This table describes the target design. §5 says which parts are implemented.
 | Field-policy output | Read cleanup replaces hidden values with `%Ash.ForbiddenField{}` | Every output, including write results, bulk, manual persist and embedded resources, goes through one `View` builder | One code path instead of one per output | Raw records are internal types; manual persist returns them to core for presentation |
 | Calculation inputs | Not authorized, by design (documented) | A calculation using a hidden field returns null unless it declares `declassify` | Derived values can't leak hidden inputs by accident | Patterns like `ssn_last_4` need an explicit declaration |
 | `first` / `sum` aggregates | Aggregate the field's stored values | Aggregate only values the reader can see | Same reason | Results can differ between readers |
-| Keyset pagination | Cursor values encode the sort values | Cursors are encrypted and authenticated by the `Runtime` | Clients can't read or forge sort values | Cursors are tied to a server key; rotating it invalidates them |
+| Keyset pagination | Cursor values encode the sort values | Cursors are encrypted and authenticated by the `Runtime` | Clients can't read or forge sort values | Configure a shared Runtime key in production; rotating it invalidates cursors. Authenticated cursor values are trusted, so hidden prepared sorts remain pageable |
 | PubSub | Notifications carry the record, changeset and actor; not authorized per subscriber | Raw events stay internal. Subscribers get `View`s for their own scope. Audit, mail and cache consumers register privileged sinks at startup | Payloads can't leak fields or tenants by default | Consumers that want raw data must be declared |
 | Subscription deduplication | An `actor` function can map subscribers to a shared actor | Groups are keyed on a whole bound `Scope` and resolved *as* that group's actor | Sharing is safe because results are computed for the group | Groups must be expressible as an actor |
 | RPC tenant (vs AshTypescript) | An explicit tenant in the payload can be used | The payload's tenant is ignored; the adapter binds it | The server owns tenancy | Clients that switch tenant need a server route that rebinds |
@@ -85,8 +85,8 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | `Runtime`, sealed `Scope`, `bind`/`system`, private `Context` fields, changesets tied to their scope, multi-scope `runtime.transaction`, every transport (HTTP and both WebSocket protocols) bound through the same binder | 2 | In review (#87) |
 | Cross-tenant lookup grant | — | Planned. Until it lands, apps that log in by email across tenants (such as the Lagrange example) ask for the tenant first |
 | System capabilities declared by action hooks | — | Planned |
-| `ClientExpr`/`TrustedExpr`, join-policy traversal, sealed cursors | 3 | Planned |
-| Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | Implemented, pending review. Typed APIs return projected resource structs; raw data-layer transport remains until step 8 |
+| `ClientExpr`/`TrustedExpr`, destination and join traversal scopes, Runtime-sealed cursors, snapshot filter registration checks | 3 | Implemented, pending review. See [Client read plans](../client-read-plans.md) |
+| Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | In review (#88). Typed APIs return projected resource structs; raw data-layer transport remains until step 8 |
 | Derived-value visibility and `declassify` | 5 | Planned |
 | Guarded upsert conflicts; data-layer-specific trusted plan nodes | 6 | Planned |
 | Managed relationships through scoped resolution; atomic cascades | 7 | Planned |

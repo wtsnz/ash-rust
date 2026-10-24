@@ -98,6 +98,7 @@ impl std::fmt::Debug for RelationshipSource {
 /// ```
 #[derive(Clone, Default)]
 pub struct View {
+    keyset: Option<Box<CursorToken>>,
     fields: FieldMap,
     forbidden: HashSet<String>,
     nested: HashMap<String, PresentedValue>,
@@ -105,6 +106,9 @@ pub struct View {
     metadata: FieldMap,
     reader: Option<std::sync::Arc<crate::Actor>>,
 }
+
+#[derive(Clone)]
+struct CursorToken(String);
 
 /// The structure of a projected composite value, including nested forbidden masks.
 #[derive(Clone, Debug)]
@@ -132,6 +136,15 @@ impl PresentedValue {
 }
 
 impl View {
+    /// An opaque server-sealed cursor, when this View was read for a keyset page.
+    pub fn keyset(&self) -> Option<&str> {
+        self.keyset.as_deref().map(|cursor| cursor.0.as_str())
+    }
+
+    pub(crate) fn set_keyset(&mut self, token: Option<String>) {
+        self.keyset = token.map(|token| Box::new(CursorToken(token)));
+    }
+
     pub fn fields(&self) -> &FieldMap {
         &self.fields
     }

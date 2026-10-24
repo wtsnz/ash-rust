@@ -41,6 +41,10 @@ impl Actor {
         self.system
     }
 
+    pub(crate) fn cursor_identity(&self) -> (&Uuid, &HashMap<String, Value>) {
+        (&self.id, &self.attributes)
+    }
+
     pub fn with(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
         self.attributes.insert(key.into(), value.into());
         self

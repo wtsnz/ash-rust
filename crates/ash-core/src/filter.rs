@@ -5,6 +5,8 @@ use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Filter {
+    Client(Box<crate::ClientExpr<Filter>>),
+    Traversal(Box<crate::Traversal>),
     True,
     False,
     Eq(String, Value),
@@ -107,6 +109,8 @@ impl Filter {
 
     pub fn collect_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
+            Self::Client(input) => input.0.collect_fields(out),
+            Self::Traversal(_) => {}
             Self::True | Self::False => {}
             Self::Eq(field, _)
             | Self::Ne(field, _)
@@ -177,11 +181,11 @@ impl Filter {
     /// Evaluates the filter against one record of `resource`, so text filters on
     /// `CiString` attributes and calculations ignore case as they do in the data layers.
     pub fn matches_on(&self, resource: &ResourceDef, fields: &FieldMap) -> bool {
-        self.eval(Some(resource), fields) == Some(true)
+        self.snapshot_match(resource, fields) == crate::FilterMatch::Match
     }
 
     /// SQL's three-valued result, with `None` for unknown.
-    fn eval(&self, resource: Option<&ResourceDef>, fields: &FieldMap) -> Option<bool> {
+    pub(crate) fn eval(&self, resource: Option<&ResourceDef>, fields: &FieldMap) -> Option<bool> {
         let present = |field: &str| fields.get(field).filter(|got| !got.is_null());
         let text = |field: &str, needle: &str, test: fn(&str, &str) -> bool| {
             let ci = resource.is_some_and(|resource| {
@@ -194,6 +198,9 @@ impl Filter {
             present(field).map(|got| text_matches(Some(got), needle, ci, test))
         };
         match self {
+            Self::Client(_) => None,
+            Self::Traversal(node) => Self::related(node.relationship.clone(), *node.filter.clone())
+                .eval(resource, fields),
             Self::True => Some(true),
             Self::False => Some(false),
             Self::Eq(field, value) if value.is_null() => Some(present(field).is_none()),
@@ -241,7 +248,8 @@ impl Filter {
                         Value::Map(m) => matches(m),
                         _ => false,
                     }),
-                    _ => true,
+                    Some(Value::Null) => false,
+                    _ => return None,
                 })
             }
         }

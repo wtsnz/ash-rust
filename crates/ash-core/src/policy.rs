@@ -406,10 +406,15 @@ pub fn guard_input_filter(
     actor: Option<&Actor>,
     filter: Filter,
 ) -> Result<Filter> {
-    guard_filter(resource, actor, filter, true)
+    crate::plan_filter(
+        resource,
+        actor,
+        None,
+        crate::TrustedExpr::Filter(crate::ClientExpr::new(filter).into_filter()),
+    )
 }
 
-fn guard_filter(
+pub(crate) fn guard_client_fields(
     resource: &ResourceDef,
     actor: Option<&Actor>,
     filter: Filter,
@@ -418,14 +423,16 @@ fn guard_filter(
     let guard_all = |parts: Vec<Filter>| -> Result<Vec<Filter>> {
         parts
             .into_iter()
-            .map(|part| guard_filter(resource, actor, part, positive))
+            .map(|part| guard_client_fields(resource, actor, part, positive))
             .collect()
     };
     Ok(match filter {
-        Filter::True | Filter::False => filter,
+        Filter::True | Filter::False | Filter::Traversal(_) => filter,
+        Filter::In(_, values) if values.is_empty() => Filter::False,
+        Filter::Client(input) => guard_client_fields(resource, actor, input.0, positive)?,
         Filter::And(parts) => Filter::and(guard_all(parts)?),
         Filter::Or(parts) => Filter::or(guard_all(parts)?),
-        Filter::Not(inner) => !guard_filter(resource, actor, *inner, !positive)?,
+        Filter::Not(inner) => !guard_client_fields(resource, actor, *inner, !positive)?,
         // The related rows a client's filter reaches are those the actor may read, as Ash
         // adds the destination read's authorization filter to each relationship path in
         // a client's filter: a filter can't find records by related rows hidden from it.
@@ -435,14 +442,8 @@ fn guard_filter(
         } => match resource.relationship(&relationship) {
             Some(rel) => {
                 let dest = (rel.destination)();
-                let inner = guard_filter(dest, actor, *filter, positive)?;
-                let readable = match compile_read_filter(dest, dest.default_read(), actor) {
-                    Ok(None) => inner,
-                    Ok(Some(policy)) => Filter::and([inner, policy]),
-                    Err(Error::Forbidden) => Filter::False,
-                    Err(err) => return Err(err),
-                };
-                Filter::related(relationship, readable)
+                let inner = guard_client_fields(dest, actor, *filter, true)?;
+                Filter::related(relationship, inner)
             }
             None => Filter::Related {
                 relationship,
@@ -458,8 +459,13 @@ fn guard_filter(
             };
             match condition {
                 None => leaf,
-                Some(condition) if matches!(leaf, Filter::IsNil(_)) => {
+                Some(condition)
+                    if matches!(&leaf, Filter::IsNil(_) | Filter::Eq(_, crate::Value::Null)) =>
+                {
                     Filter::or([!condition, leaf])
+                }
+                Some(condition) if matches!(&leaf, Filter::Ne(_, crate::Value::Null)) => {
+                    Filter::and([condition, leaf])
                 }
                 // Negated, `not (c and leaf)` would hold where it's hidden: `not c or leaf`
                 // negates to `c and not leaf`.

@@ -69,14 +69,12 @@ pub fn register_resource_sort_inputs(
     )
 }
 
-/// Parses a `[<Resource>SortInput]` into sorts as `actor` may run them, a field its field
-/// policies hide sorting as null where it's hidden ([`ash_core::guard_input_sort`]), from
-/// the value as given (see [`parse_resource_filter`](crate::filter::parse_resource_filter)).
+/// Parse client sort input. Core applies the bound reader's field visibility through
+/// [`ash_core::plan_client_sort`] before the read runs.
 pub fn parse_resource_sort(
     resource: &'static ResourceDef,
-    actor: Option<&ash_core::Actor>,
     value: &GqlValue,
-) -> Result<Vec<Sort>, async_graphql::Error> {
+) -> Result<ash_core::ClientExpr<Vec<Sort>>, async_graphql::Error> {
     let mut sorts = Vec::new();
     for item in crate::filter::list(value) {
         let GqlValue::Object(obj) = item else {
@@ -108,8 +106,7 @@ pub fn parse_resource_sort(
             ..Default::default()
         });
     }
-    ash_core::guard_input_sort(resource, actor, sorts)
-        .map_err(|e| async_graphql::Error::new(e.to_string()))
+    Ok(ash_core::ClientExpr::new(sorts))
 }
 
 /// An enum value's name: a literal's, or a variable's string.

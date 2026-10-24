@@ -503,10 +503,7 @@ impl Selection {
             Some(filter) => {
                 let filter = filter_input(dest, &rules.names.filter(dest, filter))
                     .map_err(|e| failure(&e).under("filter"))?;
-                Some(
-                    ash_core::guard_input_filter(dest, rules.actor, filter)
-                        .map_err(|e| failure(&e))?,
-                )
+                Some(filter.into_filter())
             }
         };
         let sort = match given("sort") {
@@ -515,7 +512,7 @@ impl Selection {
                 let text = sort_text(sort);
                 let sort = sort_input(dest, &rules.names.sort(dest, &text))
                     .map_err(|e| failure(&e).under("sort"))?;
-                ash_core::guard_input_sort(dest, rules.actor, sort).map_err(|e| failure(&e))?
+                ash_core::plan_client_sort(dest, rules.actor, sort).map_err(|e| failure(&e))?
             }
         };
         let number = |key: &str| given(key).and_then(Json::as_u64).map(|n| n as usize);

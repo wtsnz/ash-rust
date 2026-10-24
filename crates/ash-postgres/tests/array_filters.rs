@@ -93,7 +93,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
 
     // A client's filter, with the value cast to the list's item type.
     let filter = input::filter_input(&Post::DEF, &json!({ "scores": { "has": 1 } })).unwrap();
-    assert_eq!(titles(&ctx, run, filter).await, ["a"]);
+    assert_eq!(titles(&ctx, run, filter.into_filter()).await, ["a"]);
     let wrong = input::filter_input(&Post::DEF, &json!({ "title": { "has": "a" } }));
     assert!(wrong.is_err(), "{wrong:?}");
 }

@@ -59,7 +59,9 @@ static CATEGORY_DEF: ResourceDef = def!(
     )],
     &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(no_bad_children)])],
+        .preparations(&[PreparationDef::Filter(|| ash_core::TrustedExpr::Filter(
+            no_bad_children()
+        ))])],
     &[],
     &[AggregateDef::count("child_count", "children")]
 );
@@ -92,7 +94,9 @@ static POST_TAG_DEF: ResourceDef = def!(
     &[],
     &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(live_links)])],
+        .preparations(&[PreparationDef::Filter(|| ash_core::TrustedExpr::Filter(
+            live_links()
+        ))])],
     &[],
     &[]
 );
@@ -130,7 +134,9 @@ static ITEM_DEF: ResourceDef = def!(
     &[],
     &[ActionDef::read("read")
         .primary()
-        .preparations(&[PreparationDef::Filter(doubled_above_two)])],
+        .preparations(&[PreparationDef::Filter(|| ash_core::TrustedExpr::Filter(
+            doubled_above_two()
+        ))])],
     &[
         CalculationDef::new(
             "double_qty",

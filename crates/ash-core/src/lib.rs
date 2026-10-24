@@ -12,6 +12,7 @@ mod atomic;
 mod bulk;
 mod changeset;
 mod context;
+mod cursor;
 mod data_layer;
 #[doc(hidden)]
 pub mod default_value;
@@ -28,11 +29,13 @@ mod notifier;
 mod pipeline;
 mod policy;
 mod presentation;
+mod read_plan;
 mod registry;
 mod rel;
 mod resource;
 #[doc(hidden)]
 pub mod returned;
+mod snapshot;
 pub mod store;
 mod types;
 mod value;
@@ -87,6 +90,9 @@ pub use policy::{
     redact_fields,
 };
 pub use presentation::{PresentedValue, RawRecord, RelationshipSource, View};
+pub use read_plan::{
+    ClientExpr, Traversal, TrustedExpr, plan_client_sort, plan_filter, related_read_filter,
+};
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
@@ -95,6 +101,7 @@ pub use resource::{
     RelationshipDef, Resource, ResourceDef, ResourceExt, StatementDef, UnionMember,
     utc_now_iso8601, utc_now_timestamp,
 };
+pub use snapshot::FilterMatch;
 pub use store::{
     DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore, StoreTag,
     default_store_type_id,

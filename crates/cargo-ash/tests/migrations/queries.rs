@@ -157,7 +157,8 @@ async fn text_filters_match_literally_and_respect_case(db: TestDb) {
     let mut prepared = None;
     for preparation in action.preparations {
         if let ash_core::PreparationDef::Filter(build) = preparation {
-            prepared = Some(build());
+            prepared =
+                Some(ash_core::plan_filter(&SearchableNote::DEF, None, None, build()).unwrap());
         }
     }
     assert_eq!(

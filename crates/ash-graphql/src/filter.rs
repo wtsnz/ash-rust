@@ -122,19 +122,13 @@ fn field_type(resource: &ResourceDef, field: &str) -> Option<AttrType> {
         .or_else(|| resource.calculation(field).map(|calc| calc.ty))
 }
 
-/// Parses a `<Resource>FilterInput` into a [`Filter`] as `actor` may run it: fields its
-/// field policies hide read as null where they're hidden, as Ash reads a client's filter
-/// ([`ash_core::guard_input_filter`]). It reads the value as given (an argument's, or one
-/// a selection holds), so a relationship selected with a filter can be loaded ahead of
-/// its field.
+/// Parse client input while retaining its provenance. The scope-bound core planner
+/// applies field visibility and resolves relationship reads before execution.
 pub fn parse_resource_filter(
     resource: &'static ResourceDef,
-    actor: Option<&ash_core::Actor>,
     value: &GqlValue,
-) -> Result<Filter, async_graphql::Error> {
-    let filter = parse_filter(resource, value)?;
-    ash_core::guard_input_filter(resource, actor, filter)
-        .map_err(|e| async_graphql::Error::new(e.to_string()))
+) -> Result<ash_core::ClientExpr<Filter>, async_graphql::Error> {
+    parse_filter(resource, value).map(ash_core::ClientExpr::new)
 }
 
 fn parse_filter(

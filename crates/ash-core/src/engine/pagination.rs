@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::data_layer::Sort;
 use crate::filter::Filter;
-use crate::resource::{Resource, ResourceDef};
+use crate::resource::ResourceDef;
 use crate::value::Value;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -42,7 +42,10 @@ impl KeysetCursor {
 /// unless the sort already orders by the primary key or every key of an identity, so no
 /// two records share a keyset.
 pub fn keyset_sort(resource: &ResourceDef, mut sort: Vec<Sort>) -> Vec<Sort> {
-    let sorted_on = |keys: &[&str]| keys.iter().all(|key| sort.iter().any(|s| s.field == *key));
+    let sorted_on = |keys: &[&str]| {
+        keys.iter()
+            .all(|key| sort.iter().any(|s| s.field == *key && s.guard.is_none()))
+    };
     let primary_key: Vec<&str> = resource
         .attributes
         .iter()
@@ -128,28 +131,20 @@ pub fn keyset_values(resource: &ResourceDef, cursor: &KeysetCursor, sorts: &[Sor
     let pk = resource.primary_key().map(|attr| attr.name);
     sorts
         .iter()
-        .map(
-            |sort| match cursor.values.iter().find(|(field, _)| *field == sort.field) {
+        .enumerate()
+        .map(|(index, sort)| {
+            match cursor
+                .values
+                .get(index)
+                .filter(|(field, _)| *field == sort.field)
+                .or_else(|| cursor.values.iter().find(|(field, _)| *field == sort.field))
+            {
                 Some((_, value)) => value.clone(),
                 None if Some(sort.field.as_str()) == pk => cursor.id.clone(),
                 None => Value::Null,
-            },
-        )
+            }
+        })
         .collect()
-}
-
-pub(crate) fn cursor_for_record<R: Resource>(record: &R, sort: &[Sort]) -> String {
-    let fields = R::to_fields(record);
-    let mut values = Vec::with_capacity(sort.len());
-    for s in sort {
-        let val = fields.get(&s.field).cloned().unwrap_or(Value::Null);
-        values.push((s.field.clone(), val));
-    }
-    KeysetCursor {
-        id: record.pk(),
-        values,
-    }
-    .encode()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
