@@ -148,6 +148,7 @@ dependencies = [
  "ash-core",
  "ash-macros",
  "ash-memory",
+ "ash-postgres",
  "ash-sqlite",
  "axum",
  "bytes",
@@ -349,11 +350,13 @@ dependencies = [
  "async-graphql",
  "axum",
  "futures-util",
+ "http-body-util",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
+ "tower",
  "uuid",
 ]
 

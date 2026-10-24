@@ -16,7 +16,12 @@ use serde_json::{Value, json};
 use support::{FleetDb, Harness};
 use tower::ServiceExt;
 
-async fn call(router: &axum::Router, path: &str, token: Option<&str>, body: Value) -> (StatusCode, Value) {
+async fn call(
+    router: &axum::Router,
+    path: &str,
+    token: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .method("POST")
         .uri(path)
@@ -31,11 +36,20 @@ async fn call(router: &axum::Router, path: &str, token: Option<&str>, body: Valu
         .unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
-async fn token(router: &axum::Router, email: &str) -> String {
-    let (status, body) = call(router, "/auth/sign-in", None, json!({ "email": email, "password": lagrange::seed::PASSWORD })).await;
+async fn token(router: &axum::Router, line: &str, email: &str) -> String {
+    let (status, body) = call(
+        router,
+        "/auth/sign-in",
+        None,
+        json!({ "line": line, "email": email, "password": lagrange::seed::PASSWORD }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     body["token"].as_str().unwrap().to_string()
 }
@@ -48,32 +62,92 @@ async fn graphql(router: &axum::Router, token: Option<&str>, query: &str) -> Val
 }
 
 fn names(list: &Value, field: &str) -> Vec<String> {
-    let mut names: Vec<String> = list.as_array().unwrap().iter().map(|item| item[field].as_str().unwrap().to_string()).collect();
+    let mut names: Vec<String> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item[field].as_str().unwrap().to_string())
+        .collect();
     names.sort();
     names
 }
 
 async fn http_api<D: FleetDb>(h: Harness<D>) {
     let app = Arc::new(h.app);
-    let router = lagrange::server::router(Arc::clone(&app), Arc::new(JwtService::new("lagrange-test-signing-key-0123456789"))).unwrap();
+    let router = lagrange::server::router(
+        Arc::clone(&app),
+        Arc::new(JwtService::new("lagrange-test-signing-key-0123456789")),
+    )
+    .unwrap();
 
-    let (status, _) = call(&router, "/auth/sign-in", None, json!({ "email": "ada@helios-freight.example", "password": "nope" })).await;
+    let (status, _) = call(&router, "/auth/sign-in", None, json!({ "line": lagrange::seed::HELIOS, "email": "ada@helios-freight.example", "password": "nope" })).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let ada = token(&router, "ada@helios-freight.example").await;
-    let mae = token(&router, "mae@red-dust-logistics.example").await;
-    let grace = token(&router, "grace@helios-freight.example").await;
+    let (status, _) = call(&router, "/auth/sign-in", None, json!({ "line": lagrange::seed::RED_DUST, "email": "ada@helios-freight.example", "password": lagrange::seed::PASSWORD })).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "credentials must belong to the selected line"
+    );
+    let (status, _) = call(
+        &router,
+        "/auth/sign-in",
+        None,
+        json!({ "email": "ada@helios-freight.example", "password": lagrange::seed::PASSWORD }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "line is required before authentication"
+    );
+    let ada = token(
+        &router,
+        lagrange::seed::HELIOS,
+        "ada@helios-freight.example",
+    )
+    .await;
+    let mae = token(
+        &router,
+        lagrange::seed::RED_DUST,
+        "mae@red-dust-logistics.example",
+    )
+    .await;
+    let grace = token(
+        &router,
+        lagrange::seed::HELIOS,
+        "grace@helios-freight.example",
+    )
+    .await;
 
     // The map is public; ships belong to a line.
     let ports = graphql(&router, None, "{ listPorts { code name } }").await;
     assert_eq!(ports["listPorts"].as_array().unwrap().len(), 7);
     let ships = graphql(&router, Some(&ada), "{ listShips { name } }").await;
-    assert_eq!(names(&ships["listShips"], "name"), ["Behemoth", "Long Haul", "Tin Kettle"]);
+    assert_eq!(
+        names(&ships["listShips"], "name"),
+        ["Behemoth", "Long Haul", "Tin Kettle"]
+    );
     let ships = graphql(&router, Some(&mae), "{ listShips { name } }").await;
     assert_eq!(names(&ships["listShips"], "name"), ["Dust Devil"]);
     // Ships belong to a line, and an anonymous request has none.
-    let (_, refused) = call(&router, "/graphql", None, json!({ "query": "{ listShips { name } }" })).await;
-    assert!(refused["errors"].to_string().contains("tenant"), "{refused}");
-    let (status, _) = call(&router, "/graphql", Some("not-a-token"), json!({ "query": "{ listPorts { code } }" })).await;
+    let (_, refused) = call(
+        &router,
+        "/graphql",
+        None,
+        json!({ "query": "{ listShips { name } }" }),
+    )
+    .await;
+    assert!(
+        refused["errors"].to_string().contains("tenant"),
+        "{refused}"
+    );
+    let (status, _) = call(
+        &router,
+        "/graphql",
+        Some("not-a-token"),
+        json!({ "query": "{ listPorts { code } }" }),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     // Relationships load as the request reads, batched per request: the map is public
@@ -81,20 +155,41 @@ async fn http_api<D: FleetDb>(h: Harness<D>) {
     let leo_berths = |token: Option<String>| {
         let router = router.clone();
         async move {
-            let map = graphql(&router, token.as_deref(), "{ listPorts { code planet { name } berths { code } } }").await;
-            let leo = map["listPorts"].as_array().unwrap().iter().find(|port| port["code"] == "LEO").unwrap().clone();
+            let map = graphql(
+                &router,
+                token.as_deref(),
+                "{ listPorts { code planet { name } berths { code } } }",
+            )
+            .await;
+            let leo = map["listPorts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|port| port["code"] == "LEO")
+                .unwrap()
+                .clone();
             assert_eq!(leo["planet"]["name"], "Earth");
             leo["berths"].as_array().unwrap().len()
         }
     };
     assert_eq!(leo_berths(None).await, 0);
     assert_eq!(leo_berths(Some(ada.clone())).await, 4);
-    let crewed = graphql(&router, Some(&ada), "{ listShips { name captain { name } } }").await;
+    let crewed = graphql(
+        &router,
+        Some(&ada),
+        "{ listShips { name captain { name } } }",
+    )
+    .await;
     let mut captains: Vec<(String, Value)> = crewed["listShips"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|ship| (ship["name"].as_str().unwrap().to_string(), ship["captain"]["name"].clone()))
+        .map(|ship| {
+            (
+                ship["name"].as_str().unwrap().to_string(),
+                ship["captain"]["name"].clone(),
+            )
+        })
         .collect();
     captains.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(
@@ -141,27 +236,52 @@ async fn live_voyage_updates<D: FleetDb>(h: Harness<D>) {
             .registry_context()
             .with_actor(h.ctx(name).actor.clone().unwrap())
             .with_tenant(h.ctx(name).tenant().unwrap().to_string());
-        let mut stream = schema.execute_stream(async_graphql::Request::new("subscription { voyageUpdated { updated { id status } } }").data(ctx));
-        tokio::spawn(async move { stream.next().await.map(|response| response.data.into_json().unwrap()) })
+        let mut stream = schema.execute_stream(
+            async_graphql::Request::new("subscription { voyageUpdated { updated { id status } } }")
+                .data(ctx),
+        );
+        tokio::spawn(async move {
+            stream
+                .next()
+                .await
+                .map(|response| response.data.into_json().unwrap())
+        })
     };
     let helios = listen("Ada");
     let red_dust = listen("Mae");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let voyage = ops::plan_voyage(h.ctx("Ada"), h.sol.ship("Long Haul"), h.sol.port("LEO").id, h.sol.port("PZZ").id, Date::parse("2187-02-01").unwrap())
+    let voyage = ops::plan_voyage(
+        h.ctx("Ada"),
+        h.sol.ship("Long Haul"),
+        h.sol.port("LEO").id,
+        h.sol.port("PZZ").id,
+        Date::parse("2187-02-01").unwrap(),
+    )
+    .await
+    .unwrap();
+    ops::clear_customs(&h.customs(lagrange::seed::HELIOS), voyage.id)
         .await
         .unwrap();
-    ops::clear_customs(&h.customs(lagrange::seed::HELIOS), voyage.id).await.unwrap();
 
     let heard = tokio::time::timeout(std::time::Duration::from_secs(5), helios)
         .await
         .expect("the line's dispatcher hears about it")
         .unwrap()
         .unwrap();
-    assert_eq!(heard["voyageUpdated"]["updated"]["status"], "cleared", "{heard}");
-    assert_eq!(heard["voyageUpdated"]["updated"]["id"], voyage.id.to_string());
+    assert_eq!(
+        heard["voyageUpdated"]["updated"]["status"], "cleared",
+        "{heard}"
+    );
+    assert_eq!(
+        heard["voyageUpdated"]["updated"]["id"],
+        voyage.id.to_string()
+    );
 
     let leaked = tokio::time::timeout(std::time::Duration::from_millis(300), red_dust).await;
-    assert!(leaked.is_err(), "another line must not hear about it: {leaked:?}");
+    assert!(
+        leaked.is_err(),
+        "another line must not hear about it: {leaked:?}"
+    );
 }
 on_every_backend!(live_voyage_updates);

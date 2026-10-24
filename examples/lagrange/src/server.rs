@@ -1,6 +1,6 @@
 //! The HTTP API: password sign-in that issues a JWT, and GraphQL over both databases.
 //!
-//! - `POST /auth/sign-in` with `{"email", "password"}` returns `{"token", "line", "role"}`.
+//! - `POST /auth/sign-in` with `{"line", "email", "password"}` returns `{"token", "line", "role"}`.
 //! - `POST /graphql` runs a query as the token's crew member, in their line, or as an
 //!   anonymous reader without a token.
 //! - `GET /graphql` serves GraphiQL, and `GET /graphql/ws` serves subscriptions.
@@ -53,6 +53,7 @@ struct ApiState<D> {
 
 #[derive(Deserialize)]
 struct SignIn {
+    line: String,
     email: String,
     password: String,
 }
@@ -65,7 +66,10 @@ struct Session {
 }
 
 /// The routes, sharing one platform and token signer.
-pub fn router<D>(app: Arc<Lagrange<D>>, jwt: Arc<JwtService>) -> Result<Router, async_graphql::dynamic::SchemaError>
+pub fn router<D>(
+    app: Arc<Lagrange<D>>,
+    jwt: Arc<JwtService>,
+) -> Result<Router, async_graphql::dynamic::SchemaError>
 where
     D: ash_core::DataLayer + Clone + Send + Sync + 'static,
 {
@@ -89,7 +93,7 @@ where
 {
     let crew = state
         .app
-        .authenticate(&request.email, &request.password)
+        .authenticate(&request.line, &request.email, &request.password)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let role = match ash_core::AshType::to_value(&crew.role) {
@@ -108,7 +112,10 @@ where
 }
 
 /// The request's context: the token's crew member in their line, or nobody.
-fn request_context<D>(state: &ApiState<D>, headers: &HeaderMap) -> Result<Context<StoreRegistry>, StatusCode>
+fn request_context<D>(
+    state: &ApiState<D>,
+    headers: &HeaderMap,
+) -> Result<Context<StoreRegistry>, StatusCode>
 where
     D: ash_core::DataLayer + Clone + Send + Sync + 'static,
 {
@@ -145,7 +152,11 @@ where
     D: ash_core::DataLayer + Clone + Send + Sync + 'static,
 {
     let ctx = request_context(&state, &headers)?;
-    Ok(state.schema.execute(request.into_inner().data(ctx)).await.into())
+    Ok(state
+        .schema
+        .execute(request.into_inner().data(ctx))
+        .await
+        .into())
 }
 
 async fn graphiql() -> impl IntoResponse {

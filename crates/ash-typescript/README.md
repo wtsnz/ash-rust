@@ -1,5 +1,11 @@
 # ash-typescript
 
+RPC executes and validates requests in the server adapter's context. The generated
+client retains AshTypescript's `tenant` option for wire compatibility, but ash-rust
+ignores that payload field. Send credentials through the adapter's supported headers
+or channel connection parameters. The adapter must authenticate the actor and resolve
+the tenant before execution. See [scoped access](../../docs/scoped-access.md).
+
 `ash-typescript` generates **end-to-end type-safe TypeScript definitions, Zod validation schemas, and an isomorphic client SDK** directly from your declarative `ash-rust` domain and resource definitions.
 
 It bridges the gap between your Rust backend and any modern TypeScript frontend—whether building **Server-Side Rendered (SSR)** apps in Next.js, Remix, or Astro, or **Single-Page Applications (SPA)** in React, Vite, Vue, or Svelte.

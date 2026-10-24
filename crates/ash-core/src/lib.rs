@@ -4,6 +4,7 @@
 //! [`DataLayer`], and read policies compile to filters so unauthorized rows
 //! never come back.
 
+mod access;
 mod action;
 mod actor;
 mod aggregate;
@@ -12,6 +13,8 @@ mod bulk;
 mod changeset;
 mod context;
 mod data_layer;
+#[doc(hidden)]
+pub mod default_value;
 mod engine;
 mod error;
 mod expr;
@@ -29,22 +32,22 @@ mod rel;
 mod resource;
 #[doc(hidden)]
 pub mod returned;
-#[doc(hidden)]
-pub mod default_value;
 pub mod store;
 mod types;
 mod value;
 
-pub use atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdate};
+pub use access::{CredentialReadPermit, ReadRequest, ScopedAccess};
 pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
-    BeforeActionFn, Change, ChangeContext, CustomChange, CustomValidation, DynamicAfterActionHook,
-    DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType, MetadataDef, PersistKind,
-    Countable, Pagination, PreparationDef, Validation, ValidationContext, apply_argument_defaults,
+    BeforeActionFn, Change, ChangeContext, Countable, CustomChange, CustomValidation,
+    DynamicAfterActionHook, DynamicAfterTransactionHook, DynamicBeforeActionHook, ManagedRelType,
+    MetadataDef, Pagination, PersistKind, PreparationDef, Validation, ValidationContext,
+    apply_argument_defaults,
 };
 pub use actor::Actor;
 pub use aggregate::{AggregateDef, AggregateFilter, AggregateKind};
 pub use ash_macros::{AshEnum, AshTypedMap, AshUnion, Resource, define, domain, resource};
+pub use atomic::{Atomic, AtomicCondition, AtomicContext, AtomicExpr, AtomicUpdate};
 pub use bulk::{
     BulkCreateOptions, BulkDestroyOptions, BulkResult, BulkTransaction, BulkUpdateOptions,
     bulk_create, bulk_destroy, bulk_update,
@@ -58,15 +61,17 @@ pub use data_layer::{
     CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
 pub use engine::{
-    KeysetCursor, Page, Query, build_keyset_filter, keyset_values, create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via, destroy_existing,
-    RelatedQuery, count_related_query, get, handle_managed_relationships, insert, load_related, load_related_query, manual_create, query, record_visible,
-    after_read, keyset_sort, run, scope_read, update, update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
+    KeysetCursor, Page, Query, RelatedQuery, after_read, build_keyset_filter, count_related_query,
+    create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via,
+    destroy_existing, get, handle_managed_relationships, insert, keyset_sort, keyset_values,
+    load_related, load_related_query, manual_create, query, record_visible, run, scope_read,
+    update, update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
-pub use guarded::Guarded;
 pub use filter::{Filter, all_of, any_of, in_list, like_matches, text_matches};
+pub use guarded::Guarded;
 pub use keys::{
     Aggregate, AggregateName, Attr, Calc, CalcName, FieldName, RelName, Relation, TextValue,
 };
@@ -74,30 +79,30 @@ pub use multi::{BoundMulti, IntoChangeset, Multi, MultiResult};
 pub use notifier::{Notification, Notifier, SyncFnNotifier};
 pub use pipeline::visible_scope;
 pub use policy::{
-    Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen,
-    authorize_write, check_to_filter, compile_read_filter, field_policy_fields, guard_input_filter,
-    guard_input_sort, hidden_fields, redact_fields,
+    Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_write, check_to_filter,
+    compile_read_filter, field_policy_fields, guard_input_filter, guard_input_sort, hidden_fields,
+    redact_fields,
 };
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{
-    AttrType, AttributeDef, CheckDef, DataLayerKind, Domain, DomainDef, EmbeddedType, IdentityDef, IndexDef, MapField, UnionMember,
-    StatementDef,
-    MultitenancyDef, MultitenancyStrategy, OnDelete, OnUpdate, RelKind, RelationshipDef, Resource,
-    ResourceDef, ResourceExt, utc_now_iso8601, utc_now_timestamp,
+    AttrType, AttributeDef, CheckDef, DataLayerKind, Domain, DomainDef, EmbeddedType, IdentityDef,
+    IndexDef, MapField, MultitenancyDef, MultitenancyStrategy, OnDelete, OnUpdate, RelKind,
+    RelationshipDef, Resource, ResourceDef, ResourceExt, StatementDef, UnionMember,
+    utc_now_iso8601, utc_now_timestamp,
 };
 pub use store::{
     DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore, StoreTag,
     default_store_type_id,
 };
 pub use types::{
-    AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, TimePrecision, UtcDateTime, UtcDateTimeUsec, Vector,
-    canonical_text, check_vector, compare_decimal, compare_typed, format_inet, format_vector,
-    parse_vector,
+    AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, TimePrecision, UtcDateTime,
+    UtcDateTimeUsec, Vector, canonical_text, check_vector, compare_decimal, compare_typed,
+    format_inet, format_vector, parse_vector,
 };
 pub use value::{
-    ConstValue, FieldMap, IntoOption, Value, get_metadata, optional_int, optional_uuid, put_metadata,
-    pk_cast, required_pk, required_string, required_uuid, union_value,
+    ConstValue, FieldMap, IntoOption, Value, get_metadata, optional_int, optional_uuid, pk_cast,
+    put_metadata, required_pk, required_string, required_uuid, union_value,
 };
 
 /// Typestate marker: a required action input has not been set yet.

@@ -71,12 +71,13 @@ cargo run -p lagrange -- simulate --postgres postgres://localhost/lagrange
 cargo run -p lagrange -- serve --port 4000
 ```
 
-Sign in as any seeded crew member (each has the password `correct-horse-battery`) and
-send the token as a bearer token:
+Select a shipping line and sign in as one of its seeded crew members, each with the
+password `correct-horse-battery`. Authentication checks credentials within that line.
+Send the returned token as a bearer token:
 
 ```bash
 curl -s localhost:4000/auth/sign-in -H 'content-type: application/json' \
-  -d '{"email": "ada@helios-freight.example", "password": "correct-horse-battery"}'
+  -d '{"line": "helios-freight", "email": "ada@helios-freight.example", "password": "correct-horse-battery"}'
 ```
 
 ```graphql

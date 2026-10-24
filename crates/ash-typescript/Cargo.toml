@@ -30,6 +30,8 @@ tempfile = "3"
 tokio-tungstenite = "0.29"
 async-graphql = { version = "7", features = ["dynamic-schema"] }
 futures-util = "0.3"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }
 uuid.workspace = true
 

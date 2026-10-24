@@ -104,26 +104,31 @@ where
             .with_tenant(crew.line.clone())
     }
 
-    /// The crew member with this email and password.
-    pub async fn authenticate(&self, email: &str, password: &str) -> Result<CrewMember> {
+    /// The crew member with this email and password in the adapter-selected line.
+    pub async fn authenticate(
+        &self,
+        line: &str,
+        email: &str,
+        password: &str,
+    ) -> Result<CrewMember> {
         CrewMember::auth_strategy()
-            .sign_in_with_password(&self.base, email, password)
+            .sign_in_with_password(&self.base.clone().with_tenant(line), email, password)
             .await
             .map_err(|_| ash_core::Error::Forbidden)
     }
 
-    /// Signs in with an email and password.
-    pub async fn sign_in(&self, email: &str, password: &str) -> Result<Context<D>> {
-        let crew = self.authenticate(email, password).await?;
+    /// Signs in to a line with an email and password.
+    pub async fn sign_in(&self, line: &str, email: &str, password: &str) -> Result<Context<D>> {
+        let crew = self.authenticate(line, email, password).await?;
         Ok(self.as_crew(&crew))
     }
 
     /// A transponder signs in with its API key. Its context writes telemetry through the
     /// registry, so pings land in the telemetry database.
-    pub async fn transponder(&self, api_key: &str) -> Result<Context<StoreRegistry>> {
+    pub async fn transponder(&self, line: &str, api_key: &str) -> Result<Context<StoreRegistry>> {
         let strategy: AuthStrategy<Transponder> = Transponder::auth_strategy();
         let transponder = strategy
-            .authenticate_api_key(&self.base, api_key)
+            .authenticate_api_key(&self.base.clone().with_tenant(line), api_key)
             .await
             .map_err(|_| ash_core::Error::Forbidden)?;
         Ok(Context::new(self.registry())

@@ -11,11 +11,34 @@ use support::{Backend, FleetDb, Harness};
 
 async fn crew_sign_in<D: FleetDb>(h: Harness<D>) {
     // Emails are case-insensitive, and the session carries the member's line.
-    let ada = h.app.sign_in("ADA@helios-freight.example", PASSWORD).await.unwrap();
+    let ada = h
+        .app
+        .sign_in(HELIOS, "ADA@helios-freight.example", PASSWORD)
+        .await
+        .unwrap();
     assert_eq!(ada.tenant(), Some(HELIOS));
-    assert_eq!(ada.actor.as_ref().and_then(|a| a.role()), Some("dispatcher"));
-    assert!(h.app.sign_in("ada@helios-freight.example", "wrong-password!").await.is_err());
-    assert!(h.app.sign_in("nobody@helios-freight.example", PASSWORD).await.is_err());
+    assert_eq!(
+        ada.actor.as_ref().and_then(|a| a.role()),
+        Some("dispatcher")
+    );
+    assert!(
+        h.app
+            .sign_in(HELIOS, "ada@helios-freight.example", "wrong-password!")
+            .await
+            .is_err()
+    );
+    assert!(
+        h.app
+            .sign_in(HELIOS, "nobody@helios-freight.example", PASSWORD)
+            .await
+            .is_err()
+    );
+    assert!(
+        h.app
+            .sign_in(RED_DUST, "ada@helios-freight.example", PASSWORD)
+            .await
+            .is_err()
+    );
 
     // Dispatchers hire crew into their own line; shippers can't.
     let hired = CrewMember::register_with_password(&ada)
@@ -26,7 +49,13 @@ async fn crew_sign_in<D: FleetDb>(h: Harness<D>) {
         .await
         .unwrap();
     assert_eq!(hired.line, HELIOS);
-    assert!(hired.hashed_password.as_deref().unwrap().starts_with("$argon2"));
+    assert!(
+        hired
+            .hashed_password
+            .as_deref()
+            .unwrap()
+            .starts_with("$argon2")
+    );
     let err = CrewMember::register_with_password(h.ctx("Grace"))
         .email(CiString::parse("eve@helios-freight.example").unwrap())
         .name("Eve")
@@ -53,10 +82,16 @@ async fn lines_see_their_own_fleet<D: FleetDb>(h: Harness<D>) {
         names.sort();
         names
     };
-    assert_eq!(names(Ship::query(ada).all().await.unwrap()), ["Behemoth", "Long Haul", "Tin Kettle"]);
+    assert_eq!(
+        names(Ship::query(ada).all().await.unwrap()),
+        ["Behemoth", "Long Haul", "Tin Kettle"]
+    );
     assert_eq!(names(Ship::query(mae).all().await.unwrap()), ["Dust Devil"]);
     let long_haul = h.sol.ship("Long Haul");
-    assert!(matches!(Ship::get(mae, long_haul.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Ship::get(mae, long_haul.id).await,
+        Err(Error::NotFound)
+    ));
 
     // The map is shared, and anyone may read it. Read policies filter rather than
     // fail, so a reader who isn't signed in sees no ships at all.
@@ -64,7 +99,10 @@ async fn lines_see_their_own_fleet<D: FleetDb>(h: Harness<D>) {
     assert_eq!(Port::query(mae).count().await.unwrap(), 7);
     let stranger = h.app.anonymous().with_tenant(HELIOS);
     assert!(Ship::query(&stranger).all().await.unwrap().is_empty());
-    assert!(matches!(Ship::get(&stranger, long_haul.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Ship::get(&stranger, long_haul.id).await,
+        Err(Error::NotFound)
+    ));
 
     // Ships are created in the dispatcher's line, never another.
     let commissioned = Ship::commission(mae)
@@ -81,7 +119,11 @@ on_every_backend!(lines_see_their_own_fleet);
 
 async fn captains_fly_their_own_ships<D: FleetDb>(h: Harness<D>) {
     let long_haul = h.sol.ship("Long Haul").clone();
-    let err = long_haul.clone().depart_on(h.ctx("Valentina")).await.unwrap_err();
+    let err = long_haul
+        .clone()
+        .depart_on(h.ctx("Valentina"))
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::Forbidden), "{err:?}");
     let flying = long_haul.depart_on(h.ctx("Yuri")).await.unwrap();
     assert_eq!(flying.current_state(), "in_transit");
@@ -89,12 +131,23 @@ async fn captains_fly_their_own_ships<D: FleetDb>(h: Harness<D>) {
 
     // Maintenance is the dispatcher's call, and only for a docked ship.
     let kettle = h.sol.ship("Tin Kettle").clone();
-    let err = kettle.clone().begin_maintenance_on(h.ctx("Valentina")).await.unwrap_err();
+    let err = kettle
+        .clone()
+        .begin_maintenance_on(h.ctx("Valentina"))
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::Forbidden), "{err:?}");
     let in_dock = kettle.begin_maintenance_on(h.ctx("Ada")).await.unwrap();
     assert_eq!(in_dock.current_state(), "maintenance");
     assert!(in_dock.clone().depart_on(h.ctx("Ada")).await.is_err());
-    assert_eq!(in_dock.end_maintenance_on(h.ctx("Ada")).await.unwrap().current_state(), "docked");
+    assert_eq!(
+        in_dock
+            .end_maintenance_on(h.ctx("Ada"))
+            .await
+            .unwrap()
+            .current_state(),
+        "docked"
+    );
 
     // A stale copy can't overwrite a newer one: departing raised the lock version.
     let stale = h.sol.ship("Long Haul").clone();
@@ -122,12 +175,18 @@ async fn decommissioned_ships_are_archived<D: FleetDb>(h: Harness<D>) {
     .unwrap();
 
     ops::decommission(ada, kettle.id).await.unwrap();
-    assert!(matches!(Ship::get(ada, kettle.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Ship::get(ada, kettle.id).await,
+        Err(Error::NotFound)
+    ));
     let retired = Ship::decommissioned(ada).all().await.unwrap();
     assert_eq!(retired.len(), 1);
     assert!(retired[0].is_archived());
     // Its berth hold went with it.
-    assert!(matches!(BerthReservation::get(ada, hold.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        BerthReservation::get(ada, hold.id).await,
+        Err(Error::NotFound)
+    ));
 
     // The registry code is free for a new hull while the old one stays on file.
     let reborn = Ship::commission(ada)
