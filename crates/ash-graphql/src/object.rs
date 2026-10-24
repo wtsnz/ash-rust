@@ -1,5 +1,7 @@
 use ash_core::eval as eval_expr;
-use ash_core::{AttrType, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value};
+use ash_core::{
+    AttrType, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value,
+};
 
 use async_graphql::Value as GqlValue;
 use async_graphql::dataloader::DataLoader;
@@ -34,14 +36,22 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let allow_nil = attr.allow_nil || has_field_policy;
         // The primary key is the record's `id: ID!`, as AshGraphql encodes it by default,
         // whatever its type; one by another name is its own field as well.
-        let pk = attr.primary_key && resource.attributes.iter().filter(|a| a.primary_key).count() == 1;
+        let pk =
+            attr.primary_key && resource.attributes.iter().filter(|a| a.primary_key).count() == 1;
         if pk {
-            obj = obj.field(Field::new("id", TypeRef::named_nn(TypeRef::ID), move |ctx| {
-                FieldFuture::new(async move {
-                    let id = ctx.parent_value.downcast_ref::<FieldMap>().and_then(|map| map.get(attr_name));
-                    Ok(id.and_then(crate::types::id_output).map(FieldValue::value))
-                })
-            }));
+            obj = obj.field(Field::new(
+                "id",
+                TypeRef::named_nn(TypeRef::ID),
+                move |ctx| {
+                    FieldFuture::new(async move {
+                        let id = ctx
+                            .parent_value
+                            .downcast_ref::<FieldMap>()
+                            .and_then(|map| map.get(attr_name));
+                        Ok(id.and_then(crate::types::id_output).map(FieldValue::value))
+                    })
+                },
+            ));
             if attr_name == "id" {
                 continue;
             }
@@ -75,12 +85,17 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let calc_ty = calc.ty;
         let type_ref = attr_type_to_type_ref(resource.name, calc.name, calc.ty, true);
         let expr = calc.expr;
-        let has_field_policy = resource.field_policies.iter().any(|fp| fp.field == calc.name);
+        let has_field_policy = resource
+            .field_policies
+            .iter()
+            .any(|fp| fp.field == calc.name);
 
         let field = Field::new(camel(calc_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    if has_field_policy && is_forbidden(resource, request_actor::<D>(&ctx), map, calc_name) {
+                    if has_field_policy
+                        && is_forbidden(resource, request_actor::<D>(&ctx), map, calc_name)
+                    {
                         report_forbidden(&ctx);
                         return Ok(None);
                     }
@@ -111,7 +126,10 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
     for agg in resource.aggregates {
         let agg_name = agg.name;
         // Unless a field policy may hide it, as one may an attribute.
-        let has_field_policy = resource.field_policies.iter().any(|fp| fp.field == agg.name);
+        let has_field_policy = resource
+            .field_policies
+            .iter()
+            .any(|fp| fp.field == agg.name);
         let always = matches!(
             agg.kind,
             ash_core::AggregateKind::Count | ash_core::AggregateKind::Exists
@@ -121,7 +139,9 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
         let field = Field::new(camel(agg_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
                 if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    if has_field_policy && is_forbidden(resource, request_actor::<D>(&ctx), map, agg_name) {
+                    if has_field_policy
+                        && is_forbidden(resource, request_actor::<D>(&ctx), map, agg_name)
+                    {
                         report_forbidden(&ctx);
                         return Ok(None);
                     }
@@ -174,7 +194,9 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     return Ok(match preloaded {
                         Value::Map(row) => Some(FieldValue::borrowed_any(row)),
                         Value::Array(rows) => Some(FieldValue::list(
-                            rows.iter().filter_map(Value::as_map).map(|row| FieldValue::borrowed_any(row)),
+                            rows.iter()
+                                .filter_map(Value::as_map)
+                                .map(|row| FieldValue::borrowed_any(row)),
                         )),
                         _ if to_one => None,
                         _ => Some(FieldValue::list(std::iter::empty::<FieldValue>())),
@@ -183,7 +205,13 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                 let query = if to_one {
                     RelatedQuery::default()
                 } else {
-                    related_query(dest_res, request_actor::<D>(&ctx), ctx.args.iter().map(|(name, value)| (name.as_str(), value.as_value())))?
+                    related_query(
+                        dest_res,
+                        request_actor::<D>(&ctx),
+                        ctx.args
+                            .iter()
+                            .map(|(name, value)| (name.as_str(), value.as_value())),
+                    )?
                 };
                 let shaped = query.filter.is_some()
                     || !query.sort.is_empty()
@@ -241,10 +269,15 @@ async fn load_shaped<D: DataLayer + Clone + 'static>(
     query: &RelatedQuery,
 ) -> async_graphql::Result<Vec<FieldMap>> {
     let ash = request_context::<D>(ctx)?;
-    let mut related =
-        ash_core::load_related_query(&*ash, resource, rel.name, &[relationship_source(rel, source)], query)
-            .await
-            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    let mut related = ash_core::load_related_query(
+        &*ash,
+        resource,
+        rel.name,
+        &[relationship_source(rel, source)],
+        query,
+    )
+    .await
+    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     Ok(related.pop().unwrap_or_default())
 }
 
@@ -266,10 +299,14 @@ async fn load_relationship<D: DataLayer + Clone + 'static>(
             .map_err(|e| (*e).clone())?;
         return Ok(rows.unwrap_or_default());
     }
-    let mut related =
-        ash_core::load_related(&*ash, resource, rel.name, &[relationship_source(rel, source)])
-            .await
-            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    let mut related = ash_core::load_related(
+        &*ash,
+        resource,
+        rel.name,
+        &[relationship_source(rel, source)],
+    )
+    .await
+    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     Ok(related.pop().unwrap_or_default())
 }
 
@@ -282,7 +319,12 @@ pub fn collect_enums_for_resource(resource: &'static ResourceDef) -> Vec<Enum> {
         .map(|attr| attr.ty)
         .chain(resource.aggregates.iter().map(|agg| agg.ty))
         .chain(resource.calculations.iter().map(|calc| calc.ty))
-        .chain(resource.actions.iter().flat_map(|action| action.arguments.iter().map(|arg| arg.ty)));
+        .chain(
+            resource
+                .actions
+                .iter()
+                .flat_map(|action| action.arguments.iter().map(|arg| arg.ty)),
+        );
     let mut enums: Vec<Enum> = Vec::new();
     let mut seen = Vec::new();
     for ty in types {

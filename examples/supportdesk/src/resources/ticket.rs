@@ -228,7 +228,11 @@ fn note_short_ids(_arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::
 /// An opened ticket notes how many comments it was opened with, as its
 /// `comments_given` metadata.
 fn note_comments_given(ctx: &mut ash_core::ChangeContext<'_>) -> ash_core::Result<()> {
-    let given = ctx.arguments.get("comments").and_then(Value::as_array).map_or(0, <[Value]>::len) as i64;
+    let given = ctx
+        .arguments
+        .get("comments")
+        .and_then(Value::as_array)
+        .map_or(0, <[Value]>::len) as i64;
     ctx.after_action(move |record| {
         ash_core::put_metadata(record, "comments_given", given);
         Ok(())

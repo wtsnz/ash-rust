@@ -97,7 +97,8 @@ impl Hooks {
         self.action_before_channel_push.is_some() || self.action_after_channel_response.is_some()
     }
     fn validation_channel(&self) -> bool {
-        self.validation_before_channel_push.is_some() || self.validation_after_channel_response.is_some()
+        self.validation_before_channel_push.is_some()
+            || self.validation_after_channel_response.is_some()
     }
 }
 
@@ -139,7 +140,10 @@ impl<D> Rpc<D> {
         let actions = self.ordered_actions();
         let mut resources: Vec<&'static ResourceDef> = Vec::new();
         for (_, rpc) in &actions {
-            if !resources.iter().any(|resource| resource.name == rpc.resource.name) {
+            if !resources
+                .iter()
+                .any(|resource| resource.name == rpc.resource.name)
+            {
                 resources.push(rpc.resource);
             }
         }
@@ -158,8 +162,17 @@ impl<D> Rpc<D> {
             .enumerate()
             .filter_map(|(i, name)| self.actions.get(name).map(|rpc| (i, name.as_str(), rpc)))
             .collect();
-        actions.sort_by(|a, b| (a.2.resource.name, a.2.action.name, a.0).cmp(&(b.2.resource.name, b.2.action.name, b.0)));
-        actions.into_iter().map(|(_, name, rpc)| (name, rpc)).collect()
+        actions.sort_by(|a, b| {
+            (a.2.resource.name, a.2.action.name, a.0).cmp(&(
+                b.2.resource.name,
+                b.2.action.name,
+                b.0,
+            ))
+        });
+        actions
+            .into_iter()
+            .map(|(_, name, rpc)| (name, rpc))
+            .collect()
     }
 }
 
@@ -175,16 +188,25 @@ fn ts_type(ty: &AttrType) -> String {
         AttrType::Boolean => "boolean".into(),
         AttrType::Date => "AshDate".into(),
         AttrType::Binary => "Binary".into(),
-        AttrType::UtcDatetime { precision: ash_core::TimePrecision::Second } => "UtcDateTime".into(),
+        AttrType::UtcDatetime {
+            precision: ash_core::TimePrecision::Second,
+        } => "UtcDateTime".into(),
         AttrType::UtcDatetime { .. } => "UtcDateTimeUsec".into(),
         AttrType::Vector { .. } => "Array<number>".into(),
         AttrType::Atom { one_of, .. } if !one_of.is_empty() => {
             let mut values: Vec<&str> = one_of.to_vec();
             values.sort_unstable();
-            values.iter().map(|value| format!("\"{value}\"")).collect::<Vec<_>>().join(" | ")
+            values
+                .iter()
+                .map(|value| format!("\"{value}\""))
+                .collect::<Vec<_>>()
+                .join(" | ")
         }
         AttrType::Atom { .. } => "string".into(),
-        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => "Record<string, any>".into(),
+        AttrType::Map
+        | AttrType::Embedded(_)
+        | AttrType::TypedMap { .. }
+        | AttrType::Union { .. } => "Record<string, any>".into(),
         AttrType::Array { of } => format!("Array<{}>", ts_type(of)),
     }
 }
@@ -196,7 +218,9 @@ fn alias_of(ty: &AttrType) -> Option<&'static str> {
         AttrType::Decimal => Some("export type Decimal = string;"),
         AttrType::Date => Some("export type AshDate = string;"),
         AttrType::Binary => Some("export type Binary = string;"),
-        AttrType::UtcDatetime { precision: ash_core::TimePrecision::Second } => Some("export type UtcDateTime = string;"),
+        AttrType::UtcDatetime {
+            precision: ash_core::TimePrecision::Second,
+        } => Some("export type UtcDateTime = string;"),
         AttrType::UtcDatetime { .. } => Some("export type UtcDateTimeUsec = string;"),
         AttrType::Array { of } => alias_of(of),
         _ => None,
@@ -222,7 +246,12 @@ fn fields(resource: &ResourceDef) -> Vec<Field> {
     let mut fields: Vec<Field> = resource
         .attributes
         .iter()
-        .map(|attr| Field { name: attr.name, ty: attr.ty, allow_nil: attr.allow_nil, kind: FieldKind::Attribute })
+        .map(|attr| Field {
+            name: attr.name,
+            ty: attr.ty,
+            allow_nil: attr.allow_nil,
+            kind: FieldKind::Attribute,
+        })
         .chain(resource.calculations.iter().map(|calc| Field {
             name: calc.name,
             ty: calc.ty,
@@ -245,11 +274,18 @@ fn fields(resource: &ResourceDef) -> Vec<Field> {
 }
 
 /// The relationships of `resource` to resources the client has, in name order.
-fn relationships<'a>(resource: &'a ResourceDef, resources: &[&'static ResourceDef]) -> Vec<&'a ash_core::RelationshipDef> {
+fn relationships<'a>(
+    resource: &'a ResourceDef,
+    resources: &[&'static ResourceDef],
+) -> Vec<&'a ash_core::RelationshipDef> {
     let mut rels: Vec<_> = resource
         .relationships
         .iter()
-        .filter(|rel| resources.iter().any(|known| known.name == (rel.destination)().name))
+        .filter(|rel| {
+            resources
+                .iter()
+                .any(|known| known.name == (rel.destination)().name)
+        })
         .collect();
     rels.sort_by_key(|rel| rel.name);
     rels
@@ -262,7 +298,10 @@ fn to_many(rel: &ash_core::RelationshipDef) -> bool {
 /// Whether a to-one relationship may find nothing.
 fn rel_allow_nil(resource: &ResourceDef, rel: &ash_core::RelationshipDef) -> bool {
     match rel.kind {
-        RelKind::BelongsTo => rel.source_columns().iter().any(|column| resource.attribute(column).is_none_or(|attr| attr.allow_nil)),
+        RelKind::BelongsTo => rel
+            .source_columns()
+            .iter()
+            .any(|column| resource.attribute(column).is_none_or(|attr| attr.allow_nil)),
         _ => true,
     }
 }
@@ -286,9 +325,17 @@ fn calc_args_type(args: &[ash_core::ArgumentDef]) -> String {
         .iter()
         .map(|arg| {
             let base = ts_type(&arg.ty);
-            let ty = if arg.allow_nil { format!("{base} | null") } else { base };
+            let ty = if arg.allow_nil {
+                format!("{base} | null")
+            } else {
+                base
+            };
             let optional = arg.default.is_some() || arg.allow_nil;
-            format!("{}{}: {ty}", to_camel_case(arg.name), if optional { "?" } else { "" })
+            format!(
+                "{}{}: {ty}",
+                to_camel_case(arg.name),
+                if optional { "?" } else { "" }
+            )
         })
         .collect();
     format!("{{ {} }}", args.join("; "))
@@ -298,7 +345,11 @@ fn primitive_union(names: &[&str]) -> String {
     if names.is_empty() {
         return "never".into();
     }
-    names.iter().map(|name| format!("\"{}\"", to_camel_case(name))).collect::<Vec<_>>().join(" | ")
+    names
+        .iter()
+        .map(|name| format!("\"{}\"", to_camel_case(name)))
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn field_line(field: &Field) -> String {
@@ -312,17 +363,27 @@ fn field_line(field: &Field) -> String {
 
 fn resource_schema(resource: &ResourceDef, resources: &[&'static ResourceDef]) -> String {
     let fields = fields(resource);
-    let (complex, primitive): (Vec<&Field>, Vec<&Field>) =
-        fields.iter().partition(|field| matches!(field.kind, FieldKind::Calculation(args) if !args.is_empty()));
+    let (complex, primitive): (Vec<&Field>, Vec<&Field>) = fields
+        .iter()
+        .partition(|field| matches!(field.kind, FieldKind::Calculation(args) if !args.is_empty()));
     let mut lines = vec![
         "  __type: \"Resource\";".to_string(),
-        format!("  __primitiveFields: {};", primitive_union(&primitive.iter().map(|field| field.name).collect::<Vec<_>>())),
+        format!(
+            "  __primitiveFields: {};",
+            primitive_union(&primitive.iter().map(|field| field.name).collect::<Vec<_>>())
+        ),
     ];
     lines.extend(primitive.iter().map(|field| field_line(field)));
     for field in complex {
-        let FieldKind::Calculation(args) = field.kind else { continue };
+        let FieldKind::Calculation(args) = field.kind else {
+            continue;
+        };
         let base = ts_type(&field.ty);
-        let returns = if field.allow_nil { format!("{base} | null") } else { base };
+        let returns = if field.allow_nil {
+            format!("{base} | null")
+        } else {
+            base
+        };
         lines.push(format!(
             "  {}: {{ __type: \"ComplexCalculation\"; __returnType: {returns}; __args: {}; }};",
             to_camel_case(field.name),
@@ -332,40 +393,79 @@ fn resource_schema(resource: &ResourceDef, resources: &[&'static ResourceDef]) -
     for rel in relationships(resource, resources) {
         let dest = (rel.destination)().name;
         let line = if to_many(rel) {
-            let pagination = rel_pagination(rel).map(|kind| format!(" __pagination: \"{kind}\";")).unwrap_or_default();
+            let pagination = rel_pagination(rel)
+                .map(|kind| format!(" __pagination: \"{kind}\";"))
+                .unwrap_or_default();
             format!(
                 "{{ __type: \"Relationship\"; __array: true; __resource: {dest}ResourceSchema;{pagination} __filterInput: {dest}FilterInput; __sortField: {dest}SortField; }}"
             )
         } else {
-            let null = if rel_allow_nil(resource, rel) { " | null" } else { "" };
+            let null = if rel_allow_nil(resource, rel) {
+                " | null"
+            } else {
+                ""
+            };
             format!("{{ __type: \"Relationship\"; __resource: {dest}ResourceSchema{null}; }}")
         };
         lines.push(format!("  {}: {line};", to_camel_case(rel.name)));
     }
-    format!("export type {}ResourceSchema = {{\n{}\n}};\n", resource.name, lines.join("\n"))
+    format!(
+        "export type {}ResourceSchema = {{\n{}\n}};\n",
+        resource.name,
+        lines.join("\n")
+    )
 }
 
 fn attributes_only_schema(resource: &ResourceDef) -> String {
-    let attrs: Vec<Field> = fields(resource).into_iter().filter(|field| matches!(field.kind, FieldKind::Attribute)).collect();
+    let attrs: Vec<Field> = fields(resource)
+        .into_iter()
+        .filter(|field| matches!(field.kind, FieldKind::Attribute))
+        .collect();
     let mut lines = vec![
         "  __type: \"Resource\";".to_string(),
-        format!("  __primitiveFields: {};", primitive_union(&attrs.iter().map(|field| field.name).collect::<Vec<_>>())),
+        format!(
+            "  __primitiveFields: {};",
+            primitive_union(&attrs.iter().map(|field| field.name).collect::<Vec<_>>())
+        ),
     ];
     lines.extend(attrs.iter().map(field_line));
-    format!("export type {}AttributesOnlySchema = {{\n{}\n}};\n", resource.name, lines.join("\n"))
+    format!(
+        "export type {}AttributesOnlySchema = {{\n{}\n}};\n",
+        resource.name,
+        lines.join("\n")
+    )
 }
 
 /// The operators a field of type `ty` filters by, as Ash offers them for the type.
 fn operators(ty: &AttrType) -> &'static [&'static str] {
-    const COMPARE: &[&str] = &["eq", "notEq", "in", "lessThan", "greaterThan", "lessThanOrEqual", "greaterThanOrEqual"];
+    const COMPARE: &[&str] = &[
+        "eq",
+        "notEq",
+        "in",
+        "lessThan",
+        "greaterThan",
+        "lessThanOrEqual",
+        "greaterThanOrEqual",
+    ];
     const TEXT: &[&str] = &[
-        "eq", "notEq", "in", "lessThan", "greaterThan", "lessThanOrEqual", "greaterThanOrEqual", "contains", "stringEndsWith",
+        "eq",
+        "notEq",
+        "in",
+        "lessThan",
+        "greaterThan",
+        "lessThanOrEqual",
+        "greaterThanOrEqual",
+        "contains",
+        "stringEndsWith",
         "stringStartsWith",
     ];
     match ty {
         AttrType::Boolean => &["eq", "notEq", "in"],
         AttrType::String | AttrType::CiString => TEXT,
-        AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => &["eq", "notEq", "in"],
+        AttrType::Map
+        | AttrType::Embedded(_)
+        | AttrType::TypedMap { .. }
+        | AttrType::Union { .. } => &["eq", "notEq", "in"],
         AttrType::Array { .. } => &["eq", "notEq", "in", "has"],
         _ => COMPARE,
     }
@@ -392,12 +492,22 @@ fn filter_input(resource: &ResourceDef, resources: &[&'static ResourceDef]) -> S
                 };
                 lines.push(format!("    {op}?: {rhs};"));
             }
-            format!("  {}?: {{\n{}\n  }};\n", to_camel_case(field.name), lines.join("\n"))
+            format!(
+                "  {}?: {{\n{}\n  }};\n",
+                to_camel_case(field.name),
+                lines.join("\n")
+            )
         })
         .collect();
     let rel_filters: Vec<String> = relationships(resource, resources)
         .iter()
-        .map(|rel| format!("  {}?: {}FilterInput;\n", to_camel_case(rel.name), (rel.destination)().name))
+        .map(|rel| {
+            format!(
+                "  {}?: {}FilterInput;\n",
+                to_camel_case(rel.name),
+                (rel.destination)().name
+            )
+        })
         .collect();
     format!(
         "export type {name} = {{\n  and?: Array<{name}>;\n  or?: Array<{name}>;\n  not?: Array<{name}>;\n\n{}\n{}\n}};\n",
@@ -408,14 +518,21 @@ fn filter_input(resource: &ResourceDef, resources: &[&'static ResourceDef]) -> S
 
 fn lower_first(name: &str) -> String {
     let mut chars = name.chars();
-    chars.next().map(|first| first.to_ascii_lowercase().to_string() + chars.as_str()).unwrap_or_default()
+    chars
+        .next()
+        .map(|first| first.to_ascii_lowercase().to_string() + chars.as_str())
+        .unwrap_or_default()
 }
 
 fn field_array(resource: &ResourceDef, suffix: &str, names: &[String]) -> String {
     if names.is_empty() {
         return String::new();
     }
-    let items = names.iter().map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", ");
+    let items = names
+        .iter()
+        .map(|name| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let const_name = format!("{}{suffix}s", lower_first(resource.name));
     format!(
         "export const {const_name} = [{items}] as const;\nexport type {}{suffix} = (typeof {const_name})[number];\n",
@@ -424,22 +541,45 @@ fn field_array(resource: &ResourceDef, suffix: &str, names: &[String]) -> String
 }
 
 fn filter_field_array(resource: &ResourceDef, resources: &[&'static ResourceDef]) -> String {
-    let mut names: Vec<String> = fields(resource).iter().map(|field| to_camel_case(field.name)).collect();
-    names.extend(relationships(resource, resources).iter().map(|rel| to_camel_case(rel.name)));
+    let mut names: Vec<String> = fields(resource)
+        .iter()
+        .map(|field| to_camel_case(field.name))
+        .collect();
+    names.extend(
+        relationships(resource, resources)
+            .iter()
+            .map(|rel| to_camel_case(rel.name)),
+    );
     field_array(resource, "FilterField", &names)
 }
 
 fn sort_field_array(resource: &ResourceDef) -> String {
-    let names: Vec<String> = fields(resource).iter().map(|field| to_camel_case(field.name)).collect();
+    let names: Vec<String> = fields(resource)
+        .iter()
+        .map(|field| to_camel_case(field.name))
+        .collect();
     field_array(resource, "SortField", &names)
 }
 
-fn type_aliases<D>(resources: &[&'static ResourceDef], actions: &[(&str, &RpcAction<D>)]) -> String {
+fn type_aliases<D>(
+    resources: &[&'static ResourceDef],
+    actions: &[(&str, &RpcAction<D>)],
+) -> String {
     let mut types: Vec<AttrType> = Vec::new();
     for resource in resources {
         types.extend(fields(resource).iter().map(|field| field.ty));
-        types.extend(resource.calculations.iter().flat_map(|calc| calc.arguments.iter().map(|arg| arg.ty)));
-        types.extend(resource.actions.iter().flat_map(|action| action.arguments.iter().map(|arg| arg.ty)));
+        types.extend(
+            resource
+                .calculations
+                .iter()
+                .flat_map(|calc| calc.arguments.iter().map(|arg| arg.ty)),
+        );
+        types.extend(
+            resource
+                .actions
+                .iter()
+                .flat_map(|action| action.arguments.iter().map(|arg| arg.ty)),
+        );
     }
     for (_, rpc) in actions {
         types.extend(rpc.action.returns);
@@ -455,13 +595,26 @@ fn types_file<D>(resources: &[&'static ResourceDef], actions: &[(&str, &RpcActio
     let schemas: Vec<String> = resources
         .iter()
         .map(|resource| {
-            let base = format!("// {} Schema\n{}\n", resource.name, resource_schema(resource, resources));
+            let base = format!(
+                "// {} Schema\n{}\n",
+                resource.name,
+                resource_schema(resource, resources)
+            );
             [base, attributes_only_schema(resource)].join("\n\n")
         })
         .collect();
-    let filters: String = resources.iter().map(|resource| filter_input(resource, resources)).collect();
-    let filter_arrays: Vec<String> = resources.iter().map(|resource| filter_field_array(resource, resources)).collect();
-    let sort_arrays: Vec<String> = resources.iter().map(|resource| sort_field_array(resource)).collect();
+    let filters: String = resources
+        .iter()
+        .map(|resource| filter_input(resource, resources))
+        .collect();
+    let filter_arrays: Vec<String> = resources
+        .iter()
+        .map(|resource| filter_field_array(resource, resources))
+        .collect();
+    let sort_arrays: Vec<String> = resources
+        .iter()
+        .map(|resource| sort_field_array(resource))
+        .collect();
     format!(
         "// Generated by AshTypescript - Shared Types\n// Do not edit this file manually\n\n\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
         type_aliases(resources, actions),
@@ -516,7 +669,12 @@ fn inputs(resource: &ResourceDef, action: &ActionDef) -> Vec<Input> {
         }
     }
     for arg in action.arguments {
-        inputs.push(Input { name: arg.name, ty: arg.ty, allow_nil: arg.allow_nil, required: !arg.allow_nil && arg.default.is_none() });
+        inputs.push(Input {
+            name: arg.name,
+            ty: arg.ty,
+            allow_nil: arg.allow_nil,
+            required: !arg.allow_nil && arg.default.is_none(),
+        });
     }
     inputs
 }
@@ -529,7 +687,11 @@ fn context<D>(rpc: &RpcAction<D>) -> Context {
     let inputs = inputs(rpc.resource, action);
     Context {
         identities: if matches!(action.kind, ActionKind::Update | ActionKind::Destroy) {
-            options.identities.iter().map(identity_type(rpc.resource, false)).collect()
+            options
+                .identities
+                .iter()
+                .map(identity_type(rpc.resource, false))
+                .collect()
         } else {
             Vec::new()
         },
@@ -551,16 +713,27 @@ fn context<D>(rpc: &RpcAction<D>) -> Context {
 fn identity_type(resource: &ResourceDef, validation: bool) -> impl Fn(&Identity) -> String + '_ {
     let ts_type = move |ty: &AttrType| {
         let ty = ts_type(ty);
-        if validation && ty != "string" { format!("{ty} | string") } else { ty }
+        if validation && ty != "string" {
+            format!("{ty} | string")
+        } else {
+            ty
+        }
     };
     move |identity| match identity {
         Identity::PrimaryKey => {
-            let keys: Vec<_> = resource.attributes.iter().filter(|attr| attr.primary_key).collect();
+            let keys: Vec<_> = resource
+                .attributes
+                .iter()
+                .filter(|attr| attr.primary_key)
+                .collect();
             match keys.as_slice() {
                 [key] => ts_type(&key.ty),
                 keys => format!(
                     "{{ {} }}",
-                    keys.iter().map(|key| format!("{}: {}", to_camel_case(key.name), ts_type(&key.ty))).collect::<Vec<_>>().join("; ")
+                    keys.iter()
+                        .map(|key| format!("{}: {}", to_camel_case(key.name), ts_type(&key.ty)))
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 ),
             }
         }
@@ -571,7 +744,9 @@ fn identity_type(resource: &ResourceDef, validation: bool) -> impl Fn(&Identity)
                     .keys
                     .iter()
                     .map(|key| {
-                        let ty = resource.attribute(key).map_or_else(|| "string".to_string(), |attr| ts_type(&attr.ty));
+                        let ty = resource
+                            .attribute(key)
+                            .map_or_else(|| "string".to_string(), |attr| ts_type(&attr.ty));
                         format!("{}: {ty}", to_camel_case(key))
                     })
                     .collect::<Vec<_>>()
@@ -587,12 +762,22 @@ fn exposed_metadata<D>(rpc: &RpcAction<D>) -> Vec<&'static MetadataDef> {
     rpc.action
         .metadata
         .iter()
-        .filter(|def| rpc.options.show_metadata.as_ref().is_none_or(|shown| shown.contains(&def.name)))
+        .filter(|def| {
+            rpc.options
+                .show_metadata
+                .as_ref()
+                .is_none_or(|shown| shown.contains(&def.name))
+        })
         .collect()
 }
 
 fn metadata_name<D>(rpc: &RpcAction<D>, def: &MetadataDef) -> String {
-    let mapped = rpc.options.metadata_field_names.iter().find(|(field, _)| *field == def.name).map_or(def.name, |(_, name)| name);
+    let mapped = rpc
+        .options
+        .metadata_field_names
+        .iter()
+        .find(|(field, _)| *field == def.name)
+        .map_or(def.name, |(_, name)| name);
     to_camel_case(mapped)
 }
 
@@ -605,11 +790,22 @@ fn input_type<D>(pascal: &str, rpc: &RpcAction<D>) -> String {
         .iter()
         .map(|input| {
             let base = ts_type(&input.ty);
-            let ty = if input.allow_nil { format!("{base} | null") } else { base };
-            format!("  {}{}: {ty};", to_camel_case(input.name), if input.required { "" } else { "?" })
+            let ty = if input.allow_nil {
+                format!("{base} | null")
+            } else {
+                base
+            };
+            format!(
+                "  {}{}: {ty};",
+                to_camel_case(input.name),
+                if input.required { "" } else { "?" }
+            )
         })
         .collect();
-    format!("export type {pascal}Input = {{\n{}\n}};\n", lines.join("\n"))
+    format!(
+        "export type {pascal}Input = {{\n{}\n}};\n",
+        lines.join("\n")
+    )
 }
 
 fn metadata_type<D>(pascal: &str, rpc: &RpcAction<D>) -> String {
@@ -619,9 +815,19 @@ fn metadata_type<D>(pascal: &str, rpc: &RpcAction<D>) -> String {
     }
     let lines: Vec<String> = exposed
         .iter()
-        .map(|def| format!("  {}{}: {};", metadata_name(rpc, def), if def.allow_nil { "?" } else { "" }, ts_type(&def.ty)))
+        .map(|def| {
+            format!(
+                "  {}{}: {};",
+                metadata_name(rpc, def),
+                if def.allow_nil { "?" } else { "" },
+                ts_type(&def.ty)
+            )
+        })
         .collect();
-    format!("\nexport type {pascal}Metadata = {{\n{}\n}};\n", lines.join("\n"))
+    format!(
+        "\nexport type {pascal}Metadata = {{\n{}\n}};\n",
+        lines.join("\n")
+    )
 }
 
 fn keyset_inline(schema: &str, array: &str) -> String {
@@ -632,7 +838,9 @@ fn keyset_inline(schema: &str, array: &str) -> String {
 }
 
 fn offset_inline(array: &str) -> String {
-    format!("{{\n  results: {array};\n  hasMore: boolean;\n  limit: number;\n  offset: number;\n  count?: number | null;\n  type: \"offset\";\n}}")
+    format!(
+        "{{\n  results: {array};\n  hasMore: boolean;\n  limit: number;\n  offset: number;\n  count?: number | null;\n  type: \"offset\";\n}}"
+    )
 }
 
 fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
@@ -643,17 +851,24 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
         (f, s) => format!("UnifiedFieldSelection<{schema}, {f}, {s}>"),
     };
     let metadata = metadata_type(pascal, rpc);
-    let metadata_param = format!("MetadataFields extends ReadonlyArray<keyof {pascal}Metadata> = []");
+    let metadata_param =
+        format!("MetadataFields extends ReadonlyArray<keyof {pascal}Metadata> = []");
     let picked = format!("Pick<{pascal}Metadata, MetadataFields[number]>");
     match rpc.action.kind {
         ActionKind::Read if ctx.is_get => {
-            let null = if rpc.options.not_found_error.unwrap_or(true) { "" } else { " | null" };
+            let null = if rpc.options.not_found_error.unwrap_or(true) {
+                ""
+            } else {
+                " | null"
+            };
             if has_metadata {
                 format!(
                     "export type {pascal}Fields = {selection}[];\n{metadata}\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields,\n  {metadata_param}\n> = (InferResult<{schema}, Fields> & {picked}){null};\n"
                 )
             } else {
-                format!("export type {pascal}Fields = {selection}[];\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields,\n> = InferResult<{schema}, Fields>{null};\n")
+                format!(
+                    "export type {pascal}Fields = {selection}[];\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields,\n> = InferResult<{schema}, Fields>{null};\n"
+                )
             }
         }
         ActionKind::Read if ctx.supports_pagination => {
@@ -664,17 +879,31 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
             } else {
                 format!("Array<InferResult<{schema}, Fields>>")
             };
-            let metadata_line = if has_metadata { format!("  {metadata_param},\n") } else { String::new() };
+            let metadata_line = if has_metadata {
+                format!("  {metadata_param},\n")
+            } else {
+                String::new()
+            };
             let page = if pagination.required {
                 // Pages required: the page alone.
                 let body = match (pagination.offset, pagination.keyset) {
-                    (true, true) => format!("{} | {}", offset_inline(&array), keyset_inline(&schema, &array)),
+                    (true, true) => format!(
+                        "{} | {}",
+                        offset_inline(&array),
+                        keyset_inline(&schema, &array)
+                    ),
                     (true, false) => offset_inline(&array),
                     _ => keyset_inline(&schema, &array),
                 };
-                let metadata_line = if has_metadata { format!("  {metadata_param}\n") } else { String::new() };
+                let metadata_line = if has_metadata {
+                    format!("  {metadata_param}\n")
+                } else {
+                    String::new()
+                };
                 let fields_line = format!("  Fields extends {pascal}Fields,\n");
-                format!("export type Infer{pascal}Result<\n{fields_line}{metadata_line}> = {body};\n")
+                format!(
+                    "export type Infer{pascal}Result<\n{fields_line}{metadata_line}> = {body};\n"
+                )
             } else {
                 let wrapped = match (pagination.offset, pagination.keyset) {
                     (true, true) => format!(
@@ -682,8 +911,14 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
                         offset_inline(&array),
                         keyset_inline(&schema, &array)
                     ),
-                    (true, false) => format!("ConditionalPaginatedResult<Page, {array}, {}>", offset_inline(&array)),
-                    _ => format!("ConditionalPaginatedResult<Page, {array}, {}>", keyset_inline(&schema, &array)),
+                    (true, false) => format!(
+                        "ConditionalPaginatedResult<Page, {array}, {}>",
+                        offset_inline(&array)
+                    ),
+                    _ => format!(
+                        "ConditionalPaginatedResult<Page, {array}, {}>",
+                        keyset_inline(&schema, &array)
+                    ),
                 };
                 format!(
                     "export type Infer{pascal}Result<\n  Fields extends {pascal}Fields | undefined,\n{metadata_line}  Page extends {pascal}Config[\"page\"] = undefined\n> = {wrapped};\n"
@@ -697,7 +932,9 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
                     "export type {pascal}Fields = {selection}[];\n{metadata}\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields,\n  {metadata_param}\n> = Array<InferResult<{schema}, Fields> & {picked}>;\n"
                 )
             } else {
-                format!("export type {pascal}Fields = {selection}[];\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields,\n> = Array<InferResult<{schema}, Fields>>;\n")
+                format!(
+                    "export type {pascal}Fields = {selection}[];\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields,\n> = Array<InferResult<{schema}, Fields>>;\n"
+                )
             }
         }
         ActionKind::Create | ActionKind::Update => {
@@ -706,12 +943,16 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
                     "export type {pascal}Fields = {selection}[];\n{metadata}\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields | undefined,\n  {metadata_param}\n> = InferResult<{schema}, Fields>;\n"
                 )
             } else {
-                format!("export type {pascal}Fields = {selection}[];\n\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields | undefined,\n> = InferResult<{schema}, Fields>;\n")
+                format!(
+                    "export type {pascal}Fields = {selection}[];\n\nexport type Infer{pascal}Result<\n  Fields extends {pascal}Fields | undefined,\n> = InferResult<{schema}, Fields>;\n"
+                )
             }
         }
         ActionKind::Destroy => {
             if has_metadata {
-                format!("{metadata}\nexport type Infer{pascal}Result<\n  {metadata_param}\n> = {{}};\n")
+                format!(
+                    "{metadata}\nexport type Infer{pascal}Result<\n  {metadata_param}\n> = {{}};\n"
+                )
             } else {
                 metadata
             }
@@ -719,7 +960,9 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
         ActionKind::Generic => {
             let returns = match rpc.action.returns {
                 Some(AttrType::Map) => "Record<string, any>".to_string(),
-                Some(AttrType::Array { of: AttrType::Map }) => "Array<Record<string, any>>".to_string(),
+                Some(AttrType::Array { of: AttrType::Map }) => {
+                    "Array<Record<string, any>>".to_string()
+                }
                 Some(ty) => ts_type(&ty),
                 None => "{}".to_string(),
             };
@@ -736,15 +979,31 @@ const FETCH_CONFIG: [&str; 3] = [
 
 fn pagination_config(pagination: ash_core::Pagination) -> Vec<String> {
     let optional = if pagination.required { "" } else { "?" };
-    let limit = if pagination.required && pagination.default_limit.is_none() { "" } else { "?" };
+    let limit = if pagination.required && pagination.default_limit.is_none() {
+        ""
+    } else {
+        "?"
+    };
     let countable = pagination.countable != Countable::No;
     match (pagination.offset, pagination.keyset) {
         (true, true) => {
-            let mut lines = vec![format!("  page{optional}: ("), "    {".into(), format!("      limit{limit}: number;"), "      offset?: number;".into()];
+            let mut lines = vec![
+                format!("  page{optional}: ("),
+                "    {".into(),
+                format!("      limit{limit}: number;"),
+                "      offset?: number;".into(),
+            ];
             if countable {
                 lines.push("      count?: boolean;".into());
             }
-            lines.extend(["    } | {".into(), format!("      limit{limit}: number;"), "      after?: string;".into(), "      before?: string;".into(), "    }".into(), "  );".into()]);
+            lines.extend([
+                "    } | {".into(),
+                format!("      limit{limit}: number;"),
+                "      after?: string;".into(),
+                "      before?: string;".into(),
+                "    }".into(),
+                "  );".into(),
+            ]);
             lines
         }
         (true, false) => {
@@ -779,7 +1038,10 @@ fn description(resource: &ResourceDef, action: &ActionDef) -> (&'static str, Str
         ActionKind::Create => ("create", format!("Create a new {}", resource.name)),
         ActionKind::Update => ("update", format!("Update an existing {}", resource.name)),
         ActionKind::Destroy => ("destroy", format!("Delete a {}", resource.name)),
-        ActionKind::Generic => ("action", format!("Execute generic action on {}", resource.name)),
+        ActionKind::Generic => (
+            "action",
+            format!("Execute generic action on {}", resource.name),
+        ),
     }
 }
 
@@ -790,7 +1052,9 @@ fn jsdoc(resource: &ResourceDef, action: &ActionDef) -> String {
 
 fn validation_jsdoc(resource: &ResourceDef, action: &ActionDef) -> String {
     let (kind, description) = description(resource, action);
-    format!("/**\n * Validate: {description}\n *\n * @ashActionType :{kind}\n * @validation true\n */")
+    format!(
+        "/**\n * Validate: {description}\n *\n * @ashActionType :{kind}\n * @validation true\n */"
+    )
 }
 
 /// Which request a config is for, and so which hook context it carries.
@@ -803,7 +1067,13 @@ enum Request {
 }
 
 /// The config every function takes: tenant, identity, input, and the hook context.
-fn common_config<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, hooks: &Hooks) -> Vec<String> {
+fn common_config<D>(
+    pascal: &str,
+    rpc: &RpcAction<D>,
+    ctx: &Context,
+    request: Request,
+    hooks: &Hooks,
+) -> Vec<String> {
     let validation = matches!(request, Request::Validation | Request::ValidationChannel);
     let mut config = vec!["  tenant?: string;".to_string()];
     if !ctx.identities.is_empty() {
@@ -821,7 +1091,9 @@ fn common_config<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Re
         InputKind::None => {}
     }
     let hook = match request {
-        Request::ValidationChannel if hooks.validation_channel() => Some("ValidationChannelHookContext"),
+        Request::ValidationChannel if hooks.validation_channel() => {
+            Some("ValidationChannelHookContext")
+        }
         Request::ActionChannel if hooks.action_channel() => Some("ActionChannelHookContext"),
         Request::Validation if hooks.validation() => Some("ValidationHookContext"),
         Request::Action if hooks.action() => Some("ActionHookContext"),
@@ -843,7 +1115,13 @@ struct Shape {
     is_mutation: bool,
 }
 
-fn shape<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, hooks: &Hooks) -> Shape {
+fn shape<D>(
+    pascal: &str,
+    rpc: &RpcAction<D>,
+    ctx: &Context,
+    request: Request,
+    hooks: &Hooks,
+) -> Shape {
     let action = rpc.action;
     let resource = rpc.resource;
     let has_metadata = !exposed_metadata(rpc).is_empty();
@@ -851,7 +1129,9 @@ fn shape<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, h
     if !rpc.options.get_by.is_empty() {
         config.push("  getBy: {".into());
         for field in &rpc.options.get_by {
-            let ty = resource.attribute(field).map_or_else(|| "string".to_string(), |attr| ts_type(&attr.ty));
+            let ty = resource
+                .attribute(field)
+                .map_or_else(|| "string".to_string(), |attr| ts_type(&attr.ty));
             config.push(format!("    {}: {ty};", to_camel_case(field)));
         }
         config.push("  };".into());
@@ -863,7 +1143,10 @@ fn shape<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, h
         }
         ActionKind::Create | ActionKind::Update => {
             config.push("  fields?: Fields;".into());
-            (true, format!("Fields extends {pascal}Fields | undefined = undefined"))
+            (
+                true,
+                format!("Fields extends {pascal}Fields | undefined = undefined"),
+            )
         }
         _ => (false, String::new()),
     };
@@ -871,7 +1154,10 @@ fn shape<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, h
         config.push(format!("  filter?: {}FilterInput;", resource.name));
     }
     if ctx.supports_sorting {
-        config.push(format!("  sort?: SortString<{0}SortField> | SortString<{0}SortField>[];", resource.name));
+        config.push(format!(
+            "  sort?: SortString<{0}SortField> | SortString<{0}SortField>[];",
+            resource.name
+        ));
     }
     if ctx.supports_pagination {
         config.extend(pagination_config(action.pagination.expect("paged")));
@@ -879,8 +1165,11 @@ fn shape<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, h
     if has_metadata {
         config.push("  metadataFields?: MetadataFields;".into());
     }
-    let optional_pagination =
-        action.kind == ActionKind::Read && !ctx.is_get && ctx.supports_pagination && !action.pagination.is_some_and(|p| p.required) && has_fields;
+    let optional_pagination = action.kind == ActionKind::Read
+        && !ctx.is_get
+        && ctx.supports_pagination
+        && !action.pagination.is_some_and(|p| p.required)
+        && has_fields;
     Shape {
         config,
         has_fields,
@@ -892,8 +1181,19 @@ fn shape<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context, request: Request, h
 }
 
 /// The payload a function sends.
-fn payload(name: &str, rpc: &RpcAction<impl Sized>, ctx: &Context, fields: bool, metadata: bool, filtering: bool, get_by: bool) -> String {
-    let mut payload = vec![format!("action: \"{name}\""), "...(config.tenant !== undefined && { tenant: config.tenant })".to_string()];
+fn payload(
+    name: &str,
+    rpc: &RpcAction<impl Sized>,
+    ctx: &Context,
+    fields: bool,
+    metadata: bool,
+    filtering: bool,
+    get_by: bool,
+) -> String {
+    let mut payload = vec![
+        format!("action: \"{name}\""),
+        "...(config.tenant !== undefined && { tenant: config.tenant })".to_string(),
+    ];
     if !ctx.identities.is_empty() {
         payload.push("identity: config.identity".into());
     }
@@ -907,7 +1207,8 @@ fn payload(name: &str, rpc: &RpcAction<impl Sized>, ctx: &Context, fields: bool,
         payload.push("...(config.fields !== undefined && { fields: config.fields })".into());
     }
     if metadata {
-        payload.push("...(config.metadataFields && { metadataFields: config.metadataFields })".into());
+        payload
+            .push("...(config.metadataFields && { metadataFields: config.metadataFields })".into());
     }
     if filtering && ctx.supports_filtering {
         payload.push("...(config.filter && { filter: config.filter })".into());
@@ -921,13 +1222,23 @@ fn payload(name: &str, rpc: &RpcAction<impl Sized>, ctx: &Context, fields: bool,
     format!("{{\n    {}\n  }}", payload.join(",\n    "))
 }
 
-fn execution_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Context, hooks: &Hooks) -> String {
+fn execution_function<D>(
+    name: &str,
+    pascal: &str,
+    rpc: &RpcAction<D>,
+    ctx: &Context,
+    hooks: &Hooks,
+) -> String {
     let action = rpc.action;
     let shape = shape(pascal, rpc, ctx, Request::Action, hooks);
     let mut config = shape.config.clone();
     config.extend(FETCH_CONFIG.iter().map(|line| line.to_string()));
-    let (has_fields, has_metadata, optional_pagination, is_mutation) =
-        (shape.has_fields, shape.has_metadata, shape.optional_pagination, shape.is_mutation);
+    let (has_fields, has_metadata, optional_pagination, is_mutation) = (
+        shape.has_fields,
+        shape.has_metadata,
+        shape.optional_pagination,
+        shape.is_mutation,
+    );
     let fields_generic = shape.fields_generic.clone();
 
     let (config_export, config_ref) = if optional_pagination {
@@ -935,33 +1246,58 @@ fn execution_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Con
             .iter()
             .map(|line| {
                 line.replace(": Fields;", &format!(": {pascal}Fields;"))
-                    .replace(": MetadataFields;", &format!(": ReadonlyArray<keyof {pascal}Metadata>;"))
+                    .replace(
+                        ": MetadataFields;",
+                        &format!(": ReadonlyArray<keyof {pascal}Metadata>;"),
+                    )
             })
             .collect();
-        (format!("export type {pascal}Config = {{\n{}\n}};\n\n", concrete.join("\n")), format!("{pascal}Config"))
+        (
+            format!(
+                "export type {pascal}Config = {{\n{}\n}};\n\n",
+                concrete.join("\n")
+            ),
+            format!("{pascal}Config"),
+        )
     } else {
         (String::new(), format!("{{\n{}\n}}", config.join("\n")))
     };
 
     // The result type, and the function's generics and signature.
     let error = "{ success: false; errors: AshRpcError[]; }\n";
-    let metadata_param = format!("MetadataFields extends ReadonlyArray<keyof {pascal}Metadata> = []");
+    let metadata_param =
+        format!("MetadataFields extends ReadonlyArray<keyof {pascal}Metadata> = []");
     let picked = format!("Pick<{pascal}Metadata, MetadataFields[number]>");
     let (result_def, returns, generics, signature) = if action.kind == ActionKind::Destroy {
         if has_metadata {
             (
-                format!("export type {pascal}Result<{metadata_param}> = | {{ success: true; data: {{}}; metadata: {picked}; }}\n| {error}\n;"),
+                format!(
+                    "export type {pascal}Result<{metadata_param}> = | {{ success: true; data: {{}}; metadata: {picked}; }}\n| {error}\n;"
+                ),
                 format!("{pascal}Result<MetadataFields>"),
                 metadata_param.clone(),
                 format!("config: {config_ref}"),
             )
         } else {
-            (format!("export type {pascal}Result = | {{ success: true; data: {{}}; }}\n| {error}\n;"), format!("{pascal}Result"), String::new(), format!("config: {config_ref}"))
+            (
+                format!(
+                    "export type {pascal}Result = | {{ success: true; data: {{}}; }}\n| {error}\n;"
+                ),
+                format!("{pascal}Result"),
+                String::new(),
+                format!("config: {config_ref}"),
+            )
         }
     } else if has_fields {
-        let mutation_metadata = if is_mutation && has_metadata { format!(" metadata: {picked};") } else { String::new() };
+        let mutation_metadata = if is_mutation && has_metadata {
+            format!(" metadata: {picked};")
+        } else {
+            String::new()
+        };
         let config_generic = format!("Config extends {pascal}Config = {pascal}Config");
-        let (result_generics, data_generics, fn_generics, sig, fn_return) = if optional_pagination && has_metadata {
+        let (result_generics, data_generics, fn_generics, sig, fn_return) = if optional_pagination
+            && has_metadata
+        {
             (
                 format!("{fields_generic}, {metadata_param}, Page extends {pascal}Config[\"page\"] = undefined"),
                 "<Fields, MetadataFields, Page>".to_string(),
@@ -994,7 +1330,13 @@ fn execution_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Con
                 "<Fields extends undefined ? [] : Fields, MetadataFields>".to_string(),
             )
         } else if action.kind == ActionKind::Read {
-            (fields_generic.clone(), "<Fields>".to_string(), fields_generic.clone(), format!("config: {config_ref}"), "<Fields>".to_string())
+            (
+                fields_generic.clone(),
+                "<Fields>".to_string(),
+                fields_generic.clone(),
+                format!("config: {config_ref}"),
+                "<Fields>".to_string(),
+            )
         } else {
             (
                 fields_generic.clone(),
@@ -1005,24 +1347,39 @@ fn execution_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Con
             )
         };
         (
-            format!("export type {pascal}Result<{result_generics}> = | {{ success: true; data: Infer{pascal}Result{data_generics};{mutation_metadata} }}\n| {error}\n;"),
+            format!(
+                "export type {pascal}Result<{result_generics}> = | {{ success: true; data: Infer{pascal}Result{data_generics};{mutation_metadata} }}\n| {error}\n;"
+            ),
             format!("{pascal}Result{fn_return}"),
             fn_generics,
             sig,
         )
     } else if has_metadata {
         (
-            format!("export type {pascal}Result<{metadata_param}> = | {{ success: true; data: Infer{pascal}Result; metadata: {picked}; }}\n| {error}\n;"),
+            format!(
+                "export type {pascal}Result<{metadata_param}> = | {{ success: true; data: Infer{pascal}Result; metadata: {picked}; }}\n| {error}\n;"
+            ),
             format!("{pascal}Result<MetadataFields>"),
             metadata_param.clone(),
             format!("config: {config_ref}"),
         )
     } else {
-        (format!("export type {pascal}Result = | {{ success: true; data: Infer{pascal}Result; }}\n| {error}\n;"), format!("{pascal}Result"), String::new(), format!("config: {config_ref}"))
+        (
+            format!(
+                "export type {pascal}Result = | {{ success: true; data: Infer{pascal}Result; }}\n| {error}\n;"
+            ),
+            format!("{pascal}Result"),
+            String::new(),
+            format!("config: {config_ref}"),
+        )
     };
 
     let payload = payload(name, rpc, ctx, has_fields, has_metadata, true, true);
-    let generics = if generics.is_empty() { String::new() } else { format!("<{generics}>") };
+    let generics = if generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{generics}>")
+    };
     format!(
         "{config_export}{result_def}\n\n{}\nexport async function {}{generics}(\n  {signature}\n): Promise<{returns}> {{\n  const payload = {payload};\n\n  return executeActionRpcRequest<{returns}>(\n    payload,\n    config\n  );\n}}\n",
         jsdoc(rpc.resource, action),
@@ -1030,7 +1387,13 @@ fn execution_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Con
     )
 }
 
-fn validation_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Context, hooks: &Hooks) -> String {
+fn validation_function<D>(
+    name: &str,
+    pascal: &str,
+    rpc: &RpcAction<D>,
+    ctx: &Context,
+    hooks: &Hooks,
+) -> String {
     let mut config = common_config(pascal, rpc, ctx, Request::Validation, hooks);
     config.extend(FETCH_CONFIG.iter().map(|line| line.to_string()));
     let payload = payload(name, rpc, ctx, false, false, false, false);
@@ -1054,23 +1417,46 @@ fn page_generic(config: &[String]) -> Vec<String> {
     let rest = if config[start].ends_with(';') {
         rest
     } else {
-        let close = rest.iter().position(|line| line == "  );" || line == "  };").map_or(rest.len(), |i| i + 1);
+        let close = rest
+            .iter()
+            .position(|line| line == "  );" || line == "  };")
+            .map_or(rest.len(), |i| i + 1);
         &rest[close..]
     };
     out.extend(rest.iter().cloned());
     out
 }
 
-fn channel_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Context, hooks: &Hooks) -> String {
+fn channel_function<D>(
+    name: &str,
+    pascal: &str,
+    rpc: &RpcAction<D>,
+    ctx: &Context,
+    hooks: &Hooks,
+) -> String {
     let shape = shape(pascal, rpc, ctx, Request::ActionChannel, hooks);
     let destroy = rpc.action.kind == ActionKind::Destroy;
-    let page_param = shape.optional_pagination.then(|| format!("Page extends {pascal}Config[\"page\"] = undefined"));
-    let config = if page_param.is_some() { page_generic(&shape.config) } else { shape.config.clone() };
-    let metadata_param = format!("MetadataFields extends ReadonlyArray<keyof {pascal}Metadata> = []");
+    let page_param = shape
+        .optional_pagination
+        .then(|| format!("Page extends {pascal}Config[\"page\"] = undefined"));
+    let config = if page_param.is_some() {
+        page_generic(&shape.config)
+    } else {
+        shape.config.clone()
+    };
+    let metadata_param =
+        format!("MetadataFields extends ReadonlyArray<keyof {pascal}Metadata> = []");
     let (mut params, mut args): (Vec<String>, Vec<&str>) = if destroy || !shape.has_fields {
-        if shape.has_metadata { (vec![metadata_param], vec!["MetadataFields"]) } else { (vec![], vec![]) }
+        if shape.has_metadata {
+            (vec![metadata_param], vec!["MetadataFields"])
+        } else {
+            (vec![], vec![])
+        }
     } else if shape.has_metadata {
-        (vec![shape.fields_generic.clone(), metadata_param], vec!["Fields", "MetadataFields"])
+        (
+            vec![shape.fields_generic.clone(), metadata_param],
+            vec!["Fields", "MetadataFields"],
+        )
     } else {
         (vec![shape.fields_generic.clone()], vec!["Fields"])
     };
@@ -1081,8 +1467,16 @@ fn channel_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Conte
         params.push(page.clone());
         args.push("Page");
     }
-    let result = if args.is_empty() { format!("{pascal}Result") } else { format!("{pascal}Result<{}>", args.join(", ")) };
-    let generics = if params.is_empty() { String::new() } else { format!("<{}>", params.join(", ")) };
+    let result = if args.is_empty() {
+        format!("{pascal}Result")
+    } else {
+        format!("{pascal}Result<{}>", args.join(", "))
+    };
+    let generics = if params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", params.join(", "))
+    };
     let mut fields = vec!["  channel: Channel;".to_string()];
     fields.extend(config);
     fields.extend([
@@ -1091,7 +1485,15 @@ fn channel_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Conte
         "  timeoutHandler?: () => void;".to_string(),
         "  timeout?: number;".to_string(),
     ]);
-    let payload = payload(name, rpc, ctx, shape.has_fields, shape.has_metadata, true, true);
+    let payload = payload(
+        name,
+        rpc,
+        ctx,
+        shape.has_fields,
+        shape.has_metadata,
+        true,
+        true,
+    );
     format!(
         "{}\nexport async function {}{generics}(config: {{\n{}\n}}) {{\n  executeActionChannelPush<{result}>(\n    config.channel,\n    {payload},\n    config.timeout,\n    config\n  );\n}}\n",
         jsdoc(rpc.resource, rpc.action),
@@ -1100,9 +1502,21 @@ fn channel_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Conte
     )
 }
 
-fn validation_channel_function<D>(name: &str, pascal: &str, rpc: &RpcAction<D>, ctx: &Context, hooks: &Hooks) -> String {
+fn validation_channel_function<D>(
+    name: &str,
+    pascal: &str,
+    rpc: &RpcAction<D>,
+    ctx: &Context,
+    hooks: &Hooks,
+) -> String {
     let mut fields = vec!["  channel: Channel;".to_string()];
-    fields.extend(common_config(pascal, rpc, ctx, Request::ValidationChannel, hooks));
+    fields.extend(common_config(
+        pascal,
+        rpc,
+        ctx,
+        Request::ValidationChannel,
+        hooks,
+    ));
     fields.extend([
         "  resultHandler: (result: ValidationResult) => void;".to_string(),
         "  errorHandler?: (error: any) => void;".to_string(),
@@ -1132,10 +1546,14 @@ fn rpc_function<D>(name: &str, rpc: &RpcAction<D>, config: &ClientConfig) -> Str
     if config.channel_functions {
         functions.push(channel_function(name, &pascal, rpc, &ctx, hooks));
     }
-    let parts: Vec<String> = [input_type(&pascal, rpc), result_type(&pascal, rpc, &ctx), functions.join("\n\n")]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect();
+    let parts: Vec<String> = [
+        input_type(&pascal, rpc),
+        result_type(&pascal, rpc, &ctx),
+        functions.join("\n\n"),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect();
     parts.join("\n").trim_end_matches('\n').to_string() + "\n"
 }
 
@@ -1145,17 +1563,46 @@ fn hook_context_types(hooks: &Hooks) -> String {
     let mut parts = Vec::new();
     let mut add = |enabled: bool, ty: &Option<String>, label: &str, name: &str| {
         if let Some(ty) = ty.as_ref().filter(|ty| enabled && !ty.is_empty()) {
-            parts.push(format!("// RPC {label} Hook Context Type\nexport type {name} = {ty};\n"));
+            parts.push(format!(
+                "// RPC {label} Hook Context Type\nexport type {name} = {ty};\n"
+            ));
         }
     };
-    add(hooks.action(), &hooks.action_context_type, "Action", "ActionHookContext");
-    add(hooks.validation(), &hooks.validation_context_type, "Validation", "ValidationHookContext");
-    add(hooks.action_channel(), &hooks.action_channel_context_type, "Action Channel", "ActionChannelHookContext");
-    add(hooks.validation_channel(), &hooks.validation_channel_context_type, "Validation Channel", "ValidationChannelHookContext");
+    add(
+        hooks.action(),
+        &hooks.action_context_type,
+        "Action",
+        "ActionHookContext",
+    );
+    add(
+        hooks.validation(),
+        &hooks.validation_context_type,
+        "Validation",
+        "ValidationHookContext",
+    );
+    add(
+        hooks.action_channel(),
+        &hooks.action_channel_context_type,
+        "Action Channel",
+        "ActionChannelHookContext",
+    );
+    add(
+        hooks.validation_channel(),
+        &hooks.validation_channel_context_type,
+        "Validation Channel",
+        "ValidationChannelHookContext",
+    );
     parts.join("\n").trim().to_string()
 }
 
-fn request_helper(function: &str, description: &str, config_type: &str, endpoint: &str, before: Option<&str>, after: Option<&str>) -> String {
+fn request_helper(
+    function: &str,
+    description: &str,
+    config_type: &str,
+    endpoint: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> String {
     let before = match before {
         Some(hook) => format!(
             "    let processedConfig = config;\n    if ({hook}) {{\n      processedConfig = await {hook}(payload.action, config);\n    }}\n"
@@ -1163,7 +1610,9 @@ fn request_helper(function: &str, description: &str, config_type: &str, endpoint
         None => "    const processedConfig = config;\n".to_string(),
     };
     let after = match after {
-        Some(hook) => format!("    if ({hook}) {{\n      await {hook}(payload.action, response, result, processedConfig);\n    }}\n"),
+        Some(hook) => format!(
+            "    if ({hook}) {{\n      await {hook}(payload.action, response, result, processedConfig);\n    }}\n"
+        ),
         None => String::new(),
     };
     format!(
@@ -1219,7 +1668,14 @@ export async function {function}<T>(
     )
 }
 
-fn channel_helper(function: &str, description: &str, config_type: &str, event: &str, before: Option<&str>, after: Option<&str>) -> String {
+fn channel_helper(
+    function: &str,
+    description: &str,
+    config_type: &str,
+    event: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> String {
     let before = match before {
         Some(hook) => format!(
             "    let processedConfig = config;\n    if ({hook}) {{\n      processedConfig = await {hook}(payload.action, config);\n    }}\n"
@@ -1227,7 +1683,9 @@ fn channel_helper(function: &str, description: &str, config_type: &str, event: &
         None => "    const processedConfig = config;\n".to_string(),
     };
     let after = |status: &str, value: &str| match after {
-        Some(hook) => format!("      if ({hook}) {{\n        await {hook}(payload.action, \"{status}\", {value}, processedConfig);\n      }}\n"),
+        Some(hook) => format!(
+            "      if ({hook}) {{\n        await {hook}(payload.action, \"{status}\", {value}, processedConfig);\n      }}\n"
+        ),
         None => String::new(),
     };
     format!(
@@ -1280,7 +1738,10 @@ export async function {function}<T>(
 
 fn helper_functions(config: &ClientConfig) -> String {
     let hooks = &config.hooks;
-    let context = |ty: &Option<String>| ty.clone().unwrap_or_else(|| "Record<string, any>".to_string());
+    let context = |ty: &Option<String>| {
+        ty.clone()
+            .unwrap_or_else(|| "Record<string, any>".to_string())
+    };
     let validation_config = if config.validation_functions {
         format!(
             r#"
@@ -1518,7 +1979,14 @@ export function buildCSRFHeaders(headers: Record<string, string> = {{}}): Record
 
 fn typed_query_fields(resource: &ResourceDef, fields: &serde_json::Value) -> String {
     match fields {
-        serde_json::Value::Array(items) => format!("[{}]", items.iter().map(|item| typed_query_field(resource, item)).collect::<Vec<_>>().join(", ")),
+        serde_json::Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(|item| typed_query_field(resource, item))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         other => typed_query_field(resource, other),
     }
 }
@@ -1535,7 +2003,11 @@ fn typed_query_field(resource: &ResourceDef, field: &serde_json::Value) -> Strin
                     let nested = resource
                         .relationship(key)
                         .map_or(resource, |rel| (rel.destination)());
-                    format!("{}: {}", to_camel_case(key), typed_query_fields(nested, value))
+                    format!(
+                        "{}: {}",
+                        to_camel_case(key),
+                        typed_query_fields(nested, value)
+                    )
                 })
                 .collect();
             format!("{{ {} }}", pairs.join(", "))
@@ -1550,7 +2022,10 @@ fn typed_queries_section<D>(queries: &[TypedQuery], actions: &[(&str, &RpcAction
     }
     let mut by_resource: Vec<(&str, Vec<&TypedQuery>)> = Vec::new();
     for query in queries {
-        match by_resource.iter_mut().find(|(name, _)| *name == query.resource.name) {
+        match by_resource
+            .iter_mut()
+            .find(|(name, _)| *name == query.resource.name)
+        {
             Some((_, list)) => list.push(query),
             None => by_resource.push((query.resource.name, vec![query])),
         }
@@ -1603,26 +2078,54 @@ fn typed_queries_section<D>(queries: &[TypedQuery], actions: &[(&str, &RpcAction
 fn used_type_names(types: &str, body: &str) -> Vec<String> {
     let mut exported: Vec<String> = types
         .lines()
-        .filter_map(|line| line.strip_prefix("export type ").or_else(|| line.strip_prefix("export interface ")))
-        .filter_map(|rest| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).next())
+        .filter_map(|line| {
+            line.strip_prefix("export type ")
+                .or_else(|| line.strip_prefix("export interface "))
+        })
+        .filter_map(|rest| {
+            rest.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+        })
         .map(str::to_string)
         .collect();
     exported.sort();
     exported.dedup();
-    let words: std::collections::HashSet<&str> = body.split(|c: char| !(c.is_alphanumeric() || c == '_')).collect();
-    exported.into_iter().filter(|name| words.contains(name.as_str())).collect()
+    let words: std::collections::HashSet<&str> = body
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .collect();
+    exported
+        .into_iter()
+        .filter(|name| words.contains(name.as_str()))
+        .collect()
 }
 
-fn rpc_file<D>(actions: &[(&str, &RpcAction<D>)], queries: &[TypedQuery], types: &str, config: &ClientConfig) -> String {
-    let functions: Vec<String> = actions.iter().map(|(name, rpc)| rpc_function(name, rpc, config)).collect();
-    let body: Vec<String> = [hook_context_types(&config.hooks), helper_functions(config), typed_queries_section(queries, actions), functions.join("\n\n")]
-        .into_iter()
-        .filter(|part| !part.is_empty())
+fn rpc_file<D>(
+    actions: &[(&str, &RpcAction<D>)],
+    queries: &[TypedQuery],
+    types: &str,
+    config: &ClientConfig,
+) -> String {
+    let functions: Vec<String> = actions
+        .iter()
+        .map(|(name, rpc)| rpc_function(name, rpc, config))
         .collect();
+    let body: Vec<String> = [
+        hook_context_types(&config.hooks),
+        helper_functions(config),
+        typed_queries_section(queries, actions),
+        functions.join("\n\n"),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect();
     let body = body.join("\n\n");
     let used = used_type_names(types, &body);
     let import = config.types_import.as_str();
-    let imports = if config.channel_functions { format!("import {{ Channel }} from \"{}\";\n", config.phoenix_import) } else { String::new() };
+    let imports = if config.channel_functions {
+        format!("import {{ Channel }} from \"{}\";\n", config.phoenix_import)
+    } else {
+        String::new()
+    };
     format!(
         "// Generated by AshTypescript - RPC Actions\n// Do not edit this file manually\n\n{imports}\nimport type {{ {} }} from \"{import}\";\nexport type * from \"{import}\";\n\n{body}\n",
         used.join(", ")

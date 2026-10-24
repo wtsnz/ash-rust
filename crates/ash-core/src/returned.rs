@@ -26,7 +26,9 @@ pub trait AsSerializedValue {
 
 impl<T: serde::Serialize> AsSerializedValue for &Returned<T> {
     fn value(&self) -> Result<Value> {
-        serde_json::to_value(&self.0).map(Value::from_plain_json).map_err(|e| Error::Invalid(e.to_string()))
+        serde_json::to_value(&self.0)
+            .map(Value::from_plain_json)
+            .map_err(|e| Error::Invalid(e.to_string()))
     }
 }
 

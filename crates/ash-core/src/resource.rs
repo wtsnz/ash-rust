@@ -76,11 +76,18 @@ pub struct IdentityDef {
 /// `keys`, led by the tenant attribute under attribute multitenancy unless they span
 /// every tenant, as AshPostgres scopes identities and custom indexes: the tenant first,
 /// wherever it was declared.
-fn tenant_led(keys: &'static [&'static str], multitenancy: Option<MultitenancyDef>, all_tenants: bool) -> Vec<&'static str> {
+fn tenant_led(
+    keys: &'static [&'static str],
+    multitenancy: Option<MultitenancyDef>,
+    all_tenants: bool,
+) -> Vec<&'static str> {
     match multitenancy {
-        Some(MultitenancyDef { strategy: MultitenancyStrategy::Attribute(tenant), .. }) if !all_tenants => {
-            std::iter::once(tenant).chain(keys.iter().copied().filter(|key| *key != tenant)).collect()
-        }
+        Some(MultitenancyDef {
+            strategy: MultitenancyStrategy::Attribute(tenant),
+            ..
+        }) if !all_tenants => std::iter::once(tenant)
+            .chain(keys.iter().copied().filter(|key| *key != tenant))
+            .collect(),
         _ => keys.to_vec(),
     }
 }
@@ -379,9 +386,12 @@ impl ResourceDef {
     /// resources are kept apart by the data layer instead.
     pub fn tenant_filter(&self, tenant: Option<&str>) -> Option<crate::filter::Filter> {
         match (self.multitenancy?.strategy, tenant) {
-            (MultitenancyStrategy::Attribute(attribute), Some(tenant)) => Some(
-                crate::filter::Filter::eq(attribute, crate::value::Value::String(tenant.to_string())),
-            ),
+            (MultitenancyStrategy::Attribute(attribute), Some(tenant)) => {
+                Some(crate::filter::Filter::eq(
+                    attribute,
+                    crate::value::Value::String(tenant.to_string()),
+                ))
+            }
             _ => None,
         }
     }
@@ -534,22 +544,32 @@ pub enum AttrType {
     Array {
         of: &'static AttrType,
     },
-    UtcDatetime { precision: crate::types::TimePrecision },
+    UtcDatetime {
+        precision: crate::types::TimePrecision,
+    },
     Decimal,
     Float,
     Date,
     Binary,
     CiString,
     Inet,
-    Vector { dimensions: u32 },
+    Vector {
+        dimensions: u32,
+    },
     /// An embedded resource, as an attribute holding one has it: its fields, as a map.
     Embedded(EmbeddedType),
     /// A map of declared fields, as Ash's `:map` with `fields` constraints (or a typed
     /// struct): `#[derive(AshTypedMap)]` on a struct.
-    TypedMap { name: &'static str, fields: &'static [MapField] },
+    TypedMap {
+        name: &'static str,
+        fields: &'static [MapField],
+    },
     /// One of several typed members, as Ash's `Ash.Type.Union`, held as `{type, value}`:
     /// `#[derive(AshUnion)]` on an enum.
-    Union { name: &'static str, members: &'static [UnionMember] },
+    Union {
+        name: &'static str,
+        members: &'static [UnionMember],
+    },
 }
 
 /// The embedded resource an [`AttrType::Embedded`] attribute holds.
@@ -601,7 +621,11 @@ impl AttrType {
                     .resource()
                     .attributes
                     .iter()
-                    .map(|attr| MapField { name: attr.name, ty: attr.ty, allow_nil: attr.allow_nil })
+                    .map(|attr| MapField {
+                        name: attr.name,
+                        ty: attr.ty,
+                        allow_nil: attr.allow_nil,
+                    })
                     .collect(),
             ),
             Self::TypedMap { fields, .. } => Some(fields.to_vec()),
@@ -612,7 +636,10 @@ impl AttrType {
     /// Whether a value of this type is held as a map: a map, an embedded resource, a
     /// typed map or a union.
     pub const fn is_map_like(self) -> bool {
-        matches!(self, Self::Map | Self::Embedded(_) | Self::TypedMap { .. } | Self::Union { .. })
+        matches!(
+            self,
+            Self::Map | Self::Embedded(_) | Self::TypedMap { .. } | Self::Union { .. }
+        )
     }
 
     /// A UTC datetime to the second, as Ash's `:utc_datetime`.
@@ -882,7 +909,9 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
 
     /// The record's primary key, where it's a UUID. For any key, [`Resource::pk`].
     fn id(&self) -> Uuid {
-        self.pk().as_uuid().expect("`Resource::id` is for a UUID primary key; use `pk` for any key")
+        self.pk()
+            .as_uuid()
+            .expect("`Resource::id` is for a UUID primary key; use `pk` for any key")
     }
     fn to_fields(&self) -> FieldMap;
     fn from_fields(fields: &FieldMap) -> Result<Self>;
@@ -904,7 +933,10 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
         _input: FieldMap,
     ) -> Pin<Box<dyn Future<Output = Result<crate::value::Value>> + Send + 'a>> {
         Box::pin(async move {
-            let action = Self::DEF.action(action).map(|a| a.name).unwrap_or("unknown");
+            let action = Self::DEF
+                .action(action)
+                .map(|a| a.name)
+                .unwrap_or("unknown");
             Err(Error::ManualRequired { action })
         })
     }

@@ -1,7 +1,8 @@
 use super::calculations::calc_expr_to_tokens;
 use super::policies::lit_to_const_value;
 use crate::ast_helpers::{
-    argument_attr_type, is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake, snake_case,
+    argument_attr_type, is_bool, is_integer, is_string, is_uuid, option_inner, screaming_snake,
+    snake_case,
 };
 use crate::define::ast::{AggregateFilterSpec, AggregateKindSpec, RelType, ResourceDefinition};
 use proc_macro2::TokenStream;
@@ -134,7 +135,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     // A field a field policy may hide that isn't an `Option` is held as `Guarded`: its
     // value, or forbidden, as Ash holds a hidden field whatever its type.
     let guarded = |a: &crate::define::ast::AttributeSpec| {
-        option_inner(&a.ty).is_none() && !a.pk && def.field_policies.iter().any(|fp| fp.field == a.ident)
+        option_inner(&a.ty).is_none()
+            && !a.pk
+            && def.field_policies.iter().any(|fp| fp.field == a.ident)
     };
 
     // 1. Struct fields
@@ -924,7 +927,9 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                         ::ash_core::Attr::new(#name_str);
                 });
             }
-        } else if (a.pk && is_uuid(ty)) || (!a.pk && (is_uuid(ty) || option_inner(ty).is_some_and(is_uuid))) {
+        } else if (a.pk && is_uuid(ty))
+            || (!a.pk && (is_uuid(ty) || option_inner(ty).is_some_and(is_uuid)))
+        {
             field_consts.push(quote! {
                 #(#o_attrs)*
                 pub const #id: ::ash_core::Attr<super::#resource, ::uuid::Uuid> =
@@ -1278,10 +1283,20 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
     // Each generic action with a `run` of its own, run by name: its input from values,
     // its result as one, as an API serving actions by name runs them.
     let mut generic_arms = Vec::new();
-    for act in def.actions.iter().filter(|act| act.kind == crate::define::ast::ActionKind::Generic && act.accept.is_empty()) {
-        let Some(run_expr) = &act.run_expr else { continue };
+    for act in def
+        .actions
+        .iter()
+        .filter(|act| act.kind == crate::define::ast::ActionKind::Generic && act.accept.is_empty())
+    {
+        let Some(run_expr) = &act.run_expr else {
+            continue;
+        };
         let name_str = act.name.to_string();
-        let input_struct = format_ident!("{}{}Input", resource, crate::ast_helpers::pascal_case(&name_str));
+        let input_struct = format_ident!(
+            "{}{}Input",
+            resource,
+            crate::ast_helpers::pascal_case(&name_str)
+        );
         let returns_ty = act.returns.clone().unwrap_or_else(|| syn::parse_quote!(()));
         let names: Vec<&syn::Ident> = act.arguments.iter().map(|arg| &arg.name).collect();
         let extracts = act.arguments.iter().map(|arg| {
@@ -1315,10 +1330,12 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 }
             }
         });
-        let call = |ctx: TokenStream| quote! {
-            let input = #input_struct { ctx: #ctx, #(#names,)* };
-            let fut = __call(#run_expr, input);
-            ::ash_core::run::<#resource, D, #returns_ty, _, _>(#ctx, #name_str, move || fut).await
+        let call = |ctx: TokenStream| {
+            quote! {
+                let input = #input_struct { ctx: #ctx, #(#names,)* };
+                let fut = __call(#run_expr, input);
+                ::ash_core::run::<#resource, D, #returns_ty, _, _>(#ctx, #name_str, move || fut).await
+            }
         };
         let ran = if act.transaction {
             let inner = call(quote! { &tx });

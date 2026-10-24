@@ -6,16 +6,22 @@
 
 use std::sync::Arc;
 
-use ash_core::{ActionDef, ActionKind, BoxFuture, Context, FieldMap, Resource, ResourceDef, TransactionSupport, Value};
+use ash_core::{
+    ActionDef, ActionKind, BoxFuture, Context, FieldMap, Resource, ResourceDef, TransactionSupport,
+    Value,
+};
 use async_graphql::Value as GqlValue;
-use async_graphql::dynamic::{Field, FieldFuture, FieldValue, InputObject, InputValue, ResolverContext, TypeRef};
+use async_graphql::dynamic::{
+    Field, FieldFuture, FieldValue, InputObject, InputValue, ResolverContext, TypeRef,
+};
 
 use crate::error::raised;
 use crate::names::{camel, pascal};
 use crate::types::{ash_value_to_graphql_value_typed, attr_type_to_type_ref, parse_input_val};
 
 /// Runs a generic action with its arguments, as its own `run` does.
-pub(crate) type Runner<D> = Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<Value>> + Send + Sync>;
+pub(crate) type Runner<D> =
+    Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<Value>> + Send + Sync>;
 
 /// A generic action the schema serves.
 pub(crate) struct GenericAction<D> {
@@ -31,15 +37,32 @@ impl<D: TransactionSupport + Clone + 'static> GenericAction<D> {
     /// `R`'s generic action `action`, served as `name`, run as its own `run` runs it.
     pub(crate) fn of<R: Resource>(name: &str, action: &str, mutation: bool) -> Self {
         let resource = &R::DEF;
-        let action = resource
-            .action(action)
-            .unwrap_or_else(|| panic!("`{name}` serves `{action}`, which isn't an action of {}", resource.name));
-        assert!(action.kind == ActionKind::Generic, "`{name}` serves `{}`, which isn't a generic action", action.name);
-        let action_name = action.name;
-        let run: Runner<D> = Arc::new(move |ctx: Context<D>, input: FieldMap| -> BoxFuture<'static, ash_core::Result<Value>> {
-            Box::pin(async move { R::run_generic(&ctx, action_name, input).await })
+        let action = resource.action(action).unwrap_or_else(|| {
+            panic!(
+                "`{name}` serves `{action}`, which isn't an action of {}",
+                resource.name
+            )
         });
-        Self { name: name.to_string(), resource, action, mutation, run }
+        assert!(
+            action.kind == ActionKind::Generic,
+            "`{name}` serves `{}`, which isn't a generic action",
+            action.name
+        );
+        let action_name = action.name;
+        let run: Runner<D> = Arc::new(
+            move |ctx: Context<D>,
+                  input: FieldMap|
+                  -> BoxFuture<'static, ash_core::Result<Value>> {
+                Box::pin(async move { R::run_generic(&ctx, action_name, input).await })
+            },
+        );
+        Self {
+            name: name.to_string(),
+            resource,
+            action,
+            mutation,
+            run,
+        }
     }
 }
 
@@ -50,11 +73,19 @@ impl<D> GenericAction<D> {
 
     /// Whether some argument must be given.
     fn requires_input(&self) -> bool {
-        self.action.arguments.iter().any(|arg| !arg.allow_nil && arg.default.is_none())
+        self.action
+            .arguments
+            .iter()
+            .any(|arg| !arg.allow_nil && arg.default.is_none())
     }
 
     fn argument_type(&self, arg: &ash_core::ArgumentDef) -> TypeRef {
-        crate::types::input_type_ref(self.resource.name, arg.name, arg.ty, arg.allow_nil || arg.default.is_some())
+        crate::types::input_type_ref(
+            self.resource.name,
+            arg.name,
+            arg.ty,
+            arg.allow_nil || arg.default.is_some(),
+        )
     }
 
     /// A mutation's `<Name>Input`, if the action takes arguments.
@@ -109,7 +140,11 @@ impl<D: Send + Sync + 'static> GenericAction<D> {
                 let required = self.requires_input();
                 field = field.argument(InputValue::new(
                     "input",
-                    if required { TypeRef::named_nn(input) } else { TypeRef::named(input) },
+                    if required {
+                        TypeRef::named_nn(input)
+                    } else {
+                        TypeRef::named(input)
+                    },
                 ));
             }
         } else {
@@ -122,7 +157,11 @@ impl<D: Send + Sync + 'static> GenericAction<D> {
 }
 
 /// The action's arguments as given: a query's own, or a mutation's `input`.
-fn arguments(ctx: &ResolverContext<'_>, action: &ActionDef, mutation: bool) -> async_graphql::Result<FieldMap> {
+fn arguments(
+    ctx: &ResolverContext<'_>,
+    action: &ActionDef,
+    mutation: bool,
+) -> async_graphql::Result<FieldMap> {
     let mut input = FieldMap::new();
     let given = if mutation {
         match ctx.args.get("input").filter(|value| !value.is_null()) {

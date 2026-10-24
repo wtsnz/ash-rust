@@ -74,7 +74,11 @@ pub fn scope_read(
 
 /// Runs `action`'s `after_action` preparations on the records a read through it found,
 /// as Ash runs a read's after-action hooks: every read through the action calls it.
-pub fn after_read(action: &ActionDef, arguments: &FieldMap, records: &mut [FieldMap]) -> Result<()> {
+pub fn after_read(
+    action: &ActionDef,
+    arguments: &FieldMap,
+    records: &mut [FieldMap],
+) -> Result<()> {
     for preparation in action.preparations {
         if let PreparationDef::AfterAction(run) = preparation {
             run(arguments, records)?;

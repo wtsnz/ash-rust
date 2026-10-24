@@ -19,7 +19,12 @@ pub(crate) fn forbidden_marker(field: &str) -> String {
 /// Whether a field policy hides `field` of `record` from `actor`: as noted when the
 /// record was redacted ([`redact_record`]), or, for a record redacted elsewhere, as its
 /// policies say now.
-pub(crate) fn is_forbidden(resource: &ResourceDef, actor: Option<&Actor>, record: &FieldMap, field: &str) -> bool {
+pub(crate) fn is_forbidden(
+    resource: &ResourceDef,
+    actor: Option<&Actor>,
+    record: &FieldMap,
+    field: &str,
+) -> bool {
     record.contains_key(&forbidden_marker(field))
         || hidden_fields(resource, actor, record).map_or(true, |hidden| hidden.contains(&field))
 }
@@ -35,7 +40,9 @@ pub(crate) fn report_forbidden(ctx: &async_graphql::dynamic::ResolverContext<'_>
         extensions.set("vars", GqlValue::Object(Default::default()));
         extensions.set("fields", GqlValue::List(Vec::new()));
     });
-    let error = ctx.ctx.set_error_path(error.into_server_error(ctx.ctx.item.pos));
+    let error = ctx
+        .ctx
+        .set_error_path(error.into_server_error(ctx.ctx.item.pos));
     ctx.ctx.add_error(error);
 }
 
@@ -50,12 +57,22 @@ pub(crate) fn redact_record(resource: &ResourceDef, actor: Option<&Actor>, recor
         .relationships
         .iter()
         .flat_map(|rel| rel.source_columns())
-        .filter(|column| resource.field_policies.iter().any(|policy| policy.field == *column))
+        .filter(|column| {
+            resource
+                .field_policies
+                .iter()
+                .any(|policy| policy.field == *column)
+        })
         .filter_map(|column| record.get(column).map(|value| (column, value.clone())))
         .collect();
     // A policy that can't be checked hides what it guards, as every field policy then.
-    let hidden = hidden_fields(resource, actor, record)
-        .unwrap_or_else(|_| resource.field_policies.iter().map(|policy| policy.field).collect());
+    let hidden = hidden_fields(resource, actor, record).unwrap_or_else(|_| {
+        resource
+            .field_policies
+            .iter()
+            .map(|policy| policy.field)
+            .collect()
+    });
     for field in hidden {
         record.insert(field.to_string(), Value::Null);
         record.insert(forbidden_marker(field), Value::Bool(true));

@@ -343,11 +343,19 @@ pub struct MetadataDef {
 
 impl MetadataDef {
     pub const fn new(name: &'static str, ty: AttrType) -> Self {
-        Self { name, ty, allow_nil: true }
+        Self {
+            name,
+            ty,
+            allow_nil: true,
+        }
     }
 
     pub const fn required(name: &'static str, ty: AttrType) -> Self {
-        Self { name, ty, allow_nil: false }
+        Self {
+            name,
+            ty,
+            allow_nil: false,
+        }
     }
 }
 
@@ -394,7 +402,11 @@ impl Pagination {
 
     /// Offset pages, with Ash's defaults otherwise.
     pub const fn offset() -> Self {
-        Self { keyset: false, offset: true, ..Self::keyset() }
+        Self {
+            keyset: false,
+            offset: true,
+            ..Self::keyset()
+        }
     }
 
     /// Offset pages as well.
@@ -756,11 +768,17 @@ impl std::fmt::Debug for Change {
                 .field("relationship", relationship)
                 .field("rel_type", rel_type)
                 .finish(),
-            Self::AtomicUpdate { field, .. } => f.debug_struct("AtomicUpdate").field("field", field).finish(),
+            Self::AtomicUpdate { field, .. } => f
+                .debug_struct("AtomicUpdate")
+                .field("field", field)
+                .finish(),
             Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
             Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
             Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),
-            Self::OptimisticLock { field } => f.debug_struct("OptimisticLock").field("field", field).finish(),
+            Self::OptimisticLock { field } => f
+                .debug_struct("OptimisticLock")
+                .field("field", field)
+                .finish(),
             Self::Custom(_) => write!(f, "Custom(<dyn CustomChange>)"),
             Self::Func(_) => write!(f, "Func(<fn>)"),
         }
@@ -813,17 +831,28 @@ impl Validation {
                 let (message, vars) = match (min, max) {
                     (Some(min), Some(max)) => (
                         "must have length of between %{min} and %{max}",
-                        vec![("min".into(), Value::Int(min as i64)), ("max".into(), Value::Int(max as i64))],
+                        vec![
+                            ("min".into(), Value::Int(min as i64)),
+                            ("max".into(), Value::Int(max as i64)),
+                        ],
                     ),
-                    (Some(min), None) => ("must have length of at least %{min}", vec![("min".into(), Value::Int(min as i64))]),
-                    (None, Some(max)) => ("must have length of no more than %{max}", vec![("max".into(), Value::Int(max as i64))]),
+                    (Some(min), None) => (
+                        "must have length of at least %{min}",
+                        vec![("min".into(), Value::Int(min as i64))],
+                    ),
+                    (None, Some(max)) => (
+                        "must have length of no more than %{max}",
+                        vec![("max".into(), Value::Int(max as i64))],
+                    ),
                     (None, None) => return None,
                 };
                 Error::validation(field, message, vars)
             }
-            Self::OneOf { field, allowed } => {
-                Error::validation(field, "expected one of %{values}", vec![("values".into(), text(&allowed.join(", ")))])
-            }
+            Self::OneOf { field, allowed } => Error::validation(
+                field,
+                "expected one of %{values}",
+                vec![("values".into(), text(&allowed.join(", ")))],
+            ),
             // As Ash's `compare`, with bounds it may and may not be at.
             Self::Numericality { field, min, max } => {
                 let mut parts = Vec::new();
