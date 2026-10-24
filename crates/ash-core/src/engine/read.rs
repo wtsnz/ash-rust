@@ -74,12 +74,27 @@ pub fn scope_read(
 
 /// Runs `action`'s `after_action` preparations on the records a read through it found,
 /// as Ash runs a read's after-action hooks: every read through the action calls it.
-pub fn after_read(action: &ActionDef, arguments: &FieldMap, records: &mut [FieldMap]) -> Result<()> {
-    for preparation in action.preparations {
-        if let PreparationDef::AfterAction(run) = preparation {
-            run(arguments, records)?;
+pub fn after_read(
+    action: &ActionDef,
+    arguments: &FieldMap,
+    records: &mut [FieldMap],
+) -> Result<()> {
+    let mut raw: Vec<crate::RawRecord> = records
+        .iter_mut()
+        .map(|fields| std::mem::take(fields).into())
+        .collect();
+    let result = (|| {
+        for preparation in action.preparations {
+            if let PreparationDef::AfterAction(run) = preparation {
+                run(arguments, &mut raw)?;
+            }
         }
+        Ok(())
+    })();
+    for (record, raw) in records.iter_mut().zip(raw) {
+        *record = raw.into_fields();
     }
+    result?;
     Ok(())
 }
 

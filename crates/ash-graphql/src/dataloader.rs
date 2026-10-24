@@ -1,10 +1,8 @@
-use ash_core::{Context, DataLayer, FieldMap, RelationshipDef, ResourceDef, Value};
+use ash_core::{Context, DataLayer, RelationshipDef, ResourceDef};
 use async_graphql::dataloader::Loader;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-
-use crate::redact::key_value;
 
 /// One source record's relationship, batched by [`AshBatchLoader`].
 #[derive(Clone, Debug)]
@@ -12,31 +10,20 @@ pub struct RelatedKey {
     pub resource: &'static ResourceDef,
     pub relationship: &'static str,
     /// The source record's key columns, which are all a load needs from it.
-    pub source: Vec<(&'static str, Value)>,
+    pub source: ash_core::RelationshipSource,
 }
 
 impl RelatedKey {
     pub fn new(
         resource: &'static ResourceDef,
         relationship: &'static RelationshipDef,
-        source: &FieldMap,
+        source: &ash_core::View,
     ) -> Self {
         Self {
             resource,
             relationship: relationship.name,
-            source: relationship
-                .source_columns()
-                .into_iter()
-                .map(|column| (column, key_value(source, column)))
-                .collect(),
+            source: source.relationship_source(relationship),
         }
-    }
-
-    fn source_record(&self) -> FieldMap {
-        self.source
-            .iter()
-            .map(|(column, value)| (column.to_string(), value.clone()))
-            .collect()
     }
 }
 
@@ -78,7 +65,7 @@ impl<D> AshBatchLoader<D> {
 }
 
 impl<D: DataLayer + Clone + 'static> Loader<RelatedKey> for AshBatchLoader<D> {
-    type Value = Vec<FieldMap>;
+    type Value = Vec<ash_core::View>;
     type Error = Arc<async_graphql::Error>;
 
     async fn load(
@@ -95,7 +82,8 @@ impl<D: DataLayer + Clone + 'static> Loader<RelatedKey> for AshBatchLoader<D> {
 
         let mut results = HashMap::with_capacity(keys.len());
         for group in groups.into_values() {
-            let sources: Vec<FieldMap> = group.iter().map(|key| key.source_record()).collect();
+            let sources: Vec<ash_core::RelationshipSource> =
+                group.iter().map(|key| key.source.clone()).collect();
             let related = ash_core::load_related(
                 &self.ctx,
                 group[0].resource,

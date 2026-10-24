@@ -107,7 +107,12 @@ pub fn argument_attr_type(ty: &Type) -> TokenStream {
     } else if let Some(item) = vec_inner(inner) {
         let item = argument_attr_type(item);
         quote! { ::ash_core::AttrType::Array { of: &#item } }
-    } else if last_ident(inner).is_some_and(|i| matches!(i.to_string().as_str(), "FieldMap" | "HashMap" | "BTreeMap" | "Map")) {
+    } else if last_ident(inner).is_some_and(|i| {
+        matches!(
+            i.to_string().as_str(),
+            "FieldMap" | "HashMap" | "BTreeMap" | "Map"
+        )
+    }) {
         quote! { ::ash_core::AttrType::Map }
     } else {
         quote! { <#inner as ::ash_core::AshType>::ATTR_TYPE }
@@ -119,12 +124,21 @@ pub fn argument_attr_type(ty: &Type) -> TokenStream {
 /// say, which needn't be an Ash type).
 pub fn returns_attr_type(ty: &Type) -> TokenStream {
     let inner = option_inner(ty).unwrap_or(ty);
+    if let Some(of) = vec_inner(inner) {
+        let of = returns_attr_type(of);
+        return quote! { ::ash_core::AttrType::Array { of: &#of } };
+    }
     let known = is_uuid(inner)
         || is_string(inner)
         || is_integer(inner)
         || is_bool(inner)
         || vec_inner(inner).is_some()
-        || last_ident(inner).is_some_and(|i| matches!(i.to_string().as_str(), "FieldMap" | "HashMap" | "BTreeMap" | "Map" | "f64" | "f32"));
+        || last_ident(inner).is_some_and(|i| {
+            matches!(
+                i.to_string().as_str(),
+                "FieldMap" | "HashMap" | "BTreeMap" | "Map" | "f64" | "f32"
+            )
+        });
     if !known {
         return quote! { ::ash_core::AttrType::Map };
     }

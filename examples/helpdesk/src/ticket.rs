@@ -108,13 +108,13 @@ resource! {
     }
 }
 
-pub fn intake_store() -> &'static Mutex<HashMap<Uuid, Ticket>> {
-    static STORE: OnceLock<Mutex<HashMap<Uuid, Ticket>>> = OnceLock::new();
+pub fn intake_store() -> &'static Mutex<HashMap<Uuid, ash_core::RawRecord>> {
+    static STORE: OnceLock<Mutex<HashMap<Uuid, ash_core::RawRecord>>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub fn intake_get(id: Uuid) -> Option<Ticket> {
-    intake_store().lock().ok()?.get(&id).cloned()
+    <Ticket as ash_core::Resource>::from_fields(intake_store().lock().ok()?.get(&id)?.fields()).ok()
 }
 
 pub fn actor_customer(id: Uuid) -> Actor {

@@ -27,6 +27,7 @@ mod multi;
 mod notifier;
 mod pipeline;
 mod policy;
+mod presentation;
 mod registry;
 mod rel;
 mod resource;
@@ -85,6 +86,7 @@ pub use policy::{
     compile_read_filter, field_policy_fields, guard_input_filter, guard_input_sort, hidden_fields,
     redact_fields,
 };
+pub use presentation::{PresentedValue, RawRecord, RelationshipSource, View};
 pub use registry::{BoxFuture, DataLayerRegistry, DynDataLayer, DynSchemaSupport, StoreRegistry};
 pub use rel::Rel;
 pub use resource::{

@@ -16,7 +16,7 @@ use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 /// A reading below zero is written, then refused by the action's after-action hook.
-fn refuse_negative(fields: &mut FieldMap) -> Result<()> {
+fn refuse_negative(fields: &mut ash_core::RawRecord) -> Result<()> {
     match fields.get("value") {
         Some(Value::Int(value)) if *value < 0 => Err(Error::Invalid("a reading below zero".into())),
         _ => Ok(()),

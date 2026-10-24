@@ -92,23 +92,30 @@ async fn generic_actions_run_by_name() {
     let mut input = FieldMap::new();
     input.insert("word".into(), Value::from("hi"));
     assert_eq!(
-        Entry::run_generic(&ctx, "shout", input).await.unwrap(),
+        Entry::run_generic(&ctx, "shout", input)
+            .await
+            .unwrap()
+            .to_value(),
         Value::from("HI")
     );
     // Defaults fill in, and the result is the action's own.
     let id = Entry::run_generic(&ctx, "pair", FieldMap::new())
         .await
         .unwrap();
-    assert!(id.as_uuid().is_some(), "{id:?}");
+    assert!(id.to_value().as_uuid().is_some(), "{id:?}");
     // A serializable result is what it serializes to; nothing returned is nil.
     let summary = Entry::run_generic(&ctx, "summarize", FieldMap::new())
         .await
         .unwrap();
-    assert_eq!(summary.to_plain_json(), serde_json::json!({ "count": 2 }));
+    assert_eq!(
+        summary.to_value().to_plain_json(),
+        serde_json::json!({ "count": 2 })
+    );
     assert_eq!(
         Entry::run_generic(&ctx, "noop", FieldMap::new())
             .await
-            .unwrap(),
+            .unwrap()
+            .to_value(),
         Value::Null
     );
     // Missing arguments, and the action's policies, as a run of it.

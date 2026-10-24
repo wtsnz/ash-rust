@@ -20,6 +20,7 @@ use crate::pipeline::{
 use crate::policy::authorize_write;
 use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value, required_pk};
+use crate::{RawRecord, View};
 
 use super::managed::{ManagedRelationshipSpec, extract_managed_relationships};
 use crate::engine::atomic::{
@@ -449,7 +450,7 @@ impl DynamicChangeset {
     /// Runs `hook` on the stored record immediately after persistence.
     pub fn after_action<F>(mut self, hook: F) -> Self
     where
-        F: FnOnce(&mut FieldMap) -> Result<()> + Send + 'static,
+        F: FnOnce(&mut RawRecord) -> Result<()> + Send + 'static,
     {
         self.after_actions.push(Box::new(hook));
         self
@@ -458,7 +459,7 @@ impl DynamicChangeset {
     /// Runs `hook` with the write's outcome once it has finished.
     pub fn after_transaction<F>(mut self, hook: F) -> Self
     where
-        F: FnOnce(std::result::Result<&FieldMap, &Error>) + Send + 'static,
+        F: FnOnce(std::result::Result<&View, &Error>) + Send + 'static,
     {
         self.after_transactions.push(Box::new(hook));
         self
@@ -505,7 +506,7 @@ impl DynamicChangeset {
     }
 
     /// Persists the write and finishes it.
-    pub async fn commit<D: DataLayer>(self, ctx: &Context<D>) -> Result<FieldMap> {
+    pub async fn commit<D: DataLayer>(self, ctx: &Context<D>) -> Result<View> {
         self.commit_within(ctx, &Cascade::new(true)).await
     }
 
@@ -518,7 +519,7 @@ impl DynamicChangeset {
         mut self,
         ctx: &'a Context<D>,
         cascade: &'a Cascade,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<FieldMap>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<View>> + Send + 'a>> {
         Box::pin(async move {
             self.require_scope(ctx)?;
             let after_transactions = std::mem::take(&mut self.after_transactions);
@@ -632,7 +633,7 @@ impl DynamicChangeset {
         ctx: &Context<D>,
         plan: AtomicPlan,
         cascade: &Cascade,
-    ) -> Result<FieldMap> {
+    ) -> Result<View> {
         let existing = self.existing.as_ref().ok_or(Error::NotFound)?;
         let id = required_pk(existing, pk_name(self.resource)?)?;
         let destroy = self.action.kind == ActionKind::Destroy;
@@ -692,7 +693,7 @@ impl DynamicChangeset {
         arguments: FieldMap,
         mut plan: AtomicPlan,
         scope: Option<crate::filter::Filter>,
-    ) -> Result<FieldMap> {
+    ) -> Result<View> {
         let mut changeset = Self::new(
             Arc::clone(&ctx.scope),
             resource,
@@ -870,6 +871,7 @@ impl DynamicChangeset {
             } else if let Some(create_act) = primary_action(dest_def, ActionKind::Create) {
                 Box::pin(Self::for_create(ctx, dest_def, create_act, child_fields)?.commit(ctx))
                     .await?
+                    .into_fields()
             } else {
                 generate_pk(dest_def, &mut child_fields);
                 let cid = required_pk(&child_fields, dest_pk)?;
@@ -969,9 +971,9 @@ impl DynamicChangeset {
         &mut self,
         ctx: &Context<D>,
         id: Value,
-        mut stored: FieldMap,
+        stored: FieldMap,
         notify: bool,
-    ) -> Result<FieldMap> {
+    ) -> Result<View> {
         // A key the data layer assigned, as the record it stored holds it.
         let id = if id.is_null() {
             required_pk(&stored, pk_name(self.resource)?)?
@@ -997,9 +999,11 @@ impl DynamicChangeset {
             return Err(err);
         }
 
+        let mut raw = RawRecord::from(stored);
         for hook in std::mem::take(&mut self.after_actions) {
-            hook(&mut stored)?;
+            hook(&mut raw)?;
         }
+        let stored = raw.into_fields();
 
         // The notification carries the record as committed, as Ash's does: each
         // subscriber reads it through its own field policies. Only what the writer gets
@@ -1021,8 +1025,7 @@ impl DynamicChangeset {
             .with_tenant(ctx.tenant().map(str::to_owned));
             crate::notifier::dispatch_notification(ctx, self.resource, notification).await?;
         }
-        crate::policy::redact_fields(self.resource, ctx.authorization_actor(), &mut stored)?;
-        Ok(stored)
+        ctx.present(self.resource, RawRecord::from(stored), None)
     }
 }
 

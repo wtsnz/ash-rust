@@ -516,7 +516,7 @@ async fn test_postgres_optimistic_locking_stale_record() {
         &ctx,
         &DOCUMENT_DEF,
         action("retitle"),
-        created.clone(),
+        created.clone().into_fields(),
         title("Version 2"),
     )
     .await
@@ -528,7 +528,7 @@ async fn test_postgres_optimistic_locking_stale_record() {
         &ctx,
         &DOCUMENT_DEF,
         action("retitle"),
-        created,
+        created.into_fields(),
         title("Version 3"),
     )
     .await

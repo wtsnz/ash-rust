@@ -27,9 +27,9 @@ ash_core::resource! {
     }
 }
 
-fn mark_read(_arguments: &FieldMap, rows: &mut [FieldMap]) -> ash_core::Result<()> {
+fn mark_read(_arguments: &FieldMap, rows: &mut [ash_core::RawRecord]) -> ash_core::Result<()> {
     for row in rows {
-        ash_core::put_metadata(row, "read_hook", true);
+        ash_core::put_metadata(row.fields_mut(), "read_hook", true);
     }
     Ok(())
 }
@@ -53,10 +53,17 @@ async fn scoped_reads_apply_named_action_preparations_and_hooks() {
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["hash"], "a-hash".into());
+    assert_eq!(rows[0].get("hash").cloned().unwrap(), "a-hash".into());
     assert_eq!(
-        ash_core::get_metadata(&rows[0], "read_hook"),
-        Some(&true.into())
+        rows[0]
+            .metadata(&ash_core::MetadataDef {
+                name: "read_hook",
+                ty: ash_core::AttrType::Boolean,
+                allow_nil: false
+            })
+            .unwrap()
+            .map(|value| value.to_value()),
+        Some(true.into())
     );
     let rows = access
         .read(
@@ -115,7 +122,7 @@ async fn scoped_reads_and_credential_exception_keep_the_tenant() {
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["hash"], "a-hash".into());
+    assert_eq!(rows[0].get("hash").cloned().unwrap(), "a-hash".into());
     let rows = a
         .access()
         .read(
@@ -153,7 +160,7 @@ async fn scoped_reads_and_credential_exception_keep_the_tenant() {
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["hash"], "a-hash".into());
+    assert_eq!(rows[0].get("hash").cloned().unwrap(), "a-hash".into());
     assert!(matches!(
         root.access().credentials(&permit, Filter::True, 2).await,
         Err(Error::TenantRequired { .. })

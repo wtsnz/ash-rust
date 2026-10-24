@@ -400,6 +400,7 @@ async fn create_child<D: DataLayer>(
         DynamicChangeset::for_create_forcing(ctx, dest_def, action, input, forced)?.commit(ctx),
     )
     .await
+    .map(crate::View::into_fields)
 }
 
 /// Updates the managed child `existing` through its update action, forcing `link` as
@@ -418,6 +419,7 @@ async fn update_child<D: DataLayer>(
             .commit(ctx),
     )
     .await
+    .map(crate::View::into_fields)
 }
 
 pub async fn handle_managed_relationships<D: DataLayer>(
@@ -696,7 +698,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                             child_fields,
                                         ))
                                         .await?;
-                                        required_pk(&stored, dest_pk)?
+                                        required_pk(stored.fields(), dest_pk)?
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
                                         let stored = ctx
@@ -785,7 +787,7 @@ pub async fn handle_managed_relationships<D: DataLayer>(
                                             child_fields,
                                         ))
                                         .await?;
-                                        required_pk(&stored, dest_pk)?
+                                        required_pk(stored.fields(), dest_pk)?
                                     } else {
                                         generate_pk(dest_def, &mut child_fields);
                                         let stored = ctx

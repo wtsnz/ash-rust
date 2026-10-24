@@ -99,9 +99,10 @@ async fn test_after_action_receives_persisted_record() -> Result<()> {
         .title("After Action Hook Test")
         .body("Validating after action hook receives record.")
         .after_action(move |record| {
-            *captured_id_clone.lock().unwrap() = Some(record.id);
+            *captured_id_clone.lock().unwrap() =
+                record.get("id").and_then(ash_core::Value::as_uuid);
             // We can also mutate in-memory instance
-            record.view_count = 42;
+            record.insert("view_count".into(), ash_core::Value::Int(42));
             Ok(())
         })
         .await?;

@@ -7,20 +7,21 @@ use crate::value::{ConstValue, FieldMap, Value};
 pub type DynamicBeforeActionHook = Box<dyn FnOnce(&mut FieldMap) -> Result<()> + Send + 'static>;
 
 /// Dynamic hook running immediately after persistence with mutable access to persisted attributes.
-pub type DynamicAfterActionHook = Box<dyn FnOnce(&mut FieldMap) -> Result<()> + Send + 'static>;
+pub type DynamicAfterActionHook =
+    Box<dyn FnOnce(&mut crate::RawRecord) -> Result<()> + Send + 'static>;
 
 /// Dynamic hook running after transaction completion (commit or rollback), receiving the result.
 pub type DynamicAfterTransactionHook =
-    Box<dyn FnOnce(std::result::Result<&FieldMap, &Error>) + Send + 'static>;
+    Box<dyn FnOnce(std::result::Result<&crate::View, &Error>) + Send + 'static>;
 
 /// Static function pointer for a `before_action` hook on an action definition.
 pub type BeforeActionFn = fn(&mut FieldMap) -> Result<()>;
 
 /// Static function pointer for an `after_action` hook on an action definition.
-pub type AfterActionFn = fn(&mut FieldMap) -> Result<()>;
+pub type AfterActionFn = fn(&mut crate::RawRecord) -> Result<()>;
 
 /// Static function pointer for an `after_transaction` hook on an action definition.
-pub type AfterTransactionFn = fn(std::result::Result<&FieldMap, &Error>);
+pub type AfterTransactionFn = fn(std::result::Result<&crate::View, &Error>);
 
 /// Target for an update or destroy action, which can be an entity ID, an existing record reference, or an owned record.
 ///
@@ -119,7 +120,7 @@ impl<'a> ChangeContext<'a> {
     /// Receives mutable access to the newly saved record attributes.
     pub fn after_action<F>(&mut self, hook: F)
     where
-        F: FnOnce(&mut FieldMap) -> Result<()> + Send + 'static,
+        F: FnOnce(&mut crate::RawRecord) -> Result<()> + Send + 'static,
     {
         self.after_actions.push(Box::new(hook));
     }
@@ -128,7 +129,7 @@ impl<'a> ChangeContext<'a> {
     /// Receives the final result (`Ok(&fields)` or `Err(&error)`).
     pub fn after_transaction<F>(&mut self, hook: F)
     where
-        F: FnOnce(std::result::Result<&FieldMap, &Error>) + Send + 'static,
+        F: FnOnce(std::result::Result<&crate::View, &Error>) + Send + 'static,
     {
         self.after_transactions.push(Box::new(hook));
     }
@@ -254,7 +255,7 @@ pub enum PreparationDef {
 }
 
 /// What a read's `after_action` preparation runs on the records it found.
-pub type AfterReadFn = fn(&crate::value::FieldMap, &mut [crate::value::FieldMap]) -> Result<()>;
+pub type AfterReadFn = fn(&crate::value::FieldMap, &mut [crate::RawRecord]) -> Result<()>;
 
 impl std::fmt::Debug for PreparationDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -326,6 +327,7 @@ pub struct ActionDef {
     pub pagination: Option<Pagination>,
     /// For a generic action: what it returns, as Ash's `returns`; `None` when nothing.
     pub returns: Option<AttrType>,
+    pub return_type: Option<fn() -> AttrType>,
     /// For a generic action: whether it runs in a transaction, as Ash's `transaction?`.
     pub transaction: bool,
     /// What the action may note on the records it answers, beyond their fields, as Ash's
@@ -343,11 +345,19 @@ pub struct MetadataDef {
 
 impl MetadataDef {
     pub const fn new(name: &'static str, ty: AttrType) -> Self {
-        Self { name, ty, allow_nil: true }
+        Self {
+            name,
+            ty,
+            allow_nil: true,
+        }
     }
 
     pub const fn required(name: &'static str, ty: AttrType) -> Self {
-        Self { name, ty, allow_nil: false }
+        Self {
+            name,
+            ty,
+            allow_nil: false,
+        }
     }
 }
 
@@ -394,7 +404,11 @@ impl Pagination {
 
     /// Offset pages, with Ash's defaults otherwise.
     pub const fn offset() -> Self {
-        Self { keyset: false, offset: true, ..Self::keyset() }
+        Self {
+            keyset: false,
+            offset: true,
+            ..Self::keyset()
+        }
     }
 
     /// Offset pages as well.
@@ -456,6 +470,7 @@ impl ActionDef {
             atomic_upgrade_with: None,
             pagination: None,
             returns: None,
+            return_type: None,
             transaction: false,
             metadata: &[],
         }
@@ -478,6 +493,7 @@ impl ActionDef {
             atomic_upgrade_with: None,
             pagination: None,
             returns: None,
+            return_type: None,
             transaction: false,
             metadata: &[],
         }
@@ -500,6 +516,7 @@ impl ActionDef {
             atomic_upgrade_with: None,
             pagination: None,
             returns: None,
+            return_type: None,
             transaction: false,
             metadata: &[],
         }
@@ -522,6 +539,7 @@ impl ActionDef {
             atomic_upgrade_with: None,
             pagination: None,
             returns: None,
+            return_type: None,
             transaction: false,
             metadata: &[],
         }
@@ -544,6 +562,7 @@ impl ActionDef {
             atomic_upgrade_with: None,
             pagination: None,
             returns: None,
+            return_type: None,
             transaction: false,
             metadata: &[],
         }
@@ -591,6 +610,16 @@ impl ActionDef {
     /// [`atomic_upgrade_with`](Self::atomic_upgrade_with).
     pub const fn atomic_upgrade_with(mut self, read: &'static str) -> Self {
         self.atomic_upgrade_with = Some(read);
+        self
+    }
+
+    /// Resolve the declared return's resource/composite metadata.
+    pub fn result_type(&self) -> Option<AttrType> {
+        self.return_type.map(|resolve| resolve()).or(self.returns)
+    }
+
+    pub const fn resolve_return_type(mut self, resolve: fn() -> AttrType) -> Self {
+        self.return_type = Some(resolve);
         self
     }
 
@@ -756,11 +785,17 @@ impl std::fmt::Debug for Change {
                 .field("relationship", relationship)
                 .field("rel_type", rel_type)
                 .finish(),
-            Self::AtomicUpdate { field, .. } => f.debug_struct("AtomicUpdate").field("field", field).finish(),
+            Self::AtomicUpdate { field, .. } => f
+                .debug_struct("AtomicUpdate")
+                .field("field", field)
+                .finish(),
             Self::BeforeAction(_) => write!(f, "BeforeAction(<fn>)"),
             Self::AfterAction(_) => write!(f, "AfterAction(<fn>)"),
             Self::AfterTransaction(_) => write!(f, "AfterTransaction(<fn>)"),
-            Self::OptimisticLock { field } => f.debug_struct("OptimisticLock").field("field", field).finish(),
+            Self::OptimisticLock { field } => f
+                .debug_struct("OptimisticLock")
+                .field("field", field)
+                .finish(),
             Self::Custom(_) => write!(f, "Custom(<dyn CustomChange>)"),
             Self::Func(_) => write!(f, "Func(<fn>)"),
         }
@@ -813,17 +848,28 @@ impl Validation {
                 let (message, vars) = match (min, max) {
                     (Some(min), Some(max)) => (
                         "must have length of between %{min} and %{max}",
-                        vec![("min".into(), Value::Int(min as i64)), ("max".into(), Value::Int(max as i64))],
+                        vec![
+                            ("min".into(), Value::Int(min as i64)),
+                            ("max".into(), Value::Int(max as i64)),
+                        ],
                     ),
-                    (Some(min), None) => ("must have length of at least %{min}", vec![("min".into(), Value::Int(min as i64))]),
-                    (None, Some(max)) => ("must have length of no more than %{max}", vec![("max".into(), Value::Int(max as i64))]),
+                    (Some(min), None) => (
+                        "must have length of at least %{min}",
+                        vec![("min".into(), Value::Int(min as i64))],
+                    ),
+                    (None, Some(max)) => (
+                        "must have length of no more than %{max}",
+                        vec![("max".into(), Value::Int(max as i64))],
+                    ),
                     (None, None) => return None,
                 };
                 Error::validation(field, message, vars)
             }
-            Self::OneOf { field, allowed } => {
-                Error::validation(field, "expected one of %{values}", vec![("values".into(), text(&allowed.join(", ")))])
-            }
+            Self::OneOf { field, allowed } => Error::validation(
+                field,
+                "expected one of %{values}",
+                vec![("values".into(), text(&allowed.join(", ")))],
+            ),
             // As Ash's `compare`, with bounds it may and may not be at.
             Self::Numericality { field, min, max } => {
                 let mut parts = Vec::new();

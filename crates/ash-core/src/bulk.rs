@@ -250,7 +250,7 @@ struct PreparedRow {
 /// Runs `hooks` with a row's outcome.
 fn conclude(
     hooks: Vec<DynamicAfterTransactionHook>,
-    outcome: std::result::Result<&FieldMap, &Error>,
+    outcome: std::result::Result<&crate::View, &Error>,
 ) {
     for hook in hooks {
         hook(outcome);
@@ -347,11 +347,11 @@ async fn in_batch<D, F, Fut>(
     ctx: &Context<D>,
     scope: Scope,
     write: F,
-) -> Result<Vec<Result<FieldMap>>>
+) -> Result<Vec<Result<crate::View>>>
 where
     D: TransactionSupport + 'static,
     F: FnOnce(Context<D>) -> Fut + Send,
-    Fut: Future<Output = Result<Vec<Result<FieldMap>>>> + Send,
+    Fut: Future<Output = Result<Vec<Result<crate::View>>>> + Send,
 {
     if scope.per_batch {
         ctx.transaction(write).await
@@ -369,7 +369,7 @@ async fn finish_rows<D: DataLayer>(
     stored: Vec<Result<FieldMap>>,
     notify: bool,
     transactional: bool,
-) -> Result<Vec<Result<FieldMap>>> {
+) -> Result<Vec<Result<crate::View>>> {
     let mut outcomes = Vec::with_capacity(rows.len());
     for ((id, mut changeset), stored) in rows.into_iter().zip(stored) {
         let outcome = match stored {
@@ -394,7 +394,7 @@ fn settle<R: Resource>(
     scope: Scope,
     return_records: bool,
     hooks: Vec<Vec<DynamicAfterTransactionHook>>,
-    outcomes: Result<Vec<Result<FieldMap>>>,
+    outcomes: Result<Vec<Result<crate::View>>>,
 ) -> Result<()> {
     let outcomes = match outcomes {
         Ok(outcomes) => outcomes,
@@ -418,7 +418,7 @@ fn settle<R: Resource>(
         match outcome {
             Ok(stored) => {
                 if return_records {
-                    result.records.push(R::from_fields(&stored)?);
+                    result.records.push(stored.into_record()?);
                 }
                 result.count += 1;
             }

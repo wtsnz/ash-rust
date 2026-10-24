@@ -2,6 +2,7 @@
 read_when:
   - Working on authentication tenant scoping or RPC request context
   - Migrating direct Context.data reads into the core engine
+  - Changing record presentation, field policies, hooks or response adapters
 ---
 
 # Scoped access
@@ -82,9 +83,73 @@ predicate; context tenancy selects the backend's tenant namespace. A non-global
 tenant resource requires a tenant. Explicit resource-level `global: true` retains
 its existing tenantless behavior.
 
-These reads return raw `FieldMap`s. Apply field policies before exposing them in a
-response. `ReadRequest` accepts trusted `Filter` and `Sort` values. Adapters still
+These reads return `View`s with reader-specific projected values and forbidden-field
+masks. `view.fields()` and `view.into_fields()` expose projected values only.
+`ReadRequest` accepts trusted `Filter` and `Sort` values. Adapters still
 must guard client expressions with the existing input policy helpers.
+
+## Reader-specific results
+
+Core presents ordinary execution results before returning them. The private presenter
+computes field-policy masks from each intact record, then selects and projects its
+fields. It recursively handles embedded resources, arrays, typed maps, union members
+and loaded relationships. Policy operands and load keys remain available until this
+step; hiding an operand cannot change another field's policy decision. System scopes
+retain all fields through the same presenter.
+
+Dynamic writes and scoped reads return `View`. Typed query and action builders keep
+returning their resource structs, constructed only from a completed View. Those
+projected structs can still derive `Serialize`. Context-free `build_*().build()` and
+`Resource::from_fields` construct application data without a reader; they are trusted
+input construction APIs, not execution responses.
+
+Write `after_action` hooks receive non-serializable `RawRecord<R>` for typed builders
+or `RawRecord` for dynamic hooks. Read preparations receive `&mut [RawRecord]`.
+Use `get`, `insert`, `fields` and `fields_mut` to inspect or change engine data.
+`Changeset::data` and `into_record` also expose RawRecord. Dynamic
+`after_transaction` hooks receive `View`; typed hooks receive projected resource
+structs. Hooks must finish before presentation so their changes cannot escape field
+policies.
+
+Manual persistence callbacks accept and return `RawRecord`, then core runs the
+normal finish stage, including hooks, notifications and presentation:
+
+```rust,ignore
+Employee::intake(&ctx).name("new employee").persist(|_ctx, mut raw| async move {
+    raw.insert("salary".into(), Value::Int(42));
+    external_store.save(raw.fields()).await?;
+    Ok(raw)
+}).await?;
+```
+
+Generic action runners retain the return type's `AshType` presentation contract.
+Resource results, arrays and resource-bearing `AshTypedMap`/`AshUnion` values use
+recursive presentation too. Custom Rust results without Ash metadata retain their
+application-defined serialization; use an Ash type for resource-bearing results.
+The low-level `run` callback now returns `returned::ActionOutput<T>`. Core returns
+`returned::ActionResult<T>`, retaining the projected tree and typed value together.
+Generated builders return the typed value; `Resource::run_generic` returns the
+`PresentedValue` tree so adapters retain the original masks. Generated return-type
+resolvers and `ActionDef::result_type()` preserve resource/composite metadata for
+custom runners and schema generation. These helpers avoid rechecking policies on a
+record whose policy operands have already been hidden.
+
+GraphQL resolvers consume Views and use their recorded forbidden masks. Relationship
+keys have separate private storage and never enter the serialized fields.
+`view.relationship_source(rel)` returns a non-serializable `RelationshipSource`;
+core relationship loaders and counters accept these handles. Adapters cannot read
+or serialize their key values. Trusted callers with their own source maps can
+explicitly construct a handle with `RelationshipSource::from(fields)`. Preload
+caches accept only presented child Views. RPC rendering accepts Views and emits only
+the request's selected fields, including nested selections. Neither adapter computes
+field-policy masks from an already redacted record.
+
+Derived-value visibility is step 5. Calculations and aggregates still have their
+existing visibility semantics. This step does not declassify or suppress their
+inputs. Step 9 will feed private committed events through the same presenter for
+each subscriber or bound group scope. Notification and PubSub payloads remain
+unchanged; the existing GraphQL subscription response path presents each event for
+its current reader.
 
 ## Credential reads
 
@@ -151,11 +216,13 @@ remains follow-up work. Legacy subscriptions keep their existing unshared behavi
 
 ## Limits
 
-This completes the binding work from step 2. `Context::data` and raw `insert` remain
+Steps 2 and 4 bind execution scope and centralize result presentation.
+`Context::data` and raw `insert` remain
 public but deprecated until engine reads and writes use executable plans. Core uses a
 private backend accessor for those paths. Existing adapter code and raw-backend tests
 carry documented deprecation allowances. New caller code still receives warnings.
-There is no opaque executable plan or reader-specific View yet. Credential issuance
+There is no opaque executable plan yet. DataLayer transports still use raw maps;
+core wraps hook and presentation records in RawRecord. Credential issuance
 is restricted to Runtime, while credential results remain raw maps.
 
 Cross-tenant lookup grants still need a resource/action declaration and a backend
@@ -168,8 +235,8 @@ so those additions do not require changing the binding API.
 
 This change does not fix token namespace isolation, durable access revocation,
 deleted-user validation, session invalidation or atomic reset/refresh consumption.
-It also does not fix managed relationships, upsert conflicts, derived or embedded
-field policies, or subscription authorization and payloads. The design and the
+It also does not fix managed relationships, upsert conflicts, derived-value
+visibility, or subscription authorization and payloads. The design and the
 full migration sequence are in
 [RFC 0005: Scoped execution](wip/0005-scoped-execution.md).
 

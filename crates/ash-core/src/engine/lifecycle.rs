@@ -9,6 +9,7 @@ use crate::filter::Filter;
 use crate::pipeline::{expect_kind, expect_persist, pk_name};
 use crate::resource::{Resource, ResourceDef};
 use crate::value::{FieldMap, Value};
+use crate::{RawRecord, View};
 
 use super::query::query;
 
@@ -105,7 +106,7 @@ pub(crate) async fn destroy_dynamic_with<D: DataLayer>(
     id: Value,
     existing_fields: &FieldMap,
     cascade: &super::managed::Cascade,
-) -> Result<FieldMap> {
+) -> Result<View> {
     destroy_dynamic_input(
         ctx,
         resource,
@@ -128,7 +129,7 @@ async fn destroy_dynamic_input<D: DataLayer>(
     existing_fields: &FieldMap,
     input: FieldMap,
     cascade: &super::managed::Cascade,
-) -> Result<FieldMap> {
+) -> Result<View> {
     let mut existing = existing_fields.clone();
     existing
         .entry(pk_name(resource)?.to_string())
@@ -153,7 +154,7 @@ pub async fn destroy_dynamic_by_id<D: DataLayer>(
     resource: &'static ResourceDef,
     action: &'static ActionDef,
     id: impl Into<Value>,
-) -> Result<FieldMap> {
+) -> Result<View> {
     let id: Value = id.into();
     destroy_dynamic_via(ctx, resource, None, action, id, FieldMap::new()).await
 }
@@ -169,7 +170,7 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
     action: &'static ActionDef,
     id: impl Into<Value>,
     input: FieldMap,
-) -> Result<FieldMap> {
+) -> Result<View> {
     let id: Value = id.into();
     expect_kind(action, ActionKind::Destroy)?;
     let read = match read {
@@ -299,7 +300,7 @@ pub async fn create_dynamic<D: DataLayer>(
     resource: &'static ResourceDef,
     action: &'static ActionDef,
     input: FieldMap,
-) -> Result<FieldMap> {
+) -> Result<View> {
     DynamicChangeset::for_create(ctx, resource, action, input)?
         .commit(ctx)
         .await
@@ -319,7 +320,7 @@ pub async fn update_dynamic<D: DataLayer>(
     action: &'static ActionDef,
     id: impl Into<Value>,
     input: FieldMap,
-) -> Result<FieldMap> {
+) -> Result<View> {
     let id: Value = id.into();
     update_dynamic_via(ctx, resource, None, action, id, input).await
 }
@@ -334,7 +335,7 @@ pub async fn update_dynamic_via<D: DataLayer>(
     action: &'static ActionDef,
     id: impl Into<Value>,
     input: FieldMap,
-) -> Result<FieldMap> {
+) -> Result<View> {
     let id: Value = id.into();
     expect_kind(action, ActionKind::Update)?;
     let read = match read {
@@ -392,7 +393,7 @@ pub async fn update_existing_dynamic<D: DataLayer>(
     action: &'static ActionDef,
     existing: FieldMap,
     input: FieldMap,
-) -> Result<FieldMap> {
+) -> Result<View> {
     expect_kind(action, ActionKind::Update)?;
     DynamicChangeset::for_update(ctx, resource, action, existing, input)?
         .commit(ctx)
@@ -409,14 +410,17 @@ pub async fn manual_create<R, D, F, Fut>(
 where
     R: Resource,
     D: DataLayer,
-    F: FnOnce(&Context<D>, R) -> Fut,
-    Fut: Future<Output = Result<R>>,
+    F: FnOnce(&Context<D>, RawRecord) -> Fut,
+    Fut: Future<Output = Result<RawRecord>>,
 {
     let changeset = Changeset::<R>::for_create(ctx, action, input)?;
     expect_persist(changeset.action(), PersistKind::Manual)?;
     changeset::authorize(&changeset, ctx)?;
-    let record = changeset.into_record()?;
-    persist(ctx, record).await
+    let record = RawRecord::from(changeset.attributes().clone());
+    let mut changeset = changeset.into_dynamic();
+    let stored = persist(ctx, record).await?.into_fields();
+    let id = crate::value::required_pk(&stored, pk_name(&R::DEF)?)?;
+    changeset.finish(ctx, id, stored, true).await?.into_record()
 }
 
 /// Data-layer insert with no action pipeline. Manual persist uses this to also store locally.
@@ -428,5 +432,5 @@ pub async fn insert<R: Resource, D: DataLayer>(ctx: &Context<D>, record: &R) -> 
         .raw_data()
         .create(&R::DEF, ctx.tenant(), id, fields)
         .await?;
-    R::from_fields(&stored)
+    ctx.present(&R::DEF, stored.into(), None)?.into_record()
 }

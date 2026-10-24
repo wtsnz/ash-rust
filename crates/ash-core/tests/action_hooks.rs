@@ -24,13 +24,13 @@ mod test_shorthand_and_custom_change {
         Ok(())
     }
 
-    fn track_after(fields: &mut FieldMap) -> Result<()> {
+    fn track_after(fields: &mut ash_core::RawRecord) -> Result<()> {
         AFTER_CALLED.store(true, Ordering::SeqCst);
         fields.insert("tag".into(), Value::String("PROCESSED".into()));
         Ok(())
     }
 
-    fn track_tx(res: std::result::Result<&FieldMap, &Error>) {
+    fn track_tx(res: std::result::Result<&ash_core::View, &Error>) {
         if res.is_ok() {
             TX_CALLED.store(true, Ordering::SeqCst);
         }
@@ -138,13 +138,13 @@ mod test_elixir_change_hooks {
         Ok(())
     }
 
-    fn stamp_updated(fields: &mut FieldMap) -> Result<()> {
+    fn stamp_updated(fields: &mut ash_core::RawRecord) -> Result<()> {
         UPDATE_AFTER_RAN.store(true, Ordering::SeqCst);
         fields.insert("flag".into(), Value::String("STAMPED".into()));
         Ok(())
     }
 
-    fn tx_updated(res: std::result::Result<&FieldMap, &Error>) {
+    fn tx_updated(res: std::result::Result<&ash_core::View, &Error>) {
         if res.is_ok() {
             UPDATE_TX_RAN.store(true, Ordering::SeqCst);
         }
@@ -230,12 +230,12 @@ mod test_destroy_action_hooks {
         Ok(())
     }
 
-    fn record_destroyed(_fields: &mut FieldMap) -> Result<()> {
+    fn record_destroyed(_fields: &mut ash_core::RawRecord) -> Result<()> {
         DESTROY_AFTER_RAN.store(true, Ordering::SeqCst);
         Ok(())
     }
 
-    fn tx_destroyed(res: std::result::Result<&FieldMap, &Error>) {
+    fn tx_destroyed(res: std::result::Result<&ash_core::View, &Error>) {
         if res.is_ok() {
             DESTROY_TX_RAN.store(true, Ordering::SeqCst);
         }
@@ -328,7 +328,7 @@ mod test_sqlite_hooks {
         Ok(())
     }
 
-    fn mark_saved(fields: &mut FieldMap) -> Result<()> {
+    fn mark_saved(fields: &mut ash_core::RawRecord) -> Result<()> {
         fields.insert("version".into(), Value::Int(99));
         Ok(())
     }

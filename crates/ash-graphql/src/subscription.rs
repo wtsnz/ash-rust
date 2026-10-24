@@ -1,7 +1,6 @@
 use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible};
 
 use crate::preload::{load_selected, preload, selected};
-use crate::redact::redact_record;
 use crate::request::{request_actor, request_context};
 use ash_pubsub::PubSub;
 use async_graphql::ErrorExtensions;
@@ -110,7 +109,9 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                         {
                             let ash = request_context::<D>(&ctx)?;
                             let fields = selected(ctx.ctx.field(), None);
-                            let mut record = record.clone();
+                            let mut record = ash
+                                .present(resource, record.clone().into(), None)
+                                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
                             load_selected(
                                 &ash,
                                 resource,
@@ -118,14 +119,15 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                                 std::slice::from_mut(&mut record),
                             )
                             .await?;
-                            redact_record(resource, ash.authorization_actor(), &mut record);
                             preload(&ash, resource, fields, std::slice::from_mut(&mut record))
                                 .await?;
                             Some(FieldValue::owned_any(record))
                         }
                         Some(Event::Record(record)) => {
-                            let mut record = record.clone();
-                            redact_record(resource, request_actor::<D>(&ctx), &mut record);
+                            let ash = request_context::<D>(&ctx)?;
+                            let record = ash
+                                .present(resource, record.clone().into(), None)
+                                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
                             Some(FieldValue::owned_any(record))
                         }
                         Some(Event::Id(id)) => {

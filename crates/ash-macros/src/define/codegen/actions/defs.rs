@@ -337,7 +337,11 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
         }
         if let Some(ret) = &act.returns {
             let ty = crate::ast_helpers::returns_attr_type(ret);
-            builder_chain = quote! { #builder_chain.returns(#ty) };
+            builder_chain = quote! { #builder_chain.returns(#ty).resolve_return_type(|| {
+                #[allow(unused_imports)]
+                use ::ash_core::returned::{AshReturnType as _, OpaqueReturnType as _};
+                (&&::ash_core::returned::ReturnType::<#ret>(::std::marker::PhantomData)).return_type()
+            }) };
         }
         if let Some(spec) = &act.pagination {
             let (keyset, offset) = (spec.keyset, spec.offset);

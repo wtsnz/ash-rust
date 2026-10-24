@@ -139,15 +139,14 @@ async fn insert<D: DataLayer>(
         .unwrap()
 }
 
-fn texts(rows: &[FieldMap], field: &str) -> Vec<String> {
-    rows.iter()
-        .map(|row| {
-            row.get(field)
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_string()
-        })
-        .collect()
+fn texts<'a>(rows: impl Iterator<Item = &'a FieldMap>, field: &str) -> Vec<String> {
+    rows.map(|row| {
+        row.get(field)
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string()
+    })
+    .collect()
 }
 
 // This regression deliberately inspects or mutates raw backend state.
@@ -183,7 +182,10 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         .await;
     }
     let ctx = ash_core::Runtime::new(data).bootstrap();
-    let shelves = [a.clone(), b.clone(), empty, a.clone()];
+    let shelves: Vec<ash_core::RelationshipSource> = [a.clone(), b.clone(), empty, a.clone()]
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let load = |relationship: &'static str, query: RelatedQuery| {
         let ctx = ctx.clone();
         let shelves = shelves.clone();
@@ -211,13 +213,16 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         },
     )
     .await;
-    let titles: Vec<Vec<String>> = books.iter().map(|rows| texts(rows, "title")).collect();
+    let titles: Vec<Vec<String>> = books
+        .iter()
+        .map(|rows| texts(rows.iter().map(ash_core::View::fields), "title"))
+        .collect();
     assert_eq!(
         titles,
         [vec!["A2", "A3"], vec!["B2", "B1"], vec![], vec!["A2", "A3"]]
     );
 
-    // Past the first, filtered, and only what's selected (with the key it links on).
+    // Past the first, filtered, with only selected fields in the returned View.
     let books = load(
         "books",
         RelatedQuery {
@@ -229,12 +234,15 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         },
     )
     .await;
-    let titles: Vec<Vec<String>> = books.iter().map(|rows| texts(rows, "title")).collect();
+    let titles: Vec<Vec<String>> = books
+        .iter()
+        .map(|rows| texts(rows.iter().map(ash_core::View::fields), "title"))
+        .collect();
     assert_eq!(titles, [vec!["A2", "A3"], vec![], vec![], vec!["A2", "A3"]]);
     for row in books.iter().flatten() {
-        let mut keys: Vec<&str> = row.keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = row.fields().keys().map(String::as_str).collect();
         keys.sort();
-        assert_eq!(keys, ["id", "shelf_id", "title"]);
+        assert_eq!(keys, ["title"]);
     }
 
     // Through a join resource, paged for each shelf too.
@@ -247,7 +255,10 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         },
     )
     .await;
-    let names: Vec<Vec<String>> = readers.iter().map(|rows| texts(rows, "name")).collect();
+    let names: Vec<Vec<String>> = readers
+        .iter()
+        .map(|rows| texts(rows.iter().map(ash_core::View::fields), "name"))
+        .collect();
     assert_eq!(
         names,
         [vec!["Cat", "Bob"], vec!["Dee"], vec![], vec!["Cat", "Bob"]]
@@ -261,7 +272,10 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         },
     )
     .await;
-    let names: Vec<Vec<String>> = readers.iter().map(|rows| texts(rows, "name")).collect();
+    let names: Vec<Vec<String>> = readers
+        .iter()
+        .map(|rows| texts(rows.iter().map(ash_core::View::fields), "name"))
+        .collect();
     assert_eq!(
         names,
         [vec!["Bob", "Cat"], vec![], vec![], vec!["Bob", "Cat"]]
@@ -277,10 +291,11 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         limit: Some(1),
         ..RelatedQuery::default()
     };
-    let none = load_related_query(&ctx, &SHELF, "books", &[keyless], &paged)
+    let none = load_related_query(&ctx, &SHELF, "books", &[keyless.into()], &paged)
         .await
         .unwrap();
-    assert_eq!(none, [Vec::<FieldMap>::new()]);
+    assert_eq!(none.len(), 1);
+    assert!(none[0].is_empty());
 
     // Keyed by binary digests, paged for each; this run's own, as a database may hold
     // earlier runs' chunks.
@@ -303,7 +318,10 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         &ctx,
         &BLOB,
         "chunks",
-        &blobs,
+        &blobs
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<ash_core::RelationshipSource>>(),
         &RelatedQuery {
             sort: by("n", false),
             limit: Some(2),
@@ -354,7 +372,10 @@ async fn per_key_twice<D: DataLayer>(data: &D) {
         )
         .await
         .unwrap();
-    let titles: Vec<Vec<String>> = per_key.iter().map(|rows| texts(rows, "title")).collect();
+    let titles: Vec<Vec<String>> = per_key
+        .iter()
+        .map(|rows| texts(rows.iter(), "title"))
+        .collect();
     assert_eq!(titles, [vec!["T1"], vec!["T1"]]);
 }
 

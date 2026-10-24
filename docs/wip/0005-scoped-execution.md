@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1 and 2 implemented (in review); the rest planned. See §5.
+- **Status**: Proposed. Steps 1, 2 and 4 implemented, pending review; the rest planned. See §5.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -82,11 +82,11 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | Part | Step | State |
 |---|---|---|
 | Scoped reads and credential grants for authentication; RPC ignores the payload tenant | 1 | In review (#86) |
-| `Runtime`, sealed `Scope`, `bind`/`system`, private `Context` fields, changesets tied to their scope, multi-scope `runtime.transaction`, every transport (HTTP and both WebSocket protocols) bound through the same binder | 2 | In review (stacked on #86) |
+| `Runtime`, sealed `Scope`, `bind`/`system`, private `Context` fields, changesets tied to their scope, multi-scope `runtime.transaction`, every transport (HTTP and both WebSocket protocols) bound through the same binder | 2 | In review (#87) |
 | Cross-tenant lookup grant | — | Planned. Until it lands, apps that log in by email across tenants (such as the Lagrange example) ask for the tenant first |
 | System capabilities declared by action hooks | — | Planned |
 | `ClientExpr`/`TrustedExpr`, join-policy traversal, sealed cursors | 3 | Planned |
-| `View` presentation for every output | 4 | Planned |
+| Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | Implemented, pending review. Typed APIs return projected resource structs; raw data-layer transport remains until step 8 |
 | Derived-value visibility and `declassify` | 5 | Planned |
 | Guarded upsert conflicts; data-layer-specific trusted plan nodes | 6 | Planned |
 | Managed relationships through scoped resolution; atomic cascades | 7 | Planned |
