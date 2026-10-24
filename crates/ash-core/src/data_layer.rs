@@ -1,5 +1,3 @@
-
-
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{IdentityDef, ResourceDef};
@@ -84,7 +82,10 @@ impl CompiledQuery {
 
     /// The calculations the query asks for that only Rust can compute: a SQL data layer
     /// computes them from the record it reads, after reading it.
-    pub fn custom_calculations<'a>(&'a self, resource: &'a ResourceDef) -> impl Iterator<Item = &'a crate::expr::CalculationDef> + 'a {
+    pub fn custom_calculations<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+    ) -> impl Iterator<Item = &'a crate::expr::CalculationDef> + 'a {
         self.calculations
             .iter()
             .filter_map(|name| resource.calculation(name))

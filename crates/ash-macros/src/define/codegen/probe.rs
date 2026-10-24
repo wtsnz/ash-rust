@@ -202,7 +202,9 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         __ash_assert_assignable(&__ash_record.#field, &#argument);
                     });
                 }
-                ChangeSpec::RelateActor { field } | ChangeSpec::AtomicUpdate { field, .. } | ChangeSpec::OptimisticLock { field } => {
+                ChangeSpec::RelateActor { field }
+                | ChangeSpec::AtomicUpdate { field, .. }
+                | ChangeSpec::OptimisticLock { field } => {
                     field_probes.push(quote_spanned! { field.span() =>
                         let _ = &__ash_record.#field;
                     });
@@ -257,7 +259,9 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         let _: ::ash_core::Filter = #filter_tokens;
                     });
                 }
-                PreparationSpec::Limit(_) | PreparationSpec::Offset(_) | PreparationSpec::AfterAction(_) => {}
+                PreparationSpec::Limit(_)
+                | PreparationSpec::Offset(_)
+                | PreparationSpec::AfterAction(_) => {}
             }
         }
 
@@ -310,10 +314,7 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
         quote! {}
     };
 
-    let calc_mod = format_ident!(
-        "__ash_{}_calc_probe",
-        snake_case(&resource.to_string())
-    );
+    let calc_mod = format_ident!("__ash_{}_calc_probe", snake_case(&resource.to_string()));
     let calc_helpers = if def.calculations.is_empty() {
         quote! {}
     } else {
@@ -505,10 +506,7 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
 
     for agg in &def.aggregates {
         let rel = &agg.relationship;
-        probes.push(ns_field_probe(
-            &Ident::new("__ash_rel", rel.span()),
-            rel,
-        ));
+        probes.push(ns_field_probe(&Ident::new("__ash_rel", rel.span()), rel));
         match &agg.kind {
             AggregateKindSpec::First { field } | AggregateKindSpec::Sum { field } => {
                 if let Some(r) = def.relationships.iter().find(|r| r.ident == *rel) {
@@ -543,10 +541,7 @@ fn expand_cross_section_probes(def: &ResourceDefinition) -> Vec<TokenStream> {
 
     for identity in &def.identities {
         for key in &identity.keys {
-            probes.push(ns_field_probe(
-                &Ident::new("__ash_accept", key.span()),
-                key,
-            ));
+            probes.push(ns_field_probe(&Ident::new("__ash_accept", key.span()), key));
         }
     }
 
@@ -744,9 +739,7 @@ fn calc_expr_typed(expr: &CalculationExprSpec) -> Option<TokenStream> {
             __AshStrLen::__ash_str_len(&__ash_record.#field)
         }),
         CalculationExprSpec::LitInt(n) => Some(quote! { #n }),
-        CalculationExprSpec::LitString(s) => {
-            Some(quote! { ::std::string::String::from(#s) })
-        }
+        CalculationExprSpec::LitString(s) => Some(quote! { ::std::string::String::from(#s) }),
         CalculationExprSpec::LitBool(b) => Some(quote! { #b }),
         CalculationExprSpec::Length(inner) => {
             let inner = calc_expr_typed(inner)?;
@@ -1018,10 +1011,7 @@ mod tests {
             out.contains("__ash_calc_fits"),
             "missing declared-type fit: {out}"
         );
-        assert!(
-            out.contains("__ash_str_len"),
-            "missing length probe: {out}"
-        );
+        assert!(out.contains("__ash_str_len"), "missing length probe: {out}");
     }
 
     #[test]
@@ -1132,10 +1122,7 @@ mod tests {
             out.contains("__ash_rel"),
             "relates_to should complete from the relationship namespace: {out}"
         );
-        assert!(
-            out.contains("assignee_id"),
-            "missing is_nil field: {out}"
-        );
+        assert!(out.contains("assignee_id"), "missing is_nil field: {out}");
         assert!(out.contains("status"), "missing eq field: {out}");
         assert!(
             out.contains("__ash_assert_assignable"),
@@ -1182,7 +1169,10 @@ mod tests {
             out.contains("CustomChange"),
             "missing CustomChange bound: {out}"
         );
-        assert!(out.contains("AuditLogger"), "missing custom change path: {out}");
+        assert!(
+            out.contains("AuditLogger"),
+            "missing custom change path: {out}"
+        );
         assert!(
             out.contains("ChangeContext"),
             "missing change func context: {out}"
@@ -1261,10 +1251,7 @@ mod tests {
             "missing actor namespace: {out}"
         );
         assert!(out.contains("__ash_accept"), "missing accept bind: {out}");
-        assert!(
-            out.contains("__ash_actions"),
-            "missing action bind: {out}"
-        );
+        assert!(out.contains("__ash_actions"), "missing action bind: {out}");
         assert!(
             !out.contains("Context < :: ash_core :: NoDataLayer >"),
             "policy action probes should not instantiate builders: {out}"
@@ -1345,7 +1332,10 @@ mod tests {
             }
         });
         let out = expand_ide_probe(&def).to_string();
-        assert!(out.contains("__ash_slot"), "missing empty accept cursor: {out}");
+        assert!(
+            out.contains("__ash_slot"),
+            "missing empty accept cursor: {out}"
+        );
         assert!(
             out.contains("rust_analyzer"),
             "empty accept cursor must be rust-analyzer only: {out}"

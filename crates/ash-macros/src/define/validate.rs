@@ -44,19 +44,22 @@ struct SlotNames {
 fn slot_names(def: &ResourceDefinition) -> SlotNames {
     SlotNames {
         attrs: def.attributes.iter().map(|a| a.ident.to_string()).collect(),
-        rels: def.relationships.iter().map(|r| r.ident.to_string()).collect(),
-        calcs: def.calculations.iter().map(|c| c.ident.to_string()).collect(),
+        rels: def
+            .relationships
+            .iter()
+            .map(|r| r.ident.to_string())
+            .collect(),
+        calcs: def
+            .calculations
+            .iter()
+            .map(|c| c.ident.to_string())
+            .collect(),
         aggs: def.aggregates.iter().map(|a| a.ident.to_string()).collect(),
         actions: def.actions.iter().map(|a| a.name.to_string()).collect(),
     }
 }
 
-fn slot_error(
-    ident: &Ident,
-    expected: &str,
-    candidates: &[String],
-    names: &SlotNames,
-) -> Error {
+fn slot_error(ident: &Ident, expected: &str, candidates: &[String], names: &SlotNames) -> Error {
     let SlotNames {
         attrs,
         rels,
@@ -425,12 +428,7 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             if let PolicyWhenSpec::ActionName(act_name) = when
                 && !action_names.iter().any(|n| n == &act_name.to_string())
             {
-                errors.push(slot_error(
-                    act_name,
-                    "action",
-                    &action_names,
-                    &names,
-                ));
+                errors.push(slot_error(act_name, "action", &action_names, &names));
             }
         }
         for check in &pol.checks {
@@ -440,12 +438,7 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
 
     for fp in &def.field_policies {
         if !attr_names.iter().any(|n| n == &fp.field.to_string()) {
-            errors.push(slot_error(
-                &fp.field,
-                "attribute",
-                &attr_names,
-                &names,
-            ));
+            errors.push(slot_error(&fp.field, "attribute", &attr_names, &names));
         }
         for check in &fp.checks {
             validate_policy_effect(check, &policy_fields, def.actor.as_ref(), errors);
@@ -457,9 +450,11 @@ fn validate_cross_section(def: &ResourceDefinition, errors: &mut Vec<Error>) {
             continue;
         }
         let fk_idents = if rel.fk_columns.is_empty() {
-            vec![rel.fk.clone().unwrap_or_else(|| {
-                Ident::new(&format!("{}_id", rel.ident), rel.ident.span())
-            })]
+            vec![
+                rel.fk
+                    .clone()
+                    .unwrap_or_else(|| Ident::new(&format!("{}_id", rel.ident), rel.ident.span())),
+            ]
         } else {
             rel.fk_columns.clone()
         };
@@ -613,12 +608,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                 } else {
                     let attr_names: Vec<String> =
                         def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                    errors.push(slot_error(
-                        &acc.name,
-                        "attribute",
-                        &attr_names,
-                        &names,
-                    ));
+                    errors.push(slot_error(&acc.name, "attribute", &attr_names, &names));
                 }
             }
             action.accept = kept;
@@ -632,12 +622,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(
-                            field,
-                            "attribute",
-                            &attr_names,
-                            &names,
-                        ));
+                        errors.push(slot_error(field, "attribute", &attr_names, &names));
                     } else {
                         kept_changes.push(chg);
                     }
@@ -647,12 +632,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(
-                            field,
-                            "attribute",
-                            &attr_names,
-                            &names,
-                        ));
+                        errors.push(slot_error(field, "attribute", &attr_names, &names));
                         keep = false;
                     }
                     if action.arguments.iter().all(|a| a.name != *argument) {
@@ -675,9 +655,14 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                 ChangeSpec::OptimisticLock { field } => {
                     let kind = action.kind;
                     if def.attributes.iter().all(|a| a.ident != *field) {
-                        let attr_names: Vec<String> = def.attributes.iter().map(|a| a.ident.to_string()).collect();
+                        let attr_names: Vec<String> =
+                            def.attributes.iter().map(|a| a.ident.to_string()).collect();
                         errors.push(slot_error(field, "attribute", &attr_names, &names));
-                    } else if !matches!(kind, crate::define::ast::ActionKind::Update | crate::define::ast::ActionKind::Destroy) {
+                    } else if !matches!(
+                        kind,
+                        crate::define::ast::ActionKind::Update
+                            | crate::define::ast::ActionKind::Destroy
+                    ) {
                         // As Ash's: it guards a write of a record that was read.
                         errors.push(Error::new_spanned(
                             field,
@@ -691,12 +676,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(
-                            field,
-                            "attribute",
-                            &attr_names,
-                            &names,
-                        ));
+                        errors.push(slot_error(field, "attribute", &attr_names, &names));
                     } else {
                         kept_changes.push(chg);
                     }
@@ -708,12 +688,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                             .iter()
                             .map(|r| r.ident.to_string())
                             .collect();
-                        errors.push(slot_error(
-                            relationship,
-                            "relationship",
-                            &rel_names,
-                            &names,
-                        ));
+                        errors.push(slot_error(relationship, "relationship", &rel_names, &names));
                     } else {
                         kept_changes.push(chg);
                     }
@@ -729,12 +704,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     if def.attributes.iter().all(|a| a.ident != *field) {
                         let attr_names: Vec<String> =
                             def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                        errors.push(slot_error(
-                            field,
-                            "attribute",
-                            &attr_names,
-                            &names,
-                        ));
+                        errors.push(slot_error(field, "attribute", &attr_names, &names));
                     }
                 }
                 crate::define::ast::PreparationSpec::Filter { expr } => {
@@ -785,12 +755,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                     let mut candidates: Vec<String> =
                         def.attributes.iter().map(|a| a.ident.to_string()).collect();
                     candidates.extend(action.arguments.iter().map(|a| a.name.to_string()));
-                    errors.push(slot_error(
-                        field,
-                        "attribute",
-                        &candidates,
-                        &names,
-                    ));
+                    errors.push(slot_error(field, "attribute", &candidates, &names));
                 }
                 if let Some(attr) = attr {
                     match val {
@@ -844,12 +809,7 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
             if def.attributes.iter().all(|a| a.ident != *key) {
                 let attr_names: Vec<String> =
                     def.attributes.iter().map(|a| a.ident.to_string()).collect();
-                errors.push(slot_error(
-                    key,
-                    "attribute",
-                    &attr_names,
-                    &names,
-                ));
+                errors.push(slot_error(key, "attribute", &attr_names, &names));
             }
         }
     }
@@ -920,9 +880,8 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
                 && option_inner(&attr.ty).is_none()
                 && !is_string(&attr.ty)
             {
-                let note = format!(
-                    "`present({field})` is always true because `{field}` is not `Option`"
-                );
+                let note =
+                    format!("`present({field})` is always true because `{field}` is not `Option`");
                 warnings.push(lint_warning(field.span(), &note));
             }
         }
@@ -968,9 +927,8 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
                 _ => false,
             });
             if !used_in_change && !used_in_validate {
-                let note = format!(
-                    "argument `{name}` is never used in `change`, `validate`, or `run`"
-                );
+                let note =
+                    format!("argument `{name}` is never used in `change`, `validate`, or `run`");
                 warnings.push(lint_warning(arg.name.span(), &note));
             }
         }
@@ -995,15 +953,36 @@ fn calc_mentions_arg(expr: &CalculationExprSpec, name: &Ident) -> bool {
     use CalculationExprSpec as E;
     match expr {
         E::Arg(arg) => arg == name,
-        E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Div(a, b) | E::Eq(a, b) | E::Ne(a, b) | E::Gt(a, b) | E::Gte(a, b) | E::Lt(a, b) | E::Lte(a, b) => {
-            calc_mentions_arg(a, name) || calc_mentions_arg(b, name)
+        E::Add(a, b)
+        | E::Sub(a, b)
+        | E::Mul(a, b)
+        | E::Div(a, b)
+        | E::Eq(a, b)
+        | E::Ne(a, b)
+        | E::Gt(a, b)
+        | E::Gte(a, b)
+        | E::Lt(a, b)
+        | E::Lte(a, b) => calc_mentions_arg(a, name) || calc_mentions_arg(b, name),
+        E::Concat(parts) | E::Coalesce(parts) => {
+            parts.iter().any(|part| calc_mentions_arg(part, name))
         }
-        E::Concat(parts) | E::Coalesce(parts) => parts.iter().any(|part| calc_mentions_arg(part, name)),
         E::Lower(e) | E::Upper(e) | E::Length(e) => calc_mentions_arg(e, name),
-        E::IfElse { cond, then_expr, else_expr } => {
-            calc_mentions_arg(cond, name) || calc_mentions_arg(then_expr, name) || calc_mentions_arg(else_expr, name)
+        E::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            calc_mentions_arg(cond, name)
+                || calc_mentions_arg(then_expr, name)
+                || calc_mentions_arg(else_expr, name)
         }
-        E::StringLength(_) | E::Field(_) | E::LitInt(_) | E::LitString(_) | E::LitBool(_) | E::Null | E::Custom(_) => false,
+        E::StringLength(_)
+        | E::Field(_)
+        | E::LitInt(_)
+        | E::LitString(_)
+        | E::LitBool(_)
+        | E::Null
+        | E::Custom(_) => false,
     }
 }
 
@@ -1233,7 +1212,10 @@ mod tests {
                 }
             }
         });
-        assert!(msg.contains("relationship, not a filter field"), "got: {msg}");
+        assert!(
+            msg.contains("relationship, not a filter field"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -1277,7 +1259,8 @@ mod tests {
             }
         }});
         assert!(
-            msg.contains("`code` is both an attribute and an identity") && msg.contains("unique_code"),
+            msg.contains("`code` is both an attribute and an identity")
+                && msg.contains("unique_code"),
             "got: {msg}"
         );
     }
@@ -1974,20 +1957,23 @@ mod tests {
             ("Option<i64>", quote!(field: Option<i64>;), false),
         ];
         for (label, attribute, expect_warning) in cases {
-            let notes = lint_notes(label, quote! {
-                TestResource {
-                    attributes {
-                        id: Uuid [pk];
-                        #attribute
-                    }
-                    actions {
-                        create open {
-                            accept [field];
-                            validate present(field);
+            let notes = lint_notes(
+                label,
+                quote! {
+                    TestResource {
+                        attributes {
+                            id: Uuid [pk];
+                            #attribute
+                        }
+                        actions {
+                            create open {
+                                accept [field];
+                                validate present(field);
+                            }
                         }
                     }
-                }
-            });
+                },
+            );
             assert_eq!(
                 notes.contains("`present(field)` is always true"),
                 expect_warning,
@@ -1999,39 +1985,57 @@ mod tests {
     #[test]
     fn test_accept_lint_warns_only_on_unconditional_overwrites() {
         let cases = [
-            ("set", quote!(status), quote!(change set(status = "open");), Some("set")),
+            (
+                "set",
+                quote!(status),
+                quote!(change set(status = "open");),
+                Some("set"),
+            ),
             (
                 "relate_actor",
                 quote!(owner_id),
                 quote!(change relate_actor(owner_id);),
                 Some("relate_actor"),
             ),
-            ("set_new keeps input", quote!(status), quote!(change set_new(status = "open");), None),
+            (
+                "set_new keeps input",
+                quote!(status),
+                quote!(change set_new(status = "open");),
+                None,
+            ),
             (
                 "set_from_arg keeps input when arg is absent",
                 quote!(status),
                 quote!(argument next: Option<String>; change set_from_arg(status, next);),
                 None,
             ),
-            ("set on another field", quote!(status), quote!(change set(note = "x");), None),
+            (
+                "set on another field",
+                quote!(status),
+                quote!(change set(note = "x");),
+                None,
+            ),
         ];
         for (label, accepted, body, expected_change) in cases {
-            let notes = lint_notes(label, quote! {
-                TestResource {
-                    attributes {
-                        id: Uuid [pk];
-                        status: String;
-                        note: String;
-                        owner_id: Uuid;
-                    }
-                    actions {
-                        create open {
-                            accept [#accepted];
-                            #body
+            let notes = lint_notes(
+                label,
+                quote! {
+                    TestResource {
+                        attributes {
+                            id: Uuid [pk];
+                            status: String;
+                            note: String;
+                            owner_id: Uuid;
+                        }
+                        actions {
+                            create open {
+                                accept [#accepted];
+                                #body
+                            }
                         }
                     }
-                }
-            });
+                },
+            );
             match expected_change {
                 Some(change) => assert!(
                     notes.contains(&format!("is overwritten by `change {change}({accepted})`")),
@@ -2045,7 +2049,11 @@ mod tests {
     #[test]
     fn test_unused_argument_lint_covers_every_consumer() {
         let cases = [
-            ("unused", quote!(create open { argument reason: String; }), true),
+            (
+                "unused",
+                quote!(create open { argument reason: String; }),
+                true,
+            ),
             (
                 "only a string literal mentions it",
                 quote!(create open { argument reason: String; change set(status = "reason"); }),
@@ -2138,22 +2146,28 @@ mod tests {
             ),
         ];
         for (label, action, expect_warning) in cases {
-            let notes = lint_notes(label, quote! {
-                TestResource {
-                    attributes {
-                        id: Uuid [pk];
-                        status: String;
+            let notes = lint_notes(
+                label,
+                quote! {
+                    TestResource {
+                        attributes {
+                            id: Uuid [pk];
+                            status: String;
+                        }
+                        relationships {
+                            has_many items: Item [fk: parent_id];
+                        }
+                        actions {
+                            #action
+                        }
                     }
-                    relationships {
-                        has_many items: Item [fk: parent_id];
-                    }
-                    actions {
-                        #action
-                    }
-                }
-            });
-            assert_eq!(notes.contains("is never used"), expect_warning, "{label}: {notes}");
+                },
+            );
+            assert_eq!(
+                notes.contains("is never used"),
+                expect_warning,
+                "{label}: {notes}"
+            );
         }
     }
 }
-

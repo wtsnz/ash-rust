@@ -234,8 +234,13 @@ pub enum AggregateFilterSpec {
 
 #[derive(Clone)]
 pub enum PreparationSpec {
-    Filter { expr: Expr },
-    Sort { field: Ident, descending: bool },
+    Filter {
+        expr: Expr,
+    },
+    Sort {
+        field: Ident,
+        descending: bool,
+    },
     Limit(usize),
     Offset(usize),
     /// `prepare after_action(f);`: `f` runs on the records the read found.
