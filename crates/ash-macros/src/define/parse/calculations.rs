@@ -1,5 +1,5 @@
-use syn::parse::ParseStream;
 use syn::parse::discouraged::Speculative;
+use syn::parse::{Parse, ParseStream};
 use syn::{Error, Expr, Ident, Result, Token, Type};
 
 use crate::define::ast::{ArgumentSpec, CalculationExprSpec, CalculationSpec};
@@ -55,6 +55,37 @@ fn parse_one_calculation(input: ParseStream, errors: &mut Vec<Error>) -> Result<
     }
     let _: Token![:] = input.parse()?;
     let ty: Type = input.parse()?;
+    let mut dependencies = None;
+    let mut declassify = false;
+    if input.peek(syn::token::Bracket) {
+        let options;
+        syn::bracketed!(options in input);
+        while !options.is_empty() {
+            let option: Ident = options.parse()?;
+            match option.to_string().as_str() {
+                "declassify" if !declassify => declassify = true,
+                "depends_on" if dependencies.is_none() => {
+                    let fields;
+                    syn::bracketed!(fields in options);
+                    dependencies = Some(
+                        fields
+                            .parse_terminated(Ident::parse, Token![,])?
+                            .into_iter()
+                            .collect(),
+                    );
+                }
+                _ => {
+                    return Err(Error::new_spanned(
+                        option,
+                        "expected `declassify` or `depends_on [fields]`, without duplicates",
+                    ));
+                }
+            }
+            if !options.is_empty() {
+                let _: Token![,] = options.parse()?;
+            }
+        }
+    }
     let _: Token![=] = input.parse()?;
 
     let expr = if input.peek(syn::LitStr) {
@@ -95,6 +126,8 @@ fn parse_one_calculation(input: ParseStream, errors: &mut Vec<Error>) -> Result<
         arguments,
         ty,
         expr,
+        dependencies,
+        declassify,
     })
 }
 

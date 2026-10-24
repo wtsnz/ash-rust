@@ -1,5 +1,3 @@
-
-
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::resource::{IdentityDef, ResourceDef};
@@ -16,6 +14,9 @@ pub struct Sort {
     /// Where nulls go: first, or last. `None`: as Ash places them, last ascending and
     /// first descending.
     pub nulls_first: Option<bool>,
+    /// Use projected aggregate operands, as client sorts do. Trusted preparations
+    /// leave this false and may order by stored derived values.
+    pub projected: bool,
 }
 
 impl Sort {
@@ -70,21 +71,56 @@ pub enum PerKey<'a> {
 }
 
 impl CompiledQuery {
+    /// Only explicit server predicates and sorts may require an unprojected value.
+    pub fn needs_trusted_value(&self, field: &str) -> bool {
+        let mut fields = Vec::new();
+        if let Some(filter) = &self.filter {
+            filter.collect_trusted_fields(&mut fields);
+        }
+        fields.contains(&field)
+            || self
+                .sort
+                .iter()
+                .any(|sort| !sort.projected && sort.field == field)
+    }
+
+    /// Validate opaque calculation contracts before execution, even for an empty table.
+    pub fn validate_calculations(&self, resource: &ResourceDef) -> Result<()> {
+        let mut names: Vec<&str> = self.calculations.iter().map(String::as_str).collect();
+        names.extend(self.sort.iter().map(|sort| sort.field.as_str()));
+        if let Some(filter) = &self.filter {
+            filter.collect_fields(&mut names);
+        }
+        for name in names {
+            if let Some(calc) = resource.calculation(name) {
+                calc.validate_dependencies(resource)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Whether the query reads `attribute` of `resource`: it's selected, or the primary
-    /// key, or the query selects everything, or it asks for a calculation only Rust can
-    /// compute, which reads whatever of the record it likes.
+    /// key, or the query selects everything, or a Rust calculation declares it as an
+    /// input.
     pub fn reads(&self, resource: &ResourceDef, attribute: &crate::resource::AttributeDef) -> bool {
         attribute.primary_key
             || self
                 .select
                 .as_ref()
                 .is_none_or(|select| select.iter().any(|name| name == attribute.name))
-            || self.custom_calculations(resource).next().is_some()
+            || self.custom_calculations(resource).any(|calc| {
+                calc.dependency_fields()
+                    .is_ok_and(|fields| fields.contains(&attribute.name))
+                    || crate::field_policy_fields(resource).contains(&attribute.name)
+            })
     }
 
     /// The calculations the query asks for that only Rust can compute: a SQL data layer
     /// computes them from the record it reads, after reading it.
-    pub fn custom_calculations<'a>(&'a self, resource: &'a ResourceDef) -> impl Iterator<Item = &'a crate::expr::CalculationDef> + 'a {
+    pub fn custom_calculations<'a>(
+        &'a self,
+        resource: &'a ResourceDef,
+    ) -> impl Iterator<Item = &'a crate::expr::CalculationDef> + 'a {
         self.calculations
             .iter()
             .filter_map(|name| resource.calculation(name))

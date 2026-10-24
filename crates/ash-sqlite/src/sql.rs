@@ -39,17 +39,30 @@ pub fn insert_query(resource: &ResourceDef, fields: &FieldMap) -> Result<Compile
     compiler.compile_insert(resource, fields)
 }
 
-pub fn update_query(resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: &FieldMap) -> Result<CompiledSql> {
+pub fn update_query(
+    resource: &ResourceDef,
+    tenant: Option<&str>,
+    id: Value,
+    fields: &FieldMap,
+) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect).with_tenant(tenant);
     compiler.compile_update(resource, id, fields)
 }
 
-pub fn delete_query(resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<CompiledSql> {
+pub fn delete_query(
+    resource: &ResourceDef,
+    tenant: Option<&str>,
+    id: Value,
+) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect).with_tenant(tenant);
     compiler.compile_delete(resource, id)
 }
 
-pub fn bulk_delete_query(resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<CompiledSql> {
+pub fn bulk_delete_query(
+    resource: &ResourceDef,
+    tenant: Option<&str>,
+    ids: &[Value],
+) -> Result<CompiledSql> {
     let mut compiler = QueryCompiler::new(&SqliteDialect).with_tenant(tenant);
     compiler.compile_bulk_delete(resource, ids)
 }
@@ -70,7 +83,13 @@ pub fn row_to_fields(
     calculations: &[String],
     aggregates: &[String],
 ) -> Result<FieldMap> {
-    read_row(row, resource, &CompiledQuery::default(), calculations, aggregates)
+    read_row(
+        row,
+        resource,
+        &CompiledQuery::default(),
+        calculations,
+        aggregates,
+    )
 }
 
 /// A row `query` read: the attributes it selected, and the calculations and aggregates.
@@ -83,7 +102,11 @@ pub fn read_row(
 ) -> Result<FieldMap> {
     let mut map = FieldMap::new();
 
-    for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
+    for attr in resource
+        .attributes
+        .iter()
+        .filter(|attr| query.reads(resource, attr))
+    {
         let val = extract_column_value(row, attr.name, &attr.ty)?;
         map.insert(attr.name.to_string(), val);
     }
@@ -111,12 +134,35 @@ pub fn read_row(
         })?;
         let val = extract_aggregate_value(row, agg)?;
         map.insert(agg.name.to_string(), val);
+        if matches!(
+            agg.kind,
+            ash_core::AggregateKind::First { .. } | ash_core::AggregateKind::Sum { .. }
+        ) {
+            let name = ash_core::derived::projected_name(agg.name);
+            let value = extract_column_value(
+                row,
+                &ash_core::derived::projected_column(resource, agg.name),
+                &agg.ty,
+            )?;
+            map.insert(name, value);
+        }
     }
 
     // What only Rust computes, from the record as read.
     for calc in query.custom_calculations(resource) {
-        let args = query.calculation_args.get(calc.name).cloned().unwrap_or_default();
-        ash_core::apply_named_with_args(resource, &mut map, calc.name, &args)?;
+        let args = query
+            .calculation_args
+            .get(calc.name)
+            .cloned()
+            .unwrap_or_default();
+        ash_core::derived::apply_calculation(
+            resource,
+            query.actor.as_ref(),
+            &mut map,
+            calc.name,
+            &args,
+            query.needs_trusted_value(calc.name),
+        )?;
     }
 
     Ok(map)
@@ -136,12 +182,10 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
         | AttrType::Date
         | AttrType::Inet
         | AttrType::Vector { .. }
-        | AttrType::UtcDatetime { .. } => {
-            match optional_text(row, col)? {
-                None => Ok(Value::Null),
-                Some(text) => Ok(Value::String(text)),
-            }
-        }
+        | AttrType::UtcDatetime { .. } => match optional_text(row, col)? {
+            None => Ok(Value::Null),
+            Some(text) => Ok(Value::String(text)),
+        },
         AttrType::Decimal => match optional_decimal(row, col)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
@@ -163,7 +207,11 @@ fn extract_column_value(row: &SqliteRow, col: &str, ty: &AttrType) -> Result<Val
             Some(0) => Ok(Value::Bool(false)),
             Some(_) => Ok(Value::Bool(true)),
         },
-        AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => match optional_text(row, col)? {
+        AttrType::Map
+        | AttrType::Array { .. }
+        | AttrType::Embedded(_)
+        | AttrType::TypedMap { .. }
+        | AttrType::Union { .. } => match optional_text(row, col)? {
             None => Ok(Value::Null),
             Some(text) => match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(json) => Ok(Value::from_plain_json(json)),
@@ -190,12 +238,10 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
         | AttrType::Date
         | AttrType::Inet
         | AttrType::Vector { .. }
-        | AttrType::UtcDatetime { .. } => {
-            match optional_text(row, agg.name)? {
-                None => Ok(Value::Null),
-                Some(text) => Ok(Value::String(text)),
-            }
-        }
+        | AttrType::UtcDatetime { .. } => match optional_text(row, agg.name)? {
+            None => Ok(Value::Null),
+            Some(text) => Ok(Value::String(text)),
+        },
         AttrType::Decimal => match optional_decimal(row, agg.name)? {
             None => Ok(Value::Null),
             Some(text) => Ok(Value::String(text)),
@@ -214,7 +260,11 @@ fn extract_aggregate_value(row: &SqliteRow, agg: &AggregateDef) -> Result<Value>
                 Uuid::parse_str(&text).map_err(|err| Error::DataLayer(err.to_string()))?,
             )),
         },
-        AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => Ok(Value::Null),
+        AttrType::Map
+        | AttrType::Array { .. }
+        | AttrType::Embedded(_)
+        | AttrType::TypedMap { .. }
+        | AttrType::Union { .. } => Ok(Value::Null),
     }
 }
 

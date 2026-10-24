@@ -34,7 +34,7 @@ impl Filter {
             Self::And(parts) | Self::Or(parts) => parts
                 .iter()
                 .try_for_each(|part| part.validate_snapshot(resource)),
-            Self::Not(inner) => inner.validate_snapshot(resource),
+            Self::Not(inner) | Self::Projected(inner) => inner.validate_snapshot(resource),
             leaf => {
                 let mut fields = Vec::new();
                 leaf.collect_fields(&mut fields);
@@ -68,7 +68,7 @@ fn needs_data(filter: &Filter, resource: &ResourceDef, fields: &FieldMap) -> boo
         Filter::And(parts) | Filter::Or(parts) => {
             parts.iter().any(|part| needs_data(part, resource, fields))
         }
-        Filter::Not(inner) => needs_data(inner, resource, fields),
+        Filter::Not(inner) | Filter::Projected(inner) => needs_data(inner, resource, fields),
         leaf => {
             let mut names = Vec::new();
             leaf.collect_fields(&mut names);

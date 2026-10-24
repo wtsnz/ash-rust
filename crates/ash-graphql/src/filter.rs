@@ -131,6 +131,18 @@ pub fn parse_resource_filter(
     parse_filter(resource, value).map(ash_core::ClientExpr::new)
 }
 
+// Validate dependencies before field guards can simplify a hidden derived filter away.
+pub(crate) fn parse_subscription_filter(
+    resource: &'static ResourceDef,
+    value: &GqlValue,
+) -> Result<ash_core::ClientExpr<Filter>, async_graphql::Error> {
+    let filter = parse_filter(resource, value)?;
+    filter
+        .validate_snapshot(resource)
+        .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+    Ok(ash_core::ClientExpr::new(filter))
+}
+
 fn parse_filter(
     resource: &'static ResourceDef,
     value: &GqlValue,

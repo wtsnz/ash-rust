@@ -120,6 +120,17 @@ pub enum PresentedValue {
 }
 
 impl PresentedValue {
+    pub(crate) fn has_forbidden(&self) -> bool {
+        match self {
+            Self::Scalar(_) => false,
+            Self::Record(view) => {
+                !view.forbidden.is_empty() || view.nested.values().any(Self::has_forbidden)
+            }
+            Self::Array(items) => items.iter().any(Self::has_forbidden),
+            Self::Map(fields) => fields.values().any(Self::has_forbidden),
+        }
+    }
+
     pub fn to_value(&self) -> Value {
         match self {
             Self::Scalar(value) => value.clone(),
@@ -299,7 +310,8 @@ fn present(
         reader: actor.cloned().map(std::sync::Arc::new),
         ..View::default()
     };
-    for (name, value) in record.fields {
+    let fields = crate::derived::into_projected_fields(record.fields);
+    for (name, value) in fields {
         if select.is_some_and(|fields| !fields.contains(&name)) {
             continue;
         }
@@ -346,7 +358,7 @@ fn project_relationship(
     }
 }
 
-fn project_value(
+pub(crate) fn project_value(
     ty: AttrType,
     actor: Option<&crate::Actor>,
     value: Value,

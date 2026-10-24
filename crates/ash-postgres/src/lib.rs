@@ -150,9 +150,13 @@ impl Params {
                     Some(AttrType::Uuid) => (Box::new(None::<Uuid>), Type::UUID),
                     Some(AttrType::Integer) => (Box::new(None::<i64>), Type::INT8),
                     Some(AttrType::Boolean) => (Box::new(None::<bool>), Type::BOOL),
-                    Some(AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }) => {
-                        (Box::new(None::<serde_json::Value>), Type::JSONB)
-                    }
+                    Some(
+                        AttrType::Map
+                        | AttrType::Array { .. }
+                        | AttrType::Embedded(_)
+                        | AttrType::TypedMap { .. }
+                        | AttrType::Union { .. },
+                    ) => (Box::new(None::<serde_json::Value>), Type::JSONB),
                     _ => (Box::new(None::<String>), Type::TEXT),
                 },
                 Value::Bool(b) => (Box::new(*b), Type::BOOL),
@@ -169,7 +173,10 @@ impl Params {
     }
 
     fn refs(&self) -> Vec<&(dyn ToSql + Sync)> {
-        self.values.iter().map(|value| value.as_ref() as &(dyn ToSql + Sync)).collect()
+        self.values
+            .iter()
+            .map(|value| value.as_ref() as &(dyn ToSql + Sync))
+            .collect()
     }
 }
 
@@ -200,10 +207,17 @@ impl Postgres {
     }
 
     /// [`connect_with`](Self::connect_with), with a pool sized and bounded as `settings` say.
-    pub async fn connect_with_pool(config: tokio_postgres::Config, settings: PoolSettings) -> Result<Self> {
+    pub async fn connect_with_pool(
+        config: tokio_postgres::Config,
+        settings: PoolSettings,
+    ) -> Result<Self> {
         let pool = pool_with(&config, settings)?;
         // Connect once now, so an unreachable database fails here, as sqlx's did.
-        drop(pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?);
+        drop(
+            pool.get()
+                .await
+                .map_err(|e| Error::DataLayer(e.to_string()))?,
+        );
         Ok(Self {
             source: PostgresSource::Pool(pool, Some(Arc::new(config))),
         })
@@ -243,7 +257,9 @@ impl Postgres {
             .prepare_typed_cached(&compiled.sql, &params.types)
             .await
             .map_err(Failure::Db)?;
-        conn.query(&statement, &params.refs()).await.map_err(Failure::Db)
+        conn.query(&statement, &params.refs())
+            .await
+            .map_err(Failure::Db)
     }
 
     /// The number of rows `compiled` changed.
@@ -254,29 +270,59 @@ impl Postgres {
             .prepare_typed_cached(&compiled.sql, &params.types)
             .await
             .map_err(Failure::Db)?;
-        conn.execute(&statement, &params.refs()).await.map_err(Failure::Db)
+        conn.execute(&statement, &params.refs())
+            .await
+            .map_err(Failure::Db)
     }
 
     async fn execute_compiled(&self, compiled: &CompiledSql) -> Result<u64> {
         self.affected(compiled).await.map_err(map_failure)
     }
 
-    async fn execute_compiled_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<u64> {
-        self.affected(compiled).await.map_err(|e| map_failure_resource(e, resource))
+    async fn execute_compiled_resource(
+        &self,
+        compiled: &CompiledSql,
+        resource: &ResourceDef,
+    ) -> Result<u64> {
+        self.affected(compiled)
+            .await
+            .map_err(|e| map_failure_resource(e, resource))
     }
 
-    async fn fetch_one_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Row> {
+    async fn fetch_one_resource(
+        &self,
+        compiled: &CompiledSql,
+        resource: &ResourceDef,
+    ) -> Result<Row> {
         self.fetch_optional_resource(compiled, resource)
             .await?
-            .ok_or_else(|| Error::DataLayer("no rows returned by a query that expected to return at least one row".into()))
+            .ok_or_else(|| {
+                Error::DataLayer(
+                    "no rows returned by a query that expected to return at least one row".into(),
+                )
+            })
     }
 
-    async fn fetch_all_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Vec<Row>> {
-        self.rows(compiled).await.map_err(|e| map_failure_resource(e, resource))
+    async fn fetch_all_resource(
+        &self,
+        compiled: &CompiledSql,
+        resource: &ResourceDef,
+    ) -> Result<Vec<Row>> {
+        self.rows(compiled)
+            .await
+            .map_err(|e| map_failure_resource(e, resource))
     }
 
-    async fn fetch_optional_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Option<Row>> {
-        Ok(self.fetch_all_resource(compiled, resource).await?.into_iter().next())
+    async fn fetch_optional_resource(
+        &self,
+        compiled: &CompiledSql,
+        resource: &ResourceDef,
+    ) -> Result<Option<Row>> {
+        Ok(self
+            .fetch_all_resource(compiled, resource)
+            .await?
+            .into_iter()
+            .next())
     }
 
     async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<Row>> {
@@ -284,7 +330,10 @@ impl Postgres {
     }
 
     /// [`fetch_all`](Self::fetch_all), keeping the database's error for the caller to read.
-    async fn fetch_all_raw(&self, compiled: &CompiledSql) -> std::result::Result<Vec<Row>, Failure> {
+    async fn fetch_all_raw(
+        &self,
+        compiled: &CompiledSql,
+    ) -> std::result::Result<Vec<Row>, Failure> {
         self.rows(compiled).await
     }
 
@@ -303,8 +352,10 @@ impl Postgres {
         self.transaction(|tx| {
             let tx = tx.clone();
             async move {
-                tx.execute_raw(&format!("SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"))
-                    .await?;
+                tx.execute_raw(&format!(
+                    "SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"
+                ))
+                .await?;
                 tx.install_unlocked(resources).await
             }
         })
@@ -330,9 +381,12 @@ impl Postgres {
         self.transaction(|tx| {
             let tx = tx.clone();
             async move {
-                tx.execute_raw(&format!("SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"))
+                tx.execute_raw(&format!(
+                    "SELECT pg_advisory_xact_lock({MIGRATION_LOCK_KEY})"
+                ))
+                .await?;
+                tx.execute_raw(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
                     .await?;
-                tx.execute_raw(&format!("CREATE SCHEMA IF NOT EXISTS {schema}")).await?;
                 // New tables land in the first schema on the path, for this transaction
                 // only; `public` keeps extension types such as `citext` visible.
                 tx.execute_raw(&format!("SET LOCAL search_path TO {schema}, public"))
@@ -351,7 +405,9 @@ impl Postgres {
         // made, and those keys added after: no order creates them with every key inline.
         let creates = resources
             .iter()
-            .map(|res| ash_sql::SchemaOperation::CreateTable(TableSnapshot::from_resource(res, &dialect)))
+            .map(|res| {
+                ash_sql::SchemaOperation::CreateTable(TableSnapshot::from_resource(res, &dialect))
+            })
             .collect();
         for operation in ash_sql::defer_forward_references(creates) {
             match operation {
@@ -363,7 +419,8 @@ impl Postgres {
                     for extension in ash_sql::required_extensions(&dialect, res) {
                         self.execute_raw(&extension).await?;
                     }
-                    self.execute_raw(&ash_sql::emit_create_table(&dialect, &table)).await?;
+                    self.execute_raw(&ash_sql::emit_create_table(&dialect, &table))
+                        .await?;
                     for idx_ddl in compiler.compile_create_indexes(res)? {
                         self.execute_raw(&idx_ddl).await?;
                     }
@@ -389,7 +446,8 @@ impl Postgres {
                 .any(|s| s.dialects.is_empty() || s.dialects.contains(&"postgres"))
         });
         if has_statements {
-            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE).await?;
+            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE)
+                .await?;
         }
         for res in &resources {
             for statement in res.statements {
@@ -434,7 +492,9 @@ impl Postgres {
         migrations_dir: impl AsRef<Path>,
     ) -> Result<()> {
         let PostgresSource::Pool(pool, config) = &self.source else {
-            return Err(Error::DataLayer("Migration requires a connection pool".into()));
+            return Err(Error::DataLayer(
+                "Migration requires a connection pool".into(),
+            ));
         };
         let config = config.as_ref().ok_or_else(|| {
             Error::DataLayer("Migrating schemas needs the pool's connection settings: connect with Postgres::connect".into())
@@ -443,7 +503,10 @@ impl Postgres {
         for name in schemas {
             validate_schema_name(name)?;
             let quoted = quote_schema_name(name);
-            let conn = pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?;
+            let conn = pool
+                .get()
+                .await
+                .map_err(|e| Error::DataLayer(e.to_string()))?;
             conn.batch_execute(&format!("CREATE SCHEMA IF NOT EXISTS {quoted}"))
                 .await
                 .map_err(map_pg)?;
@@ -629,7 +692,10 @@ impl DataLayer for Postgres {
         let plan = RowPlan::new(&rows, resource, query);
         for row in &rows {
             let ord: i64 = row.try_get("__ash_ord").map_err(map_pg)?;
-            if let Some(rows) = usize::try_from(ord - 1).ok().and_then(|i| per_key.get_mut(i)) {
+            if let Some(rows) = usize::try_from(ord - 1)
+                .ok()
+                .and_then(|i| per_key.get_mut(i))
+            {
                 rows.push(plan.read(row)?);
             }
         }
@@ -639,7 +705,9 @@ impl DataLayer for Postgres {
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
-        let rows = self.fetch_all(&compiler.compile_count(resource, query)?).await?;
+        let rows = self
+            .fetch_all(&compiler.compile_count(resource, query)?)
+            .await?;
         let count: i64 = rows
             .first()
             .ok_or_else(|| Error::DataLayer("COUNT returned no row".into()))?
@@ -659,7 +727,8 @@ impl DataLayer for Postgres {
         let dialect = PostgresDialect;
         let page_sql = QueryCompiler::new(&dialect).compile_select(resource, page)?;
         let count_sql = QueryCompiler::new(&dialect).compile_count(resource, count)?;
-        let (page_params, count_params) = (Params::of(&page_sql.params), Params::of(&count_sql.params));
+        let (page_params, count_params) =
+            (Params::of(&page_sql.params), Params::of(&count_sql.params));
         let conn = self.conn().await.map_err(map_failure)?;
         let (page_statement, count_statement) = futures_util::future::try_join(
             conn.prepare_typed_cached(&page_sql.sql, &page_params.types),
@@ -674,7 +743,10 @@ impl DataLayer for Postgres {
         .await
         .map_err(map_pg)?;
         let plan = RowPlan::new(&rows, resource, page);
-        let records = rows.iter().map(|row| plan.read(row)).collect::<Result<Vec<_>>>()?;
+        let records = rows
+            .iter()
+            .map(|row| plan.read(row))
+            .collect::<Result<Vec<_>>>()?;
         let counted: i64 = counted.try_get(0).map_err(map_pg)?;
         Ok((records, counted as usize))
     }
@@ -698,7 +770,8 @@ impl DataLayer for Postgres {
         let rows = match self.fetch_all_raw(&compiled).await {
             Ok(rows) => rows,
             Err(err) => {
-                return Err(raised_error(&err, resource, &update.conditions).unwrap_or_else(|| map_failure_resource(err, resource)));
+                return Err(raised_error(&err, resource, &update.conditions)
+                    .unwrap_or_else(|| map_failure_resource(err, resource)));
             }
         };
         rows_to_fields(&rows, resource)
@@ -721,7 +794,10 @@ impl DataLayer for Postgres {
         let compiled = compiler.compile_atomic_destroy(resource, query, conditions)?;
         let rows = match self.fetch_all_raw(&compiled).await {
             Ok(rows) => rows,
-            Err(err) => return Err(raised_error(&err, resource, conditions).unwrap_or_else(|| map_failure_resource(err, resource))),
+            Err(err) => {
+                return Err(raised_error(&err, resource, conditions)
+                    .unwrap_or_else(|| map_failure_resource(err, resource)));
+            }
         };
         rows_to_fields(&rows, resource)
     }
@@ -784,7 +860,10 @@ impl DataLayer for Postgres {
         let mut together = Vec::new();
         for (i, (id, fields)) in rows.iter().enumerate() {
             if !writes(fields) {
-                results[i] = Some(self.update(resource, tenant, id.clone(), fields.clone()).await);
+                results[i] = Some(
+                    self.update(resource, tenant, id.clone(), fields.clone())
+                        .await,
+                );
             } else {
                 together.push(i);
             }
@@ -793,29 +872,40 @@ impl DataLayer for Postgres {
         let columns: Vec<&str> = resource
             .attributes
             .iter()
-            .filter(|attr| !attr.primary_key && together.iter().any(|&i| rows[i].1.contains_key(attr.name)))
+            .filter(|attr| {
+                !attr.primary_key && together.iter().any(|&i| rows[i].1.contains_key(attr.name))
+            })
             .map(|attr| attr.name)
             .collect();
         let dialect = PostgresDialect;
         // Postgres binds at most 65,535 parameters to a statement.
         let per_statement = (65_535 / (columns.len() + 1)).max(1);
         for batch in together.chunks(per_statement) {
-            let batch_rows: Vec<(Value, &FieldMap)> =
-                batch.iter().map(|&i| (rows[i].0.clone(), &rows[i].1)).collect();
+            let batch_rows: Vec<(Value, &FieldMap)> = batch
+                .iter()
+                .map(|&i| (rows[i].0.clone(), &rows[i].1))
+                .collect();
             let compiled = QueryCompiler::new(&dialect)
                 .with_tenant(tenant)
                 .compile_bulk_update(resource, &columns, &batch_rows)?;
-            let mut stored: std::collections::HashMap<Value, FieldMap> =
-                rows_to_fields(&self.fetch_all_resource(&compiled, resource).await?, resource)?
-                    .into_iter()
-                    .map(|fields| {
-                        let id = match fields.get(pk) {
-                            Some(id) if !id.is_null() => id.clone(),
-                            _ => return Err(Error::DataLayer(format!("{} row without its key", resource.name))),
-                        };
-                        Ok((id, fields))
-                    })
-                    .collect::<Result<_>>()?;
+            let mut stored: std::collections::HashMap<Value, FieldMap> = rows_to_fields(
+                &self.fetch_all_resource(&compiled, resource).await?,
+                resource,
+            )?
+            .into_iter()
+            .map(|fields| {
+                let id = match fields.get(pk) {
+                    Some(id) if !id.is_null() => id.clone(),
+                    _ => {
+                        return Err(Error::DataLayer(format!(
+                            "{} row without its key",
+                            resource.name
+                        )));
+                    }
+                };
+                Ok((id, fields))
+            })
+            .collect::<Result<_>>()?;
             for &i in batch {
                 results[i] = Some(stored.remove(&rows[i].0).ok_or(Error::NotFound));
             }
@@ -826,7 +916,12 @@ impl DataLayer for Postgres {
             .collect())
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
+    async fn bulk_destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        ids: &[Value],
+    ) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -847,7 +942,10 @@ impl TransactionSupport for Postgres {
     {
         match &self.source {
             PostgresSource::Pool(pool, _) => {
-                let conn = pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))?;
+                let conn = pool
+                    .get()
+                    .await
+                    .map_err(|e| Error::DataLayer(e.to_string()))?;
                 conn.batch_execute("BEGIN").await.map_err(map_pg)?;
                 let conn = Arc::new(Mutex::new(conn));
                 let tx_pg = Postgres {
@@ -855,7 +953,11 @@ impl TransactionSupport for Postgres {
                 };
                 match f(&tx_pg).await {
                     Ok(val) => {
-                        conn.lock().await.batch_execute("COMMIT").await.map_err(map_pg)?;
+                        conn.lock()
+                            .await
+                            .batch_execute("COMMIT")
+                            .await
+                            .map_err(map_pg)?;
                         Ok(val)
                     }
                     Err(err) => {
@@ -897,7 +999,13 @@ impl TransactionSupport for Postgres {
 /// A pool of up to `size` connections made with `config`. A connection is reused without
 /// a round trip to check it (`RecyclingMethod::Fast`), as Postgrex reuses one.
 fn pool_of(config: &tokio_postgres::Config, size: usize) -> Result<Pool> {
-    pool_with(config, PoolSettings { size, ..PoolSettings::default() })
+    pool_with(
+        config,
+        PoolSettings {
+            size,
+            ..PoolSettings::default()
+        },
+    )
 }
 
 fn pool_with(config: &tokio_postgres::Config, settings: PoolSettings) -> Result<Pool> {
@@ -911,7 +1019,9 @@ fn pool_with(config: &tokio_postgres::Config, settings: PoolSettings) -> Result<
     let mut builder = Pool::builder(manager).max_size(settings.size);
     if settings.wait_timeout.is_some() {
         // A timeout needs the runtime that will time it.
-        builder = builder.runtime(deadpool_postgres::Runtime::Tokio1).wait_timeout(settings.wait_timeout);
+        builder = builder
+            .runtime(deadpool_postgres::Runtime::Tokio1)
+            .wait_timeout(settings.wait_timeout);
     }
     builder.build().map_err(|e| Error::DataLayer(e.to_string()))
 }
@@ -976,14 +1086,19 @@ impl PgMigrationExecutor {
     }
 
     async fn conn(&self) -> Result<Object> {
-        self.pool.get().await.map_err(|e| Error::DataLayer(e.to_string()))
+        self.pool
+            .get()
+            .await
+            .map_err(|e| Error::DataLayer(e.to_string()))
     }
 
     async fn init(&self) -> Result<()> {
         // Concurrent `CREATE TABLE IF NOT EXISTS` calls can still collide, so take the lock.
         let mut conn = self.conn().await?;
         let tx = locked(&mut conn).await?;
-        tx.batch_execute(self.create_table_sql).await.map_err(map_pg)?;
+        tx.batch_execute(self.create_table_sql)
+            .await
+            .map_err(map_pg)?;
         tx.commit().await.map_err(map_pg)
     }
 }
@@ -998,9 +1113,17 @@ async fn locked(conn: &mut Object) -> Result<deadpool_postgres::Transaction<'_>>
 }
 
 /// Whether `sql`, with `version` for its one parameter, returns a row.
-async fn any_row(tx: &deadpool_postgres::Transaction<'_>, sql: &str, version: &str) -> Result<bool> {
+async fn any_row(
+    tx: &deadpool_postgres::Transaction<'_>,
+    sql: &str,
+    version: &str,
+) -> Result<bool> {
     let statement = tx.prepare_typed(sql, &[TEXT]).await.map_err(map_pg)?;
-    Ok(!tx.query(&statement, &[&version]).await.map_err(map_pg)?.is_empty())
+    Ok(!tx
+        .query(&statement, &[&version])
+        .await
+        .map_err(map_pg)?
+        .is_empty())
 }
 
 const RECORD_MIGRATION: &str =
@@ -1019,11 +1142,20 @@ impl MigrationExecutor for PgMigrationExecutor {
     async fn apply_migration(&self, sql: &str, version: &str, name: &str) -> Result<bool> {
         let mut conn = self.conn().await?;
         let tx = locked(&mut conn).await?;
-        if any_row(&tx, "SELECT 1 FROM _ash_schema_migrations WHERE version = $1", version).await? {
+        if any_row(
+            &tx,
+            "SELECT 1 FROM _ash_schema_migrations WHERE version = $1",
+            version,
+        )
+        .await?
+        {
             return Ok(false);
         }
         tx.batch_execute(sql).await.map_err(map_pg)?;
-        let record = tx.prepare_typed(RECORD_MIGRATION, &[TEXT, TEXT, TEXT]).await.map_err(map_pg)?;
+        let record = tx
+            .prepare_typed(RECORD_MIGRATION, &[TEXT, TEXT, TEXT])
+            .await
+            .map_err(map_pg)?;
         tx.execute(&record, &[&version, &name, &ash_core::utc_now_iso8601()])
             .await
             .map_err(map_pg)?;
@@ -1039,7 +1171,10 @@ impl MigrationExecutor for PgMigrationExecutor {
             return Ok(false);
         }
         tx.batch_execute(sql).await.map_err(map_pg)?;
-        let forget = tx.prepare_typed(FORGET_MIGRATION, &[TEXT]).await.map_err(map_pg)?;
+        let forget = tx
+            .prepare_typed(FORGET_MIGRATION, &[TEXT])
+            .await
+            .map_err(map_pg)?;
         tx.execute(&forget, &[&version]).await.map_err(map_pg)?;
         tx.commit().await.map_err(map_pg)?;
         Ok(true)
@@ -1049,15 +1184,23 @@ impl MigrationExecutor for PgMigrationExecutor {
         let rows = self
             .conn()
             .await?
-            .query("SELECT version FROM _ash_schema_migrations ORDER BY version ASC", &[])
+            .query(
+                "SELECT version FROM _ash_schema_migrations ORDER BY version ASC",
+                &[],
+            )
             .await
             .map_err(map_pg)?;
-        rows.iter().map(|row| row.try_get("version").map_err(map_pg)).collect()
+        rows.iter()
+            .map(|row| row.try_get("version").map_err(map_pg))
+            .collect()
     }
 
     async fn record_migration(&self, version: &str, name: &str) -> Result<()> {
         let conn = self.conn().await?;
-        let record = conn.prepare_typed(RECORD_MIGRATION, &[TEXT, TEXT, TEXT]).await.map_err(map_pg)?;
+        let record = conn
+            .prepare_typed(RECORD_MIGRATION, &[TEXT, TEXT, TEXT])
+            .await
+            .map_err(map_pg)?;
         conn.execute(&record, &[&version, &name, &ash_core::utc_now_iso8601()])
             .await
             .map_err(map_pg)?;
@@ -1066,7 +1209,10 @@ impl MigrationExecutor for PgMigrationExecutor {
 
     async fn remove_migration(&self, version: &str) -> Result<()> {
         let conn = self.conn().await?;
-        let forget = conn.prepare_typed(FORGET_MIGRATION, &[TEXT]).await.map_err(map_pg)?;
+        let forget = conn
+            .prepare_typed(FORGET_MIGRATION, &[TEXT])
+            .await
+            .map_err(map_pg)?;
         conn.execute(&forget, &[&version]).await.map_err(map_pg)?;
         Ok(())
     }
@@ -1092,7 +1238,7 @@ struct RowPlan<'q> {
     resource: &'q ResourceDef,
     query: &'q CompiledQuery,
     /// Each field read: its name, type, and column, if the result has it.
-    fields: Vec<(&'static str, AttrType, Option<usize>)>,
+    fields: Vec<(String, AttrType, Option<usize>)>,
 }
 
 impl<'q> RowPlan<'q> {
@@ -1101,21 +1247,42 @@ impl<'q> RowPlan<'q> {
     fn new(rows: &[Row], resource: &'q ResourceDef, query: &'q CompiledQuery) -> Self {
         let columns = rows.first().map(Row::columns).unwrap_or_default();
         let column = |name: &str| columns.iter().position(|col| col.name() == name);
-        let mut fields = Vec::with_capacity(resource.attributes.len() + query.calculations.len() + query.aggregates.len());
-        for attr in resource.attributes.iter().filter(|attr| query.reads(resource, attr)) {
-            fields.push((attr.name, attr.ty, column(attr.name)));
+        let mut fields = Vec::with_capacity(
+            resource.attributes.len() + query.calculations.len() + query.aggregates.len(),
+        );
+        for attr in resource
+            .attributes
+            .iter()
+            .filter(|attr| query.reads(resource, attr))
+        {
+            fields.push((attr.name.to_string(), attr.ty, column(attr.name)));
         }
         for calc_name in &query.calculations {
-            if let Some(calc) = resource.calculation(calc_name).filter(|calc| !calc.expr.is_custom()) {
-                fields.push((calc.name, calc.ty, column(calc.name)));
+            if let Some(calc) = resource
+                .calculation(calc_name)
+                .filter(|calc| !calc.expr.is_custom())
+            {
+                fields.push((calc.name.to_string(), calc.ty, column(calc.name)));
             }
         }
         for agg_name in &query.aggregates {
             if let Some(agg) = resource.aggregate(agg_name) {
-                fields.push((agg.name, agg.ty, column(agg.name)));
+                fields.push((agg.name.to_string(), agg.ty, column(agg.name)));
+                if matches!(
+                    agg.kind,
+                    ash_core::AggregateKind::First { .. } | ash_core::AggregateKind::Sum { .. }
+                ) {
+                    let name = ash_core::derived::projected_name(agg.name);
+                    let index = column(&ash_core::derived::projected_column(resource, agg.name));
+                    fields.push((name, agg.ty, index));
+                }
             }
         }
-        Self { resource, query, fields }
+        Self {
+            resource,
+            query,
+            fields,
+        }
     }
 
     /// A row as the record it holds, with what only Rust computes from it.
@@ -1126,8 +1293,20 @@ impl<'q> RowPlan<'q> {
             map.insert(name.to_string(), value);
         }
         for calc in self.query.custom_calculations(self.resource) {
-            let args = self.query.calculation_args.get(calc.name).cloned().unwrap_or_default();
-            ash_core::apply_named_with_args(self.resource, &mut map, calc.name, &args)?;
+            let args = self
+                .query
+                .calculation_args
+                .get(calc.name)
+                .cloned()
+                .unwrap_or_default();
+            ash_core::derived::apply_calculation(
+                self.resource,
+                self.query.actor.as_ref(),
+                &mut map,
+                calc.name,
+                &args,
+                self.query.needs_trusted_value(calc.name),
+            )?;
         }
         Ok(map)
     }
@@ -1138,7 +1317,10 @@ impl<'q> RowPlan<'q> {
 struct Raw(Vec<u8>);
 
 impl<'a> FromSql<'a> for Raw {
-    fn from_sql(_: &Type, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(
+        _: &Type,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Raw(raw.to_vec()))
     }
 
@@ -1192,16 +1374,22 @@ fn extract_column_value(row: &Row, column: usize, ty: &ash_core::AttrType) -> Va
             .unwrap_or(Value::Null),
         ash_core::AttrType::Uuid => get::<Uuid>(row, column)
             .map(Value::Uuid)
-            .or_else(|| text(row).and_then(|s| Uuid::parse_str(&s).ok()).map(Value::Uuid))
+            .or_else(|| {
+                text(row)
+                    .and_then(|s| Uuid::parse_str(&s).ok())
+                    .map(Value::Uuid)
+            })
             .unwrap_or(Value::Null),
-        ash_core::AttrType::String | ash_core::AttrType::CiString | ash_core::AttrType::Atom { .. } => {
-            text(row).map(Value::String).unwrap_or(Value::Null)
+        ash_core::AttrType::String
+        | ash_core::AttrType::CiString
+        | ash_core::AttrType::Atom { .. } => text(row).map(Value::String).unwrap_or(Value::Null),
+        ash_core::AttrType::UtcDatetime { precision } => {
+            get::<chrono::DateTime<chrono::Utc>>(row, column)
+                .or_else(|| get::<chrono::NaiveDateTime>(row, column).map(|dt| dt.and_utc()))
+                .map(|dt| Value::String(precision.format(dt)))
+                .or_else(|| text(row).map(|s| Value::String(precision.normalize(&s).unwrap_or(s))))
+                .unwrap_or(Value::Null)
         }
-        ash_core::AttrType::UtcDatetime { precision } => get::<chrono::DateTime<chrono::Utc>>(row, column)
-            .or_else(|| get::<chrono::NaiveDateTime>(row, column).map(|dt| dt.and_utc()))
-            .map(|dt| Value::String(precision.format(dt)))
-            .or_else(|| text(row).map(|s| Value::String(precision.normalize(&s).unwrap_or(s))))
-            .unwrap_or(Value::Null),
         ash_core::AttrType::Decimal => get::<rust_decimal::Decimal>(row, column)
             .map(|n| n.to_string())
             .or_else(|| text(row))
@@ -1226,7 +1414,9 @@ fn extract_column_value(row: &Row, column: usize, ty: &ash_core::AttrType) -> Va
             .or_else(|| get::<i16>(row, column).map(i64::from))
             .map(Value::Int)
             .unwrap_or(Value::Null),
-        ash_core::AttrType::Boolean => get::<bool>(row, column).map(Value::Bool).unwrap_or(Value::Null),
+        ash_core::AttrType::Boolean => get::<bool>(row, column)
+            .map(Value::Bool)
+            .unwrap_or(Value::Null),
         ash_core::AttrType::Map
         | ash_core::AttrType::Array { .. }
         | ash_core::AttrType::Embedded(_)
@@ -1240,12 +1430,17 @@ fn extract_column_value(row: &Row, column: usize, ty: &ash_core::AttrType) -> Va
 
 /// The error an atomic statement's condition raised through `ash_raise_error`, if that's
 /// what `err` is: `ash_error: {"condition": n, "row": {...}}`.
-fn raised_error(err: &Failure, resource: &ResourceDef, conditions: &[ash_core::AtomicCondition]) -> Option<Error> {
+fn raised_error(
+    err: &Failure,
+    resource: &ResourceDef,
+    conditions: &[ash_core::AtomicCondition],
+) -> Option<Error> {
     let Failure::Db(err) = err else {
         return None;
     };
     let db_err = err.as_db_error()?;
-    let payload: serde_json::Value = serde_json::from_str(db_err.message().strip_prefix("ash_error: ")?).ok()?;
+    let payload: serde_json::Value =
+        serde_json::from_str(db_err.message().strip_prefix("ash_error: ")?).ok()?;
     let condition = conditions.get(payload.get("condition")?.as_u64()? as usize)?;
     let mut row = FieldMap::new();
     if let Some(reported) = payload.get("row").and_then(serde_json::Value::as_object) {
@@ -1262,11 +1457,13 @@ fn json_value(ty: Option<ash_core::AttrType>, json: &serde_json::Value) -> Value
     use ash_core::AttrType;
     match (ty, json) {
         (_, serde_json::Value::Null) => Value::Null,
-        (Some(AttrType::Uuid), serde_json::Value::String(text)) => {
-            Uuid::parse_str(text).map(Value::Uuid).unwrap_or_else(|_| Value::String(text.clone()))
-        }
+        (Some(AttrType::Uuid), serde_json::Value::String(text)) => Uuid::parse_str(text)
+            .map(Value::Uuid)
+            .unwrap_or_else(|_| Value::String(text.clone())),
         (_, serde_json::Value::Bool(b)) => Value::Bool(*b),
-        (Some(AttrType::Integer), serde_json::Value::Number(n)) => n.as_i64().map(Value::Int).unwrap_or(Value::Null),
+        (Some(AttrType::Integer), serde_json::Value::Number(n)) => {
+            n.as_i64().map(Value::Int).unwrap_or(Value::Null)
+        }
         (_, serde_json::Value::Number(n)) => Value::String(n.to_string()),
         (_, serde_json::Value::String(text)) => Value::String(text.clone()),
         (_, other) => Value::String(other.to_string()),
@@ -1322,7 +1519,9 @@ fn map_failure_resource(failure: Failure, resource: &ResourceDef) -> Error {
                 message: "unique constraint violation".to_string(),
             }
         }
-        "23503" => Error::Invalid("foreign key violation: referenced record does not exist".to_string()),
+        "23503" => {
+            Error::Invalid("foreign key violation: referenced record does not exist".to_string())
+        }
         "23514" => Error::Validation {
             field: "validation".to_string(),
             message: db_err.message().to_string(),

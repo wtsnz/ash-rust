@@ -397,13 +397,18 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             quote! { ::ash_core::AttrType::String }
         };
         let expr_tokens = calc_expr_to_tokens(&c.expr);
+        let dependencies = c.dependencies.as_ref().map(|fields| {
+            let fields: Vec<_> = fields.iter().map(ToString::to_string).collect();
+            quote! { .dependencies(&[#(#fields),*]) }
+        });
+        let declassify = c.declassify.then(|| quote! { .declassify() });
         if c.arguments.is_empty() {
             calc_defs.push(quote! {
                 ::ash_core::CalculationDef::new(
                     #name_str,
                     #ty_tokens,
                     #expr_tokens,
-                )
+                ) #dependencies #declassify
             });
         } else {
             let arg_defs: Vec<_> = c
@@ -430,7 +435,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     #ty_tokens,
                     #expr_tokens,
                     &[#(#arg_defs),*],
-                )
+                ) #dependencies #declassify
             });
         }
     }

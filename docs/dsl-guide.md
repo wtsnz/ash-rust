@@ -69,7 +69,7 @@ resource! {
             total_price: Option<i64> = price * quantity;
             display_label: Option<String> = coalesce(nickname, title, "Untitled");
             badge: Option<String> = if_else(views >= 1000, "Trending", "Normal");
-            custom_rank: Option<String> = custom(my_rank_calculator);
+            custom_rank: Option<String> [depends_on [title]] = custom(my_rank_calculator);
         }
 
         aggregates {
@@ -824,3 +824,38 @@ impl CustomValidation for CheckTenant {
     }
 }
 ```
+
+
+## Policies on calculated and aggregate fields
+
+`field_policies` accepts attributes, calculations and aggregates. Policies on a
+calculation tighten its inherited operand visibility; they do not make hidden
+inputs readable. A calculation is null whenever any dependency is hidden, including
+coalesce fallbacks and conditional branches.
+
+```rust,ignore
+calculations {
+    salary_x2: Option<i64> = coalesce(salary, 0) * 2;
+    ssn_last_4: Option<String> [depends_on [ssn], declassify] = custom(last_four);
+}
+aggregates {
+    total_salary: Option<i64> = sum(employees, salary);
+}
+field_policies {
+    field salary_x2 { authorize_if actor_attribute_equals(role, "admin"); }
+    field total_salary { authorize_if actor_attribute_equals(role, "admin"); }
+}
+```
+
+`declassify` is an explicit permission to expose a reviewed derived value over
+hidden dependencies. It does not bypass a policy on that calculation. Opaque
+`custom` expressions require `depends_on [fields]`; callbacks receive only declared
+and statically known inputs. An empty list explicitly declares a callback that
+needs no record fields. Calculation options go between the type and `=`.
+Field names beginning with `__ash_` are reserved for internal query values.
+
+`sum` and `first` project each source field under its source record's field policy.
+`first` chooses the first authorized row by ascending primary key before projecting;
+it does not search for a visible operand. `count` and `exists` still count or test
+row-authorized records. See [Derived values](scoped-access.md#derived-values) for
+client comparisons, system scopes and the custom calculation contract.

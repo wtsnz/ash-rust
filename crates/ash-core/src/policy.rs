@@ -330,7 +330,7 @@ pub fn redact_fields(
 }
 
 /// The fields of `record` that `actor` may not see under `resource`'s field policies,
-/// each policy checking the record as given.
+/// including inherited calculation visibility, checked against the intact record.
 pub fn hidden_fields(
     resource: &ResourceDef,
     actor: Option<&Actor>,
@@ -345,6 +345,13 @@ pub fn hidden_fields(
             hidden.push(fp.field);
         }
     }
+    for calc in resource.calculations {
+        if record.contains_key(calc.name)
+            && !crate::derived::calculation_visible(resource, actor, record, calc.name)?
+        {
+            hidden.push(calc.name);
+        }
+    }
     Ok(hidden)
 }
 
@@ -357,7 +364,7 @@ pub(crate) fn readable_condition(
 ) -> Result<Option<Filter>> {
     let conditions: Vec<Filter> = fields
         .iter()
-        .map(|field| field_condition(resource, field, actor))
+        .map(|field| field_read_condition(resource, field, actor))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
@@ -369,9 +376,9 @@ pub(crate) fn readable_condition(
 }
 
 /// Where `actor` may read `field` of `resource` under its field policies, as a filter on
-/// the record: `None` where nothing hides it (no field policy, or the primary key, which
-/// Ash never hides).
-fn field_condition(
+/// the record, including calculation dependencies unless declassified. `None` means
+/// unrestricted visibility. Primary keys remain readable.
+pub fn field_read_condition(
     resource: &ResourceDef,
     field: &str,
     actor: Option<&Actor>,
@@ -382,12 +389,38 @@ fn field_condition(
     if resource.primary_key().is_some_and(|pk| pk.name == field) {
         return Ok(None);
     }
-    let conditions = resource
+    field_condition_inner(resource, field, actor, &mut Vec::new())
+}
+
+fn field_condition_inner(
+    resource: &ResourceDef,
+    field: &str,
+    actor: Option<&Actor>,
+    visiting: &mut Vec<String>,
+) -> Result<Option<Filter>> {
+    if visiting.iter().any(|name| name == field) || visiting.len() >= 64 {
+        return Err(Error::Invalid(format!(
+            "cyclic calculation dependencies at `{field}`"
+        )));
+    }
+    visiting.push(field.to_string());
+    let mut conditions = resource
         .field_policies
         .iter()
         .filter(|policy| policy.field == field)
         .map(|policy| effects_to_filter(policy.checks, actor))
         .collect::<Result<Vec<_>>>()?;
+    if let Some(calc) = resource.calculation(field) {
+        let dependencies = calc.validate_dependencies(resource)?;
+        if !calc.declassify {
+            for dependency in dependencies {
+                conditions.extend(field_condition_inner(
+                    resource, dependency, actor, visiting,
+                )?);
+            }
+        }
+    }
+    visiting.pop();
     Ok(match Filter::and(conditions) {
         Filter::True => None,
         condition => Some(condition),
@@ -450,23 +483,27 @@ pub(crate) fn guard_client_fields(
                 filter,
             },
         },
+        Filter::Projected(_) => filter,
         leaf => {
             let mut fields = Vec::new();
             leaf.collect_fields(&mut fields);
             let condition = match fields.first() {
-                Some(field) => field_condition(resource, field, actor)?,
+                Some(field) => field_read_condition(resource, field, actor)?,
                 None => None,
+            };
+            let is_nil = matches!(&leaf, Filter::IsNil(_) | Filter::Eq(_, crate::Value::Null));
+            let is_not_nil = matches!(&leaf, Filter::Ne(_, crate::Value::Null));
+            let leaf = if fields.first().is_some_and(|field| {
+                resource.calculation(field).is_some() || resource.aggregate(field).is_some()
+            }) {
+                Filter::Projected(Box::new(leaf))
+            } else {
+                leaf
             };
             match condition {
                 None => leaf,
-                Some(condition)
-                    if matches!(&leaf, Filter::IsNil(_) | Filter::Eq(_, crate::Value::Null)) =>
-                {
-                    Filter::or([!condition, leaf])
-                }
-                Some(condition) if matches!(&leaf, Filter::Ne(_, crate::Value::Null)) => {
-                    Filter::and([condition, leaf])
-                }
+                Some(condition) if is_nil => Filter::or([!condition, leaf]),
+                Some(condition) if is_not_nil => Filter::and([condition, leaf]),
                 // Negated, `not (c and leaf)` would hold where it's hidden: `not c or leaf`
                 // negates to `c and not leaf`.
                 Some(condition) if positive => Filter::and([condition, leaf]),
@@ -486,8 +523,12 @@ pub fn guard_input_sort(
     sorts
         .into_iter()
         .map(|sort| {
-            let guard = field_condition(resource, &sort.field, actor)?;
-            Ok(Sort { guard, ..sort })
+            let guard = field_read_condition(resource, &sort.field, actor)?;
+            Ok(Sort {
+                guard,
+                projected: true,
+                ..sort
+            })
         })
         .collect()
 }

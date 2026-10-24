@@ -91,13 +91,20 @@ pub fn build_keyset_filter(
             .attribute(&sort.field)
             .is_none_or(|attr| attr.allow_nil);
     let field = sort.field.clone();
+    let project = |filter| {
+        if sort.projected {
+            Filter::Projected(Box::new(filter))
+        } else {
+            filter
+        }
+    };
     let guarded = |filter: Filter| match &sort.guard {
-        Some(guard) => Filter::and([guard.clone(), filter]),
-        None => filter,
+        Some(guard) => Filter::and([guard.clone(), project(filter)]),
+        None => project(filter),
     };
     let is_nil = || match &sort.guard {
-        Some(guard) => Filter::or([!guard.clone(), Filter::IsNil(field.clone())]),
-        None => Filter::IsNil(field.clone()),
+        Some(guard) => Filter::or([!guard.clone(), project(Filter::IsNil(field.clone()))]),
+        None => project(Filter::IsNil(field.clone())),
     };
     let (beyond, tied) = if value.is_null() {
         let beyond = if nulls_ahead {
