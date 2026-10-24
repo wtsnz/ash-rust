@@ -31,14 +31,17 @@ resource! {
     }
 }
 
-fn count_books(arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Result<()> {
+fn count_books(arguments: &FieldMap, records: &mut [ash_core::RawRecord]) -> ash_core::Result<()> {
     if arguments.get("refuse") == Some(&Value::Bool(true)) {
         return Err(Error::Invalid("refused".into()));
     }
     for record in records.iter_mut() {
         let seen = SEEN.fetch_add(1, Ordering::SeqCst) as i64 + 1;
-        put_metadata(record, "seen", seen);
-        assert_eq!(get_metadata(record, "seen"), Some(&Value::Int(seen)));
+        put_metadata(record.fields_mut(), "seen", seen);
+        assert_eq!(
+            get_metadata(record.fields(), "seen"),
+            Some(&Value::Int(seen))
+        );
     }
     Ok(())
 }

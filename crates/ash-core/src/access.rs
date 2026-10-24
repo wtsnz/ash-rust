@@ -44,8 +44,8 @@ impl CredentialReadPermit {
 }
 
 /// Borrowing the context holds its actor and tenant fixed for this execution.
-/// Returned maps are engine data. Callers must apply field policies before exposing
-/// them. The existing public `Context::data` interface can still bypass this handle.
+/// Ordinary reads return reader-specific Views. Credential reads remain privileged
+/// engine data. The deprecated `Context::data` interface can still bypass this handle.
 pub struct ScopedAccess<'a, D> {
     ctx: &'a Context<D>,
 }
@@ -69,15 +69,15 @@ impl<D> ScopedAccess<'_, D> {
 }
 
 impl<D: DataLayer> ScopedAccess<'_, D> {
-    /// Read through action preparations, row policies and tenant scoping. Field
-    /// presentation remains the caller's responsibility until the view migration.
+    /// Read through action preparations, row policies and tenant scoping, then
+    /// present every record for this context's reader.
     pub async fn read(
         &self,
         resource: &ResourceDef,
         action: &str,
         arguments: &FieldMap,
         request: ReadRequest,
-    ) -> Result<Vec<FieldMap>> {
+    ) -> Result<Vec<crate::View>> {
         let action = crate::pipeline::read_action(resource, Some(action))?;
         let query = crate::scope_read(
             resource,
@@ -95,7 +95,9 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         )?;
         let mut rows = self.ctx.raw_data().run_query(resource, &query).await?;
         crate::after_read(action, arguments, &mut rows)?;
-        Ok(rows)
+        rows.into_iter()
+            .map(|row| self.ctx.present(resource, row.into(), None))
+            .collect()
     }
 
     /// Look up credentials using an explicit resource-bound server permit. There is

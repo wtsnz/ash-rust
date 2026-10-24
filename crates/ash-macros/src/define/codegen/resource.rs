@@ -1334,7 +1334,12 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             quote! {
                 let input = #input_struct { ctx: #ctx, #(#names,)* };
                 let fut = __call(#run_expr, input);
-                ::ash_core::run::<#resource, D, #returns_ty, _, _>(#ctx, #name_str, move || fut).await
+                ::ash_core::run::<#resource, D, #returns_ty, _, _>(#ctx, #name_str, move || async move {
+                        let value = fut.await?;
+                        #[allow(unused_imports)]
+                        use ::ash_core::returned::{AshOutput as _, OpaqueOutput as _};
+                        Ok((&&::ash_core::returned::PendingOutput::new(value)).output())
+                    }).await
             }
         };
         let ran = if act.transaction {
@@ -1348,10 +1353,10 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
             quote! {
                 #[allow(unused_imports)]
                 use ::ash_core::returned::{AsAshValue as _, AsSerializedValue as _, NoValue as _};
-                (&&::ash_core::returned::Returned(__result)).value()
+                (&&::ash_core::returned::Returned(__result)).value().map(::ash_core::PresentedValue::Scalar)
             }
         } else {
-            quote! { let _ = __result; ::std::result::Result::Ok(::ash_core::Value::Null) }
+            quote! { let _ = __result; ::std::result::Result::Ok(::ash_core::PresentedValue::Scalar(::ash_core::Value::Null)) }
         };
         generic_arms.push(quote! {
             #name_str => {
@@ -1363,7 +1368,8 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                     f(input)
                 }
                 #(#extracts)*
-                let __result: #returns_ty = #ran;
+                let (__result, __presented) = (#ran).into_parts();
+                if let Some(value) = __presented { return Ok(value); }
                 #value
             }
         });
@@ -1376,7 +1382,7 @@ pub fn expand_resource_struct(def: &ResourceDefinition) -> Result<TokenStream> {
                 ctx: &'a ::ash_core::Context<D>,
                 action: &'a str,
                 __input: ::ash_core::FieldMap,
-            ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::ash_core::Result<::ash_core::Value>> + ::std::marker::Send + 'a>> {
+            ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::ash_core::Result<::ash_core::PresentedValue>> + ::std::marker::Send + 'a>> {
                 ::std::boxed::Box::pin(async move {
                     match action {
                         #(#generic_arms)*

@@ -21,7 +21,8 @@ use crate::value::{FieldMap, Value};
 pub type BeforeActionHook<R> = Box<dyn FnOnce(&mut Changeset<R>) -> Result<()> + Send + 'static>;
 
 /// Hook running immediately after persistence with mutable access to the newly saved record.
-pub type AfterActionHook<R> = Box<dyn FnOnce(&mut R) -> Result<()> + Send + 'static>;
+pub type AfterActionHook<R> =
+    Box<dyn FnOnce(&mut crate::RawRecord<R>) -> Result<()> + Send + 'static>;
 
 /// Hook running after transaction completion (commit or rollback), receiving the result.
 pub type AfterTransactionHook<R> =
@@ -34,12 +35,12 @@ pub type AfterTransactionHook<R> =
 /// adapted to its fields, so typed and dynamic writes take the same steps.
 pub struct Changeset<R: Resource> {
     inner: DynamicChangeset,
-    existing: Option<R>,
+    existing: Option<crate::RawRecord<R>>,
     _resource: PhantomData<fn() -> R>,
 }
 
 impl<R: Resource> Changeset<R> {
-    fn wrap(inner: DynamicChangeset, existing: Option<R>) -> Self {
+    fn wrap(inner: DynamicChangeset, existing: Option<crate::RawRecord<R>>) -> Self {
         Self {
             inner,
             existing,
@@ -95,7 +96,7 @@ impl<R: Resource> Changeset<R> {
         self.inner = self
             .inner
             .before_action(move |inner: &mut DynamicChangeset| {
-                let existing = inner.existing().map(R::from_fields).transpose()?;
+                let existing = inner.existing().cloned().map(crate::RawRecord::from);
                 let mut typed = Changeset::wrap(inner.take(), existing);
                 let result = hook(&mut typed);
                 *inner = typed.inner;
@@ -108,12 +109,12 @@ impl<R: Resource> Changeset<R> {
     /// Receives mutable access to the newly saved record.
     pub fn after_action<F>(mut self, hook: F) -> Self
     where
-        F: FnOnce(&mut R) -> Result<()> + Send + 'static,
+        F: FnOnce(&mut crate::RawRecord<R>) -> Result<()> + Send + 'static,
     {
-        self.inner = self.inner.after_action(move |stored: &mut FieldMap| {
-            let mut record = R::from_fields(stored)?;
-            hook(&mut record)?;
-            *stored = record.to_fields();
+        self.inner = self.inner.after_action(move |stored| {
+            let mut raw = crate::RawRecord::<R>::from_raw(stored.clone());
+            hook(&mut raw)?;
+            *stored = raw.into_raw();
             Ok(())
         });
         self
@@ -126,7 +127,7 @@ impl<R: Resource> Changeset<R> {
         F: FnOnce(std::result::Result<&R, &Error>) + Send + 'static,
     {
         self.inner = self.inner.after_transaction(move |result| match result {
-            Ok(stored) => match R::from_fields(stored) {
+            Ok(stored) => match R::from_fields(stored.fields()) {
                 Ok(record) => hook(Ok(&record)),
                 Err(err) => hook(Err(&err)),
             },
@@ -175,7 +176,7 @@ impl<R: Resource> Changeset<R> {
         self.inner.arguments().get(name)
     }
 
-    pub fn data(&self) -> Option<&R> {
+    pub fn data(&self) -> Option<&crate::RawRecord<R>> {
         self.existing.as_ref()
     }
 
@@ -203,7 +204,10 @@ impl<R: Resource> Changeset<R> {
         let action = action_named(&R::DEF, action)?;
         let inner =
             DynamicChangeset::for_update(ctx, &R::DEF, action, existing.to_fields(), input)?;
-        Ok(Self::wrap(inner, Some(existing)))
+        Ok(Self::wrap(
+            inner,
+            Some(crate::RawRecord::from(existing.to_fields())),
+        ))
     }
 
     /// The record a create action would store, without a context or data layer. Like
@@ -226,15 +230,18 @@ impl<R: Resource> Changeset<R> {
     pub fn for_destroy<D: DataLayer>(ctx: &Context<D>, action: &str, existing: R) -> Result<Self> {
         let action = action_named(&R::DEF, action)?;
         let inner = DynamicChangeset::for_destroy(ctx, &R::DEF, action, existing.to_fields())?;
-        Ok(Self::wrap(inner, Some(existing)))
+        Ok(Self::wrap(
+            inner,
+            Some(crate::RawRecord::from(existing.to_fields())),
+        ))
     }
 
     pub async fn commit<D: DataLayer>(self, ctx: &Context<D>) -> Result<R> {
-        R::from_fields(&self.inner.commit(ctx).await?)
+        self.inner.commit(ctx).await?.into_record()
     }
 
-    pub fn into_record(self) -> Result<R> {
-        R::from_fields(self.inner.attributes())
+    pub fn into_record(self) -> crate::RawRecord<R> {
+        crate::RawRecord::from(self.inner.attributes().clone())
     }
 }
 

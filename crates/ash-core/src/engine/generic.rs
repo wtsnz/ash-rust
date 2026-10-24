@@ -10,12 +10,16 @@ use crate::policy::authorize_write;
 use crate::resource::Resource;
 
 /// Generic action: policies run, then `f`. No persist.
-pub async fn run<R, D, T, F, Fut>(ctx: &Context<D>, action: &str, f: F) -> Result<T>
+pub async fn run<R, D, T, F, Fut>(
+    ctx: &Context<D>,
+    action: &str,
+    f: F,
+) -> Result<crate::returned::ActionResult<T>>
 where
     R: Resource,
     D: DataLayer,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<T>>,
+    Fut: Future<Output = Result<crate::returned::ActionOutput<T>>>,
 {
     let action_def = action_named(&R::DEF, action)?;
     expect_kind(action_def, ActionKind::Generic)?;
@@ -35,5 +39,5 @@ where
     .with_tenant(ctx.tenant().map(str::to_owned));
     crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 
-    Ok(result)
+    result.present(ctx)
 }

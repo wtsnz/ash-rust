@@ -216,10 +216,17 @@ resource! {
 }
 
 /// Each ticket a read finds notes the start of its id, as its `short_id` metadata.
-fn note_short_ids(_arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Result<()> {
+fn note_short_ids(
+    _arguments: &FieldMap,
+    records: &mut [ash_core::RawRecord],
+) -> ash_core::Result<()> {
     for record in records {
         if let Some(id) = record.get("id").and_then(Value::as_uuid) {
-            ash_core::put_metadata(record, "short_id", id.to_string()[..8].to_string());
+            ash_core::put_metadata(
+                record.fields_mut(),
+                "short_id",
+                id.to_string()[..8].to_string(),
+            );
         }
     }
     Ok(())
@@ -234,7 +241,7 @@ fn note_comments_given(ctx: &mut ash_core::ChangeContext<'_>) -> ash_core::Resul
         .and_then(Value::as_array)
         .map_or(0, <[Value]>::len) as i64;
     ctx.after_action(move |record| {
-        ash_core::put_metadata(record, "comments_given", given);
+        ash_core::put_metadata(record.fields_mut(), "comments_given", given);
         Ok(())
     });
     Ok(())

@@ -17,7 +17,6 @@ use async_graphql::dynamic::*;
 use crate::filter::{parse_resource_filter, resource_filter_input_name};
 use crate::names::camel;
 use crate::preload::{Load, preload, selected};
-use crate::redact::redact_record;
 use crate::request::request_context;
 use crate::sort::{parse_resource_sort, resource_sort_input_name};
 use crate::types::parse_input_val;
@@ -64,7 +63,7 @@ fn countable(resource: &ResourceDef) -> bool {
 /// A page of records and the keysets at its ends.
 #[derive(Clone)]
 pub struct KeysetPage {
-    pub results: Vec<FieldMap>,
+    pub results: Vec<ash_core::View>,
     pub start_keyset: Option<String>,
     pub end_keyset: Option<String>,
     pub count: Option<usize>,
@@ -78,7 +77,7 @@ pub fn keyset_page_type_name(resource_name: &str) -> String {
 /// An offset page of records, and where it is among the pages.
 #[derive(Clone)]
 pub struct OffsetPage {
-    pub results: Vec<FieldMap>,
+    pub results: Vec<ash_core::View>,
     pub count: Option<usize>,
     pub limit: usize,
     pub offset: usize,
@@ -499,9 +498,13 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     records.reverse();
                 }
                 after_read(action, &arguments, &mut records)?;
-                for record in &mut records {
-                    redact_record(resource, ash.authorization_actor(), record);
-                }
+                let mut records = records
+                    .into_iter()
+                    .map(|row| {
+                        ash.present(resource, row.into(), None)
+                            .map_err(|e| async_graphql::Error::new(e.to_string()))
+                    })
+                    .collect::<async_graphql::Result<Vec<_>>>()?;
                 preload(
                     &ash,
                     resource,
@@ -509,8 +512,9 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     &mut records,
                 )
                 .await?;
-                let keyset =
-                    |record: Option<&FieldMap>| record.map(|r| keyset_of(r, &sort, pk_name));
+                let keyset = |record: Option<&ash_core::View>| {
+                    record.map(|r| keyset_of(r.fields(), &sort, pk_name))
+                };
                 Ok(Some(FieldValue::owned_any(KeysetPage {
                     start_keyset: keyset(records.first()),
                     end_keyset: keyset(records.last()),
@@ -613,9 +617,13 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
                     records.truncate(limit);
                 }
                 after_read(action, &arguments, &mut records)?;
-                for record in &mut records {
-                    redact_record(resource, ash.authorization_actor(), record);
-                }
+                let mut records = records
+                    .into_iter()
+                    .map(|row| {
+                        ash.present(resource, row.into(), None)
+                            .map_err(|e| async_graphql::Error::new(e.to_string()))
+                    })
+                    .collect::<async_graphql::Result<Vec<_>>>()?;
                 preload(&ash, resource, fields, &mut records).await?;
                 Ok(Some(FieldValue::owned_any(OffsetPage {
                     limit: limit.unwrap_or(records.len()).max(1),

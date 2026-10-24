@@ -300,10 +300,13 @@ async fn manual_intake_skips_data_layer() {
     let ticket = Ticket::intake(&as_customer)
         .subject("From email")
         .persist(|_ctx, ticket| async move {
-            intake_store()
-                .lock()
-                .expect("intake store")
-                .insert(ticket.id, ticket.clone());
+            intake_store().lock().expect("intake store").insert(
+                ticket
+                    .get("id")
+                    .and_then(ash_core::Value::as_uuid)
+                    .expect("ticket id"),
+                ticket.clone(),
+            );
             Ok(ticket)
         })
         .await

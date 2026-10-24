@@ -931,7 +931,7 @@ pub trait Resource: Sized + Clone + Send + Sync + 'static {
         _ctx: &'a Context<D>,
         action: &'a str,
         _input: FieldMap,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::value::Value>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<crate::PresentedValue>> + Send + 'a>> {
         Box::pin(async move {
             let action = Self::DEF
                 .action(action)

@@ -249,7 +249,7 @@ fn input(pairs: &[(&str, Value)]) -> FieldMap {
 }
 
 /// A counter owned by `owner`, open, at zero.
-async fn counter<D: DataLayer>(ctx: &Context<D>, owner: Uuid) -> FieldMap {
+async fn counter<D: DataLayer>(ctx: &Context<D>, owner: Uuid) -> ash_core::View {
     ash_core::create_dynamic(
         ctx,
         &COUNTER,
@@ -265,7 +265,7 @@ async fn counter<D: DataLayer>(ctx: &Context<D>, owner: Uuid) -> FieldMap {
     .unwrap()
 }
 
-fn id_of(record: &FieldMap) -> Uuid {
+fn id_of(record: &ash_core::View) -> Uuid {
     record.get("id").and_then(Value::as_uuid).unwrap()
 }
 
@@ -383,7 +383,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
         &ctx,
         &COUNTER,
         action("locked_bump"),
-        created.clone(),
+        created.clone().into_fields(),
         FieldMap::new(),
     )
     .await;
@@ -554,11 +554,15 @@ async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert_eq!(shouted.get("name"), Some(&Value::from("FIRST")));
 
     // A soft destroy of the record in hand runs as one update too: from a stale copy, stale.
-    let stale =
-        ash_core::DynamicChangeset::for_destroy(&ctx, &COUNTER, action("archive"), archivable)
-            .unwrap()
-            .commit(&ctx)
-            .await;
+    let stale = ash_core::DynamicChangeset::for_destroy(
+        &ctx,
+        &COUNTER,
+        action("archive"),
+        archivable.into_fields(),
+    )
+    .unwrap()
+    .commit(&ctx)
+    .await;
     assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
 }
 

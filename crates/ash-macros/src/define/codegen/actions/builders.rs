@@ -572,8 +572,8 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                         #impl_ready {
                             pub async fn persist<F, Fut>(self, f: F) -> ::ash_core::Result<#resource>
                             where
-                                F: ::std::ops::FnOnce(&::ash_core::Context<D>, #resource) -> Fut,
-                                Fut: ::std::future::Future<Output = ::ash_core::Result<#resource>>,
+                                F: ::std::ops::FnOnce(&::ash_core::Context<D>, ::ash_core::RawRecord) -> Fut,
+                                Fut: ::std::future::Future<Output = ::ash_core::Result<::ash_core::RawRecord>>,
                             {
                                 let fields = self.into_fields();
                                 ::ash_core::manual_create(self.ctx, #act_name_str, fields, f).await
@@ -642,7 +642,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                             pub fn after_action<F>(mut self, hook: F) -> Self
                             where
-                                F: ::std::ops::FnOnce(&mut #resource) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
+                                F: ::std::ops::FnOnce(&mut ::ash_core::RawRecord<#resource>) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
                             {
                                 self.after_actions.push(::std::boxed::Box::new(hook));
                                 self
@@ -971,7 +971,7 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
 
                         pub fn after_action<F>(mut self, hook: F) -> Self
                         where
-                            F: ::std::ops::FnOnce(&mut #resource) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
+                            F: ::std::ops::FnOnce(&mut ::ash_core::RawRecord<#resource>) -> ::ash_core::Result<()> + ::std::marker::Send + 'static,
                         {
                             self.after_actions.push(::std::boxed::Box::new(hook));
                             self
@@ -1323,26 +1323,41 @@ pub fn expand_action_builders(def: &ResourceDefinition, has_primary_read: bool) 
                 let in_transaction = |runner: TokenStream| {
                     if act.transaction {
                         quote! {
-                            let #input_struct_name { #(#input_names,)* .. } = input;
-                            ctx.transaction(move |tx| async move {
-                                let input = #input_struct_name { ctx: &tx, #(#input_names,)* };
-                                let fut = Self::__run_action_in(#runner, input);
-                                ::ash_core::run::<#resource, D, #returns_ty, _, _>(&tx, #act_name_str, move || fut).await
-                            })
-                            .await
-                        }
+                                    let #input_struct_name { #(#input_names,)* .. } = input;
+                                    ctx.transaction(move |tx| async move {
+                                        let input = #input_struct_name { ctx: &tx, #(#input_names,)* };
+                                        let fut = Self::__run_action_in(#runner, input);
+                                        ::ash_core::run::<#resource, D, #returns_ty, _, _>(&tx, #act_name_str, move || async move {
+                            let value = fut.await?;
+                            #[allow(unused_imports)]
+                            use ::ash_core::returned::{AshOutput as _, OpaqueOutput as _};
+                            Ok((&&::ash_core::returned::PendingOutput::new(value)).output())
+                        }).await.map(::ash_core::returned::ActionResult::into_inner)
+                                    })
+                                    .await
+                                }
                     } else {
                         quote! {
-                            let fut = Self::__run_action(#runner, input);
-                            ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
-                        }
+                                    let fut = Self::__run_action(#runner, input);
+                                    ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || async move {
+                            let value = fut.await?;
+                            #[allow(unused_imports)]
+                            use ::ash_core::returned::{AshOutput as _, OpaqueOutput as _};
+                            Ok((&&::ash_core::returned::PendingOutput::new(value)).output())
+                        }).await.map(::ash_core::returned::ActionResult::into_inner)
+                                }
                     }
                 };
                 // A runner given at the call manages any transaction itself: its input is
                 // the builder's, which can't borrow a transaction opened here.
                 let run_with_runner = quote! {
                     let fut = Self::__run_action(runner, input);
-                    ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || fut).await
+                    ::ash_core::run::<#resource, D, #returns_ty, _, _>(ctx, #act_name_str, move || async move {
+                    let value = fut.await?;
+                    #[allow(unused_imports)]
+                    use ::ash_core::returned::{AshOutput as _, OpaqueOutput as _};
+                    Ok((&&::ash_core::returned::PendingOutput::new(value)).output())
+                }).await.map(::ash_core::returned::ActionResult::into_inner)
                 };
                 let run_impl = if let Some(expr) = &act.run_expr {
                     in_transaction(quote! { #expr })

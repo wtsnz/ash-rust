@@ -4,7 +4,7 @@
 //! (`<Name>`, `<Name>Input`); a union is a GraphQL union of an object per member
 //! (`<Name><Member> { value }`), and takes an input of one field per member.
 
-use ash_core::{AttrType, DataLayer, FieldMap, ResourceDef, Value};
+use ash_core::{AttrType, DataLayer, PresentedValue, ResourceDef, Value};
 use async_graphql::dynamic::{
     Field, FieldFuture, FieldValue, InputObject, InputValue, Object, SchemaBuilder, Union,
 };
@@ -24,36 +24,54 @@ pub(crate) fn is_composite(ty: AttrType) -> bool {
 /// A union member's value, resolved through its member's object.
 struct UnionValue {
     ty: AttrType,
-    value: Value,
+    value: PresentedValue,
 }
 
 /// `value` of type `ty` as a field resolves it: an object for an embedded resource or
 /// typed map, a union's member object, a list of them, or a scalar.
-pub(crate) fn output_value(ty: AttrType, value: &Value) -> Option<FieldValue<'static>> {
+pub(crate) fn output_presented(value: &PresentedValue) -> Option<FieldValue<'static>> {
+    match value {
+        PresentedValue::Record(view) => Some(FieldValue::owned_any(view.clone())),
+        PresentedValue::Array(items) => {
+            Some(FieldValue::list(items.iter().map(|item| {
+                output_presented(item).unwrap_or(FieldValue::NULL)
+            })))
+        }
+        PresentedValue::Scalar(Value::Null) => None,
+        _ => None,
+    }
+}
+
+pub(crate) fn output_value(ty: AttrType, value: &PresentedValue) -> Option<FieldValue<'static>> {
     match (ty, value) {
-        (_, Value::Null) => None,
-        (AttrType::Array { of }, Value::Array(items)) if is_composite(*of) => {
+        (_, PresentedValue::Scalar(Value::Null)) => None,
+        (AttrType::Array { of }, PresentedValue::Array(items)) => {
             Some(FieldValue::list(items.iter().map(|item| {
                 output_value(*of, item).unwrap_or(FieldValue::NULL)
             })))
         }
-        (AttrType::Embedded(_) | AttrType::TypedMap { .. }, Value::Map(map)) => {
-            Some(FieldValue::owned_any(map.clone()))
+        (AttrType::Embedded(_), PresentedValue::Record(view)) => {
+            Some(FieldValue::owned_any(view.clone()))
         }
-        (AttrType::Union { name, members }, value) => {
-            value.union_member().and_then(|(member, held)| {
-                let ty = members.iter().find(|m| m.name == member)?.ty;
-                Some(
-                    FieldValue::owned_any(UnionValue {
-                        ty,
-                        value: held.clone(),
-                    })
-                    .with_type(format!("{name}{}", pascal(member))),
-                )
-            })
+        (AttrType::TypedMap { .. }, PresentedValue::Map(_)) => {
+            Some(FieldValue::owned_any(value.clone()))
+        }
+        (AttrType::Union { name, members }, PresentedValue::Map(fields)) => {
+            let PresentedValue::Scalar(Value::String(member)) = fields.get("type")? else {
+                return None;
+            };
+            let ty = members.iter().find(|m| m.name == member)?.ty;
+            Some(
+                FieldValue::owned_any(UnionValue {
+                    ty,
+                    value: fields.get("value")?.clone(),
+                })
+                .with_type(format!("{name}{}", pascal(member))),
+            )
         }
         (ty, value) => Some(FieldValue::value(ash_value_to_graphql_value_typed(
-            value, ty,
+            &value.to_value(),
+            ty,
         ))),
     }
 }
@@ -104,8 +122,11 @@ impl Registry {
                             FieldFuture::new(async move {
                                 Ok(ctx
                                     .parent_value
-                                    .downcast_ref::<FieldMap>()
-                                    .and_then(|map| map.get(field_name))
+                                    .downcast_ref::<PresentedValue>()
+                                    .and_then(|value| match value {
+                                        PresentedValue::Map(map) => map.get(field_name),
+                                        _ => None,
+                                    })
                                     .and_then(|value| output_value(field_ty, value)))
                             })
                         },
@@ -224,6 +245,9 @@ pub(crate) fn register_composites<D: DataLayer + Clone + 'static>(
             registry.output(calc.ty);
         }
         for action in resource.actions {
+            if let Some(ty) = action.result_type() {
+                registry.output(ty);
+            }
             for arg in action.arguments {
                 registry.input(resource.name, arg.name, arg.ty);
             }

@@ -11,7 +11,6 @@ use crate::pagination::{
     PageStrategy, build_keyset_query, build_offset_query, read_field_arguments, scoped_read,
 };
 use crate::preload::{Load, preload, selected};
-use crate::redact::redact_record;
 use crate::request::request_context;
 
 /// Runs `query` as a read through `action` in `ctx`: with the action's preparations and
@@ -22,7 +21,7 @@ pub(crate) async fn run_read<D: DataLayer>(
     action: &ActionDef,
     arguments: &FieldMap,
     query: CompiledQuery,
-) -> async_graphql::Result<Vec<FieldMap>> {
+) -> async_graphql::Result<Vec<ash_core::View>> {
     let query = scope_read(
         resource,
         action,
@@ -37,7 +36,13 @@ pub(crate) async fn run_read<D: DataLayer>(
         .await
         .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     crate::pagination::after_read(action, arguments, &mut records)?;
-    Ok(records)
+    records
+        .into_iter()
+        .map(|row| {
+            ctx.present(resource, row.into(), None)
+                .map_err(|e| async_graphql::Error::new(e.to_string()))
+        })
+        .collect()
 }
 
 /// `Ticket` → `listTickets`.
@@ -93,7 +98,6 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 let Some(mut record) = records.into_iter().next() else {
                     return Ok(None);
                 };
-                redact_record(resource, ash.authorization_actor(), &mut record);
                 preload(&ash, resource, fields, std::slice::from_mut(&mut record)).await?;
                 Ok(Some(FieldValue::owned_any(record)))
             })
@@ -156,9 +160,13 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
                 .await
                 .map_err(|e| async_graphql::Error::new(e.to_string()))?;
             crate::pagination::after_read(action, &arguments, &mut records)?;
-            for record in &mut records {
-                redact_record(resource, ash.authorization_actor(), record);
-            }
+            let mut records = records
+                .into_iter()
+                .map(|row| {
+                    ash.present(resource, row.into(), None)
+                        .map_err(|e| async_graphql::Error::new(e.to_string()))
+                })
+                .collect::<async_graphql::Result<Vec<_>>>()?;
             preload(&ash, resource, fields, &mut records).await?;
             Ok(Some(FieldValue::list(
                 records.into_iter().map(FieldValue::owned_any),

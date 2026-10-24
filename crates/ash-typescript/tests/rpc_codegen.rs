@@ -49,7 +49,7 @@ resource! {
 
 fn note_gone(ctx: &mut ChangeContext<'_>) -> ash_core::Result<()> {
     ctx.after_action(|record| {
-        ash_core::put_metadata(record, "gone_at", "now");
+        ash_core::put_metadata(record.fields_mut(), "gone_at", "now");
         Ok(())
     });
     Ok(())

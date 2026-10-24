@@ -4,26 +4,8 @@ use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, PerKey, Sort};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
-use crate::resource::{RelKind, Resource, ResourceDef};
+use crate::resource::{RelKind, ResourceDef};
 use crate::value::{FieldMap, Value, required_pk};
-
-pub(crate) async fn attach_relationships<R: Resource, D: DataLayer>(
-    ctx: &Context<D>,
-    records: &mut [R],
-    loads: &[String],
-) -> Result<()> {
-    if loads.is_empty() || records.is_empty() {
-        return Ok(());
-    }
-    let sources: Vec<FieldMap> = records.iter().map(Resource::to_fields).collect();
-    for name in loads {
-        let related = load_related(ctx, &R::DEF, name, &sources).await?;
-        for (record, rows) in records.iter_mut().zip(related) {
-            record.attach(name, rows)?;
-        }
-    }
-    Ok(())
-}
 
 /// The rows related to each of `sources` (records of `resource`) through
 /// `relationship`, in the same order.
@@ -38,8 +20,8 @@ pub async fn load_related<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ResourceDef,
     relationship: &str,
-    sources: &[FieldMap],
-) -> Result<Vec<Vec<FieldMap>>> {
+    sources: &[crate::RelationshipSource],
+) -> Result<Vec<Vec<crate::View>>> {
     load_related_query(
         ctx,
         resource,
@@ -92,6 +74,38 @@ pub async fn load_related_query<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ResourceDef,
     relationship: &str,
+    sources: &[crate::RelationshipSource],
+    query: &RelatedQuery,
+) -> Result<Vec<Vec<crate::View>>> {
+    let rel = resource
+        .relationship(relationship)
+        .ok_or_else(|| Error::Invalid(format!("unknown relationship `{relationship}`")))?;
+    let sources: Vec<FieldMap> = sources
+        .iter()
+        .map(crate::RelationshipSource::fields)
+        .collect();
+    let rows = load_related_raw(ctx, resource, relationship, &sources, query).await?;
+    let selected = query.select.as_ref().map(|select| {
+        select
+            .iter()
+            .chain(&query.calculations)
+            .chain(&query.aggregates)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    rows.into_iter()
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| ctx.present((rel.destination)(), row.into(), selected.as_deref()))
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) async fn load_related_raw<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &ResourceDef,
+    relationship: &str,
     sources: &[FieldMap],
     query: &RelatedQuery,
 ) -> Result<Vec<Vec<FieldMap>>> {
@@ -121,7 +135,12 @@ pub async fn load_related_query<D: DataLayer>(
             if first_values.is_empty() {
                 return Ok(vec![Vec::new(); sources.len()]);
             }
-            let read = related_read(ctx, dest, None, &query.reading(&columns))?;
+            let read = related_read(
+                ctx,
+                dest,
+                crate::policy::readable_condition(dest, &columns, ctx.authorization_actor())?,
+                &query.reading(&columns),
+            )?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
             let by = PerKey::Attribute(columns[0]);
             if columns.len() == 1 && paged(&read) && ctx.raw_data().can_run_query_per_key(dest, &by)
@@ -179,12 +198,25 @@ pub async fn load_related_query<D: DataLayer>(
             let read = related_read(
                 ctx,
                 dest,
-                None,
+                crate::policy::readable_condition(
+                    dest,
+                    &[rel.destination_attribute],
+                    ctx.authorization_actor(),
+                )?,
                 &query.reading(&[rel.destination_attribute]),
             )?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
             // The join rows as the actor reads them, linking each source to its rows.
-            let joins = related_read(ctx, through, None, &RelatedQuery::default())?;
+            let joins = related_read(
+                ctx,
+                through,
+                crate::policy::readable_condition(
+                    through,
+                    &[source_on_join, dest_on_join],
+                    ctx.authorization_actor(),
+                )?,
+                &RelatedQuery::default(),
+            )?;
             let by = PerKey::Through {
                 resource: through,
                 filter: joins.filter.as_ref(),
@@ -251,9 +283,14 @@ pub async fn count_related_query<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ResourceDef,
     relationship: &str,
-    sources: &[FieldMap],
+    sources: &[crate::RelationshipSource],
     query: &RelatedQuery,
 ) -> Result<Vec<usize>> {
+    let records: Vec<FieldMap> = sources
+        .iter()
+        .map(crate::RelationshipSource::fields)
+        .collect();
+    let sources = records.as_slice();
     let rel = resource.relationship(relationship).ok_or_else(|| {
         Error::Invalid(format!(
             "unknown relationship `{relationship}` on {}",
@@ -333,7 +370,16 @@ pub async fn count_related_query<D: DataLayer>(
             let dest_on_join = rel
                 .destination_attribute_on_join_resource
                 .unwrap_or(rel.destination_attribute);
-            let mut joins = related_read(ctx, through, None, &RelatedQuery::default())?;
+            let mut joins = related_read(
+                ctx,
+                through,
+                crate::policy::readable_condition(
+                    through,
+                    &[source_on_join, dest_on_join],
+                    ctx.authorization_actor(),
+                )?,
+                &RelatedQuery::default(),
+            )?;
             joins.limit = None;
             joins.offset = None;
             let join_rows = read_batch(ctx, through, source_on_join, source_ids, joins).await?;
@@ -423,13 +469,10 @@ async fn read_per_key<D: DataLayer>(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let mut per_key = ctx
+    let per_key = ctx
         .raw_data()
         .run_query_per_key(dest, read, by, keys)
         .await?;
-    for row in per_key.iter_mut().flatten() {
-        crate::policy::redact_fields(dest, ctx.authorization_actor(), row)?;
-    }
     Ok(per_key)
 }
 
@@ -462,6 +505,24 @@ fn related_read<D>(
     filter: Option<Filter>,
     shape: &RelatedQuery,
 ) -> Result<CompiledQuery> {
+    let mut shape = shape.clone();
+    for operand in crate::policy::field_policy_fields(dest) {
+        if dest.attribute(operand).is_some() {
+            if let Some(select) = &mut shape.select
+                && !select.iter().any(|name| name == operand)
+            {
+                select.push(operand.to_string());
+            }
+        } else if dest.calculation(operand).is_some()
+            && !shape.calculations.iter().any(|name| name == operand)
+        {
+            shape.calculations.push(operand.to_string());
+        } else if dest.aggregate(operand).is_some()
+            && !shape.aggregates.iter().any(|name| name == operand)
+        {
+            shape.aggregates.push(operand.to_string());
+        }
+    }
     super::read::scope_read(
         dest,
         dest.default_read(),
@@ -508,8 +569,5 @@ async fn read_batch<D: DataLayer>(
         None => by_key,
     });
     related.rows = ctx.raw_data().run_query(dest, &read).await?;
-    for row in &mut related.rows {
-        crate::policy::redact_fields(dest, ctx.authorization_actor(), row)?;
-    }
     Ok(related)
 }

@@ -582,7 +582,7 @@ fn type_aliases<D>(
         );
     }
     for (_, rpc) in actions {
-        types.extend(rpc.action.returns);
+        types.extend(rpc.action.result_type());
         types.extend(rpc.action.metadata.iter().map(|def| def.ty));
     }
     let mut aliases: Vec<&str> = types.iter().filter_map(alias_of).collect();
@@ -958,7 +958,7 @@ fn result_type<D>(pascal: &str, rpc: &RpcAction<D>, ctx: &Context) -> String {
             }
         }
         ActionKind::Generic => {
-            let returns = match rpc.action.returns {
+            let returns = match rpc.action.result_type() {
                 Some(AttrType::Map) => "Record<string, any>".to_string(),
                 Some(AttrType::Array { of: AttrType::Map }) => {
                     "Array<Record<string, any>>".to_string()

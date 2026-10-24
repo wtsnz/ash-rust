@@ -124,6 +124,10 @@ pub fn argument_attr_type(ty: &Type) -> TokenStream {
 /// say, which needn't be an Ash type).
 pub fn returns_attr_type(ty: &Type) -> TokenStream {
     let inner = option_inner(ty).unwrap_or(ty);
+    if let Some(of) = vec_inner(inner) {
+        let of = returns_attr_type(of);
+        return quote! { ::ash_core::AttrType::Array { of: &#of } };
+    }
     let known = is_uuid(inner)
         || is_string(inner)
         || is_integer(inner)

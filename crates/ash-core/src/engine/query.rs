@@ -15,7 +15,6 @@ use super::pagination::{
     KeysetCursor, Page, build_keyset_filter, cursor_for_record, keyset_sort, keyset_values,
 };
 use super::read::scope_read;
-use super::relations::attach_relationships;
 
 /// Query shape bound to its context's immutable execution identity.
 ///
@@ -227,15 +226,49 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let mut rows = this.ctx.raw_data().run_query(&R::DEF, &query).await?;
         super::read::after_read(action, &this.arguments, &mut rows)?;
 
-        let mut records = Vec::with_capacity(rows.len());
-        for mut row in rows {
-            crate::policy::redact_fields(&R::DEF, this.ctx.authorization_actor(), &mut row)?;
-            for operand in &operands {
-                row.remove(*operand);
+        for name in &this.loads {
+            let rel = R::DEF
+                .relationship(name)
+                .ok_or_else(|| Error::Invalid(format!("unknown relationship `{name}`")))?;
+            let groups = super::relations::load_related_raw(
+                this.ctx,
+                &R::DEF,
+                name,
+                &rows,
+                &super::relations::RelatedQuery::default(),
+            )
+            .await?;
+            for (row, related) in rows.iter_mut().zip(groups) {
+                let values: Vec<Value> = related.into_iter().map(Value::Map).collect();
+                let value =
+                    if matches!(rel.kind, crate::RelKind::BelongsTo | crate::RelKind::HasOne) {
+                        values.into_iter().next().unwrap_or(Value::Null)
+                    } else {
+                        Value::Array(values)
+                    };
+                row.insert(name.clone(), value);
             }
-            records.push(R::from_fields(&row)?);
         }
-        attach_relationships(this.ctx, &mut records, &this.loads).await?;
+        let mut records = Vec::with_capacity(rows.len());
+        for row in rows {
+            let view = this.ctx.present(&R::DEF, row.into(), None)?;
+            let mut fields = view.into_fields();
+            for operand in &operands {
+                fields.remove(*operand);
+            }
+            let mut record = R::from_fields(&fields)?;
+            for name in &this.loads {
+                let related = match fields.get(name) {
+                    Some(Value::Map(fields)) => vec![fields.clone()],
+                    Some(Value::Array(values)) => {
+                        values.iter().filter_map(Value::as_map).cloned().collect()
+                    }
+                    _ => Vec::new(),
+                };
+                record.attach(name, related)?;
+            }
+            records.push(record);
+        }
         Ok(records)
     }
 

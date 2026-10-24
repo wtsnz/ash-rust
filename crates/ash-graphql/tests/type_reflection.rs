@@ -92,21 +92,23 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
     let mut query = Object::new("Query");
     let ticket_id = Uuid::new_v4();
 
-    query = query.field(Field::new(
-        "ticket",
-        TypeRef::named("Ticket"),
-        move |_ctx| {
-            let mut map = FieldMap::new();
-            map.insert("id".into(), Value::Uuid(ticket_id));
-            map.insert("title".into(), Value::String("Fix GraphQL bug".into()));
-            map.insert("status".into(), Value::String("open".into()));
-            map.insert(
-                "secret_notes".into(),
-                Value::String("Top secret diagnostics".into()),
-            );
-            FieldFuture::new(async move { Ok(Some(FieldValue::owned_any(map))) })
-        },
-    ));
+    query = query.field(Field::new("ticket", TypeRef::named("Ticket"), move |ctx| {
+        let mut map = FieldMap::new();
+        map.insert("id".into(), Value::Uuid(ticket_id));
+        map.insert("title".into(), Value::String("Fix GraphQL bug".into()));
+        map.insert("status".into(), Value::String("open".into()));
+        map.insert(
+            "secret_notes".into(),
+            Value::String("Top secret diagnostics".into()),
+        );
+        FieldFuture::new(async move {
+            let ash = ctx.ctx.data::<ash_core::Context<ash_memory::Memory>>()?;
+            let view = ash
+                .present(&TICKET_DEF, map.into(), None)
+                .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+            Ok(Some(FieldValue::owned_any(view)))
+        })
+    }));
 
     let mut builder = Schema::build("Query", None, None).register(query);
     builder = builder.register(Scalar::new("Json"));

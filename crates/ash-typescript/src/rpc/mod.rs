@@ -71,8 +71,11 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// What a generic action does, supplied with its RPC action: the context it runs in, and
 /// its input, cast to its arguments' types.
-pub type GenericRunner<D> =
-    Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<Value>> + Send + Sync>;
+pub type GenericRunner<D> = Arc<
+    dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<ash_core::PresentedValue>>
+        + Send
+        + Sync,
+>;
 
 /// Told of each error AshTypescript has no shape for, with the id its client was given.
 pub type ErrorReporter = Arc<dyn Fn(&str, &Error) + Send + Sync>;
@@ -212,13 +215,14 @@ struct Shown {
 }
 
 /// `record`'s metadata as the request shows it.
-fn metadata_json(record: &FieldMap, shown: &[Shown]) -> Map<String, Json> {
+fn metadata_json(record: &ash_core::View, shown: &[Shown]) -> ash_core::Result<Map<String, Json>> {
     shown
         .iter()
         .map(|field| {
-            let value = ash_core::get_metadata(record, field.def.name)
-                .map_or(Json::Null, |value| to_json(Some(field.def.ty), value));
-            (field.name.clone(), value)
+            let value = record.metadata(field.def)?.map_or(Json::Null, |value| {
+                to_json(Some(field.def.ty), &value.to_value())
+            });
+            Ok((field.name.clone(), value))
         })
         .collect()
 }
@@ -386,7 +390,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             Arc::new(
                 move |ctx: Context<D>,
                       input: FieldMap|
-                      -> BoxFuture<'static, ash_core::Result<Value>> {
+                      -> BoxFuture<'static, ash_core::Result<ash_core::PresentedValue>> {
                     Box::pin(async move { R::run_generic(&ctx, name, input).await })
                 },
             ) as GenericRunner<D>
@@ -427,7 +431,19 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             let run = Arc::clone(&run);
             Box::pin(async move {
                 let inner = ctx.clone();
-                ash_core::run::<R, D, Value, _, _>(&ctx, def.name, move || run(inner, input)).await
+                ash_core::run::<R, D, Value, _, _>(&ctx, def.name, move || async move {
+                    use ash_core::returned::OpaqueOutput as _;
+                    let value = run(inner, input).await?;
+                    Ok((&ash_core::returned::PendingOutput::new(value)).output())
+                })
+                .await
+                .and_then(|result| {
+                    let (value, _) = result.into_parts();
+                    match def.result_type() {
+                        Some(ty) => ctx.present_value(ty, value),
+                        None => Ok(ash_core::PresentedValue::Scalar(Value::Null)),
+                    }
+                })
             })
         });
         self.declare(name);
@@ -698,13 +714,16 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             )
             .await
             .map_err(|e| self.failure(e))?;
-        rows.into_iter().next().ok_or_else(|| {
-            Failure::new(
-                "not_found",
-                "Not found",
-                format!("record with id: {:?} not found", id.to_string()),
-            )
-        })
+        rows.into_iter()
+            .next()
+            .map(ash_core::View::into_fields)
+            .ok_or_else(|| {
+                Failure::new(
+                    "not_found",
+                    "Not found",
+                    format!("record with id: {:?} not found", id.to_string()),
+                )
+            })
     }
 
     async fn answer(&self, ctx: &Context<D>, request: &Json) -> Result<Answer, Vec<Failure>> {
@@ -822,8 +841,15 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let input =
             action_input(resource, action, &raw_input).map_err(|e| self.failure_of(action, e))?;
         // What a write notes on its record, as the request shows it.
-        let metadata =
-            |stored: &FieldMap| (!shown.is_empty()).then(|| metadata_json(stored, &shown));
+        let metadata = |stored: &ash_core::View| -> Result<_, Failure> {
+            if shown.is_empty() {
+                Ok(None)
+            } else {
+                metadata_json(stored, &shown)
+                    .map(Some)
+                    .map_err(|e| self.failure(e))
+            }
+        };
 
         match action.kind {
             ActionKind::Read if get => {
@@ -847,7 +873,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 let stored = ash_core::create_dynamic(&ctx, resource, action, input)
                     .await
                     .map_err(|e| self.failure_of(action, e))?;
-                let metadata = metadata(&stored);
+                let metadata = metadata(&stored)?;
                 Ok(Answer {
                     data: self.written(&ctx, resource, stored, &selection).await?,
                     metadata,
@@ -863,7 +889,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                             Error::NotFound => self.failure(e),
                             e => self.failure_of(action, e).in_bulk(),
                         })?;
-                let metadata = metadata(&stored);
+                let metadata = metadata(&stored)?;
                 Ok(Answer {
                     data: self.written(&ctx, resource, stored, &selection).await?,
                     metadata,
@@ -896,8 +922,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     Err(Error::NotFound) => Ok(nothing().into()),
                     Err(e) => Err(self.failure_of(action, e)),
                     Ok(mut stored) => {
-                        let metadata = metadata(&stored);
-                        stored.extend(loaded);
+                        let metadata = metadata(&stored)?;
+                        stored.merge_selected(
+                            &loaded,
+                            &selection.of(|name| resource.attribute(name).is_none()),
+                        );
                         let rows = self
                             .render(&ctx, resource, vec![stored], &selection)
                             .await?;
@@ -913,15 +942,15 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     .runner
                     .as_ref()
                     .ok_or_else(|| Failure::action_not_found(name))?;
-                let value = runner(ctx, input)
+                let value = runner(ctx.clone(), input)
                     .await
                     .map_err(|e| self.failure_of(action, e))?;
                 // An action returning nothing answers an empty object, as AshTypescript's
                 // (`:ok`) does.
-                Ok(if action.returns.is_none() {
+                Ok(if action.result_type().is_none() {
                     json!({})
                 } else {
-                    to_json(action.returns, &value)
+                    to_json(action.result_type(), &value.to_value())
                 }
                 .into())
             }
@@ -1329,8 +1358,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         if backward {
             rows.reverse();
         }
-        let cursor = |row: Option<&FieldMap>| -> Json {
-            row.map_or(Json::Null, |row| {
+        let cursor = |row: Option<&FieldMap>| -> Result<Json, Failure> {
+            let view = row
+                .map(|row| {
+                    ctx.present(resource, row.clone().into(), None)
+                        .map_err(|e| self.failure(e))
+                })
+                .transpose()?;
+            Ok(view.as_ref().map_or(Json::Null, |row| {
                 let id = row.get(pk).cloned().unwrap_or(Value::Null);
                 let values = sort
                     .iter()
@@ -1342,9 +1377,9 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     })
                     .collect();
                 Json::String(KeysetCursor { id, values }.encode())
-            })
+            }))
         };
-        let (previous, next) = (cursor(rows.first()), cursor(rows.last()));
+        let (previous, next) = (cursor(rows.first())?, cursor(rows.last())?);
         let results = self
             .render_read(ctx, rpc, input, rows, selection, shown)
             .await?;
@@ -1366,10 +1401,10 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         resource: &'static ResourceDef,
         id: Value,
         selection: &Selection,
-    ) -> Result<FieldMap, Failure> {
+    ) -> Result<ash_core::View, Failure> {
         let loads = selection.of(|name| resource.attribute(name).is_none());
         let Some(pk) = resource.primary_key().filter(|_| !loads.is_empty()) else {
-            return Ok(FieldMap::new());
+            return Ok(ash_core::View::default());
         };
         let query = CompiledQuery {
             filter: Some(Filter::eq(pk.name, id)),
@@ -1384,10 +1419,8 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .into_iter()
             .next()
             .unwrap_or_default();
-        Ok(loads
-            .into_iter()
-            .filter_map(|name| row.get(&name).cloned().map(|value| (name, value)))
-            .collect())
+        ctx.present(resource, row.into(), Some(&loads))
+            .map_err(|e| self.failure(e))
     }
 
     /// A written record, as the client selected it: its aggregates and calculations read as
@@ -1396,7 +1429,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         &self,
         ctx: &Context<D>,
         resource: &'static ResourceDef,
-        mut stored: FieldMap,
+        mut stored: ash_core::View,
         selection: &Selection,
     ) -> Result<Json, Failure> {
         if let Some(id) = resource
@@ -1405,7 +1438,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .filter(|id| !id.is_null())
             .cloned()
         {
-            stored.extend(self.loads_of(ctx, resource, id, selection).await?);
+            let loaded = self.loads_of(ctx, resource, id, selection).await?;
+            stored.merge_selected(
+                &loaded,
+                &selection.of(|name| resource.attribute(name).is_none()),
+            );
         }
         let rows = self.render(ctx, resource, vec![stored], selection).await?;
         Ok(rows.into_iter().next().unwrap_or(Json::Null))
@@ -1424,9 +1461,19 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         shown: &[Shown],
     ) -> Result<Vec<Json>, Failure> {
         ash_core::after_read(rpc.action, input, &mut rows).map_err(|e| self.failure(e))?;
-        let metadata: Vec<Map<String, Json>> =
-            rows.iter().map(|row| metadata_json(row, shown)).collect();
-        let mut rendered = self.render(ctx, rpc.resource, rows, selection).await?;
+        let views = rows
+            .into_iter()
+            .map(|row| {
+                ctx.present(rpc.resource, row.into(), None)
+                    .map_err(|e| self.failure(e))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let metadata = views
+            .iter()
+            .map(|view| metadata_json(view, shown))
+            .collect::<ash_core::Result<Vec<_>>>()
+            .map_err(|e| self.failure(e))?;
+        let mut rendered = self.render(ctx, rpc.resource, views, selection).await?;
         for (record, metadata) in rendered.iter_mut().zip(metadata) {
             if let Json::Object(record) = record {
                 record.extend(metadata);
@@ -1440,7 +1487,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         &'a self,
         ctx: &'a Context<D>,
         resource: &'static ResourceDef,
-        rows: Vec<FieldMap>,
+        rows: Vec<ash_core::View>,
         selection: &'a Selection,
     ) -> BoxFuture<'a, Result<Vec<Json>, Failure>> {
         Box::pin(async move {
@@ -1470,13 +1517,17 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     .expect("parsed against the resource");
                 let dest = (rel.destination)();
                 let many = matches!(rel.kind, RelKind::HasMany | RelKind::ManyToMany);
+                let sources: Vec<ash_core::RelationshipSource> = rows
+                    .iter()
+                    .map(|row| row.relationship_source(rel))
+                    .collect();
                 let values: Vec<Json> = match &nested.page {
                     None => {
                         let groups = ash_core::load_related_query(
                             ctx,
                             resource,
                             rel_name,
-                            &rows,
+                            &sources,
                             &nested.query,
                         )
                         .await
@@ -1504,7 +1555,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                             .collect()
                     }
                     Some(page) => {
-                        self.nested_pages(ctx, resource, rel_name, dest, &rows, nested, page)
+                        self.nested_pages(ctx, resource, rel_name, dest, &sources, nested, page)
                             .await?
                     }
                 };
@@ -1524,7 +1575,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         resource: &'static ResourceDef,
         rel_name: &str,
         dest: &'static ResourceDef,
-        rows: &[FieldMap],
+        rows: &[ash_core::RelationshipSource],
         nested: &fields::Nested,
         page: &NestedPage,
     ) -> Result<Vec<Json>, Failure> {
@@ -1610,7 +1661,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             if backward {
                 group.reverse();
             }
-            let cursor = |row: Option<&FieldMap>| -> Json {
+            let cursor = |row: Option<&ash_core::View>| -> Json {
                 row.map_or(Json::Null, |row| {
                     let id = row.get(pk).cloned().unwrap_or(Value::Null);
                     let values = sort
@@ -1876,11 +1927,7 @@ async fn read_rows<D: DataLayer>(
         calculation_args: selection.calculation_args.clone(),
         ..query
     };
-    let mut rows = ctx.data.run_query(resource, &query).await?;
-    for row in &mut rows {
-        ash_core::redact_fields(resource, ctx.authorization_actor(), row)?;
-    }
-    Ok(rows)
+    ctx.data.run_query(resource, &query).await
 }
 
 /// A value as JSON, as AshTypescript formats its field's type: a float a number, a

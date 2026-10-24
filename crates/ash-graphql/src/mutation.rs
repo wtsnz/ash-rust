@@ -2,7 +2,6 @@ use ash_core::create_dynamic;
 use ash_core::destroy_dynamic_by_id;
 
 use crate::preload::{load_selected, preload, selected};
-use crate::redact::redact_record;
 use ash_core::update_dynamic_via;
 use ash_core::{
     ActionDef, ActionKind, AttrType, DataLayer, Error as AshError, FieldMap, ResourceDef, Value,
@@ -16,7 +15,7 @@ use crate::types::{attr_type_to_type_ref, parse_input_val};
 
 #[derive(Clone)]
 pub struct MutationPayload {
-    pub result: Option<FieldMap>,
+    pub result: Option<ash_core::View>,
     pub errors: Vec<UserError>,
 }
 
@@ -92,15 +91,15 @@ pub fn register_action_payload(
                 attr_type_to_type_ref(resource.name, field, ty, def.allow_nil),
                 move |ctx| {
                     FieldFuture::new(async move {
-                        let record = ctx.parent_value.downcast_ref::<FieldMap>();
-                        Ok(record
-                            .and_then(|record| ash_core::get_metadata(record, field))
-                            .filter(|value| !value.is_null())
-                            .map(|value| {
-                                FieldValue::value(crate::types::ash_value_to_graphql_value_typed(
-                                    value, ty,
-                                ))
-                            }))
+                        let record = ctx.parent_value.downcast_ref::<ash_core::View>();
+                        let value = record
+                            .map(|record| record.metadata(def))
+                            .transpose()
+                            .map_err(|e| async_graphql::Error::new(e.to_string()))?
+                            .flatten();
+                        Ok(value
+                            .as_ref()
+                            .and_then(|value| crate::composite::output_value(ty, value)))
                     })
                 },
             ));
@@ -178,7 +177,7 @@ fn failed(err: &AshError) -> Option<FieldValue<'static>> {
     }))
 }
 
-fn succeeded(result: Option<FieldMap>) -> Option<FieldValue<'static>> {
+fn succeeded(result: Option<ash_core::View>) -> Option<FieldValue<'static>> {
     Some(FieldValue::owned_any(MutationPayload {
         result,
         errors: Vec::new(),
@@ -228,7 +227,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                                 std::slice::from_mut(&mut stored),
                             )
                             .await?;
-                            redact_record(resource, ash.authorization_actor(), &mut stored);
                             preload(ash, resource, fields, std::slice::from_mut(&mut stored))
                                 .await?;
                             succeeded(Some(stored))
@@ -258,7 +256,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                                     std::slice::from_mut(&mut updated),
                                 )
                                 .await?;
-                                redact_record(resource, ash.authorization_actor(), &mut updated);
                                 preload(ash, resource, fields, std::slice::from_mut(&mut updated))
                                     .await?;
                                 succeeded(Some(updated))
@@ -282,7 +279,6 @@ pub fn build_action_mutation<D: DataLayer + Clone + 'static>(
                                 std::slice::from_mut(&mut destroyed),
                             )
                             .await?;
-                            redact_record(resource, ash.authorization_actor(), &mut destroyed);
                             preload(ash, resource, fields, std::slice::from_mut(&mut destroyed))
                                 .await?;
                             succeeded(Some(destroyed))

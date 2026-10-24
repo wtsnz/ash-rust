@@ -1,7 +1,5 @@
 use ash_core::eval as eval_expr;
-use ash_core::{
-    AttrType, DataLayer, FieldMap, RelKind, RelatedQuery, RelationshipDef, ResourceDef, Value,
-};
+use ash_core::{AttrType, DataLayer, RelKind, RelatedQuery, RelationshipDef, ResourceDef};
 
 use async_graphql::Value as GqlValue;
 use async_graphql::dataloader::DataLoader;
@@ -11,7 +9,7 @@ use crate::dataloader::{AshBatchLoader, RelatedKey};
 use crate::filter::resource_filter_input_name;
 use crate::names::camel;
 use crate::preload::{preloaded_key, related_query};
-use crate::redact::{is_forbidden, redact_record, relationship_source, report_forbidden};
+use crate::redact::report_forbidden;
 use crate::request::{request_actor, request_context};
 use crate::sort::resource_sort_input_name;
 use crate::types::{
@@ -46,7 +44,7 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     FieldFuture::new(async move {
                         let id = ctx
                             .parent_value
-                            .downcast_ref::<FieldMap>()
+                            .downcast_ref::<ash_core::View>()
                             .and_then(|map| map.get(attr_name));
                         Ok(id.and_then(crate::types::id_output).map(FieldValue::value))
                     })
@@ -60,15 +58,13 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
 
         let field = Field::new(camel(attr_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
-                if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    let actor = request_actor::<D>(&ctx);
-
-                    if has_field_policy && is_forbidden(resource, actor, map, attr_name) {
+                if let Some(map) = ctx.parent_value.downcast_ref::<ash_core::View>() {
+                    if has_field_policy && map.is_forbidden(attr_name) {
                         report_forbidden(&ctx);
                         return Ok(None);
                     }
 
-                    if let Some(val) = map.get(attr_name) {
+                    if let Some(val) = map.nested(attr_name) {
                         return Ok(crate::composite::output_value(attr_ty, val));
                     }
                 }
@@ -92,20 +88,18 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
 
         let field = Field::new(camel(calc_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
-                if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    if has_field_policy
-                        && is_forbidden(resource, request_actor::<D>(&ctx), map, calc_name)
-                    {
+                if let Some(map) = ctx.parent_value.downcast_ref::<ash_core::View>() {
+                    if has_field_policy && map.is_forbidden(calc_name) {
                         report_forbidden(&ctx);
                         return Ok(None);
                     }
                     // Loaded with the record, nil included: computed from the record as
                     // stored, which the record here may not wholly hold.
-                    if let Some(val) = map.get(calc_name) {
+                    if let Some(val) = map.nested(calc_name) {
                         return Ok(crate::composite::output_value(calc_ty, val));
                     }
 
-                    match eval_expr(&expr, map) {
+                    match eval_expr(&expr, map.fields()) {
                         Ok(val) if !val.is_null() => {
                             return Ok(Some(FieldValue::value(ash_value_to_graphql_value_typed(
                                 &val, calc_ty,
@@ -138,10 +132,8 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
 
         let field = Field::new(camel(agg_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
-                if let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() {
-                    if has_field_policy
-                        && is_forbidden(resource, request_actor::<D>(&ctx), map, agg_name)
-                    {
+                if let Some(map) = ctx.parent_value.downcast_ref::<ash_core::View>() {
+                    if has_field_policy && map.is_forbidden(agg_name) {
                         report_forbidden(&ctx);
                         return Ok(None);
                     }
@@ -185,22 +177,13 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
 
         let mut field = Field::new(camel(rel_name), type_ref, move |ctx| {
             FieldFuture::new(async move {
-                let Some(map) = ctx.parent_value.downcast_ref::<FieldMap>() else {
+                let Some(map) = ctx.parent_value.downcast_ref::<ash_core::View>() else {
                     return Ok(None);
                 };
                 // Loaded ahead with its record, and already as the requester may see it.
                 let field = ctx.ctx.field();
-                if let Some(preloaded) = map.get(&preloaded_key(rel_name, &field)?) {
-                    return Ok(match preloaded {
-                        Value::Map(row) => Some(FieldValue::borrowed_any(row)),
-                        Value::Array(rows) => Some(FieldValue::list(
-                            rows.iter()
-                                .filter_map(Value::as_map)
-                                .map(|row| FieldValue::borrowed_any(row)),
-                        )),
-                        _ if to_one => None,
-                        _ => Some(FieldValue::list(std::iter::empty::<FieldValue>())),
-                    });
+                if let Some(preloaded) = map.nested(&preloaded_key(rel_name, &field)?) {
+                    return Ok(crate::composite::output_presented(preloaded));
                 }
                 let query = if to_one {
                     RelatedQuery::default()
@@ -217,21 +200,15 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
                     || !query.sort.is_empty()
                     || query.limit.is_some()
                     || query.offset.is_some();
-                let rows = match map.get(rel_name) {
-                    _ if shaped => load_shaped::<D>(&ctx, resource, rel, map, &query).await?,
-                    // Loaded along with the parent.
-                    Some(Value::Null) => Vec::new(),
-                    Some(Value::Map(m)) => vec![m.clone()],
-                    Some(Value::Array(items)) => {
-                        items.iter().filter_map(|v| v.as_map().cloned()).collect()
-                    }
-                    _ => load_relationship::<D>(&ctx, resource, rel, map).await?,
+                if !shaped && let Some(loaded) = map.nested(rel_name) {
+                    return Ok(crate::composite::output_presented(loaded));
+                }
+                let rows = if shaped {
+                    load_shaped::<D>(&ctx, resource, rel, map, &query).await?
+                } else {
+                    load_relationship::<D>(&ctx, resource, rel, map).await?
                 };
-                let actor = request_actor::<D>(&ctx);
-                let mut items = rows.into_iter().map(|mut row| {
-                    redact_record(dest_res, actor, &mut row);
-                    FieldValue::owned_any(row)
-                });
+                let mut items = rows.into_iter().map(FieldValue::owned_any);
                 if to_one {
                     Ok(items.next())
                 } else {
@@ -265,15 +242,15 @@ async fn load_shaped<D: DataLayer + Clone + 'static>(
     ctx: &ResolverContext<'_>,
     resource: &'static ResourceDef,
     rel: &'static RelationshipDef,
-    source: &FieldMap,
+    source: &ash_core::View,
     query: &RelatedQuery,
-) -> async_graphql::Result<Vec<FieldMap>> {
+) -> async_graphql::Result<Vec<ash_core::View>> {
     let ash = request_context::<D>(ctx)?;
     let mut related = ash_core::load_related_query(
         &*ash,
         resource,
         rel.name,
-        &[relationship_source(rel, source)],
+        &[source.relationship_source(rel)],
         query,
     )
     .await
@@ -287,8 +264,8 @@ async fn load_relationship<D: DataLayer + Clone + 'static>(
     ctx: &ResolverContext<'_>,
     resource: &'static ResourceDef,
     rel: &'static RelationshipDef,
-    source: &FieldMap,
-) -> async_graphql::Result<Vec<FieldMap>> {
+    source: &ash_core::View,
+) -> async_graphql::Result<Vec<ash_core::View>> {
     let ash = request_context::<D>(ctx)?;
     if let Some(loader) = ctx.data_opt::<DataLoader<AshBatchLoader<D>>>()
         && loader.loader().serves(&ash)
@@ -303,7 +280,7 @@ async fn load_relationship<D: DataLayer + Clone + 'static>(
         &*ash,
         resource,
         rel.name,
-        &[relationship_source(rel, source)],
+        &[source.relationship_source(rel)],
     )
     .await
     .map_err(|e| async_graphql::Error::new(e.to_string()))?;

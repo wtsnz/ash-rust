@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use ash_core::{
     ActionDef, ActionKind, BoxFuture, Context, FieldMap, Resource, ResourceDef, TransactionSupport,
-    Value,
 };
 use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::{
@@ -17,11 +16,14 @@ use async_graphql::dynamic::{
 
 use crate::error::raised;
 use crate::names::{camel, pascal};
-use crate::types::{ash_value_to_graphql_value_typed, attr_type_to_type_ref, parse_input_val};
+use crate::types::{attr_type_to_type_ref, parse_input_val};
 
 /// Runs a generic action with its arguments, as its own `run` does.
-pub(crate) type Runner<D> =
-    Arc<dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<Value>> + Send + Sync>;
+pub(crate) type Runner<D> = Arc<
+    dyn Fn(Context<D>, FieldMap) -> BoxFuture<'static, ash_core::Result<ash_core::PresentedValue>>
+        + Send
+        + Sync,
+>;
 
 /// A generic action the schema serves.
 pub(crate) struct GenericAction<D> {
@@ -52,7 +54,7 @@ impl<D: TransactionSupport + Clone + 'static> GenericAction<D> {
         let run: Runner<D> = Arc::new(
             move |ctx: Context<D>,
                   input: FieldMap|
-                  -> BoxFuture<'static, ash_core::Result<Value>> {
+                  -> BoxFuture<'static, ash_core::Result<ash_core::PresentedValue>> {
                 Box::pin(async move { R::run_generic(&ctx, action_name, input).await })
             },
         );
@@ -105,7 +107,7 @@ impl<D: Send + Sync + 'static> GenericAction<D> {
     /// The query or mutation field.
     pub(crate) fn field(self) -> Field {
         // What the action returns, or `true` for nothing, as AshGraphql's `Boolean`.
-        let type_ref = match self.action.returns {
+        let type_ref = match self.action.result_type() {
             Some(ty) => attr_type_to_type_ref(self.resource.name, self.action.name, ty, false),
             None => TypeRef::named_nn(TypeRef::BOOLEAN),
         };
@@ -116,7 +118,7 @@ impl<D: Send + Sync + 'static> GenericAction<D> {
                 let ash = crate::request::request_context::<D>(&ctx)?.into_owned();
                 let input = arguments(&ctx, action, mutation)?;
                 // Every failure, as AshGraphql raises each of an action's errors.
-                let value = match run(ash, input).await {
+                let value = match run(ash.clone(), input).await {
                     Ok(value) => value,
                     Err(err) => {
                         let mut errors = err.each().into_iter();
@@ -128,10 +130,10 @@ impl<D: Send + Sync + 'static> GenericAction<D> {
                         return Err(first);
                     }
                 };
-                Ok(Some(FieldValue::value(match action.returns {
-                    Some(ty) => ash_value_to_graphql_value_typed(&value, ty),
-                    None => GqlValue::Boolean(true),
-                })))
+                match action.result_type() {
+                    Some(ty) => Ok(crate::composite::output_value(ty, &value)),
+                    None => Ok(Some(FieldValue::value(GqlValue::Boolean(true)))),
+                }
             })
         });
         if mutation {

@@ -40,9 +40,9 @@ resource! {
     }
 }
 
-fn rank_items(_arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Result<()> {
+fn rank_items(_arguments: &FieldMap, records: &mut [ash_core::RawRecord]) -> ash_core::Result<()> {
     for (rank, record) in records.iter_mut().enumerate() {
-        put_metadata(record, "rank", rank as i64 + 1);
+        put_metadata(record.fields_mut(), "rank", rank as i64 + 1);
     }
     Ok(())
 }
@@ -54,8 +54,8 @@ fn note_tags(ctx: &mut ChangeContext<'_>) -> ash_core::Result<()> {
         .and_then(Value::as_array)
         .map_or(0, <[Value]>::len) as i64;
     ctx.after_action(move |record| {
-        put_metadata(record, "tag_count", count);
-        put_metadata(record, "echo", "hi");
+        put_metadata(record.fields_mut(), "tag_count", count);
+        put_metadata(record.fields_mut(), "echo", "hi");
         Ok(())
     });
     Ok(())

@@ -212,10 +212,13 @@ async fn generic_action_and_manual_intake() {
     let manual = Ticket::intake(&as_customer)
         .subject("Intake via webhook")
         .persist(|_ctx, ticket| async move {
-            intake_store()
-                .lock()
-                .unwrap()
-                .insert(ticket.id, ticket.clone());
+            intake_store().lock().unwrap().insert(
+                ticket
+                    .get("id")
+                    .and_then(ash_core::Value::as_uuid)
+                    .expect("ticket id"),
+                ticket.clone(),
+            );
             Ok(ticket)
         })
         .await

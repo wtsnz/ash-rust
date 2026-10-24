@@ -115,10 +115,13 @@ pub async fn demo() -> ash_core::Result<()> {
     let inbound = Ticket::intake(&as_customer)
         .subject("From the mailbox")
         .persist(|_ctx, ticket| async move {
-            ticket::intake_store()
-                .lock()
-                .expect("intake store")
-                .insert(ticket.id, ticket.clone());
+            ticket::intake_store().lock().expect("intake store").insert(
+                ticket
+                    .get("id")
+                    .and_then(ash_core::Value::as_uuid)
+                    .expect("ticket id"),
+                ticket.clone(),
+            );
             Ok(ticket)
         })
         .await?;
