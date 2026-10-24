@@ -4,9 +4,21 @@ use crate::fixtures::searchable_notes::SearchableNote;
 use crate::support::{Db, TestDb, on_every_backend};
 
 const NOTES: &[(&str, &str, Option<&str>)] = &[
-    ("00000000-0000-0000-0000-0000000000f1", "Printer on fire", Some("Ada@Example.com")),
-    ("00000000-0000-0000-0000-0000000000f2", "50% off_sale", Some("grace@example.com")),
-    ("00000000-0000-0000-0000-0000000000f3", r"C:\path*[x]?", Some("linus@example.org")),
+    (
+        "00000000-0000-0000-0000-0000000000f1",
+        "Printer on fire",
+        Some("Ada@Example.com"),
+    ),
+    (
+        "00000000-0000-0000-0000-0000000000f2",
+        "50% off_sale",
+        Some("grace@example.com"),
+    ),
+    (
+        "00000000-0000-0000-0000-0000000000f3",
+        r"C:\path*[x]?",
+        Some("linus@example.org"),
+    ),
     ("00000000-0000-0000-0000-0000000000f4", "No email", None),
 ];
 
@@ -58,9 +70,15 @@ async fn text_filters_match_literally_and_respect_case(db: TestDb) {
     let no_email = vec!["No email".to_string()];
 
     assert_eq!(titles(&db, Filter::contains("title", "on fi")).await, fire);
-    assert_eq!(titles(&db, Filter::starts_with("title", "Printer")).await, fire);
+    assert_eq!(
+        titles(&db, Filter::starts_with("title", "Printer")).await,
+        fire
+    );
     assert_eq!(titles(&db, Filter::ends_with("title", "fire")).await, fire);
-    assert_eq!(titles(&db, Filter::starts_with("title", "fire")).await, Vec::<String>::new());
+    assert_eq!(
+        titles(&db, Filter::starts_with("title", "fire")).await,
+        Vec::<String>::new()
+    );
     assert_eq!(titles(&db, Filter::contains("title", "")).await.len(), 4);
     assert_eq!(
         titles(&db, !Filter::contains("title", "fire")).await,
@@ -68,19 +86,31 @@ async fn text_filters_match_literally_and_respect_case(db: TestDb) {
     );
 
     // A null email makes the match unknown, and NOT of unknown is still unknown.
-    assert_eq!(titles(&db, !Filter::contains("email", "example.com")).await, path);
+    assert_eq!(
+        titles(&db, !Filter::contains("email", "example.com")).await,
+        path
+    );
     assert_eq!(
         titles(
             &db,
-            !Filter::or([Filter::ends_with("email", ".org"), Filter::IsNil("email".into())])
+            !Filter::or([
+                Filter::ends_with("email", ".org"),
+                Filter::IsNil("email".into())
+            ])
         )
         .await,
         [sale.clone(), fire.clone()].concat()
     );
 
     // String fields are case-sensitive.
-    assert_eq!(titles(&db, Filter::contains("title", "ON FI")).await, Vec::<String>::new());
-    assert_eq!(titles(&db, Filter::starts_with("title", "printer")).await, Vec::<String>::new());
+    assert_eq!(
+        titles(&db, Filter::contains("title", "ON FI")).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        titles(&db, Filter::starts_with("title", "printer")).await,
+        Vec::<String>::new()
+    );
 
     // Wildcards in the needle match only themselves.
     assert_eq!(titles(&db, Filter::contains("title", "%")).await, sale);
@@ -97,17 +127,32 @@ async fn text_filters_match_literally_and_respect_case(db: TestDb) {
         titles(&db, Filter::contains("email", "EXAMPLE.COM")).await,
         [sale.clone(), fire.clone()].concat()
     );
-    assert_eq!(titles(&db, Filter::starts_with("email", "ada@")).await, fire);
+    assert_eq!(
+        titles(&db, Filter::starts_with("email", "ada@")).await,
+        fire
+    );
     assert_eq!(titles(&db, Filter::ends_with("email", ".ORG")).await, path);
     // SQLite matches CiString with LIKE, where these would be wildcards if left unescaped.
     for wildcard in ["%", "_", r"\"] {
-        assert_eq!(titles(&db, Filter::contains("email", wildcard)).await, Vec::<String>::new());
+        assert_eq!(
+            titles(&db, Filter::contains("email", wildcard)).await,
+            Vec::<String>::new()
+        );
     }
-    assert_eq!(titles(&db, Filter::contains("email", "@EXAMPLE_COM")).await, Vec::<String>::new());
+    assert_eq!(
+        titles(&db, Filter::contains("email", "@EXAMPLE_COM")).await,
+        Vec::<String>::new()
+    );
 
     // Typed field keys and DSL preparations build the same filters.
-    assert_eq!(titles(&db, SearchableNote::title.contains("on fi")).await, fire);
-    assert_eq!(titles(&db, SearchableNote::email.ends_with(".ORG")).await, path);
+    assert_eq!(
+        titles(&db, SearchableNote::title.contains("on fi")).await,
+        fire
+    );
+    assert_eq!(
+        titles(&db, SearchableNote::email.ends_with(".ORG")).await,
+        path
+    );
     let action = SearchableNote::DEF.action("titled_on_fire").unwrap();
     let mut prepared = None;
     for preparation in action.preparations {
@@ -115,7 +160,10 @@ async fn text_filters_match_literally_and_respect_case(db: TestDb) {
             prepared = Some(build());
         }
     }
-    assert_eq!(titles(&db, prepared.expect("filter preparation")).await, fire);
+    assert_eq!(
+        titles(&db, prepared.expect("filter preparation")).await,
+        fire
+    );
 }
 on_every_backend!(text_filters_match_literally_and_respect_case);
 
@@ -133,13 +181,22 @@ on_every_backend!(text_filters_reject_non_text_fields);
 /// matches case-insensitively on Postgres but not on SQLite.
 async fn ci_string_matching_folds_non_ascii_only_on_postgres(db: TestDb) {
     db.install(&[&SearchableNote::DEF]).await.unwrap();
-    insert_note(&db, "00000000-0000-0000-0000-0000000000e1", "Ecole", Some("ÉCOLE@Example.com")).await;
+    insert_note(
+        &db,
+        "00000000-0000-0000-0000-0000000000e1",
+        "Ecole",
+        Some("ÉCOLE@Example.com"),
+    )
+    .await;
 
     let found = titles(&db, Filter::contains("email", "école")).await;
     match db.db {
         Db::Sqlite(_) => assert!(found.is_empty(), "{found:?}"),
         Db::Postgres(_) => assert_eq!(found, ["Ecole"]),
     }
-    assert_eq!(titles(&db, Filter::contains("email", "École")).await, ["Ecole"]);
+    assert_eq!(
+        titles(&db, Filter::contains("email", "École")).await,
+        ["Ecole"]
+    );
 }
 on_every_backend!(ci_string_matching_folds_non_ascii_only_on_postgres);

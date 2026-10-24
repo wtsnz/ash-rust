@@ -56,11 +56,13 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
     let mismatch = || invalid(format!("expected {}, got {json}", ty.name()));
     Ok(match (ty, json) {
         (_, Json::Null) => Value::Null,
-        (AttrType::Uuid, Json::String(text)) => {
-            Value::Uuid(uuid::Uuid::parse_str(text).map_err(|_| invalid(format!("invalid UUID {text:?}")))?)
-        }
+        (AttrType::Uuid, Json::String(text)) => Value::Uuid(
+            uuid::Uuid::parse_str(text).map_err(|_| invalid(format!("invalid UUID {text:?}")))?,
+        ),
         (AttrType::Integer, Json::Number(n)) => Value::Int(n.as_i64().ok_or_else(mismatch)?),
-        (AttrType::Integer, Json::String(text)) => Value::Int(text.parse().map_err(|_| mismatch())?),
+        (AttrType::Integer, Json::String(text)) => {
+            Value::Int(text.parse().map_err(|_| mismatch())?)
+        }
         (AttrType::Boolean, Json::Bool(b)) => Value::Bool(*b),
         // As Ash's boolean casts text.
         (AttrType::Boolean, Json::String(text)) => match text.as_str() {
@@ -74,7 +76,10 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         (AttrType::Embedded(_) | AttrType::TypedMap { .. }, Json::Object(given)) => {
             let mut map = FieldMap::new();
             for field in ty.fields().unwrap_or_default() {
-                if let Some(value) = given.get(field.name).or_else(|| given.get(&camel(field.name))) {
+                if let Some(value) = given
+                    .get(field.name)
+                    .or_else(|| given.get(&camel(field.name)))
+                {
                     map.insert(field.name.to_string(), value_input(field.ty, value)?);
                 }
             }
@@ -84,8 +89,14 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
         // it's held.
         (AttrType::Union { members, .. }, Json::Object(given)) => {
             let (name, value) = match (given.get("type"), given.get("value")) {
-                (Some(Json::String(name)), Some(value)) if given.len() == 2 => (name.as_str(), value),
-                _ if given.len() == 1 => given.iter().next().map(|(name, value)| (name.as_str(), value)).ok_or_else(mismatch)?,
+                (Some(Json::String(name)), Some(value)) if given.len() == 2 => {
+                    (name.as_str(), value)
+                }
+                _ if given.len() == 1 => given
+                    .iter()
+                    .next()
+                    .map(|(name, value)| (name.as_str(), value))
+                    .ok_or_else(mismatch)?,
                 _ => return Err(invalid(format!("a union takes one member, got {json}"))),
             };
             let member = members
@@ -95,9 +106,12 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
             crate::value::union_value(member.name, value_input(member.ty, value)?)
         }
         // Each item cast to the list's type.
-        (AttrType::Array { of }, Json::Array(items)) => {
-            Value::Array(items.iter().map(|item| value_input(*of, item)).collect::<Result<_>>()?)
-        }
+        (AttrType::Array { of }, Json::Array(items)) => Value::Array(
+            items
+                .iter()
+                .map(|item| value_input(*of, item))
+                .collect::<Result<_>>()?,
+        ),
         (AttrType::Atom { one_of, .. }, Json::String(text)) => Value::String(
             one_of
                 .iter()
@@ -123,7 +137,10 @@ pub fn value_input(ty: AttrType, json: &Json) -> Result<Value> {
 /// A client's filter on `resource`.
 pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filter> {
     let Json::Object(fields) = json else {
-        return Err(invalid(format!("a filter on {} must be an object", resource.name)));
+        return Err(invalid(format!(
+            "a filter on {} must be an object",
+            resource.name
+        )));
     };
     let mut filters = Vec::new();
     for (key, value) in fields {
@@ -132,7 +149,10 @@ pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filte
         }
         let list = |value: &Json| -> Result<Vec<Filter>> {
             match value {
-                Json::Array(items) => items.iter().map(|item| filter_input(resource, item)).collect(),
+                Json::Array(items) => items
+                    .iter()
+                    .map(|item| filter_input(resource, item))
+                    .collect(),
                 single => Ok(vec![filter_input(resource, single)?]),
             }
         };
@@ -150,7 +170,10 @@ pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filte
                         filters.push(Filter::related(rel.name, inner));
                     }
                 } else {
-                    return Err(invalid(format!("no field `{name}` to filter on {}", resource.name)));
+                    return Err(invalid(format!(
+                        "no field `{name}` to filter on {}",
+                        resource.name
+                    )));
                 }
             }
         }
@@ -158,17 +181,30 @@ pub fn filter_input(resource: &'static ResourceDef, json: &Json) -> Result<Filte
     Ok(Filter::and(filters))
 }
 
-fn field_filter(resource: &ResourceDef, field: &str, ty: AttrType, ops: &Json) -> Result<Vec<Filter>> {
+fn field_filter(
+    resource: &ResourceDef,
+    field: &str,
+    ty: AttrType,
+    ops: &Json,
+) -> Result<Vec<Filter>> {
     let Json::Object(ops) = ops else {
         // A bare value means equality, as Ash reads `%{field: value}`.
         return Ok(vec![Filter::eq(field, value_input(ty, ops)?)]);
     };
     let text = |value: &Json| -> Result<String> {
-        value.as_str().map(str::to_string).ok_or_else(|| invalid(format!("`{field}` takes text here")))
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| invalid(format!("`{field}` takes text here")))
     };
     let mut filters = Vec::new();
     for (op, value) in ops {
-        if value.is_null() && !matches!(op.as_str(), "eq" | "is_distinct_from" | "is_not_distinct_from") {
+        if value.is_null()
+            && !matches!(
+                op.as_str(),
+                "eq" | "is_distinct_from" | "is_not_distinct_from"
+            )
+        {
             continue;
         }
         filters.push(match op.as_str() {
@@ -184,8 +220,16 @@ fn field_filter(resource: &ResourceDef, field: &str, ty: AttrType, ops: &Json) -
             "less_than_or_equal" => Filter::lte(field, value_input(ty, value)?),
             "greater_than_or_equal" => Filter::gte(field, value_input(ty, value)?),
             "in" => {
-                let items = value.as_array().ok_or_else(|| invalid(format!("`in` on `{field}` takes a list")))?;
-                Filter::in_list(field, items.iter().map(|item| value_input(ty, item)).collect::<Result<Vec<_>>>()?)
+                let items = value
+                    .as_array()
+                    .ok_or_else(|| invalid(format!("`in` on `{field}` takes a list")))?;
+                Filter::in_list(
+                    field,
+                    items
+                        .iter()
+                        .map(|item| value_input(ty, item))
+                        .collect::<Result<Vec<_>>>()?,
+                )
             }
             // Null-safe equality: nulls are equal to each other and to nothing else.
             "is_distinct_from" => match value_input(ty, value)? {
@@ -206,7 +250,12 @@ fn field_filter(resource: &ResourceDef, field: &str, ty: AttrType, ops: &Json) -
             "string_ends_with" => Filter::ends_with(field, text(value)?),
             "like" => Filter::like(field, text(value)?),
             "ilike" => Filter::ilike(field, text(value)?),
-            other => return Err(invalid(format!("unknown operator `{other}` on {}.{field}", resource.name))),
+            other => {
+                return Err(invalid(format!(
+                    "unknown operator `{other}` on {}.{field}",
+                    resource.name
+                )));
+            }
         });
     }
     Ok(filters)
@@ -228,7 +277,10 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
                 p => (false, None, p),
             };
             if field_type(resource, field).is_none() {
-                return Err(invalid(format!("no field `{field}` to sort {} by", resource.name)));
+                return Err(invalid(format!(
+                    "no field `{field}` to sort {} by",
+                    resource.name
+                )));
             }
             Ok(Sort {
                 field: field.to_string(),
@@ -243,10 +295,18 @@ pub fn sort_input(resource: &ResourceDef, text: &str) -> Result<Vec<Sort>> {
 /// A client's input to `action` on `resource`, as the action takes it: each accepted
 /// attribute and argument, cast to its type. Anything else is refused, as Ash refuses
 /// input an action doesn't take, and so is input lacking an argument that may not be nil.
-pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, json: &Json) -> Result<FieldMap> {
+pub fn action_input(
+    resource: &ResourceDef,
+    action: &crate::action::ActionDef,
+    json: &Json,
+) -> Result<FieldMap> {
     let mut input = FieldMap::new();
     let Json::Object(given) = json else {
-        return if json.is_null() { Ok(input) } else { Err(invalid("input must be an object")) };
+        return if json.is_null() {
+            Ok(input)
+        } else {
+            Err(invalid("input must be an object"))
+        };
     };
     for (name, value) in given {
         let ty = action
@@ -254,7 +314,13 @@ pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, j
             .iter()
             .find(|arg| arg.name == name)
             .map(|arg| arg.ty)
-            .or_else(|| action.accept.contains(&name.as_str()).then(|| resource.attribute(name).map(|attr| attr.ty)).flatten())
+            .or_else(|| {
+                action
+                    .accept
+                    .contains(&name.as_str())
+                    .then(|| resource.attribute(name).map(|attr| attr.ty))
+                    .flatten()
+            })
             .ok_or_else(|| Error::NotAccepted {
                 field: name.clone(),
                 action: action.name,
@@ -275,8 +341,14 @@ pub fn action_input(resource: &ResourceDef, action: &crate::action::ActionDef, j
     crate::action::apply_argument_defaults(action.arguments, &mut arguments);
     input.extend(arguments);
     // An argument that may not be nil must be given, as Ash requires it.
-    if let Some(arg) = action.arguments.iter().find(|arg| !arg.allow_nil && input.get(arg.name).is_none_or(Value::is_null)) {
-        return Err(Error::Missing { field: arg.name.to_string() });
+    if let Some(arg) = action
+        .arguments
+        .iter()
+        .find(|arg| !arg.allow_nil && input.get(arg.name).is_none_or(Value::is_null))
+    {
+        return Err(Error::Missing {
+            field: arg.name.to_string(),
+        });
     }
     Ok(input)
 }

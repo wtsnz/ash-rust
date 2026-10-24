@@ -49,7 +49,12 @@ pub fn keyset_sort(resource: &ResourceDef, mut sort: Vec<Sort>) -> Vec<Sort> {
         .filter(|attr| attr.primary_key)
         .map(|attr| attr.name)
         .collect();
-    if sorted_on(&primary_key) || resource.identities.iter().any(|identity| sorted_on(identity.keys)) {
+    if sorted_on(&primary_key)
+        || resource
+            .identities
+            .iter()
+            .any(|identity| sorted_on(identity.keys))
+    {
         return sort;
     }
     for key in primary_key {
@@ -67,14 +72,21 @@ pub fn keyset_sort(resource: &ResourceDef, mut sort: Vec<Sort>) -> Vec<Sort> {
 /// orders them, last ascending and first descending), so a null value, or a field that
 /// may hold one, needs its own branch: past a null only nulls follow, or every value
 /// does, and past a value the nulls beyond it follow too. A guarded sort's field reads as null wherever its guard doesn't hold.
-pub fn build_keyset_filter(resource: &ResourceDef, sorts: &[Sort], values: &[Value], is_after: bool) -> Option<Filter> {
+pub fn build_keyset_filter(
+    resource: &ResourceDef,
+    sorts: &[Sort],
+    values: &[Value],
+    is_after: bool,
+) -> Option<Filter> {
     let (sort, value) = (sorts.first()?, values.first()?);
     // After a record in an ascending sort, or before one in a descending sort, values
     // grow; nulls lie ahead after a record when they sort last, before one when first.
     let growing = is_after != sort.descending;
     let nulls_ahead = is_after != sort.nulls_first();
     let nullable = sort.guard.is_some()
-        || resource.attribute(&sort.field).is_none_or(|attr| attr.allow_nil);
+        || resource
+            .attribute(&sort.field)
+            .is_none_or(|attr| attr.allow_nil);
     let field = sort.field.clone();
     let guarded = |filter: Filter| match &sort.guard {
         Some(guard) => Filter::and([guard.clone(), filter]),
@@ -85,7 +97,11 @@ pub fn build_keyset_filter(resource: &ResourceDef, sorts: &[Sort], values: &[Val
         None => Filter::IsNil(field.clone()),
     };
     let (beyond, tied) = if value.is_null() {
-        let beyond = if nulls_ahead { Filter::False } else { !is_nil() };
+        let beyond = if nulls_ahead {
+            Filter::False
+        } else {
+            !is_nil()
+        };
         (beyond, is_nil())
     } else {
         let past = guarded(if growing {
@@ -93,7 +109,11 @@ pub fn build_keyset_filter(resource: &ResourceDef, sorts: &[Sort], values: &[Val
         } else {
             Filter::Lt(field.clone(), value.clone())
         });
-        let beyond = if nulls_ahead && nullable { Filter::or([past, is_nil()]) } else { past };
+        let beyond = if nulls_ahead && nullable {
+            Filter::or([past, is_nil()])
+        } else {
+            past
+        };
         (beyond, guarded(Filter::Eq(field.clone(), value.clone())))
     };
     match build_keyset_filter(resource, &sorts[1..], &values[1..], is_after) {
@@ -108,11 +128,13 @@ pub fn keyset_values(resource: &ResourceDef, cursor: &KeysetCursor, sorts: &[Sor
     let pk = resource.primary_key().map(|attr| attr.name);
     sorts
         .iter()
-        .map(|sort| match cursor.values.iter().find(|(field, _)| *field == sort.field) {
-            Some((_, value)) => value.clone(),
-            None if Some(sort.field.as_str()) == pk => cursor.id.clone(),
-            None => Value::Null,
-        })
+        .map(
+            |sort| match cursor.values.iter().find(|(field, _)| *field == sort.field) {
+                Some((_, value)) => value.clone(),
+                None if Some(sort.field.as_str()) == pk => cursor.id.clone(),
+                None => Value::Null,
+            },
+        )
         .collect()
 }
 

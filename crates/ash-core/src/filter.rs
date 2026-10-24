@@ -98,7 +98,10 @@ impl Filter {
         Self::ILike(field.into(), pattern.into())
     }
 
-    pub fn in_list(field: impl Into<String>, values: impl IntoIterator<Item = impl Into<Value>>) -> Self {
+    pub fn in_list(
+        field: impl Into<String>,
+        values: impl IntoIterator<Item = impl Into<Value>>,
+    ) -> Self {
         Self::In(field.into(), values.into_iter().map(Into::into).collect())
     }
 
@@ -202,15 +205,17 @@ impl Filter {
             Self::Lt(field, value) => compare(fields.get(field), value, Ordering::Less, false),
             Self::Lte(field, value) => compare(fields.get(field), value, Ordering::Less, true),
             Self::In(_, values) if values.is_empty() => Some(false),
-            Self::In(field, values) => {
-                in_list(present(field), values, |got, value| got == value)
-            }
+            Self::In(field, values) => in_list(present(field), values, |got, value| got == value),
             Self::IsNil(field) => Some(present(field).is_none()),
-            Self::Contains(field, needle) => text(field, needle, |text, needle| text.contains(needle)),
+            Self::Contains(field, needle) => {
+                text(field, needle, |text, needle| text.contains(needle))
+            }
             Self::StartsWith(field, needle) => {
                 text(field, needle, |text, needle| text.starts_with(needle))
             }
-            Self::EndsWith(field, needle) => text(field, needle, |text, needle| text.ends_with(needle)),
+            Self::EndsWith(field, needle) => {
+                text(field, needle, |text, needle| text.ends_with(needle))
+            }
             Self::Like(field, pattern) => text(field, pattern, like_matches),
             Self::ILike(field, pattern) => {
                 present(field).map(|got| text_matches(Some(got), pattern, true, like_matches))
@@ -222,7 +227,10 @@ impl Filter {
             Self::And(parts) => all_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Or(parts) => any_of(parts.iter().map(|part| part.eval(resource, fields))),
             Self::Not(inner) => inner.eval(resource, fields).map(|matched| !matched),
-            Self::Related { relationship, filter } => {
+            Self::Related {
+                relationship,
+                filter,
+            } => {
                 let destination = resource
                     .and_then(|resource| resource.relationship(relationship))
                     .map(|rel| (rel.destination)());
@@ -273,7 +281,10 @@ pub fn in_list(
     same: impl Fn(&Value, &Value) -> bool,
 ) -> Option<bool> {
     let got = got.filter(|got| !got.is_null())?;
-    if values.iter().any(|value| !value.is_null() && same(got, value)) {
+    if values
+        .iter()
+        .any(|value| !value.is_null() && same(got, value))
+    {
         Some(true)
     } else if values.iter().any(Value::is_null) {
         None
@@ -579,7 +590,6 @@ mod tests {
         assert!((!Filter::contains("name", "ADA")).matches_on(&CONTACT, &row));
     }
 
-   
     #[test]
     fn operator_overloading() {
         let open = Filter::eq("status", "open");

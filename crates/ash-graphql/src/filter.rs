@@ -26,8 +26,10 @@ fn is_text(ty: AttrType) -> bool {
 
 /// Whether a field of this type can be filtered at all.
 fn filterable(ty: AttrType) -> bool {
-    !matches!(ty, AttrType::Map | AttrType::Array { .. } | AttrType::Vector { .. } | AttrType::Binary)
-        && !ty.is_map_like()
+    !matches!(
+        ty,
+        AttrType::Map | AttrType::Array { .. } | AttrType::Vector { .. } | AttrType::Binary
+    ) && !ty.is_map_like()
 }
 
 /// The operators every filterable field takes, and those text fields add.
@@ -41,7 +43,13 @@ const OPERATORS: &[&str] = &[
     "isDistinctFrom",
     "isNotDistinctFrom",
 ];
-const TEXT_OPERATORS: &[&str] = &["contains", "stringStartsWith", "stringEndsWith", "like", "ilike"];
+const TEXT_OPERATORS: &[&str] = &[
+    "contains",
+    "stringStartsWith",
+    "stringEndsWith",
+    "like",
+    "ilike",
+];
 
 fn field_filter(name: String, ty: AttrType, items_nullable: bool) -> InputObject {
     let scalar = graphql_type_name(ty);
@@ -125,10 +133,14 @@ pub fn parse_resource_filter(
     value: &GqlValue,
 ) -> Result<Filter, async_graphql::Error> {
     let filter = parse_filter(resource, value)?;
-    ash_core::guard_input_filter(resource, actor, filter).map_err(|e| async_graphql::Error::new(e.to_string()))
+    ash_core::guard_input_filter(resource, actor, filter)
+        .map_err(|e| async_graphql::Error::new(e.to_string()))
 }
 
-fn parse_filter(resource: &'static ResourceDef, value: &GqlValue) -> Result<Filter, async_graphql::Error> {
+fn parse_filter(
+    resource: &'static ResourceDef,
+    value: &GqlValue,
+) -> Result<Filter, async_graphql::Error> {
     let obj = object(value)?;
     let mut filters = Vec::new();
 
@@ -194,7 +206,10 @@ fn parse_filter(resource: &'static ResourceDef, value: &GqlValue) -> Result<Filt
 }
 
 /// The input object `value` holds.
-fn object(value: &GqlValue) -> Result<&async_graphql::indexmap::IndexMap<async_graphql::Name, GqlValue>, async_graphql::Error> {
+fn object(
+    value: &GqlValue,
+) -> Result<&async_graphql::indexmap::IndexMap<async_graphql::Name, GqlValue>, async_graphql::Error>
+{
     match value {
         GqlValue::Object(obj) => Ok(obj),
         _ => Err(async_graphql::Error::new("internal: not an object")),
@@ -217,7 +232,9 @@ fn parse_field_filter(
     let mut filters = Vec::new();
     for (op, value) in ops {
         let op = op.as_str();
-        if matches!(value, GqlValue::Null) && !matches!(op, "eq" | "isDistinctFrom" | "isNotDistinctFrom") {
+        if matches!(value, GqlValue::Null)
+            && !matches!(op, "eq" | "isDistinctFrom" | "isNotDistinctFrom")
+        {
             continue;
         }
         let parse = |value: &GqlValue| -> Result<Value, async_graphql::Error> {

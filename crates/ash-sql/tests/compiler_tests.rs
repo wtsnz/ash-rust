@@ -146,9 +146,11 @@ fn test_postgres_insert_update_upsert_returning() {
     let compiled_up = compiler2
         .compile_update(&TICKET_DEF, id.into(), &update_fields)
         .unwrap();
-    assert!(compiled_up
-        .sql
-        .contains("UPDATE \"tickets\" SET \"status\" = $1 WHERE \"id\" = $2 RETURNING *"));
+    assert!(
+        compiled_up
+            .sql
+            .contains("UPDATE \"tickets\" SET \"status\" = $1 WHERE \"id\" = $2 RETURNING *")
+    );
 
     // 3. Upsert
     let mut compiler3 = QueryCompiler::new(&dialect);
@@ -178,17 +180,35 @@ fn test_postgres_bulk_update_is_one_statement_for_rows_that_differ() {
     triages.insert("priority".into(), Value::Int(2));
 
     let compiled = QueryCompiler::new(&dialect)
-        .compile_bulk_update(&TICKET_DEF, &["status", "priority"], &[(Value::Uuid(closed), &closes), (Value::Uuid(triaged), &triages)])
+        .compile_bulk_update(
+            &TICKET_DEF,
+            &["status", "priority"],
+            &[
+                (Value::Uuid(closed), &closes),
+                (Value::Uuid(triaged), &triages),
+            ],
+        )
         .unwrap();
     assert!(compiled.sql.starts_with("UPDATE \"tickets\" SET \"status\" = \"v\".\"status\", \"priority\" = CASE WHEN \"v\".\"__ash_set_1\" THEN \"v\".\"priority\" ELSE \"tickets\".\"priority\" END FROM (VALUES "), "{}", compiled.sql);
     assert!(compiled.sql.ends_with(") AS \"v\" (\"id\", \"status\", \"__ash_set_1\", \"priority\") WHERE \"tickets\".\"id\" = \"v\".\"id\" RETURNING \"tickets\".*"), "{}", compiled.sql);
-    assert!(compiled.sql.contains(", FALSE, ") && compiled.sql.contains(", TRUE, "), "{}", compiled.sql);
+    assert!(
+        compiled.sql.contains(", FALSE, ") && compiled.sql.contains(", TRUE, "),
+        "{}",
+        compiled.sql
+    );
     // Each row binds its key and a value per column, set or not.
     assert_eq!(compiled.params.len(), 6);
 
     // Rows that all set the same columns need no flags.
     let compiled = QueryCompiler::new(&dialect)
-        .compile_bulk_update(&TICKET_DEF, &["status"], &[(Value::Uuid(closed), &closes), (Value::Uuid(triaged), &closes)])
+        .compile_bulk_update(
+            &TICKET_DEF,
+            &["status"],
+            &[
+                (Value::Uuid(closed), &closes),
+                (Value::Uuid(triaged), &closes),
+            ],
+        )
         .unwrap();
     assert!(!compiled.sql.contains("CASE"), "{}", compiled.sql);
     assert_eq!(compiled.params.len(), 4);
@@ -453,7 +473,11 @@ fn test_text_filters_escape_wildcards_per_dialect() {
 
     let mut sqlite_compiler = QueryCompiler::new(&SqliteDialect);
     let sqlite = sqlite_compiler.compile_select(&TICKET_DEF, &query).unwrap();
-    assert!(sqlite.sql.contains("\"subject\" GLOB ?"), "got: {}", sqlite.sql);
+    assert!(
+        sqlite.sql.contains("\"subject\" GLOB ?"),
+        "got: {}",
+        sqlite.sql
+    );
     assert_eq!(
         sqlite.params[0].value,
         Value::String(r"*50%_off[*][[]x][?]\*".into())
@@ -501,13 +525,11 @@ fn test_text_filters_reject_non_text_fields() {
 }
 
 fn live_folders() -> Filter {
-    Filter::and([
-        Filter::is_nil("archived_at"),
-        Filter::ne("name", "hidden"),
-    ])
+    Filter::and([Filter::is_nil("archived_at"), Filter::ne("name", "hidden")])
 }
 
-static FOLDER_PREPS: &[ash_core::PreparationDef] = &[ash_core::PreparationDef::Filter(live_folders)];
+static FOLDER_PREPS: &[ash_core::PreparationDef] =
+    &[ash_core::PreparationDef::Filter(live_folders)];
 
 static FOLDER_ATTRS: &[AttributeDef] = &[
     AttributeDef::uuid_pk("id"),
@@ -573,11 +595,14 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
     ] {
         let sub = "\"__ash_agg_children\"";
         assert!(
-            sql.contains(&format!("{sub}.\"archived_at\" IS NULL AND {sub}.\"name\" <>")),
+            sql.contains(&format!(
+                "{sub}.\"archived_at\" IS NULL AND {sub}.\"name\" <>"
+            )),
             "{dialect} aggregate must apply the read filter: {sql}"
         );
         assert!(
-            sql.contains("rel_folders_1.\"name\" = ") && sql.contains("rel_folders_1.\"archived_at\" IS NULL"),
+            sql.contains("rel_folders_1.\"name\" = ")
+                && sql.contains("rel_folders_1.\"archived_at\" IS NULL"),
             "{dialect} related filter must apply the read filter: {sql}"
         );
         let values: Vec<&Value> = params.iter().map(|p| &p.value).collect();
@@ -594,7 +619,10 @@ fn test_aggregates_and_related_filters_apply_the_destination_read_filter() {
             for n in 1..=4 {
                 assert!(sql.contains(&format!("${n}")), "missing ${n}: {sql}");
             }
-            assert!(!sql.contains("$5"), "placeholders must be consecutive: {sql}");
+            assert!(
+                !sql.contains("$5"),
+                "placeholders must be consecutive: {sql}"
+            );
         }
     }
 }
@@ -613,15 +641,22 @@ fn test_count_compilation() {
         }],
         ..CompiledQuery::default()
     };
-    let compiled = QueryCompiler::new(&dialect).compile_count(&TICKET_DEF, &query).unwrap();
-    assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM "tickets" WHERE "status" = $1"#);
+    let compiled = QueryCompiler::new(&dialect)
+        .compile_count(&TICKET_DEF, &query)
+        .unwrap();
+    assert_eq!(
+        compiled.sql(),
+        r#"SELECT COUNT(*) FROM "tickets" WHERE "status" = $1"#
+    );
 
     let page = CompiledQuery {
         limit: Some(10),
         offset: Some(20),
         ..query
     };
-    let compiled = QueryCompiler::new(&dialect).compile_count(&TICKET_DEF, &page).unwrap();
+    let compiled = QueryCompiler::new(&dialect)
+        .compile_count(&TICKET_DEF, &page)
+        .unwrap();
     assert_eq!(
         compiled.sql(),
         r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" WHERE "status" = $1 LIMIT $2 OFFSET $3) AS counted"#
@@ -631,8 +666,13 @@ fn test_count_compilation() {
         offset: Some(5),
         ..CompiledQuery::default()
     };
-    let compiled = QueryCompiler::new(&SqliteDialect).compile_count(&TICKET_DEF, &offset_only).unwrap();
-    assert_eq!(compiled.sql(), r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" LIMIT ? OFFSET ?) AS counted"#);
+    let compiled = QueryCompiler::new(&SqliteDialect)
+        .compile_count(&TICKET_DEF, &offset_only)
+        .unwrap();
+    assert_eq!(
+        compiled.sql(),
+        r#"SELECT COUNT(*) FROM (SELECT 1 FROM "tickets" LIMIT ? OFFSET ?) AS counted"#
+    );
 }
 
 static ITEM_NAME: Expr = Expr::Field("name");
@@ -640,8 +680,15 @@ static ITEM_NAME: Expr = Expr::Field("name");
 static BIN_DEF: ResourceDef = ResourceDef {
     name: "Bin",
     table: "bins",
-    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
-    relationships: &[ash_core::RelationshipDef::has_many("items", || &ITEM_DEF, "bin_id")],
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("name", AttrType::String),
+    ],
+    relationships: &[ash_core::RelationshipDef::has_many(
+        "items",
+        || &ITEM_DEF,
+        "bin_id",
+    )],
     actions: &[ActionDef::read("read").primary()],
     aggregates: &[],
     calculations: &[],
@@ -659,7 +706,11 @@ static ITEM_DEF: ResourceDef = ResourceDef {
     relationships: &[],
     actions: &[ActionDef::read("read").primary()],
     aggregates: &[],
-    calculations: &[CalculationDef::new("loud_name", AttrType::String, Expr::Upper(&ITEM_NAME))],
+    calculations: &[CalculationDef::new(
+        "loud_name",
+        AttrType::String,
+        Expr::Upper(&ITEM_NAME),
+    )],
     ..FOLDER_DEF
 };
 
@@ -673,11 +724,18 @@ fn a_related_calculation_reads_its_own_table() {
     };
     let mut compiler = QueryCompiler::new(&PostgresDialect);
     let sql = compiler.compile_select(&BIN_DEF, &query).unwrap().sql;
-    let alias = sql.split("\"items\" AS ").nth(1).and_then(|rest| rest.split_whitespace().next()).expect("an alias");
+    let alias = sql
+        .split("\"items\" AS ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("an alias");
     assert!(sql.contains(&format!("upper({alias}.\"name\")")), "{sql}");
 }
 
-static ORDER_ATTRS: &[AttributeDef] = &[AttributeDef::integer_pk("id"), AttributeDef::optional("label", AttrType::String)];
+static ORDER_ATTRS: &[AttributeDef] = &[
+    AttributeDef::integer_pk("id"),
+    AttributeDef::optional("label", AttrType::String),
+];
 
 /// A key the database assigns: left out of a single insert, every column defaulted when
 /// nothing else is given, and in a batch mixing rows with and without one, the default
@@ -690,15 +748,37 @@ fn test_inserts_leave_assigned_keys_to_the_database() {
     orders.identities = &[];
     orders.calculations = &[];
 
-    let compiled = QueryCompiler::new(&PostgresDialect).compile_insert(&orders, &Default::default()).unwrap();
-    assert_eq!(compiled.sql(), r#"INSERT INTO "orders" DEFAULT VALUES RETURNING *"#);
-    let compiled = QueryCompiler::new(&SqliteDialect).compile_insert(&orders, &Default::default()).unwrap();
+    let compiled = QueryCompiler::new(&PostgresDialect)
+        .compile_insert(&orders, &Default::default())
+        .unwrap();
+    assert_eq!(
+        compiled.sql(),
+        r#"INSERT INTO "orders" DEFAULT VALUES RETURNING *"#
+    );
+    let compiled = QueryCompiler::new(&SqliteDialect)
+        .compile_insert(&orders, &Default::default())
+        .unwrap();
     assert_eq!(compiled.sql(), r#"INSERT INTO "orders" DEFAULT VALUES"#);
 
     let label = |text: &str| ash_core::FieldMap::from([("label".to_string(), Value::from(text))]);
-    let rows = [(Value::Int(50), label("given")), (Value::Null, label("assigned"))];
-    let compiled = QueryCompiler::new(&PostgresDialect).compile_bulk_insert(&orders, &rows).unwrap();
-    assert!(compiled.sql().contains("VALUES ($1, $2), (DEFAULT, $3)"), "{}", compiled.sql());
-    let compiled = QueryCompiler::new(&SqliteDialect).compile_bulk_insert(&orders, &rows).unwrap();
-    assert!(compiled.sql().contains("VALUES (?, ?), (NULL, ?)"), "{}", compiled.sql());
+    let rows = [
+        (Value::Int(50), label("given")),
+        (Value::Null, label("assigned")),
+    ];
+    let compiled = QueryCompiler::new(&PostgresDialect)
+        .compile_bulk_insert(&orders, &rows)
+        .unwrap();
+    assert!(
+        compiled.sql().contains("VALUES ($1, $2), (DEFAULT, $3)"),
+        "{}",
+        compiled.sql()
+    );
+    let compiled = QueryCompiler::new(&SqliteDialect)
+        .compile_bulk_insert(&orders, &rows)
+        .unwrap();
+    assert!(
+        compiled.sql().contains("VALUES (?, ?), (NULL, ?)"),
+        "{}",
+        compiled.sql()
+    );
 }

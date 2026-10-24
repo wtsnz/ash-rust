@@ -21,7 +21,14 @@ pub fn resource_sort_input_name(resource_name: &str) -> String {
 /// ascending and first descending).
 pub fn register_sort_order(builder: SchemaBuilder) -> SchemaBuilder {
     let mut order = Enum::new("SortOrder");
-    for item in ["DESC", "DESC_NULLS_FIRST", "DESC_NULLS_LAST", "ASC", "ASC_NULLS_FIRST", "ASC_NULLS_LAST"] {
+    for item in [
+        "DESC",
+        "DESC_NULLS_FIRST",
+        "DESC_NULLS_LAST",
+        "ASC",
+        "ASC_NULLS_FIRST",
+        "ASC_NULLS_LAST",
+    ] {
         order = order.item(EnumItem::new(item));
     }
     builder.register(order)
@@ -101,7 +108,8 @@ pub fn parse_resource_sort(
             ..Default::default()
         });
     }
-    ash_core::guard_input_sort(resource, actor, sorts).map_err(|e| async_graphql::Error::new(e.to_string()))
+    ash_core::guard_input_sort(resource, actor, sorts)
+        .map_err(|e| async_graphql::Error::new(e.to_string()))
 }
 
 /// An enum value's name: a literal's, or a variable's string.

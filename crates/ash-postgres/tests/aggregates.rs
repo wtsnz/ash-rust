@@ -3,9 +3,9 @@
 //! and memory computes them as Ash's ETS layer does. One scenario, the same answers.
 
 use ash_core::{
-    ActionDef, ActionKind, Actor, AggregateDef, AggregateFilter, AttrType, AttributeDef, Check, CompiledQuery,
-    ConstValue, DataLayer, FieldMap, Filter, PolicyDef, PolicyEffect, PolicyWhen, PreparationDef, RelationshipDef,
-    ResourceDef, Sort, Value,
+    ActionDef, ActionKind, Actor, AggregateDef, AggregateFilter, AttrType, AttributeDef, Check,
+    CompiledQuery, ConstValue, DataLayer, FieldMap, Filter, PolicyDef, PolicyEffect, PolicyWhen,
+    PreparationDef, RelationshipDef, ResourceDef, Sort, Value,
 };
 use ash_memory::Memory;
 use ash_postgres::Postgres;
@@ -39,15 +39,28 @@ const BASE: ResourceDef = ResourceDef {
 static LIBRARY: ResourceDef = ResourceDef {
     name: "AggLibrary",
     table: "agg_libraries",
-    attributes: &[AttributeDef::uuid_pk("id"), AttributeDef::required("name", AttrType::String)],
+    attributes: &[
+        AttributeDef::uuid_pk("id"),
+        AttributeDef::required("name", AttrType::String),
+    ],
     relationships: &[
         RelationshipDef::has_many("books", || &BOOK, "library_id"),
-        RelationshipDef::many_to_many("readers", || &READER, || &MEMBERSHIP, "library_id", "reader_id"),
+        RelationshipDef::many_to_many(
+            "readers",
+            || &READER,
+            || &MEMBERSHIP,
+            "library_id",
+            "reader_id",
+        ),
     ],
     actions: &[ActionDef::read("read").primary()],
     aggregates: &[
         AggregateDef::count("book_count", "books"),
-        AggregateDef::count_where("long_count", "books", AggregateFilter::Eq("kind", ConstValue::Str("long"))),
+        AggregateDef::count_where(
+            "long_count",
+            "books",
+            AggregateFilter::Eq("kind", ConstValue::Str("long")),
+        ),
         AggregateDef::sum("pages", "books", "pages"),
         AggregateDef::exists("has_books", "books"),
         AggregateDef::first("a_title", "books", "title", AttrType::String),
@@ -72,7 +85,9 @@ static BOOK: ResourceDef = ResourceDef {
         AttributeDef::required("pages", AttrType::Integer),
         AttributeDef::required("archived", AttrType::Boolean),
     ],
-    actions: &[ActionDef::read("read").primary().preparations(&[PreparationDef::Filter(not_archived)])],
+    actions: &[ActionDef::read("read")
+        .primary()
+        .preparations(&[PreparationDef::Filter(not_archived)])],
     ..BASE
 };
 
@@ -97,18 +112,32 @@ static MEMBERSHIP: ResourceDef = ResourceDef {
     actions: &[ActionDef::read("read").primary()],
     policies: &[PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Read),
-        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "reader_id" })],
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor {
+            field: "reader_id",
+        })],
     )],
     ..BASE
 };
 
-const ALL: [&str; 6] = ["book_count", "long_count", "pages", "has_books", "a_title", "reader_count"];
+const ALL: [&str; 6] = [
+    "book_count",
+    "long_count",
+    "pages",
+    "has_books",
+    "a_title",
+    "reader_count",
+];
 
 async fn insert<D: DataLayer>(data: &D, resource: &ResourceDef, fields: &[(&str, Value)]) -> Uuid {
     let id = Uuid::new_v4();
-    let mut map: FieldMap = fields.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    let mut map: FieldMap = fields
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(resource, None, Value::from(id), map).await.unwrap();
+    data.create(resource, None, Value::from(id), map)
+        .await
+        .unwrap();
     id
 }
 
@@ -138,18 +167,32 @@ async fn scenario<D: DataLayer>(data: D) {
     let mut readers = Vec::new();
     for _ in 0..2 {
         let reader = insert(&data, &READER, &[]).await;
-        insert(&data, &MEMBERSHIP, &[("library_id", Value::Uuid(a)), ("reader_id", Value::Uuid(reader))]).await;
+        insert(
+            &data,
+            &MEMBERSHIP,
+            &[
+                ("library_id", Value::Uuid(a)),
+                ("reader_id", Value::Uuid(reader)),
+            ],
+        )
+        .await;
         readers.push(reader);
     }
 
     let ours = Filter::starts_with("name", run.clone());
-    let by_name = vec![Sort { field: "name".into(), descending: false, ..Default::default() }];
+    let by_name = vec![Sort {
+        field: "name".into(),
+        descending: false,
+        ..Default::default()
+    }];
     let read = |query: CompiledQuery| {
         let data = &data;
         async move { data.run_query(&LIBRARY, &query).await.unwrap() }
     };
     let values = |rows: &[FieldMap], field: &str| -> Vec<Value> {
-        rows.iter().map(|row| row.get(field).cloned().unwrap_or(Value::Null)).collect()
+        rows.iter()
+            .map(|row| row.get(field).cloned().unwrap_or(Value::Null))
+            .collect()
     };
 
     // Every kind, for libraries with and without related rows, in the query's order.
@@ -160,14 +203,34 @@ async fn scenario<D: DataLayer>(data: D) {
         ..CompiledQuery::default()
     })
     .await;
-    assert_eq!(values(&rows, "id"), [Value::Uuid(a), Value::Uuid(b), Value::Uuid(c)]);
-    assert_eq!(values(&rows, "book_count"), [Value::Int(3), Value::Int(0), Value::Int(1)]);
-    assert_eq!(values(&rows, "long_count"), [Value::Int(2), Value::Int(0), Value::Int(0)]);
-    assert_eq!(values(&rows, "pages"), [Value::Int(600), Value::Null, Value::Int(50)]);
-    assert_eq!(values(&rows, "has_books"), [Value::Bool(true), Value::Bool(false), Value::Bool(true)]);
+    assert_eq!(
+        values(&rows, "id"),
+        [Value::Uuid(a), Value::Uuid(b), Value::Uuid(c)]
+    );
+    assert_eq!(
+        values(&rows, "book_count"),
+        [Value::Int(3), Value::Int(0), Value::Int(1)]
+    );
+    assert_eq!(
+        values(&rows, "long_count"),
+        [Value::Int(2), Value::Int(0), Value::Int(0)]
+    );
+    assert_eq!(
+        values(&rows, "pages"),
+        [Value::Int(600), Value::Null, Value::Int(50)]
+    );
+    assert_eq!(
+        values(&rows, "has_books"),
+        [Value::Bool(true), Value::Bool(false), Value::Bool(true)]
+    );
     // No actor reads any membership.
-    assert_eq!(values(&rows, "reader_count"), [Value::Int(0), Value::Int(0), Value::Int(0)]);
-    assert!(matches!(&values(&rows, "a_title")[0], Value::String(t) if ["A1", "A2", "A3"].contains(&t.as_str())));
+    assert_eq!(
+        values(&rows, "reader_count"),
+        [Value::Int(0), Value::Int(0), Value::Int(0)]
+    );
+    assert!(
+        matches!(&values(&rows, "a_title")[0], Value::String(t) if ["A1", "A2", "A3"].contains(&t.as_str()))
+    );
     assert_eq!(values(&rows, "a_title")[1], Value::Null);
 
     // A page of them, with only what's selected.
@@ -184,14 +247,25 @@ async fn scenario<D: DataLayer>(data: D) {
     assert_eq!(values(&rows, "id"), [Value::Uuid(b), Value::Uuid(c)]);
     assert_eq!(values(&rows, "book_count"), [Value::Int(0), Value::Int(1)]);
     assert_eq!(values(&rows, "pages"), [Value::Null, Value::Int(50)]);
-    assert_eq!(values(&rows, "name"), [Value::String(name("b")), Value::String(name("c"))]);
+    assert_eq!(
+        values(&rows, "name"),
+        [Value::String(name("b")), Value::String(name("c"))]
+    );
 
     // Sorted by an aggregate, loaded or not.
     let rows = read(CompiledQuery {
         filter: Some(ours),
         sort: vec![
-            Sort { field: "book_count".into(), descending: true, ..Default::default() },
-            Sort { field: "name".into(), descending: false, ..Default::default() },
+            Sort {
+                field: "book_count".into(),
+                descending: true,
+                ..Default::default()
+            },
+            Sort {
+                field: "name".into(),
+                descending: false,
+                ..Default::default()
+            },
         ],
         aggregates: vec!["reader_count".into()],
         limit: Some(2),
@@ -201,25 +275,34 @@ async fn scenario<D: DataLayer>(data: D) {
     .await;
     assert_eq!(values(&rows, "id"), [Value::Uuid(a), Value::Uuid(c)]);
     // The reader reads its own membership, not the other's.
-    assert_eq!(values(&rows, "reader_count"), [Value::Int(1), Value::Int(0)]);
+    assert_eq!(
+        values(&rows, "reader_count"),
+        [Value::Int(1), Value::Int(0)]
+    );
 }
 
 #[tokio::test]
 async fn aggregates_load_laterally_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");
         return;
     };
-    pg.install(&[&LIBRARY, &BOOK, &READER, &MEMBERSHIP]).await.unwrap();
+    pg.install(&[&LIBRARY, &BOOK, &READER, &MEMBERSHIP])
+        .await
+        .unwrap();
     scenario(pg).await;
 }
 
 #[tokio::test]
 async fn aggregates_load_grouped_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install(&[&LIBRARY, &BOOK, &READER, &MEMBERSHIP]).await.unwrap();
+    sqlite
+        .install(&[&LIBRARY, &BOOK, &READER, &MEMBERSHIP])
+        .await
+        .unwrap();
     scenario(sqlite).await;
 }
 
