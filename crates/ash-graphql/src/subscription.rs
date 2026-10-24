@@ -1,7 +1,7 @@
 use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible};
 
-use crate::redact::redact_record;
 use crate::preload::{load_selected, preload, selected};
+use crate::redact::redact_record;
 use crate::request::{request_actor, request_context};
 use ash_pubsub::PubSub;
 use async_graphql::ErrorExtensions;
@@ -50,7 +50,7 @@ fn subscriber<D: DataLayer + 'static>(
     let tenant = ctx
         .ctx
         .data_opt::<Context<D>>()
-        .and_then(|context| context.tenant.clone());
+        .and_then(|context| context.tenant().map(str::to_owned));
     (request_actor::<D>(ctx).cloned(), tenant)
 }
 
@@ -76,7 +76,11 @@ fn kinds(resource: &ResourceDef) -> [(String, ActionKind, &'static str); 3] {
     [
         (format!("{lower}Created"), ActionKind::Create, "created"),
         (format!("{lower}Updated"), ActionKind::Update, "updated"),
-        (format!("{lower}Destroyed"), ActionKind::Destroy, "destroyed"),
+        (
+            format!("{lower}Destroyed"),
+            ActionKind::Destroy,
+            "destroyed",
+        ),
     ]
 }
 
@@ -92,10 +96,8 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
         } else {
             TypeRef::named(resource.name)
         };
-        builder = builder.register(Object::new(subscription_result_name(&field)).field(Field::new(
-            key,
-            type_ref,
-            move |ctx| {
+        builder = builder.register(Object::new(subscription_result_name(&field)).field(
+            Field::new(key, type_ref, move |ctx| {
                 FieldFuture::new(async move {
                     Ok(match ctx.parent_value.downcast_ref::<Event>() {
                         // What the subscriber selects of the record loads with it, as
@@ -103,13 +105,22 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                         // selection builds: aggregates, calculations and relationships,
                         // as the subscriber reads them.
                         // Loaded before it's redacted, so field policies hide what loads too.
-                        Some(Event::Record(record)) if ctx.ctx.data_opt::<Context<D>>().is_some() => {
+                        Some(Event::Record(record))
+                            if ctx.ctx.data_opt::<Context<D>>().is_some() =>
+                        {
                             let ash = request_context::<D>(&ctx)?;
                             let fields = selected(ctx.ctx.field(), None);
                             let mut record = record.clone();
-                            load_selected(&ash, resource, &fields, std::slice::from_mut(&mut record)).await?;
-                            redact_record(resource, ash.actor.as_ref(), &mut record);
-                            preload(&ash, resource, fields, std::slice::from_mut(&mut record)).await?;
+                            load_selected(
+                                &ash,
+                                resource,
+                                &fields,
+                                std::slice::from_mut(&mut record),
+                            )
+                            .await?;
+                            redact_record(resource, ash.authorization_actor(), &mut record);
+                            preload(&ash, resource, fields, std::slice::from_mut(&mut record))
+                                .await?;
                             Some(FieldValue::owned_any(record))
                         }
                         Some(Event::Record(record)) => {
@@ -117,12 +128,14 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                             redact_record(resource, request_actor::<D>(&ctx), &mut record);
                             Some(FieldValue::owned_any(record))
                         }
-                        Some(Event::Id(id)) => Some(FieldValue::value(async_graphql::Value::String(id.clone()))),
+                        Some(Event::Id(id)) => {
+                            Some(FieldValue::value(async_graphql::Value::String(id.clone())))
+                        }
                         None => None,
                     })
                 })
-            },
-        )));
+            }),
+        ));
     }
     builder
 }

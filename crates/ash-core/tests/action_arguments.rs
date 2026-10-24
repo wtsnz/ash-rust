@@ -1,4 +1,4 @@
-use ash_core::{AttrType, Context, Error, FieldMap, Resource, Value, resource};
+use ash_core::{AttrType, Error, FieldMap, Resource, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -35,7 +35,7 @@ actions {
 
 #[tokio::test]
 async fn test_action_arguments_success_and_set_from_arg() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Submit a refund request with required argument `reason`
     let refund = RefundRequest::submit(&ctx)
@@ -53,7 +53,7 @@ async fn test_action_arguments_success_and_set_from_arg() {
 
 #[tokio::test]
 async fn test_action_arguments_validation_failure() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Providing reason with fewer than 5 characters should fail validation
     let err = RefundRequest::submit(&ctx)
@@ -75,7 +75,7 @@ async fn test_action_arguments_validation_failure() {
 
 #[tokio::test]
 async fn test_action_arguments_on_update() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let refund = RefundRequest::submit(&ctx)
         .order_id("ORD-999")
@@ -100,29 +100,29 @@ mod shipments {
     use ash_core::{FieldMap, resource};
     use uuid::Uuid;
 
-resource! {
-Shipment {
-    table "shipments";
+    resource! {
+    Shipment {
+        table "shipments";
 
-attributes {
-    id: Uuid [pk];
-    weight: i64;
-}
-
-calculations {
-    scaled(factor: f64, label: Option<String>): i64 = weight;
-}
-
-actions {
-    create pack {
-        accept [weight];
-        argument items: Vec<FieldMap>;
-        argument options: Option<FieldMap>;
-        argument rate: f64;
-        argument fragile: bool;
+    attributes {
+        id: Uuid [pk];
+        weight: i64;
     }
-}
-}}
+
+    calculations {
+        scaled(factor: f64, label: Option<String>): i64 = weight;
+    }
+
+    actions {
+        create pack {
+            accept [weight];
+            argument items: Vec<FieldMap>;
+            argument options: Option<FieldMap>;
+            argument rate: f64;
+            argument fragile: bool;
+        }
+    }
+    }}
 }
 use shipments::Shipment;
 
@@ -132,23 +132,46 @@ use shipments::Shipment;
 #[test]
 fn test_arguments_take_their_declared_types() {
     let pack = Shipment::DEF.action("pack").unwrap();
-    let ty = |name: &str| pack.arguments.iter().find(|arg| arg.name == name).map(|arg| (arg.ty, arg.allow_nil));
-    assert_eq!(ty("items"), Some((AttrType::Array { of: &AttrType::Map }, false)));
+    let ty = |name: &str| {
+        pack.arguments
+            .iter()
+            .find(|arg| arg.name == name)
+            .map(|arg| (arg.ty, arg.allow_nil))
+    };
+    assert_eq!(
+        ty("items"),
+        Some((AttrType::Array { of: &AttrType::Map }, false))
+    );
     assert_eq!(ty("options"), Some((AttrType::Map, true)));
     assert_eq!(ty("rate"), Some((AttrType::Float, false)));
     assert_eq!(ty("fragile"), Some((AttrType::Boolean, false)));
 
     let scaled = Shipment::DEF.calculation("scaled").unwrap();
-    let types: Vec<_> = scaled.arguments.iter().map(|arg| (arg.name, arg.ty, arg.allow_nil)).collect();
-    assert_eq!(types, [("factor", AttrType::Float, false), ("label", AttrType::String, true)]);
+    let types: Vec<_> = scaled
+        .arguments
+        .iter()
+        .map(|arg| (arg.name, arg.ty, arg.allow_nil))
+        .collect();
+    assert_eq!(
+        types,
+        [
+            ("factor", AttrType::Float, false),
+            ("label", AttrType::String, true)
+        ]
+    );
 }
 
 #[tokio::test]
 async fn test_list_argument_reaches_the_action() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let mut item = FieldMap::new();
     item.insert("sku".into(), Value::String("A-1".into()));
-    let shipment = Shipment::pack(&ctx).weight(3).items(vec![item]).rate(1.5).fragile(true).await;
+    let shipment = Shipment::pack(&ctx)
+        .weight(3)
+        .items(vec![item])
+        .rate(1.5)
+        .fragile(true)
+        .await;
     assert!(shipment.is_ok(), "{shipment:?}");
 }
 
@@ -189,7 +212,7 @@ use defaults::Memo;
 // a dynamic one, and a generic one.
 #[tokio::test]
 async fn arguments_take_their_defaults() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let typed = Memo::write(&ctx).body("hi").await.unwrap();
     assert_eq!(typed.label, "general");
     let given = Memo::write(&ctx).body("hi").label("work").await.unwrap();
@@ -197,7 +220,10 @@ async fn arguments_take_their_defaults() {
 
     let mut input = FieldMap::new();
     input.insert("body".into(), Value::String("hi".into()));
-    let dynamic = ash_core::create_dynamic(&ctx, &Memo::DEF, Memo::DEF.action("write").unwrap(), input).await.unwrap();
+    let dynamic =
+        ash_core::create_dynamic(&ctx, &Memo::DEF, Memo::DEF.action("write").unwrap(), input)
+            .await
+            .unwrap();
     assert_eq!(dynamic.get("label"), Some(&Value::String("general".into())));
 
     assert_eq!(Memo::echo(&ctx).call().await.unwrap(), "hello");

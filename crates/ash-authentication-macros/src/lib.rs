@@ -427,8 +427,8 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
 
         impl #resource_ident {
             /// Initialize an `AuthStrategy` configured for this resource.
-            pub fn auth_strategy() -> ::ash_authentication::AuthStrategy<Self> {
-                ::ash_authentication::AuthStrategy::new(&<Self as ::ash_core::Resource>::DEF)
+            pub fn auth_strategy<D>(runtime: &::ash_core::Runtime<D>) -> ::ash_authentication::AuthStrategy<Self> {
+                ::ash_authentication::AuthStrategy::new(runtime)
             }
         }
     };
@@ -440,9 +440,10 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
 fn declares_argument(body: &TokenStream2, name: &str) -> bool {
     let trees: Vec<proc_macro2::TokenTree> = body.clone().into_iter().collect();
     trees.windows(2).any(|pair| match pair {
-        [proc_macro2::TokenTree::Ident(keyword), proc_macro2::TokenTree::Ident(ident)] => {
-            keyword == "argument" && ident == name
-        }
+        [
+            proc_macro2::TokenTree::Ident(keyword),
+            proc_macro2::TokenTree::Ident(ident),
+        ] => keyword == "argument" && ident == name,
         _ => false,
     })
 }

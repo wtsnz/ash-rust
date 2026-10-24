@@ -9,9 +9,12 @@ mod read;
 mod relations;
 
 pub use generic::run;
+// Keep the raw insert export during the write-plan migration.
+#[allow(deprecated)]
 pub use lifecycle::{
-    create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via, destroy_existing, get, insert, manual_create,
-    update, update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
+    create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via,
+    destroy_existing, get, insert, manual_create, update, update_dynamic, update_dynamic_via,
+    update_existing, update_existing_dynamic,
 };
 pub(crate) use lifecycle::{destroy_dynamic_with, destroy_existing_returning};
 pub(crate) use lock::{check_lock, destroy_guarded, lock_of, next_version, update_guarded};

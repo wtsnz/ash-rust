@@ -1,4 +1,4 @@
-use ash_core::{Actor, Context, Error, Resource, resource};
+use ash_core::{Actor, Error, Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -68,7 +68,8 @@ field_policies {
 #[tokio::test]
 async fn test_bypass_policy_in_memory() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime.bootstrap();
 
     let author_id = Uuid::new_v4();
     let other_user_id = Uuid::new_v4();
@@ -76,7 +77,7 @@ async fn test_bypass_policy_in_memory() {
     let author_actor = Actor::new(author_id)
         .with_attr("status", "active")
         .with_attr("clearance", "top_secret");
-    let author_ctx = ctx.with_actor(author_actor);
+    let author_ctx = ctx_runtime.bind(Some(author_actor), ctx.tenant().map(str::to_owned));
 
     // Create a document by author
     let doc = Document::create(&author_ctx)
@@ -89,14 +90,14 @@ async fn test_bypass_policy_in_memory() {
 
     // Normal user (not author) cannot read
     let normal_actor = Actor::new(other_user_id).with_attr("role", "user");
-    let normal_ctx = ctx.with_actor(normal_actor);
+    let normal_ctx = ctx_runtime.bind(Some(normal_actor), ctx.tenant().map(str::to_owned));
 
     let docs = Document::query(&normal_ctx).all().await.unwrap();
     assert_eq!(docs.len(), 0, "Normal user cannot see author's doc");
 
     // Admin actor bypasses all checks!
     let admin_actor = Actor::new(Uuid::new_v4()).with_attr("role", "admin");
-    let admin_ctx = ctx.with_actor(admin_actor);
+    let admin_ctx = ctx_runtime.bind(Some(admin_actor), ctx.tenant().map(str::to_owned));
 
     let admin_docs = Document::query(&admin_ctx).all().await.unwrap();
     assert_eq!(
@@ -117,10 +118,14 @@ async fn test_bypass_policy_in_memory() {
 #[tokio::test]
 async fn test_forbid_if_blocks_even_author() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime.bootstrap();
 
     let author_id = Uuid::new_v4();
-    let author_ctx = ctx.with_actor(Actor::new(author_id).with_attr("status", "active"));
+    let author_ctx = ctx_runtime.bind(
+        Some(Actor::new(author_id).with_attr("status", "active")),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let doc = Document::create(&author_ctx)
         .title("My Draft")
@@ -131,13 +136,13 @@ async fn test_forbid_if_blocks_even_author() {
 
     // Author without ban can read:
     let active_author = Actor::new(author_id).with_attr("status", "active");
-    let active_ctx = ctx.with_actor(active_author);
+    let active_ctx = ctx_runtime.bind(Some(active_author), ctx.tenant().map(str::to_owned));
     let my_docs = Document::query(&active_ctx).all().await.unwrap();
     assert_eq!(my_docs.len(), 1);
 
     // Banned author is hard-forbidden by `forbid_if`
     let banned_author = Actor::new(author_id).with_attr("status", "banned");
-    let banned_ctx = ctx.with_actor(banned_author);
+    let banned_ctx = ctx_runtime.bind(Some(banned_author), ctx.tenant().map(str::to_owned));
 
     let banned_docs = Document::query(&banned_ctx).all().await.unwrap();
     assert_eq!(
@@ -158,13 +163,17 @@ async fn test_forbid_if_blocks_even_author() {
 #[tokio::test]
 async fn test_field_policy_forbid_unless() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime.bootstrap();
 
     let author_id = Uuid::new_v4();
-    let author_create_ctx = ctx.with_actor(
-        Actor::new(author_id)
-            .with_attr("status", "active")
-            .with_attr("clearance", "top_secret"),
+    let author_create_ctx = ctx_runtime.bind(
+        Some(
+            Actor::new(author_id)
+                .with_attr("status", "active")
+                .with_attr("clearance", "top_secret"),
+        ),
+        ctx.tenant().map(str::to_owned),
     );
 
     let doc = Document::create(&author_create_ctx)
@@ -176,10 +185,13 @@ async fn test_field_policy_forbid_unless() {
         .unwrap();
 
     // Author without top_secret clearance sees confidential_notes as None (redacted)
-    let author_ctx = ctx.with_actor(
-        Actor::new(author_id)
-            .with_attr("status", "active")
-            .with_attr("clearance", "standard"),
+    let author_ctx = ctx_runtime.bind(
+        Some(
+            Actor::new(author_id)
+                .with_attr("status", "active")
+                .with_attr("clearance", "standard"),
+        ),
+        ctx.tenant().map(str::to_owned),
     );
     let read_doc = Document::get(&author_ctx, doc.id).await.unwrap();
     assert_eq!(
@@ -188,10 +200,13 @@ async fn test_field_policy_forbid_unless() {
     );
 
     // Officer with top_secret clearance sees confidential_notes intact
-    let officer_ctx = ctx.with_actor(
-        Actor::new(author_id)
-            .with_attr("status", "active")
-            .with_attr("clearance", "top_secret"),
+    let officer_ctx = ctx_runtime.bind(
+        Some(
+            Actor::new(author_id)
+                .with_attr("status", "active")
+                .with_attr("clearance", "top_secret"),
+        ),
+        ctx.tenant().map(str::to_owned),
     );
     let officer_doc = Document::get(&officer_ctx, doc.id).await.unwrap();
     assert_eq!(
@@ -205,10 +220,14 @@ async fn test_field_policy_forbid_unless() {
 async fn test_extended_policies_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Document::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = ctx_runtime.bootstrap();
 
     let author_id = Uuid::new_v4();
-    let author_ctx = ctx.with_actor(Actor::new(author_id).with_attr("status", "active"));
+    let author_ctx = ctx_runtime.bind(
+        Some(Actor::new(author_id).with_attr("status", "active")),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let doc = Document::create(&author_ctx)
         .title("SQLite Spec")
@@ -218,12 +237,18 @@ async fn test_extended_policies_in_sqlite() {
         .unwrap();
 
     // Non-admin query
-    let user_ctx = ctx.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", "user"));
+    let user_ctx = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_attr("role", "user")),
+        ctx.tenant().map(str::to_owned),
+    );
     let user_docs = Document::query(&user_ctx).all().await.unwrap();
     assert_eq!(user_docs.len(), 0);
 
     // Admin query bypass in SQL
-    let admin_ctx = ctx.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", "admin"));
+    let admin_ctx = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_attr("role", "admin")),
+        ctx.tenant().map(str::to_owned),
+    );
     let admin_docs = Document::query(&admin_ctx).all().await.unwrap();
     assert_eq!(admin_docs.len(), 1);
     assert_eq!(admin_docs[0].id, doc.id);

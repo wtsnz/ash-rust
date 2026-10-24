@@ -35,19 +35,26 @@ resource! {
 }
 
 async fn run(ctx: &Context<Memory>, query: &str) -> Value {
-    let schema = AshGraphQL::from_resources(&[&Song::DEF]).finish::<Memory>().unwrap();
+    let schema = AshGraphQL::from_resources(&[&Song::DEF])
+        .finish::<Memory>()
+        .unwrap();
     let response = schema.execute(Request::new(query).data(ctx.clone())).await;
     assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
     response.data.into_json().unwrap()
 }
 
 fn ranks(songs: &Value) -> Vec<i64> {
-    songs.as_array().unwrap().iter().map(|song| song["rank"].as_i64().unwrap()).collect()
+    songs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|song| song["rank"].as_i64().unwrap())
+        .collect()
 }
 
 #[tokio::test]
 async fn reads_page_as_their_actions_declare() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     for rank in 1..=5 {
         Song::create(&ctx).rank(rank).await.unwrap();
     }
@@ -65,8 +72,22 @@ async fn reads_page_as_their_actions_declare() {
     let page = &first["chartedSongs"];
     assert_eq!(ranks(&page["results"]), [1, 2]);
     assert_eq!(
-        (&page["count"], &page["limit"], &page["hasNextPage"], &page["hasPreviousPage"], &page["pageNumber"], &page["lastPage"]),
-        (&json!(5), &json!(2), &json!(true), &json!(false), &json!(1), &json!(3))
+        (
+            &page["count"],
+            &page["limit"],
+            &page["hasNextPage"],
+            &page["hasPreviousPage"],
+            &page["pageNumber"],
+            &page["lastPage"]
+        ),
+        (
+            &json!(5),
+            &json!(2),
+            &json!(true),
+            &json!(false),
+            &json!(1),
+            &json!(3)
+        )
     );
     let last = run(
         &ctx,
@@ -75,25 +96,51 @@ async fn reads_page_as_their_actions_declare() {
     .await;
     let page = &last["chartedSongs"];
     assert_eq!(ranks(&page["results"]), [5]);
-    assert_eq!((&page["hasNextPage"], &page["hasPreviousPage"]), (&json!(false), &json!(true)));
+    assert_eq!(
+        (&page["hasNextPage"], &page["hasPreviousPage"]),
+        (&json!(false), &json!(true))
+    );
     // Uncounted, it's the only page AshGraphql knows of.
     assert_eq!(page["pageNumber"], json!(1));
 
     // By keyset: the default limit, and never more than the largest page.
-    let keyset = run(&ctx, "{ latestSongs(sort: [{ field: RANK }]) { results { rank } endKeyset } }").await;
+    let keyset = run(
+        &ctx,
+        "{ latestSongs(sort: [{ field: RANK }]) { results { rank } endKeyset } }",
+    )
+    .await;
     assert_eq!(ranks(&keyset["latestSongs"]["results"]), [1, 2, 3]);
-    let capped = run(&ctx, "{ latestSongs(sort: [{ field: RANK }], first: 10) { results { rank } } }").await;
+    let capped = run(
+        &ctx,
+        "{ latestSongs(sort: [{ field: RANK }], first: 10) { results { rank } } }",
+    )
+    .await;
     assert_eq!(ranks(&capped["latestSongs"]["results"]), [1, 2, 3, 4]);
 }
 
 #[tokio::test]
 async fn page_types_follow_the_reads() {
-    let schema = AshGraphQL::from_resources(&[&Song::DEF]).finish::<Memory>().unwrap();
+    let schema = AshGraphQL::from_resources(&[&Song::DEF])
+        .finish::<Memory>()
+        .unwrap();
     let sdl = schema.sdl();
-    assert!(sdl.contains("listSongs(sort: [SongSortInput], filter: SongFilterInput): [Song!]!"), "{sdl}");
-    assert!(sdl.contains("limit: Int = 2, offset: Int): PageOfSong"), "{sdl}");
-    assert!(sdl.contains("first: Int, before: String, after: String, last: Int): KeysetPageOfSong"), "{sdl}");
+    assert!(
+        sdl.contains("listSongs(sort: [SongSortInput], filter: SongFilterInput): [Song!]!"),
+        "{sdl}"
+    );
+    assert!(
+        sdl.contains("limit: Int = 2, offset: Int): PageOfSong"),
+        "{sdl}"
+    );
+    assert!(
+        sdl.contains("first: Int, before: String, after: String, last: Int): KeysetPageOfSong"),
+        "{sdl}"
+    );
     // A page counts where some read of the resource counts.
-    let keyset_page = sdl.split("type KeysetPageOfSong {").nth(1).and_then(|rest| rest.split('}').next()).unwrap();
+    let keyset_page = sdl
+        .split("type KeysetPageOfSong {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .unwrap();
     assert!(keyset_page.contains("count: Int"), "{keyset_page}");
 }

@@ -72,7 +72,8 @@ ash_core::resource! {
 ### 2. User Registration, Sign-In & Token Rotation
 
 ```rust
-let ctx = Context::new(Memory::new());
+let runtime = ash_core::Runtime::new(Memory::new());
+let ctx = runtime.bind(None, None);
 
 // 1. Register with password confirmation
 let user = User::register_with_password(&ctx)
@@ -82,7 +83,7 @@ let user = User::register_with_password(&ctx)
     .await?;
 
 // 2. Sign in with password and receive access + refresh token pair
-let strategy = User::auth_strategy().with_jwt_service(jwt_service);
+let strategy = User::auth_strategy(&runtime).with_jwt_service(jwt_service);
 let (auth_user, pair) = strategy
     .sign_in_with_password_and_token_pair(&ctx, "alice@example.com", "super-secret-password-123")
     .await?;
@@ -121,7 +122,7 @@ use axum::{Router, Json, routing::get};
 use std::sync::Arc;
 
 let jwt_service = Arc::new(JwtService::new("my-32-byte-secret-signing-key"));
-let auth_routes = auth_router(User::auth_strategy(), jwt_service.clone(), ctx);
+let auth_routes = auth_router(User::auth_strategy(&runtime), jwt_service.clone(), ctx);
 
 let app = Router::new()
     .nest("/auth", auth_routes)

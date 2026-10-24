@@ -188,6 +188,8 @@ pub mod card_mod {
 }
 use card_mod::Card;
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn stored<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ash_core::ResourceDef,
@@ -214,14 +216,25 @@ async fn sqlite() -> Sqlite {
     sqlite
 }
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>) {
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     // Timestamps have one-second resolution, so start from an old one.
     let mut old = ash_core::FieldMap::new();
-    old.insert("updated_at".into(), Value::String("2000-01-01T00:00:00Z".into()));
-    ctx.data.update(&Ledger::DEF, None, Value::from(ledger.id), old).await.unwrap();
+    old.insert(
+        "updated_at".into(),
+        Value::String("2000-01-01T00:00:00Z".into()),
+    );
+    ctx.data
+        .update(&Ledger::DEF, None, Value::from(ledger.id), old)
+        .await
+        .unwrap();
 
-    ledger.destroy(&ctx).await.expect("a locked record can be archived");
+    ledger
+        .destroy(&ctx)
+        .await
+        .expect("a locked record can be archived");
 
     let after = stored(&ctx, &Ledger::DEF).await.remove(0);
     assert_eq!(after.get("version"), Some(&Value::Int(2)));
@@ -234,9 +247,15 @@ async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>
 }
 
 async fn soft_destroy_keeps_fields_the_actor_cannot_read<D: DataLayer + Clone>(data: D) {
-    let admin = Context::new(data.clone()).with_actor(Actor::new(Uuid::new_v4()).with_role("admin"));
-    let member = Context::new(data).with_actor(Actor::new(Uuid::new_v4()).with_role("member"));
-    let created = Payroll::create(&admin).name("Ada").salary(100).await.unwrap();
+    let admin = ash_core::Runtime::new(data.clone())
+        .bind(Some(Actor::new(Uuid::new_v4()).with_role("admin")), None);
+    let member = ash_core::Runtime::new(data)
+        .bind(Some(Actor::new(Uuid::new_v4()).with_role("member")), None);
+    let created = Payroll::create(&admin)
+        .name("Ada")
+        .salary(100)
+        .await
+        .unwrap();
 
     let seen = Payroll::get(&member, created.id).await.unwrap();
     assert_eq!(seen.salary, None, "the member cannot read the salary");
@@ -251,14 +270,31 @@ async fn cascades_stop_at_cycles<D: DataLayer>(ctx: Context<D>) {
     let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
     Node::create(&ctx).id(a).parent_id(b).await.unwrap();
     Node::create(&ctx).id(b).parent_id(a).await.unwrap();
-    Node::get(&ctx, a).await.unwrap().destroy(&ctx).await.unwrap();
-    assert_eq!(Node::query(&ctx).count().await.unwrap(), 0, "both nodes are archived");
+    Node::get(&ctx, a)
+        .await
+        .unwrap()
+        .destroy(&ctx)
+        .await
+        .unwrap();
+    assert_eq!(
+        Node::query(&ctx).count().await.unwrap(),
+        0,
+        "both nodes are archived"
+    );
     assert_eq!(stored(&ctx, &Node::DEF).await.len(), 2);
 
     Cell::create(&ctx).id(a).parent_id(b).await.unwrap();
     Cell::create(&ctx).id(b).parent_id(a).await.unwrap();
-    Cell::get(&ctx, a).await.unwrap().destroy(&ctx).await.unwrap();
-    assert!(stored(&ctx, &Cell::DEF).await.is_empty(), "both cells are deleted");
+    Cell::get(&ctx, a)
+        .await
+        .unwrap()
+        .destroy(&ctx)
+        .await
+        .unwrap();
+    assert!(
+        stored(&ctx, &Cell::DEF).await.is_empty(),
+        "both cells are deleted"
+    );
 }
 
 async fn hard_deletes_remove_archival_children<D: DataLayer>(ctx: Context<D>) {
@@ -268,7 +304,9 @@ async fn hard_deletes_remove_archival_children<D: DataLayer>(ctx: Context<D>) {
     archived.destroy(&ctx).await.unwrap();
     assert_eq!(stored(&ctx, &Card::DEF).await.len(), 2);
 
-    destroy_existing::<Board, D>(&ctx, "purge", board).await.unwrap();
+    destroy_existing::<Board, D>(&ctx, "purge", board)
+        .await
+        .unwrap();
     assert!(stored(&ctx, &Board::DEF).await.is_empty());
     assert!(
         stored(&ctx, &Card::DEF).await.is_empty(),
@@ -276,35 +314,49 @@ async fn hard_deletes_remove_archival_children<D: DataLayer>(ctx: Context<D>) {
     );
 }
 
-async fn archived_records_are_out_of_reach<D: ash_core::TransactionSupport + 'static>(ctx: Context<D>) {
+async fn archived_records_are_out_of_reach<D: ash_core::TransactionSupport + 'static>(
+    ctx: Context<D>,
+) {
     let ledger = Ledger::create(&ctx).name("Old").await.unwrap();
     let id = ledger.id;
     ledger.destroy(&ctx).await.unwrap();
-    let archived_at = stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at");
-
-    let result = bulk_destroy::<Ledger, D, _>(&ctx, "destroy", &[id], BulkDestroyOptions::default())
+    let archived_at = stored(&ctx, &Ledger::DEF)
         .await
-        .unwrap();
+        .remove(0)
+        .remove("archived_at");
+
+    let result =
+        bulk_destroy::<Ledger, D, _>(&ctx, "destroy", &[id], BulkDestroyOptions::default())
+            .await
+            .unwrap();
     assert_eq!(result.count, 0, "an archived record is not archived again");
-    assert_eq!(stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at"), archived_at);
+    assert_eq!(
+        stored(&ctx, &Ledger::DEF)
+            .await
+            .remove(0)
+            .remove("archived_at"),
+        archived_at
+    );
 }
 
 #[tokio::test]
 async fn edges_in_memory() {
-    soft_destroy_bumps_version_and_updated_at(Context::new(Memory::new())).await;
+    soft_destroy_bumps_version_and_updated_at(ash_core::Runtime::new(Memory::new()).bootstrap())
+        .await;
     soft_destroy_keeps_fields_the_actor_cannot_read(Memory::new()).await;
-    cascades_stop_at_cycles(Context::new(Memory::new())).await;
-    hard_deletes_remove_archival_children(Context::new(Memory::new())).await;
-    archived_records_are_out_of_reach(Context::new(Memory::new())).await;
+    cascades_stop_at_cycles(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    hard_deletes_remove_archival_children(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    archived_records_are_out_of_reach(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
 async fn edges_in_sqlite() {
-    soft_destroy_bumps_version_and_updated_at(Context::new(sqlite().await)).await;
+    soft_destroy_bumps_version_and_updated_at(ash_core::Runtime::new(sqlite().await).bootstrap())
+        .await;
     soft_destroy_keeps_fields_the_actor_cannot_read(sqlite().await).await;
-    cascades_stop_at_cycles(Context::new(sqlite().await)).await;
-    hard_deletes_remove_archival_children(Context::new(sqlite().await)).await;
-    archived_records_are_out_of_reach(Context::new(sqlite().await)).await;
+    cascades_stop_at_cycles(ash_core::Runtime::new(sqlite().await).bootstrap()).await;
+    hard_deletes_remove_archival_children(ash_core::Runtime::new(sqlite().await).bootstrap()).await;
+    archived_records_are_out_of_reach(ash_core::Runtime::new(sqlite().await).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -315,9 +367,15 @@ async fn bulk_notify_false_covers_cascaded_children() {
         sink.lock().unwrap().push(notification.clone());
         Ok(())
     }));
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
     let parent = Node::create(&ctx).id(Uuid::from_u128(1)).await.unwrap();
-    Node::create(&ctx).id(Uuid::from_u128(2)).parent_id(parent.id).await.unwrap();
+    Node::create(&ctx)
+        .id(Uuid::from_u128(2))
+        .parent_id(parent.id)
+        .await
+        .unwrap();
     received.lock().unwrap().clear();
 
     let options = BulkDestroyOptions {
@@ -328,13 +386,17 @@ async fn bulk_notify_false_covers_cascaded_children() {
         .await
         .unwrap();
     assert_eq!(result.count, 1);
-    assert_eq!(Node::query(&ctx).count().await.unwrap(), 0, "the child is archived too");
+    assert_eq!(
+        Node::query(&ctx).count().await.unwrap(),
+        0,
+        "the child is archived too"
+    );
     assert!(received.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn multi_destroy_returns_the_archived_record() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     let results = ctx
         .run_multi(Multi::new().destroy("archived", "destroy", ledger))
@@ -349,7 +411,7 @@ async fn multi_destroy_returns_the_archived_record() {
 async fn graphql_cannot_destroy_an_archived_record_again() {
     use async_graphql::Request;
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     let id = ledger.id;
     let schema = ash_graphql::AshGraphQL::from_resources(&[&Ledger::DEF])
@@ -360,16 +422,32 @@ async fn graphql_cannot_destroy_an_archived_record_again() {
         ledger.id
     );
 
-    let first = schema.execute(Request::new(destroy.clone()).data(ctx.clone())).await;
-    assert_eq!(first.data.into_json().unwrap()["destroyLedger"]["errors"], serde_json::json!([]));
-    let archived_at = stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at");
+    let first = schema
+        .execute(Request::new(destroy.clone()).data(ctx.clone()))
+        .await;
+    assert_eq!(
+        first.data.into_json().unwrap()["destroyLedger"]["errors"],
+        serde_json::json!([])
+    );
+    let archived_at = stored(&ctx, &Ledger::DEF)
+        .await
+        .remove(0)
+        .remove("archived_at");
 
-    let again = schema.execute(Request::new(destroy).data(ctx.clone())).await;
+    let again = schema
+        .execute(Request::new(destroy).data(ctx.clone()))
+        .await;
     assert_eq!(
         again.data.into_json().unwrap()["destroyLedger"]["errors"][0]["code"],
         "not_found"
     );
-    assert_eq!(stored(&ctx, &Ledger::DEF).await.remove(0).remove("archived_at"), archived_at);
+    assert_eq!(
+        stored(&ctx, &Ledger::DEF)
+            .await
+            .remove(0)
+            .remove("archived_at"),
+        archived_at
+    );
 
     // The Rust API agrees.
     assert!(matches!(Ledger::get(&ctx, id).await, Err(Error::NotFound)));

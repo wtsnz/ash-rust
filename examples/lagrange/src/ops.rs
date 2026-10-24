@@ -3,8 +3,7 @@
 //! all apply.
 
 use ash_core::{
-    Context, DataLayer, Date, Error, Filter, ResourceExt, Result, TransactionSupport,
-    UtcDateTime,
+    Context, DataLayer, Date, Error, Filter, ResourceExt, Result, TransactionSupport, UtcDateTime,
 };
 use uuid::Uuid;
 
@@ -24,6 +23,7 @@ fn refused(field: &str, message: impl Into<String>) -> Error {
 /// transaction. A dispatcher racing for the same berth fails on the claim; the berth
 /// can only be held once per window.
 pub async fn reserve_berth<D>(
+    runtime: &ash_core::Runtime<D>,
     ctx: &Context<D>,
     ship_id: Uuid,
     port_id: Uuid,
@@ -35,48 +35,52 @@ where
     D: DataLayer + TransactionSupport + Clone + 'static,
 {
     let berth_code = berth_code.to_string();
-    ctx.transaction(move |tx| async move {
-        let ship = Ship::get(&tx, ship_id).await?;
-        let berth = Berth::get_by_port_code(&tx, port_id, berth_code.clone()).await?;
-        if ship.dry_mass_tonnes > berth.max_mass_tonnes {
-            return Err(refused(
-                "berth",
-                format!(
-                    "{} t is too heavy for berth {} ({} t)",
-                    ship.dry_mass_tonnes, berth.code, berth.max_mass_tonnes
-                ),
-            ));
-        }
+    let actor = ctx.actor().cloned();
+    let tenant = ctx.tenant().map(str::to_owned);
+    runtime
+        .transaction(move |runtime| async move {
+            let tx = runtime.bind(actor, tenant);
+            let ship = Ship::get(&tx, ship_id).await?;
+            let berth = Berth::get_by_port_code(&tx, port_id, berth_code.clone()).await?;
+            if ship.dry_mass_tonnes > berth.max_mass_tonnes {
+                return Err(refused(
+                    "berth",
+                    format!(
+                        "{} t is too heavy for berth {} ({} t)",
+                        ship.dry_mass_tonnes, berth.code, berth.max_mass_tonnes
+                    ),
+                ));
+            }
 
-        // Reservations belong to lines, but a berth is shared: look across all of them.
-        let anyone = tx.clone().without_tenant();
-        let overlapping = BerthReservation::query(&anyone)
-            .filter(
-                BerthReservation::port_id.eq(port_id)
-                    & BerthReservation::berth_code.eq(berth_code.clone())
-                    & BerthReservation::status.eq(ReservationStatus::Active)
-                    & BerthReservation::starts_at.lt(ends_at.clone())
-                    & BerthReservation::ends_at.gt(starts_at.clone()),
-            )
-            .count()
-            .await?;
-        if overlapping > 0 {
-            return Err(refused(
-                "berth",
-                format!("berth {} is already held for that window", berth.code),
-            ));
-        }
+            // Reservations belong to lines, but a berth is shared: look across all of them.
+            let anyone = runtime.system().bind(None, None);
+            let overlapping = BerthReservation::query(&anyone)
+                .filter(
+                    BerthReservation::port_id.eq(port_id)
+                        & BerthReservation::berth_code.eq(berth_code.clone())
+                        & BerthReservation::status.eq(ReservationStatus::Active)
+                        & BerthReservation::starts_at.lt(ends_at.clone())
+                        & BerthReservation::ends_at.gt(starts_at.clone()),
+                )
+                .count()
+                .await?;
+            if overlapping > 0 {
+                return Err(refused(
+                    "berth",
+                    format!("berth {} is already held for that window", berth.code),
+                ));
+            }
 
-        berth.claim_on(&tx).await?;
-        BerthReservation::reserve(&tx)
-            .port_id(port_id)
-            .berth_code(berth_code)
-            .ship_id(ship_id)
-            .starts_at(starts_at)
-            .ends_at(ends_at)
-            .await
-    })
-    .await
+            berth.claim_on(&tx).await?;
+            BerthReservation::reserve(&tx)
+                .port_id(port_id)
+                .berth_code(berth_code)
+                .ship_id(ship_id)
+                .starts_at(starts_at)
+                .ends_at(ends_at)
+                .await
+        })
+        .await
 }
 
 /// Plans a voyage between two ports, with the route computed from the planets'
@@ -145,13 +149,19 @@ where
             .one()
             .await?;
         if voyage.current_state() != "planned" {
-            return Err(refused("voyage", "cargo is only loaded while a voyage is planned"));
+            return Err(refused(
+                "voyage",
+                "cargo is only loaded while a voyage is planned",
+            ));
         }
         let ship = Ship::get(&tx, voyage.ship_id).await?;
         if voyage.container_count.unwrap_or(0) >= ship.slot_capacity {
             return Err(refused(
                 "voyage",
-                format!("{} has no free slots ({} aboard)", ship.name, ship.slot_capacity),
+                format!(
+                    "{} has no free slots ({} aboard)",
+                    ship.name, ship.slot_capacity
+                ),
             ));
         }
         let container = Container::get(&tx, container_id).await?;
@@ -207,7 +217,10 @@ where
 }
 
 /// The contracts whose containers ride on a voyage.
-async fn contracts_aboard<D: DataLayer>(ctx: &Context<D>, voyage_id: Uuid) -> Result<Vec<Contract>> {
+async fn contracts_aboard<D: DataLayer>(
+    ctx: &Context<D>,
+    voyage_id: Uuid,
+) -> Result<Vec<Contract>> {
     let stowed = Stowage::query(ctx)
         .filter(Stowage::voyage_id.eq(voyage_id))
         .load_rel(Stowage::container)
@@ -231,7 +244,11 @@ async fn contracts_aboard<D: DataLayer>(ctx: &Context<D>, voyage_id: Uuid) -> Re
 
 /// The captain launches: the voyage leaves, the ship is in transit, and its cargo is
 /// dispatched. Launching needs a berth held at the destination.
-pub async fn launch<D>(ctx: &Context<D>, voyage_id: Uuid, departed_at: UtcDateTime) -> Result<Voyage>
+pub async fn launch<D>(
+    ctx: &Context<D>,
+    voyage_id: Uuid,
+    departed_at: UtcDateTime,
+) -> Result<Voyage>
 where
     D: DataLayer + TransactionSupport + Clone + 'static,
 {

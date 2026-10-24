@@ -1,11 +1,11 @@
-//! Authentication audit item 3 on Postgres with schema-per-tenant tenancy: does the auth
+//! Authentication on Postgres with schema-per-tenant tenancy: does the auth
 //! strategy read users from the request's tenant schema?
 //!
 //! Needs a local Postgres. DATABASE_URL defaults to
 //! postgres://postgres:postgres@localhost/ashrust_audit_auth.
 
 use ash_authentication::{ApiKeyService, AshToken, JwtService, authentication};
-use ash_core::{Context, Resource};
+use ash_core::Resource;
 use ash_postgres::Postgres;
 use uuid::Uuid;
 
@@ -54,8 +54,9 @@ async fn credential_lookups_use_the_tenant_schema() {
     db.install_tenant(&other_tenant, &[&User::DEF])
         .await
         .unwrap();
-    let root = Context::new(db.clone());
-    let a = root.with_tenant(tenant.clone());
+    let root_runtime = ash_core::Runtime::new(db.clone());
+    let root = root_runtime.bootstrap();
+    let a = root_runtime.bind(root.actor().cloned(), Some(tenant.clone()));
 
     let alice = User::register_with_password(&a)
         .email("alice@a.example")
@@ -70,7 +71,7 @@ async fn credential_lookups_use_the_tenant_schema() {
         "control: User::get in tenant {tenant}: {found:?}"
     );
 
-    let strategy = User::auth_strategy().with_jwt_service(JwtService::new(SECRET));
+    let strategy = User::auth_strategy(&root_runtime).with_jwt_service(JwtService::new(SECRET));
     let signed_in = strategy
         .sign_in_with_password(&a, "alice@a.example", "alice-password-1")
         .await;
@@ -81,7 +82,7 @@ async fn credential_lookups_use_the_tenant_schema() {
         signed_in.map(|u| u.id),
         by_id.map(|u| u.id)
     );
-    let b = root.clone().with_tenant(&other_tenant);
+    let b = root_runtime.bind(root.actor().cloned(), Some((&other_tenant).into()));
     assert!(
         strategy
             .sign_in_with_password(&b, "alice@a.example", "alice-password-1")

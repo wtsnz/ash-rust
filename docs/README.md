@@ -54,6 +54,7 @@
    - Axum integration: `AuthUser` extractor and `/auth` router
    - `#[authentication]` resource decorator macro
    - [Scoped access and tenant binding](scoped-access.md): credential reads, signed tenants, and RPC adapter responsibilities
+   - [RFC 0005: Scoped execution](wip/0005-scoped-execution.md): `Runtime`, sealed scopes, and where ash-rust departs from Elixir Ash
 8. **Transactional Email & Action Notifiers (`ash-mailer`)**
    - Pluggable transactional email delivery (`MemoryMailer`, `ConsoleMailer`)
    - `EmailNotifier`: Declarative email delivery on committed resource actions
@@ -73,7 +74,7 @@
 ## Quick Example
 
 ```rust
-use ash_core::{Context, resource};
+use ash_core::{resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -112,7 +113,7 @@ resource! {
 
 #[tokio::test]
 async fn run_post() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let post = Post::create(&ctx)
         .title("Getting Started with Ash-Rust")

@@ -1,7 +1,7 @@
 //! Typed maps and unions are stored as JSON and read back as their types, in every data
 //! layer, as Ash stores a typed map and a union (`{type, value}`).
 
-use ash_core::{AshTypedMap, AshUnion, Context, DataLayer, Filter, Resource, resource};
+use ash_core::{AshTypedMap, AshUnion, DataLayer, Filter, Resource, resource};
 use ash_memory::Memory;
 use ash_postgres::Postgres;
 use ash_sqlite::Sqlite;
@@ -41,30 +41,78 @@ resource! {
 }
 
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let run = Uuid::new_v4();
-    let origin = Point { x: 1, y: -2, tag: Some("o".into()) };
+    let origin = Point {
+        x: 1,
+        y: -2,
+        tag: Some("o".into()),
+    };
     for shape in [
-        Some(Shape::Dot(Point { x: 3, y: 4, tag: None })),
+        Some(Shape::Dot(Point {
+            x: 3,
+            y: 4,
+            tag: None,
+        })),
         Some(Shape::Text("hi".into())),
-        Some(Shape::Points(vec![Point { x: 0, y: 0, tag: None }, Point { x: 5, y: 6, tag: Some("p".into()) }])),
+        Some(Shape::Points(vec![
+            Point {
+                x: 0,
+                y: 0,
+                tag: None,
+            },
+            Point {
+                x: 5,
+                y: 6,
+                tag: Some("p".into()),
+            },
+        ])),
         None,
     ] {
-        let created = Sketch::create(&ctx).run(run).origin(origin.clone()).shape(shape.clone()).await.unwrap();
+        let created = Sketch::create(&ctx)
+            .run(run)
+            .origin(origin.clone())
+            .shape(shape.clone())
+            .await
+            .unwrap();
         assert_eq!(created.shape, shape);
-        let read = Sketch::query(&ctx).filter(Filter::eq("id", created.id)).one().await.unwrap();
+        let read = Sketch::query(&ctx)
+            .filter(Filter::eq("id", created.id))
+            .one()
+            .await
+            .unwrap();
         assert_eq!((read.origin, read.shape), (origin.clone(), shape));
     }
-    assert_eq!(Sketch::query(&ctx).filter(Filter::eq("run", run)).count().await.unwrap(), 4);
+    assert_eq!(
+        Sketch::query(&ctx)
+            .filter(Filter::eq("run", run))
+            .count()
+            .await
+            .unwrap(),
+        4
+    );
 }
 
 #[test]
 fn the_types_declare_their_fields_and_members() {
     use ash_core::{AshType, AttrType};
-    let AttrType::TypedMap { fields, .. } = Point::ATTR_TYPE else { panic!() };
-    assert_eq!(fields.iter().map(|f| (f.name, f.allow_nil)).collect::<Vec<_>>(), [("x", false), ("y", false), ("tag", true)]);
-    let AttrType::Union { members, .. } = Shape::ATTR_TYPE else { panic!() };
-    assert_eq!(members.iter().map(|m| m.name).collect::<Vec<_>>(), ["dot", "label", "points"]);
+    let AttrType::TypedMap { fields, .. } = Point::ATTR_TYPE else {
+        panic!()
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .map(|f| (f.name, f.allow_nil))
+            .collect::<Vec<_>>(),
+        [("x", false), ("y", false), ("tag", true)]
+    );
+    let AttrType::Union { members, .. } = Shape::ATTR_TYPE else {
+        panic!()
+    };
+    assert_eq!(
+        members.iter().map(|m| m.name).collect::<Vec<_>>(),
+        ["dot", "label", "points"]
+    );
 }
 
 #[tokio::test]
@@ -81,7 +129,8 @@ async fn composite_values_in_sqlite() {
 
 #[tokio::test]
 async fn composite_values_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");

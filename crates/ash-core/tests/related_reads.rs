@@ -2,7 +2,7 @@
 //! filters hide rows, its sort orders each parent's rows, and its limit pages each
 //! parent's rows rather than the whole batch.
 
-use ash_core::{Context, DataLayer, Resource};
+use ash_core::{DataLayer, Resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -71,7 +71,7 @@ pub mod post {
 }
 
 async fn loads_page_each_parent<D: DataLayer>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     for name in ["Ada", "Grace"] {
         let author = Author::create(&ctx).name(name).await.unwrap();
         for position in 1..=4 {

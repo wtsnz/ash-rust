@@ -1,4 +1,4 @@
-use ash_core::{ActionDef, AttrType, AttributeDef, Context, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -13,7 +13,11 @@ static DEVICE_ATTRS: &[AttributeDef] = &[
 
 static DEVICE_ACTIONS: &[ActionDef] = &[
     ActionDef::create("create").accept(&["address", "embedding", "weight"]),
-    ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
+    ActionDef::read("read").primary().pagination(
+        ash_core::Pagination::keyset()
+            .countable(ash_core::Countable::Yes)
+            .required(false),
+    ),
 ];
 
 static DEVICE_DEF: ResourceDef = ResourceDef {
@@ -42,7 +46,7 @@ static DEVICE_DEF: ResourceDef = ResourceDef {
 
 #[tokio::test]
 async fn inet_and_vector_round_trip_through_graphql() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&DEVICE_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
@@ -79,10 +83,16 @@ async fn inet_and_vector_round_trip_through_graphql() {
 
     for (input, message) in [
         (r#"{ address: "10.0.0.300" }"#, "invalid inet"),
-        (r#"{ address: "10.0.0.1", embedding: [1, 2] }"#, "3 dimensions"),
+        (
+            r#"{ address: "10.0.0.1", embedding: [1, 2] }"#,
+            "3 dimensions",
+        ),
     ] {
-        let mutation = format!("mutation {{ createDevice(input: {input}) {{ errors {{ code }} }} }}");
-        let res = schema.execute(Request::new(mutation).data(ctx.clone())).await;
+        let mutation =
+            format!("mutation {{ createDevice(input: {input}) {{ errors {{ code }} }} }}");
+        let res = schema
+            .execute(Request::new(mutation).data(ctx.clone()))
+            .await;
         let errors = format!("{:?}", res.errors);
         assert!(errors.contains(message), "{input}: {errors}");
     }
@@ -90,7 +100,7 @@ async fn inet_and_vector_round_trip_through_graphql() {
 
 #[tokio::test]
 async fn float_attributes_are_numbers_in_graphql() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let schema = AshGraphQL::from_resources(&[&DEVICE_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");

@@ -32,7 +32,7 @@ Send an order receipt automatically whenever an `Order::complete` action commits
 
 ```rust
 use std::sync::Arc;
-use ash_core::{Context, resource};
+use ash_core::{resource};
 use ash_mailer::{ContextMailerExt, Email, EmailNotifier, MemoryMailer};
 use ash_memory::Memory;
 
@@ -51,7 +51,7 @@ let notifier = EmailNotifier::new(mailer.clone())
             .html(format!("<h1>Receipt</h1><p>Total: <strong>${amount}</strong></p>"))
     });
 
-let ctx = Context::new(Memory::new()).with_email_notifier(notifier);
+let ctx = ash_core::Runtime::new(Memory::new()).bootstrap().with_email_notifier(notifier);
 
 // Executing the action automatically delivers the email:
 order.complete_on(&ctx).await?;
@@ -72,7 +72,7 @@ let mailer = ConsoleMailer::new();
 let auth_sender = AuthMailerSender::new(mailer, "noreply@myapp.com")
     .with_base_url("https://myapp.com");
 
-let strategy = User::auth_strategy()
+let strategy = User::auth_strategy(&runtime)
     .with_jwt_service(jwt_service)
     .with_sender(auth_sender);
 

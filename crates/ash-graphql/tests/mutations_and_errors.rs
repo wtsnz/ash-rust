@@ -1,6 +1,4 @@
-use ash_core::{
-    ActionDef, ArgumentDef, AttrType, AttributeDef, Context, ResourceDef,
-};
+use ash_core::{ActionDef, ArgumentDef, AttrType, AttributeDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -67,7 +65,7 @@ static TICKET_DEF: ResourceDef = ResourceDef {
 #[tokio::test]
 async fn test_phase4_create_update_destroy_mutations_and_errors() {
     let memory = Memory::new();
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
 
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
@@ -91,7 +89,9 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
         }
     "#;
 
-    let res = schema.execute(Request::new(create_mutation).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(create_mutation).data(ctx.clone()))
+        .await;
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let create_payload = &val["createTicket"];
@@ -110,7 +110,9 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
             }
         }
     "#;
-    let res = schema.execute(Request::new(invalid_create).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(invalid_create).data(ctx.clone()))
+        .await;
     assert_eq!(res.errors.len(), 1, "{:?}", res.errors);
     assert!(res.errors[0].message.contains("title"), "{:?}", res.errors);
 
@@ -136,7 +138,9 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     "#
     );
 
-    let res = schema.execute(Request::new(update_mutation).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(update_mutation).data(ctx.clone()))
+        .await;
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let update_payload = &val["closeTicket"];
@@ -147,7 +151,11 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
     // 4. The lock checks the version the record was read at, as AshGraphql's does: a
     // client sends no version of its own.
     let sdl = schema.sdl();
-    let input = sdl.split("input CloseTicketInput {").nth(1).and_then(|rest| rest.split('}').next()).unwrap();
+    let input = sdl
+        .split("input CloseTicketInput {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .unwrap();
     assert!(!input.contains("version"), "{input}");
 
     // 5. Destroy ticket mutation
@@ -163,7 +171,9 @@ async fn test_phase4_create_update_destroy_mutations_and_errors() {
         }}
     "#
     );
-    let res = schema.execute(Request::new(destroy_mutation).data(ctx.clone())).await;
+    let res = schema
+        .execute(Request::new(destroy_mutation).data(ctx.clone()))
+        .await;
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();
     let destroy_payload = &val["destroyTicket"];

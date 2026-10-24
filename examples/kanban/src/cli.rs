@@ -12,7 +12,10 @@ use crate::{
 };
 
 #[derive(Parser)]
-#[command(name = "kanban", about = "Trello-like Kanban on ash-rust (Workspaces + Kanban domains)")]
+#[command(
+    name = "kanban",
+    about = "Trello-like Kanban on ash-rust (Workspaces + Kanban domains)"
+)]
 pub struct Cli {
     /// SQLite file. Created if missing.
     #[arg(long, env = "KANBAN_DB", default_value = "kanban.db", global = true)]
@@ -51,10 +54,7 @@ pub enum Command {
 #[derive(Subcommand)]
 pub enum UserCommand {
     /// Register a user
-    Register {
-        name: String,
-        email: String,
-    },
+    Register { name: String, email: String },
     /// List all registered users
     List,
 }
@@ -125,11 +125,14 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             crate::demo().await?;
         }
         Command::User(cmd) => {
-            let (workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
+            let (_runtime, workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             match cmd {
                 UserCommand::Register { name, email } => {
                     let user = workspaces.register_user(name, email).await?;
-                    println!("Registered user: {} ({}) [id: {}]", user.name, user.email, user.id);
+                    println!(
+                        "Registered user: {} ({}) [id: {}]",
+                        user.name, user.email, user.id
+                    );
                 }
                 UserCommand::List => {
                     let users = workspaces.list_users().all().await?;
@@ -144,9 +147,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             }
         }
         Command::Workspace(cmd) => {
-            let (workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
+            let (runtime, _workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             let actor_id = cli.actor.unwrap_or_else(Uuid::new_v4);
-            let as_actor = workspaces.with_actor(actor_user(actor_id));
+            let as_actor =
+                crate::Workspaces::from_context(runtime.bind(Some(actor_user(actor_id)), None));
 
             match cmd {
                 WorkspaceCommand::Create { name, slug, owner } => {
@@ -154,7 +158,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
                     let multi = workspace_with_owner_multi(&as_actor.ctx, owner_id, &name, &slug)?;
                     let res = as_actor.run_multi(multi).await?;
                     let ws = res.get::<crate::Workspace>("workspace")?;
-                    println!("Created workspace '{}' (slug: {}) [id: {}]", ws.name, ws.slug, ws.id);
+                    println!(
+                        "Created workspace '{}' (slug: {}) [id: {}]",
+                        ws.name, ws.slug, ws.id
+                    );
                 }
                 WorkspaceCommand::List => {
                     let wss = as_actor
@@ -179,9 +186,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             }
         }
         Command::Board(cmd) => {
-            let (_workspaces, kanban) = open_sqlite_app(&cli.db).await?;
+            let (runtime, _workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             let actor_id = cli.actor.unwrap_or_else(Uuid::new_v4);
-            let as_actor = kanban.with_actor(actor_user(actor_id));
+            let as_actor =
+                crate::Kanban::from_context(runtime.bind(Some(actor_user(actor_id)), None));
 
             match cmd {
                 BoardCommand::Create {
@@ -204,7 +212,9 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
                             board.name, board.id
                         );
                     } else {
-                        let board = as_actor.create_board(workspace_id, name, description).await?;
+                        let board = as_actor
+                            .create_board(workspace_id, name, description)
+                            .await?;
                         println!("Created board '{}' [id: {}]", board.name, board.id);
                     }
                 }
@@ -234,9 +244,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
             }
         }
         Command::Card(cmd) => {
-            let (_workspaces, kanban) = open_sqlite_app(&cli.db).await?;
+            let (runtime, _workspaces, _kanban) = open_sqlite_app(&cli.db).await?;
             let actor_id = cli.actor.unwrap_or_else(Uuid::new_v4);
-            let as_actor = kanban.with_actor(actor_user(actor_id));
+            let as_actor =
+                crate::Kanban::from_context(runtime.bind(Some(actor_user(actor_id)), None));
 
             match cmd {
                 CardCommand::Create {
@@ -249,7 +260,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
                     let card = as_actor
                         .create_card(board_id, list_id, title, description, position)
                         .await?;
-                    println!("Created card '{}' [id: {}] at position {}", card.title, card.id, card.position);
+                    println!(
+                        "Created card '{}' [id: {}] at position {}",
+                        card.title, card.id, card.position
+                    );
                 }
                 CardCommand::List { list_id } => {
                     let mut q = as_actor
@@ -285,7 +299,10 @@ pub async fn run(cli: Cli) -> ash_core::Result<()> {
                     let multi = move_card_multi(&as_actor.ctx, card, to_list, position, note)?;
                     let res = as_actor.run_multi(multi).await?;
                     let moved = res.get::<Card>("moved_card")?;
-                    println!("Moved card '{}' to list {} at position {}", moved.title, moved.list_id, moved.position);
+                    println!(
+                        "Moved card '{}' to list {} at position {}",
+                        moved.title, moved.list_id, moved.position
+                    );
                 }
             }
         }

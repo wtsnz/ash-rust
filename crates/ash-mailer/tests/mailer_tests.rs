@@ -1,5 +1,5 @@
 use ash_authentication::{JwtService, authentication};
-use ash_core::{Context, Result};
+use ash_core::Result;
 use ash_mailer::{
     AuthMailerSender, ConsoleMailer, ContextMailerExt, Email, EmailNotifier, Mailer, MailerError,
     MemoryMailer,
@@ -190,7 +190,8 @@ async fn test_email_notifier_on_resource_action() -> Result<()> {
             ))
     });
 
-    let ctx = Context::new(Memory::new()).with_email_notifier(notifier);
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap().with_email_notifier(notifier);
 
     // 1. Create order: "place" action -> should NOT trigger email
     let order = Order::place(&ctx)
@@ -215,14 +216,21 @@ async fn test_email_notifier_on_resource_action() -> Result<()> {
     let expected_subject = format!("Receipt for Order {}", order.id);
     assert_eq!(email.subject.as_deref(), Some(expected_subject.as_str()));
     assert!(email.text.as_ref().unwrap().contains("$79"));
-    assert!(email.html.as_ref().unwrap().contains("<strong>$79</strong>"));
+    assert!(
+        email
+            .html
+            .as_ref()
+            .unwrap()
+            .contains("<strong>$79</strong>")
+    );
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_auth_mailer_sender_password_reset() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let mailer = MemoryMailer::new();
     let jwt_service = JwtService::new("test-super-secret-auth-mailer-signing-key-123456");
 
@@ -238,7 +246,7 @@ async fn test_auth_mailer_sender_password_reset() -> Result<()> {
     let auth_sender = AuthMailerSender::new(mailer.clone(), "accounts@myservice.com")
         .with_base_url("https://myservice.com");
 
-    let strategy = User::auth_strategy()
+    let strategy = User::auth_strategy(&ctx_runtime)
         .with_jwt_service(jwt_service)
         .with_sender(auth_sender);
 
@@ -254,7 +262,10 @@ async fn test_auth_mailer_sender_password_reset() -> Result<()> {
 
     let email = mailer.last_delivered().unwrap();
     assert_eq!(email.from.as_deref(), Some("accounts@myservice.com"));
-    assert_eq!(email.subject.as_deref(), Some("Password Reset Instructions"));
+    assert_eq!(
+        email.subject.as_deref(),
+        Some("Password Reset Instructions")
+    );
     assert!(email.text.as_ref().unwrap().contains(&reset_token));
     assert!(
         email
@@ -294,7 +305,8 @@ async fn test_auth_mailer_sender_password_reset() -> Result<()> {
 
 #[tokio::test]
 async fn test_custom_auth_mailer_template() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let mailer = MemoryMailer::new();
     let jwt_service = JwtService::new("test-super-secret-auth-mailer-signing-key-custom");
 
@@ -316,7 +328,7 @@ async fn test_custom_auth_mailer_template() -> Result<()> {
                 .text(format!("Custom reset code: {token}"))
         });
 
-    let strategy = User::auth_strategy()
+    let strategy = User::auth_strategy(&ctx_runtime)
         .with_jwt_service(jwt_service)
         .with_sender(auth_sender);
 
@@ -332,10 +344,7 @@ async fn test_custom_auth_mailer_template() -> Result<()> {
         Some("CUSTOM: Reset your Security Key")
     );
     let expected_body = format!("Custom reset code: {reset_token}");
-    assert_eq!(
-        email.text.as_deref(),
-        Some(expected_body.as_str())
-    );
+    assert_eq!(email.text.as_deref(), Some(expected_body.as_str()));
 
     Ok(())
 }

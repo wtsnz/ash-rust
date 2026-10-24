@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use ash_core::{
-    Actor, BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap, Resource,
-    TransactionSupport, Value,
+    Actor, BulkCreateOptions, BulkDestroyOptions, BulkUpdateOptions, Context, Error, FieldMap,
+    Resource, TransactionSupport, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_graphql::axum::{RequestData, SubscriptionHub};
@@ -23,42 +23,49 @@ use crate::{Agent, AuditEvent, DESK_DEF, Ticket};
 
 /// The context a request runs in: `base`, in the tenant `x-org` names, acting as the
 /// agent `x-actor` and `x-role` describe.
-pub fn request_context<D>(base: &Context<D>, headers: &HeaderMap) -> Context<D> {
+pub fn request_context<D>(base: &ash_core::Runtime<D>, headers: &HeaderMap) -> Context<D> {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-    let mut ctx = base.clone();
-    if let Some(org) = header("x-org") {
-        ctx = ctx.with_tenant(org);
-    }
-    if let (Some(id), Some(role)) = (header("x-actor").and_then(|id| Uuid::parse_str(id).ok()), header("x-role")) {
-        ctx = ctx.with_actor(Actor::new(id).with_role(role));
-    }
-    ctx
+    let tenant = header("x-org").map(str::to_owned);
+    let actor = match (
+        header("x-actor").and_then(|id| Uuid::parse_str(id).ok()),
+        header("x-role"),
+    ) {
+        (Some(id), Some(role)) => Some(Actor::new(id).with_role(role)),
+        _ => None,
+    };
+    base.bind(actor, tenant)
 }
 
 /// GraphQL requests and subscriptions run as their headers say.
-struct Headers<D>(Context<D>);
+struct Headers<D>(ash_core::Runtime<D>);
 
 impl<D: Send + Sync + 'static> RequestData for Headers<D> {
-    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> (async_graphql::Request, String) {
+    fn apply(
+        &self,
+        headers: &HeaderMap,
+        request: async_graphql::Request,
+    ) -> (async_graphql::Request, String) {
         let ctx = request_context(&self.0, headers);
         let scope = format!(
             "{}|{}",
             ctx.tenant().unwrap_or_default(),
-            ctx.actor.as_ref().map(|a| format!("{}:{}", a.id, a.role().unwrap_or_default())).unwrap_or_default()
+            ctx.actor()
+                .map(|a| format!("{}:{}", a.id, a.role().unwrap_or_default()))
+                .unwrap_or_default()
         );
         (request.data(ctx), scope)
     }
 }
 
 struct App<D> {
-    base: Context<D>,
+    base: ash_core::Runtime<D>,
     seeded_ms: u64,
 }
 
 /// The API over `base`, whose notifier publishes to `pubsub`. `seeded_ms` is how long
 /// loading the fixture took, for `GET /health/seeded`.
 pub fn router<D: TransactionSupport + 'static>(
-    base: Context<D>,
+    base: ash_core::Runtime<D>,
     pubsub: PubSub,
     seeded_ms: u64,
 ) -> Result<Router, async_graphql::dynamic::SchemaError> {
@@ -66,14 +73,16 @@ pub fn router<D: TransactionSupport + 'static>(
         .with_pubsub(pubsub)
         .with_dataloader()
         .mutation_action::<Ticket, D>("route_ticket", "route")
-        .finish_with_context(base.clone())?;
+        .finish_with_context(base.bootstrap())?;
     let graphql = ash_graphql::axum::graphql_router_with(
         schema,
         Arc::new(SubscriptionHub::default()),
         Arc::new(Headers(base.clone())),
     );
     let rpc_base = base.clone();
-    let rpc = ash_typescript::rpc::axum::rpc_router(rpc::<D>(), move |headers| request_context(&rpc_base, headers));
+    let rpc = ash_typescript::rpc::axum::rpc_router(rpc::<D>(), move |headers| {
+        request_context(&rpc_base, headers)
+    });
     let app = Arc::new(App { base, seeded_ms });
     let api = Router::new()
         .route("/api/route", post(route::<D>))
@@ -98,13 +107,18 @@ impl IntoResponse for Failure {
             Error::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Error::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Error::StaleRecord { .. } => (StatusCode::CONFLICT, "stale_record"),
-            Error::Validation { .. } | Error::Invalid(_) | Error::Missing { .. } | Error::Multiple(_) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid")
-            }
+            Error::Validation { .. }
+            | Error::Invalid(_)
+            | Error::Missing { .. }
+            | Error::Multiple(_) => (StatusCode::UNPROCESSABLE_ENTITY, "invalid"),
             Error::TenantRequired { .. } => (StatusCode::BAD_REQUEST, "tenant_required"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "error"),
         };
-        (status, Json(json!({ "error": code, "message": self.0.to_string() }))).into_response()
+        (
+            status,
+            Json(json!({ "error": code, "message": self.0.to_string() })),
+        )
+            .into_response()
     }
 }
 
@@ -227,27 +241,52 @@ async fn bulk<D: TransactionSupport + 'static>(
         .map(|i| {
             let mut fields = FieldMap::new();
             fields.insert("subject".into(), Value::String(format!("Bulk import {i}")));
-            fields.insert("body".into(), Value::String("Imported from the old desk".into()));
+            fields.insert(
+                "body".into(),
+                Value::String("Imported from the old desk".into()),
+            );
             fields.insert("priority".into(), Value::Int(1 + (i % 4) as i64));
-            fields.insert("requester_email".into(), Value::String(format!("import{i}@example.com")));
+            fields.insert(
+                "requester_email".into(),
+                Value::String(format!("import{i}@example.com")),
+            );
             fields.insert("comments".into(), Value::Array(Vec::new()));
             fields
         })
         .collect();
-    let created = Ticket::bulk_create_with_opts(&ctx, "open", inputs, BulkCreateOptions::new().notify(false)).await?;
+    let created =
+        Ticket::bulk_create_with_opts(&ctx, "open", inputs, BulkCreateOptions::new().notify(false))
+            .await?;
     let mut assign = FieldMap::new();
-    assign.insert("assignee_id".into(), input.assignee_id.map(Value::Uuid).unwrap_or(Value::Null));
-    let updates = created.records.iter().cloned().map(|ticket| (ticket, assign.clone()));
-    let updated = Ticket::bulk_update_with_opts(&ctx, "assign", updates, BulkUpdateOptions::new().notify(false)).await?;
+    assign.insert(
+        "assignee_id".into(),
+        input.assignee_id.map(Value::Uuid).unwrap_or(Value::Null),
+    );
+    let updates = created
+        .records
+        .iter()
+        .cloned()
+        .map(|ticket| (ticket, assign.clone()));
+    let updated = Ticket::bulk_update_with_opts(
+        &ctx,
+        "assign",
+        updates,
+        BulkUpdateOptions::new().notify(false),
+    )
+    .await?;
     let ids: Vec<Uuid> = created.records.iter().map(Resource::id).collect();
     let destroyed = Ticket::bulk_destroy_with_opts(
         &ctx,
         "destroy",
         &ids,
-        BulkDestroyOptions::new().notify(false).return_records(false),
+        BulkDestroyOptions::new()
+            .notify(false)
+            .return_records(false),
     )
     .await?;
-    Ok(Json(json!({ "created": created.count, "updated": updated.count, "destroyed": destroyed.count })))
+    Ok(Json(
+        json!({ "created": created.count, "updated": updated.count, "destroyed": destroyed.count }),
+    ))
 }
 
 #[derive(Deserialize)]

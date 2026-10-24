@@ -1,7 +1,7 @@
 //! A nested page answers as its read does: ordered by the read's prepared sort, with the
 //! primary key only breaking ties, and a count of the rows the page itself would show.
 
-use ash_core::{Actor, Context, Value};
+use ash_core::{Actor, Value};
 use ash_memory::Memory;
 use ash_typescript::rpc::Rpc;
 use serde_json::{Value as Json, json};
@@ -119,7 +119,7 @@ use secret::Secret;
 use shelf::Shelf;
 
 struct Library {
-    ctx: Context<Memory>,
+    runtime: ash_core::Runtime<Memory>,
     rpc: Rpc<Memory>,
     shelf: Uuid,
 }
@@ -127,19 +127,35 @@ struct Library {
 impl Library {
     /// A shelf with items scored 1 to 3 and one secret.
     async fn new() -> Self {
-        let ctx = Context::new(Memory::new());
+        let runtime = ash_core::Runtime::new(Memory::new());
+        let ctx = runtime.bootstrap();
         let shelf = Shelf::create(&ctx).name("Top").await.unwrap().id;
         for score in 1..=3 {
-            Item::create(&ctx).shelf_id(shelf).score(score).await.unwrap();
+            Item::create(&ctx)
+                .shelf_id(shelf)
+                .score(score)
+                .await
+                .unwrap();
         }
-        Secret::create(&ctx).shelf_id(shelf).body("hidden").await.unwrap();
-        Self { ctx, rpc: Rpc::new().get_by::<Shelf>("get_shelf", "read", &["id"]), shelf }
+        Secret::create(&ctx)
+            .shelf_id(shelf)
+            .body("hidden")
+            .await
+            .unwrap();
+        Self {
+            runtime,
+            rpc: Rpc::new().get_by::<Shelf>("get_shelf", "read", &["id"]),
+            shelf,
+        }
     }
 
     async fn nested(&self, role: &str, relationship: Json) -> Json {
         let actor = Actor::new(Uuid::new_v4()).with_attr("role", Value::from(role));
         let request = json!({ "action": "get_shelf", "getBy": { "id": self.shelf }, "fields": ["id", relationship] });
-        let response = self.rpc.run(&self.ctx.with_actor(actor), &request).await;
+        let response = self
+            .rpc
+            .run(&self.runtime.bind(Some(actor), None), &request)
+            .await;
         assert_eq!(response["success"], true, "{response}");
         response["data"].clone()
     }
@@ -148,10 +164,19 @@ impl Library {
 #[tokio::test]
 async fn a_keyset_page_keeps_the_reads_prepared_sort() {
     let library = Library::new().await;
-    let first = library.nested("reader", json!({ "items": { "fields": ["score"], "page": { "limit": 1 } } })).await;
+    let first = library
+        .nested(
+            "reader",
+            json!({ "items": { "fields": ["score"], "page": { "limit": 1 } } }),
+        )
+        .await;
     let items = &first["items"];
     assert_eq!(items["type"], "keyset");
-    assert_eq!(items["results"], json!([{ "score": 3 }]), "the highest score first, as the read sorts");
+    assert_eq!(
+        items["results"],
+        json!([{ "score": 3 }]),
+        "the highest score first, as the read sorts"
+    );
     let next = library.nested("reader", json!({ "items": { "fields": ["score"], "page": { "limit": 1, "after": items["nextPage"] } } })).await;
     assert_eq!(next["items"]["results"], json!([{ "score": 2 }]));
 }
@@ -177,10 +202,18 @@ async fn a_count_filters_on_a_calculation_with_its_arguments() {
 #[tokio::test]
 async fn a_count_leaves_out_rows_a_field_policy_unlinks() {
     let library = Library::new().await;
-    let secrets = json!({ "secrets": { "fields": ["body"], "page": { "limit": 5, "count": true } } });
+    let secrets =
+        json!({ "secrets": { "fields": ["body"], "page": { "limit": 5, "count": true } } });
     let reader = library.nested("reader", secrets.clone()).await;
-    assert_eq!(reader["secrets"]["results"], json!([]), "a reader can't see which shelf the secret is on");
-    assert_eq!(reader["secrets"]["count"], 0, "so the count doesn't tell them");
+    assert_eq!(
+        reader["secrets"]["results"],
+        json!([]),
+        "a reader can't see which shelf the secret is on"
+    );
+    assert_eq!(
+        reader["secrets"]["count"], 0,
+        "so the count doesn't tell them"
+    );
     let editor = library.nested("editor", secrets).await;
     assert_eq!(editor["secrets"]["results"], json!([{ "body": "hidden" }]));
     assert_eq!(editor["secrets"]["count"], 1);

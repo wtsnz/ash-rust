@@ -164,7 +164,7 @@ pub async fn dispatch_notification<D>(
         return Ok(());
     }
 
-    for notifier in &ctx.notifiers {
+    for notifier in ctx.notifiers() {
         let _ = notifier.notify(&notification).await;
     }
     for notifier in resource_def.notifiers {

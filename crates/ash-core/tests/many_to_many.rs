@@ -1,4 +1,4 @@
-use ash_core::{Context, Resource, resource};
+use ash_core::{Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -55,9 +55,9 @@ pub mod post_tag {
 }
 
 pub mod post {
-    use super::*;
     use super::post_tag::PostTag;
     use super::tag::Tag;
+    use super::*;
 
     resource! {
         Post {
@@ -96,7 +96,7 @@ use tag::Tag;
 
 #[tokio::test]
 async fn test_many_to_many_loading_and_aggregates_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create Posts
     let post1 = Post::create(&ctx).title("First Post").await.unwrap();
@@ -181,7 +181,7 @@ async fn test_many_to_many_loading_and_aggregates_in_sqlite() {
         .await
         .expect("install tables");
 
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     // 1. Create Posts
     let post1 = Post::create(&ctx).title("Rust Ash").await.unwrap();

@@ -62,7 +62,10 @@ async fn memory_compares_like_the_column_type() {
         (3, "100.25", "-3", "linus@example.org"),
     ] {
         let (id, fields) = row(n, weight, amount, email);
-        memory.create(&Reading::DEF, None, ash_core::Value::from(id), fields).await.unwrap();
+        memory
+            .create(&Reading::DEF, None, ash_core::Value::from(id), fields)
+            .await
+            .unwrap();
     }
 
     let mut over = ids(&memory, Some(Filter::gt("weight", "9.6")), vec![]).await;
@@ -74,16 +77,30 @@ async fn memory_compares_like_the_column_type() {
         ..Default::default()
     };
     assert_eq!(ids(&memory, None, vec![by_weight]).await, [1, 2, 3]);
-    assert_eq!(ids(&memory, Some(Filter::eq("weight", "9.50")), vec![]).await, [1]);
-    assert_eq!(ids(&memory, Some(Filter::gt("amount", "9.995")), vec![]).await, [1]);
     assert_eq!(
-        ids(&memory, Some(Filter::eq("email", "ADA@EXAMPLE.COM")), vec![]).await,
+        ids(&memory, Some(Filter::eq("weight", "9.50")), vec![]).await,
+        [1]
+    );
+    assert_eq!(
+        ids(&memory, Some(Filter::gt("amount", "9.995")), vec![]).await,
         [1]
     );
     assert_eq!(
         ids(
             &memory,
-            Some(Filter::in_list("email", [Value::String("GRACE@example.com".into())])),
+            Some(Filter::eq("email", "ADA@EXAMPLE.COM")),
+            vec![]
+        )
+        .await,
+        [1]
+    );
+    assert_eq!(
+        ids(
+            &memory,
+            Some(Filter::in_list(
+                "email",
+                [Value::String("GRACE@example.com".into())]
+            )),
             vec![]
         )
         .await,
@@ -91,7 +108,9 @@ async fn memory_compares_like_the_column_type() {
     );
 
     let (id, duplicate) = row(4, "1", "0", "ADA@example.COM");
-    let result = memory.create(&Reading::DEF, None, ash_core::Value::from(id), duplicate).await;
+    let result = memory
+        .create(&Reading::DEF, None, ash_core::Value::from(id), duplicate)
+        .await;
     assert!(
         matches!(result, Err(Error::IdentityConflict { .. })),
         "CiString identities ignore case: {result:?}"
@@ -122,10 +141,12 @@ mod host {
 use host::Host;
 
 #[tokio::test]
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
-    use ash_core::{Changeset, Context};
+    use ash_core::Changeset;
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let mut input = FieldMap::new();
     input.insert("address".into(), Value::String("10.0.0.1/32".into()));
     input.insert("embedding".into(), Value::String("[1.0, 2.50]".into()));
@@ -135,15 +156,24 @@ async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
         .await
         .unwrap();
     assert_eq!(host.address.as_str(), "10.0.0.1");
-    assert_eq!(ash_core::format_vector(host.embedding.as_slice()), "[1,2.5]");
+    assert_eq!(
+        ash_core::format_vector(host.embedding.as_slice()),
+        "[1,2.5]"
+    );
 
     let stored = ctx
         .data
         .run_query(&Host::DEF, &CompiledQuery::default())
         .await
         .unwrap();
-    assert_eq!(stored[0].get("address"), Some(&Value::String("10.0.0.1".into())));
-    assert_eq!(stored[0].get("embedding"), Some(&Value::String("[1,2.5]".into())));
+    assert_eq!(
+        stored[0].get("address"),
+        Some(&Value::String("10.0.0.1".into()))
+    );
+    assert_eq!(
+        stored[0].get("embedding"),
+        Some(&Value::String("[1,2.5]".into()))
+    );
 
     for filter in [
         Filter::eq("address", "10.0.0.1/32"),

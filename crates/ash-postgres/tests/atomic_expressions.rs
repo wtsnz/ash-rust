@@ -3,7 +3,7 @@
 //! the data layer runs one, from the record read first where it doesn't. Concurrent
 //! updates lose nothing.
 
-use ash_core::{Context, DataLayer, Resource, resource};
+use ash_core::{DataLayer, Resource, resource};
 use ash_memory::Memory;
 use ash_postgres::Postgres;
 use ash_sqlite::Sqlite;
@@ -43,8 +43,10 @@ resource! {
     }
 }
 
+// This regression deliberately inspects or mutates raw backend state.
+#[allow(deprecated)]
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     let tally = Tally::create(&ctx).name("quiet").views(2).await.unwrap();
     let viewed = tally.view(&ctx).await.unwrap();
     assert_eq!(viewed.views, 3);
@@ -70,7 +72,11 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     for handle in handles {
         handle.await.unwrap();
     }
-    let counted = Tally::query(&ctx).filter(ash_core::Filter::eq("id", fresh.id)).one().await.unwrap();
+    let counted = Tally::query(&ctx)
+        .filter(ash_core::Filter::eq("id", fresh.id))
+        .one()
+        .await
+        .unwrap();
     assert_eq!(counted.views, 10);
 }
 
@@ -88,7 +94,8 @@ async fn atomic_updates_in_sqlite() {
 
 #[tokio::test]
 async fn atomic_updates_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");

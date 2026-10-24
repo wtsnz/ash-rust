@@ -5,7 +5,9 @@
 //! `tickets`, `comments`, `ticket_tags`), each record its attributes by name, ids and
 //! timestamps as strings. The Elixir app reads the same file.
 
-use ash_core::{AttrType, Context, FieldMap, Resource, ResourceDef, Result, TransactionSupport, Value};
+use ash_core::{
+    AttrType, Context, FieldMap, Resource, ResourceDef, Result, TransactionSupport, Value,
+};
 use serde_json::{Map, Value as Json, json};
 use uuid::Uuid;
 
@@ -13,21 +15,70 @@ use crate::{Agent, Comment, Org, Tag, Ticket, TicketTag};
 
 /// Orgs, and how each one's desk is staffed and busy: 10 orgs, 10 agents and 20 tags
 /// each, 1,000 tickets each with 5 comments on average.
-pub const ORGS: &[&str] = &["acme", "globex", "initech", "umbrella", "hooli", "stark", "wayne", "wonka", "tyrell", "soylent"];
+pub const ORGS: &[&str] = &[
+    "acme", "globex", "initech", "umbrella", "hooli", "stark", "wayne", "wonka", "tyrell",
+    "soylent",
+];
 const AGENTS_PER_ORG: usize = 10;
 const TAGS_PER_ORG: usize = 20;
 const TICKETS_PER_ORG: usize = 1_000;
 const COMMENTS: usize = 50_000;
 
 const TAG_NAMES: &[&str] = &[
-    "billing", "bug", "feature", "login", "outage", "refund", "api", "mobile", "export", "invoice", "sso", "onboarding",
-    "performance", "security", "integrations", "email", "reports", "search", "permissions", "notifications",
+    "billing",
+    "bug",
+    "feature",
+    "login",
+    "outage",
+    "refund",
+    "api",
+    "mobile",
+    "export",
+    "invoice",
+    "sso",
+    "onboarding",
+    "performance",
+    "security",
+    "integrations",
+    "email",
+    "reports",
+    "search",
+    "permissions",
+    "notifications",
 ];
 const WORDS: &[&str] = &[
-    "cannot", "login", "invoice", "missing", "export", "fails", "slow", "dashboard", "password", "reset", "charge", "twice",
-    "error", "upload", "report", "broken", "sync", "calendar", "access", "denied", "refund", "request", "webhook", "timeout",
+    "cannot",
+    "login",
+    "invoice",
+    "missing",
+    "export",
+    "fails",
+    "slow",
+    "dashboard",
+    "password",
+    "reset",
+    "charge",
+    "twice",
+    "error",
+    "upload",
+    "report",
+    "broken",
+    "sync",
+    "calendar",
+    "access",
+    "denied",
+    "refund",
+    "request",
+    "webhook",
+    "timeout",
 ];
-const STATUSES: &[(&str, u64)] = &[("new", 20), ("open", 30), ("pending", 15), ("resolved", 20), ("closed", 15)];
+const STATUSES: &[(&str, u64)] = &[
+    ("new", 20),
+    ("open", 30),
+    ("pending", 15),
+    ("resolved", 20),
+    ("closed", 15),
+];
 
 /// SplitMix64: small, fast, and the same in every language, so the fixture can be
 /// regenerated anywhere.
@@ -75,7 +126,10 @@ impl Rng {
 
     fn words(&mut self, min: u64, max: u64) -> String {
         let n = min + self.below(max - min + 1);
-        (0..n).map(|_| *self.pick(WORDS)).collect::<Vec<_>>().join(" ")
+        (0..n)
+            .map(|_| *self.pick(WORDS))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -105,7 +159,8 @@ fn at(seconds: u64) -> String {
 /// The desk, from `seed`.
 pub fn generate(seed: u64) -> Json {
     let mut rng = Rng(seed);
-    let (mut orgs, mut agents, mut tags, mut tickets, mut ticket_tags) = (vec![], vec![], vec![], vec![], vec![]);
+    let (mut orgs, mut agents, mut tags, mut tickets, mut ticket_tags) =
+        (vec![], vec![], vec![], vec![], vec![]);
     // Each ticket's org, id, staff and when it was opened, for its comments.
     let mut opened: Vec<(&str, Uuid, Vec<Uuid>, u64)> = Vec::new();
     for (o, slug) in ORGS.iter().enumerate() {
@@ -156,7 +211,9 @@ pub fn generate(seed: u64) -> Json {
                 let tag = *rng.pick(&org_tags);
                 if !filed.contains(&tag) {
                     filed.push(tag);
-                    ticket_tags.push(json!({ "id": rng.uuid(), "org": slug, "ticket_id": id, "tag_id": tag }));
+                    ticket_tags.push(
+                        json!({ "id": rng.uuid(), "org": slug, "ticket_id": id, "tag_id": tag }),
+                    );
                 }
             }
             opened.push((slug, id, staff.clone(), opened_at));
@@ -165,7 +222,9 @@ pub fn generate(seed: u64) -> Json {
     // Comments land unevenly: a few tickets get many, some get none.
     let mut comments = Vec::with_capacity(COMMENTS);
     while comments.len() < COMMENTS {
-        let skewed = rng.below(opened.len() as u64).min(rng.below(opened.len() as u64)) as usize;
+        let skewed = rng
+            .below(opened.len() as u64)
+            .min(rng.below(opened.len() as u64)) as usize;
         let (slug, ticket, staff, opened_at) = &opened[skewed];
         let written = opened_at + 60 + rng.below(604_800);
         comments.push(json!({
@@ -181,10 +240,14 @@ pub fn generate(seed: u64) -> Json {
 fn fields(resource: &ResourceDef, record: &Map<String, Json>) -> FieldMap {
     let mut fields = FieldMap::new();
     for (name, value) in record {
-        let Some(attr) = resource.attribute(name) else { continue };
+        let Some(attr) = resource.attribute(name) else {
+            continue;
+        };
         let value = match (value, attr.ty) {
             (Json::Null, _) => Value::Null,
-            (Json::String(s), AttrType::Uuid) => Uuid::parse_str(s).map(Value::Uuid).unwrap_or(Value::Null),
+            (Json::String(s), AttrType::Uuid) => {
+                Uuid::parse_str(s).map(Value::Uuid).unwrap_or(Value::Null)
+            }
             (Json::String(s), _) => Value::String(s.clone()),
             (Json::Bool(b), _) => Value::Bool(*b),
             (Json::Number(n), _) => n.as_i64().map(Value::Int).unwrap_or(Value::Null),
@@ -196,15 +259,23 @@ fn fields(resource: &ResourceDef, record: &Map<String, Json>) -> FieldMap {
 }
 
 /// Loads `fixture` through each resource's `seed` action, as an admin of each org.
-pub async fn load<D: TransactionSupport + 'static>(ctx: &Context<D>, fixture: &Json) -> Result<()> {
+pub async fn load<D: TransactionSupport + 'static>(
+    runtime: &ash_core::Runtime<D>,
+    fixture: &Json,
+) -> Result<()> {
     let records = |key: &str| fixture[key].as_array().cloned().unwrap_or_default();
     let admin = ash_core::Actor::new(Uuid::nil()).with_role("admin");
-    let ctx = ctx.with_actor(admin);
+    let ctx = runtime.system().bind(Some(admin.clone()), None);
     seed::<Org, D>(&ctx, &records("orgs")).await?;
     for org in ORGS {
-        let tenant = ctx.clone().with_tenant(*org);
+        let tenant = runtime
+            .system()
+            .bind(Some(admin.clone()), Some((*org).into()));
         let of_org = |key: &str| -> Vec<Json> {
-            records(key).into_iter().filter(|r| r["org"] == *org).collect()
+            records(key)
+                .into_iter()
+                .filter(|r| r["org"] == *org)
+                .collect()
         };
         seed::<Agent, D>(&tenant, &of_org("agents")).await?;
         seed::<Tag, D>(&tenant, &of_org("tags")).await?;
@@ -215,7 +286,10 @@ pub async fn load<D: TransactionSupport + 'static>(ctx: &Context<D>, fixture: &J
     Ok(())
 }
 
-async fn seed<R: Resource, D: TransactionSupport + 'static>(ctx: &Context<D>, records: &[Json]) -> Result<()> {
+async fn seed<R: Resource, D: TransactionSupport + 'static>(
+    ctx: &Context<D>,
+    records: &[Json],
+) -> Result<()> {
     let rows: Vec<FieldMap> = records
         .iter()
         .filter_map(Json::as_object)
@@ -227,7 +301,11 @@ async fn seed<R: Resource, D: TransactionSupport + 'static>(ctx: &Context<D>, re
         .notify(false);
     let result = ash_core::bulk_create::<R, D, _, _>(ctx, "seed", rows, opts).await?;
     if result.error_count > 0 {
-        return Err(ash_core::Error::Invalid(format!("seeding {}: {:?}", R::DEF.name, result.errors.first())));
+        return Err(ash_core::Error::Invalid(format!(
+            "seeding {}: {:?}",
+            R::DEF.name,
+            result.errors.first()
+        )));
     }
     Ok(())
 }

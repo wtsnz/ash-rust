@@ -1,15 +1,15 @@
 use std::any::Any;
 
-use ash_core::{ActionKind, Context, DataLayer, DomainDef, Resource, ResourceDef, TransactionSupport};
+use ash_core::{
+    ActionKind, Context, DataLayer, DomainDef, Resource, ResourceDef, TransactionSupport,
+};
 use ash_pubsub::PubSub;
 use async_graphql::dynamic::*;
 
 use crate::error::register_user_error;
 use crate::filter::register_resource_filter_inputs;
 use crate::generic::GenericAction;
-use crate::mutation::{
-    build_action_mutation, register_action_input, register_action_payload,
-};
+use crate::mutation::{build_action_mutation, register_action_input, register_action_payload};
 use crate::object::{build_resource_object, collect_enums_for_resource};
 use crate::pagination::{PageStrategy, register_pages};
 use crate::query::{build_read_action_query, build_resource_queries};
@@ -70,16 +70,26 @@ impl AshGraphQLBuilder {
     /// `action :name, :action` in `queries`: taking the action's arguments, answering
     /// what it returns (or `true`). It runs as its own `run` does, over the data layer
     /// `D` the schema is finished for.
-    pub fn query_action<R: Resource, D: TransactionSupport + Clone + 'static>(mut self, name: &str, action: &str) -> Self {
-        self.generic.push(Box::new(GenericAction::<D>::of::<R>(name, action, false)));
+    pub fn query_action<R: Resource, D: TransactionSupport + Clone + 'static>(
+        mut self,
+        name: &str,
+        action: &str,
+    ) -> Self {
+        self.generic
+            .push(Box::new(GenericAction::<D>::of::<R>(name, action, false)));
         self
     }
 
     /// Serves `R`'s generic action `action` as the mutation `name`, as AshGraphql's
     /// `action :name, :action` in `mutations`: taking the action's arguments as its
     /// `input`.
-    pub fn mutation_action<R: Resource, D: TransactionSupport + Clone + 'static>(mut self, name: &str, action: &str) -> Self {
-        self.generic.push(Box::new(GenericAction::<D>::of::<R>(name, action, true)));
+    pub fn mutation_action<R: Resource, D: TransactionSupport + Clone + 'static>(
+        mut self,
+        name: &str,
+        action: &str,
+    ) -> Self {
+        self.generic
+            .push(Box::new(GenericAction::<D>::of::<R>(name, action, true)));
         self
     }
 
@@ -139,7 +149,10 @@ impl AshGraphQLBuilder {
         }
         for res in &self.resources {
             for action in res.actions {
-                if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+                if matches!(
+                    action.kind,
+                    ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+                ) {
                     has_mutations = true;
                     mutation = mutation.field(build_action_mutation::<D>(action, res));
                 }
@@ -190,7 +203,11 @@ impl AshGraphQLBuilder {
                     .map(|attr| attr.ty)
                     .chain(res.aggregates.iter().map(|agg| agg.ty))
                     .chain(res.calculations.iter().map(|calc| calc.ty))
-                    .chain(res.actions.iter().flat_map(|a| a.arguments.iter().map(|arg| arg.ty)))
+                    .chain(
+                        res.actions
+                            .iter()
+                            .flat_map(|a| a.arguments.iter().map(|arg| arg.ty)),
+                    )
             })
             .map(crate::types::graphql_type_name)
             .collect();
@@ -205,8 +222,11 @@ impl AshGraphQLBuilder {
         let mut enums = Vec::new();
         for res in &all_resources {
             builder = builder.register(build_resource_object::<D>(res));
-            let strategies: Vec<PageStrategy> =
-                pages.iter().filter(|(name, _)| *name == res.name).map(|(_, s)| *s).collect();
+            let strategies: Vec<PageStrategy> = pages
+                .iter()
+                .filter(|(name, _)| *name == res.name)
+                .map(|(_, s)| *s)
+                .collect();
             builder = register_pages(builder, res, &strategies);
             builder = register_resource_filter_inputs(builder, res);
             builder = register_resource_sort_inputs(builder, res);
@@ -214,7 +234,10 @@ impl AshGraphQLBuilder {
                 builder = register_subscription_results::<D>(builder, res);
             }
             for action in res.actions {
-                if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+                if matches!(
+                    action.kind,
+                    ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+                ) {
                     builder = register_action_input(builder, action, res);
                     builder = register_action_payload(builder, action, res);
                 }
@@ -234,9 +257,9 @@ impl AshGraphQLBuilder {
         if has_subscriptions {
             builder = builder.register(subscription);
         }
-        if self.dataloader_enabled {
-            builder = builder.extension(crate::request::RequestDataLoader::<D>::new());
-        }
+        builder = builder.extension(crate::request::RequestDataLoader::<D>::new(
+            self.dataloader_enabled,
+        ));
         if let Some(ctx) = default_ctx {
             builder = builder.data(ctx);
         }

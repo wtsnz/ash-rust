@@ -1,6 +1,4 @@
-use ash_core::{
-    Actor, Context, CredentialReadPermit, Error, FieldMap, Filter, ReadRequest, Resource,
-};
+use ash_core::{Actor, Error, FieldMap, Filter, ReadRequest, Resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -38,9 +36,10 @@ fn mark_read(_arguments: &FieldMap, rows: &mut [FieldMap]) -> ash_core::Result<(
 
 #[tokio::test]
 async fn scoped_reads_apply_named_action_preparations_and_hooks() {
-    let ctx = Context::new(Memory::new())
-        .with_actor(Actor::new(Uuid::new_v4()).with_role("admin"))
-        .with_tenant("a");
+    let ctx = ash_core::Runtime::new(Memory::new()).bind(
+        Some(Actor::new(Uuid::new_v4()).with_role("admin")),
+        Some(("a").into()),
+    );
     Account::create(&ctx).hash("a-hash").await.unwrap();
     Account::create(&ctx).hash("other-hash").await.unwrap();
     let access = ctx.access();
@@ -95,10 +94,14 @@ async fn scoped_reads_apply_named_action_preparations_and_hooks() {
 
 #[tokio::test]
 async fn scoped_reads_and_credential_exception_keep_the_tenant() {
-    let root = Context::new(Memory::new());
-    let admin = root.with_actor(Actor::new(Uuid::new_v4()).with_role("admin"));
-    let a = admin.with_tenant("a");
-    let b = admin.with_tenant("b");
+    let root_runtime = ash_core::Runtime::new(Memory::new());
+    let root = root_runtime.bootstrap();
+    let admin = root_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_role("admin")),
+        root.tenant().map(str::to_owned),
+    );
+    let a = root_runtime.bind(admin.actor().cloned(), Some("a".into()));
+    let b = root_runtime.bind(admin.actor().cloned(), Some("b".into()));
     Account::create(&a).hash("a-hash").await.unwrap();
     Account::create(&b).hash("b-hash").await.unwrap();
     let rows = a
@@ -128,7 +131,7 @@ async fn scoped_reads_and_credential_exception_keep_the_tenant() {
         .unwrap();
     assert!(rows.is_empty());
 
-    let anonymous = root.with_tenant("a");
+    let anonymous = root_runtime.bind(root.actor().cloned(), Some(("a").into()));
     match anonymous
         .access()
         .read(
@@ -143,7 +146,7 @@ async fn scoped_reads_and_credential_exception_keep_the_tenant() {
         Ok(rows) => assert!(rows.is_empty()),
         Err(error) => panic!("unexpected read failure: {error}"),
     }
-    let permit = CredentialReadPermit::new(&Account::DEF);
+    let permit = root_runtime.credential_reads::<Account>();
     let rows = anonymous
         .access()
         .credentials(&permit, Filter::True, 2)
@@ -159,10 +162,11 @@ async fn scoped_reads_and_credential_exception_keep_the_tenant() {
 
 #[test]
 fn signed_tenants_must_match_exactly() {
-    let root = Context::new(Memory::new());
+    let root_runtime = ash_core::Runtime::new(Memory::new());
+    let root = root_runtime.bootstrap();
     assert!(root.access().require_tenant_match(None).is_ok());
     assert!(root.access().require_tenant_match(Some("a")).is_err());
-    let a = root.with_tenant("a");
+    let a = root_runtime.bind(root.actor().cloned(), Some(("a").into()));
     assert!(a.access().require_tenant_match(Some("a")).is_ok());
     assert!(a.access().require_tenant_match(Some("b")).is_err());
     assert!(a.access().require_tenant_match(None).is_err());

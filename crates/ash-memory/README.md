@@ -31,7 +31,7 @@ It enables lightning-fast unit testing, local prototyping, and embedded executio
 ## Quick Example
 
 ```rust
-use ash_core::{Context, resource};
+use ash_core::{resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -62,7 +62,7 @@ resource! {
 async fn main() -> ash_core::Result<()> {
     // Initialize an in-memory data layer
     let storage = Memory::new();
-    let ctx = Context::new(storage);
+    let ctx = ash_core::Runtime::new(storage).bootstrap();
 
     // Create records
     let item = Item::create(&ctx)

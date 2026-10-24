@@ -1,4 +1,4 @@
-use ash_core::{resource, Context, Resource, SchemaSupport};
+use ash_core::{Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -53,7 +53,7 @@ pub use post::Post;
 #[test]
 async fn test_query_preparations_in_memory() {
     let data = Memory::new();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     // Create several posts
     Post::create(&ctx)
@@ -106,7 +106,11 @@ async fn test_query_preparations_in_memory() {
     // Invariant 2: Custom read action `published` only returns published & unarchived posts
     let published = Post::published(&ctx).all().await.unwrap();
     assert_eq!(published.len(), 3);
-    assert!(published.iter().all(|p| p.status == "published" && !p.archived));
+    assert!(
+        published
+            .iter()
+            .all(|p| p.status == "published" && !p.archived)
+    );
     assert_eq!(Post::published(&ctx).count().await.unwrap(), 3);
 
     // Invariant 3: Chaining user filter with prepared filters
@@ -152,7 +156,7 @@ async fn test_query_preparations_in_memory() {
 async fn test_query_preparations_in_sqlite() {
     let data = Sqlite::memory().await.unwrap();
     data.install_resources(&[&Post::DEF]).await.unwrap();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     // Create test posts
     Post::create(&ctx)
@@ -197,7 +201,11 @@ async fn test_query_preparations_in_sqlite() {
     // Invariant 2: Custom read action filters
     let published = Post::published(&ctx).all().await.unwrap();
     assert_eq!(published.len(), 2);
-    assert!(published.iter().all(|p| p.status == "published" && !p.archived));
+    assert!(
+        published
+            .iter()
+            .all(|p| p.status == "published" && !p.archived)
+    );
 
     // Invariant 3: Prepared sort & limit
     let leaders = Post::leaderboard(&ctx).all().await.unwrap();

@@ -67,8 +67,8 @@ async fn transponders_report_positions<D: FleetDb>(h: Harness<D>) {
             .await,
         Err(Error::Forbidden)
     ));
-    let crew =
-        ash_core::Context::new(h.app.registry()).with_actor(h.ctx("Yuri").actor.clone().unwrap());
+    let crew = ash_core::Runtime::new(h.app.registry())
+        .bind(Some(h.ctx("Yuri").actor().unwrap().clone()), None);
     let err = TelemetryPing::report(&crew)
         .position(Vector::new([0.0, 0.0, 0.0]).unwrap())
         .speed_kms(Float::parse("1").unwrap())
@@ -108,7 +108,7 @@ async fn fleet_actions_are_audited<D: FleetDb>(h: Harness<D>) {
         .unwrap();
     assert_eq!(telemetry_rows(&h, "ops_events").await, before + 1);
 
-    let audit = ash_core::Context::new(h.app.registry());
+    let audit = ash_core::Runtime::new(h.app.registry()).bootstrap();
     let event = OpsEvent::query(&audit)
         .filter(OpsEvent::record_id.eq(contract.id))
         .one()

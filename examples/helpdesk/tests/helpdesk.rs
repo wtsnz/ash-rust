@@ -1,21 +1,24 @@
-use ash_core::{Context, Error, Filter, Rel, Value};
+use ash_core::{Error, Filter, Rel, Value};
 use ash_memory::Memory;
 use helpdesk::ticket::{fields, intake_store};
 use helpdesk::{
-    Representative, Status, Ticket, TicketActions, actor_customer, actor_representative,
-    intake_get,
+    Representative, Status, Ticket, TicketActions, actor_customer, actor_representative, intake_get,
 };
 use uuid::Uuid;
 
-fn ctx() -> Context<Memory> {
-    Context::new(Memory::new())
+fn ctx() -> ash_core::Runtime<Memory> {
+    ash_core::Runtime::new(Memory::new())
 }
 
 #[tokio::test]
 async fn customer_opens_and_reads_own_ticket() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer)
         .subject("Broken mouse")
@@ -32,9 +35,16 @@ async fn customer_opens_and_reads_own_ticket() {
 
 #[tokio::test]
 async fn other_customer_does_not_see_ticket() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_other = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_other = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
 
     Ticket::open(&as_customer)
         .subject("Broken mouse")
@@ -46,12 +56,22 @@ async fn other_customer_does_not_see_ticket() {
 
 #[tokio::test]
 async fn representative_sees_unassigned_then_only_assigned() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let bob = Representative::create(&ctx).name("Bob").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
-    let as_bob = ctx.with_actor(actor_representative(bob.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_bob = ctx_runtime.bind(
+        Some(actor_representative(bob.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     assert_eq!(Ticket::query(&as_bob).load().await.unwrap().len(), 1);
@@ -72,11 +92,18 @@ async fn representative_sees_unassigned_then_only_assigned() {
 
 #[tokio::test]
 async fn opener_still_sees_ticket_after_assign() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     ticket
@@ -91,10 +118,17 @@ async fn opener_still_sees_ticket_after_assign() {
 
 #[tokio::test]
 async fn opener_and_assignee_can_close() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let first = Ticket::open(&as_customer).subject("One").await.unwrap();
     let closed = first.close(&as_customer).await.unwrap();
@@ -112,12 +146,22 @@ async fn opener_and_assignee_can_close() {
 
 #[tokio::test]
 async fn other_representative_cannot_close_assigned_ticket() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let bob = Representative::create(&ctx).name("Bob").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
-    let as_bob = ctx.with_actor(actor_representative(bob.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_bob = ctx_runtime.bind(
+        Some(actor_representative(bob.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     let assigned = ticket
@@ -137,9 +181,13 @@ async fn other_representative_cannot_close_assigned_ticket() {
 
 #[tokio::test]
 async fn customer_cannot_assign() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     let err = ticket
@@ -152,20 +200,28 @@ async fn customer_cannot_assign() {
 
 #[tokio::test]
 async fn open_without_actor_is_forbidden() {
-    let ctx = ctx();
-    let err = Ticket::open(&ctx)
-        .subject("Printer")
-        .await
-        .unwrap_err();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let err = Ticket::open(&ctx).subject("Printer").await.unwrap_err();
     assert!(matches!(err, Error::Forbidden));
 }
 
 #[tokio::test]
 async fn user_filter_and_policy_filter_combine() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    Ticket::open(&as_customer).subject("open one").await.unwrap();
-    let closed = Ticket::open(&as_customer).subject("close me").await.unwrap();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    Ticket::open(&as_customer)
+        .subject("open one")
+        .await
+        .unwrap();
+    let closed = Ticket::open(&as_customer)
+        .subject("close me")
+        .await
+        .unwrap();
     closed.close(&as_customer).await.unwrap();
 
     // Uses operator overloading (&) for filter composition
@@ -180,8 +236,12 @@ async fn user_filter_and_policy_filter_combine() {
 
 #[tokio::test]
 async fn extra_input_is_rejected() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let err = ash_core::create::<Ticket, _>(
         &as_customer,
         "open",
@@ -197,7 +257,8 @@ async fn extra_input_is_rejected() {
 
 #[tokio::test]
 async fn representatives_can_be_listed() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     Representative::create(&ctx).name("Alice").await.unwrap();
     Representative::create(&ctx).name("Bob").await.unwrap();
     let people = Representative::query(&ctx).load().await.unwrap();
@@ -206,8 +267,12 @@ async fn representatives_can_be_listed() {
 
 #[tokio::test]
 async fn generic_action_analyzes_text() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let analysis = Ticket::analyze_subject(&as_customer)
         .text("Printer is jammed!")
         .await
@@ -218,18 +283,20 @@ async fn generic_action_analyzes_text() {
 
 #[tokio::test]
 async fn generic_action_requires_actor() {
-    let ctx = ctx();
-    let err = Ticket::analyze_subject(&ctx)
-        .text("hi")
-        .await
-        .unwrap_err();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let err = Ticket::analyze_subject(&ctx).text("hi").await.unwrap_err();
     assert!(matches!(err, Error::Forbidden));
 }
 
 #[tokio::test]
 async fn manual_intake_skips_data_layer() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let ticket = Ticket::intake(&as_customer)
         .subject("From email")
         .persist(|_ctx, ticket| async move {
@@ -245,14 +312,18 @@ async fn manual_intake_skips_data_layer() {
     assert!(Ticket::query(&as_customer).load().await.unwrap().is_empty());
     let stored = intake_get(ticket.id).expect("intake store");
     assert_eq!(stored.subject, "From email");
-    assert_eq!(stored.opener_id, as_customer.actor.as_ref().unwrap().id);
+    assert_eq!(stored.opener_id, as_customer.actor().unwrap().id);
 }
 
 #[tokio::test]
 async fn changeset_applies_changes_before_commit() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
     let changeset = Ticket::open(&as_customer)
         .subject("Inspect me")
         .changeset()
@@ -271,8 +342,12 @@ async fn changeset_applies_changes_before_commit() {
 
 #[tokio::test]
 async fn query_sorts_by_subject() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     Ticket::open(&as_customer).subject("zeta").await.unwrap();
     Ticket::open(&as_customer).subject("alpha").await.unwrap();
     let listed = Ticket::query(&as_customer)
@@ -286,8 +361,12 @@ async fn query_sorts_by_subject() {
 
 #[tokio::test]
 async fn create_rejects_manual_action() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let err = ash_core::create::<Ticket, _>(
         &as_customer,
         "intake",
@@ -300,9 +379,16 @@ async fn create_rejects_manual_action() {
 
 #[tokio::test]
 async fn calculation_is_absent_until_loaded() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let ticket = Ticket::open(&as_customer).subject("hello world").await.unwrap();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let ticket = Ticket::open(&as_customer)
+        .subject("hello world")
+        .await
+        .unwrap();
     assert_eq!(ticket.subject_length, None);
 
     let listed = Ticket::query(&as_customer).load().await.unwrap();
@@ -318,10 +404,17 @@ async fn calculation_is_absent_until_loaded() {
 
 #[tokio::test]
 async fn calculation_filter_runs_without_loading() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     Ticket::open(&as_customer).subject("hi").await.unwrap();
-    Ticket::open(&as_customer).subject("hello world").await.unwrap();
+    Ticket::open(&as_customer)
+        .subject("hello world")
+        .await
+        .unwrap();
 
     let long = Ticket::query(&as_customer)
         .filter(fields::subject_length.gt(5_i64))
@@ -335,10 +428,17 @@ async fn calculation_filter_runs_without_loading() {
 
 #[tokio::test]
 async fn belongs_to_is_not_loaded_until_asked() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     ticket
         .assign(&as_alice)
@@ -354,13 +454,20 @@ async fn belongs_to_is_not_loaded_until_asked() {
         .one()
         .await
         .unwrap();
-    assert_eq!(loaded.representative.as_option().unwrap().unwrap().name, "Alice");
+    assert_eq!(
+        loaded.representative.as_option().unwrap().unwrap().name,
+        "Alice"
+    );
 }
 
 #[tokio::test]
 async fn belongs_to_null_fk_loads_none() {
-    let ctx = ctx();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     Ticket::open(&as_customer).subject("Printer").await.unwrap();
     let loaded = Ticket::query(&as_customer)
         .include("representative")
@@ -372,10 +479,17 @@ async fn belongs_to_null_fk_loads_none() {
 
 #[tokio::test]
 async fn has_many_loads_assigned_tickets() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     ticket
         .assign(&as_alice)
@@ -399,11 +513,21 @@ async fn has_many_loads_assigned_tickets() {
 
 #[tokio::test]
 async fn has_many_respects_ticket_read_policy() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
-    let as_customer = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_other = ctx.with_actor(actor_customer(Uuid::new_v4()));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_other = ctx_runtime.bind(
+        Some(actor_customer(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
     let ticket = Ticket::open(&as_customer).subject("Printer").await.unwrap();
     ticket
         .assign(&as_alice)

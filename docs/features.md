@@ -350,7 +350,7 @@ In the Ash architecture, **Notifiers** run side-effects (e.g. broadcasting event
 
 ```rust
 use std::sync::Arc;
-use ash_core::{Context, resource};
+use ash_core::{Runtime, resource};
 use ash_memory::Memory;
 use ash_pubsub::{PubSub, PubSubNotifier};
 
@@ -359,7 +359,7 @@ let pubsub = Arc::new(PubSub::new());
 let notifier = Arc::new(PubSubNotifier::new(Arc::clone(&pubsub)));
 
 // 2. Attach to execution Context (defined in `ash-core`)
-let ctx = Context::new(Memory::new()).with_notifier(notifier);
+let ctx = Runtime::new(Memory::new()).bootstrap().with_notifier(notifier);
 
 // 3. Subscribe to topic patterns
 let mut sub_all_orders = pubsub.subscribe("order:*");
@@ -445,7 +445,7 @@ Fluently attach `PubSub` to contexts and subscribe to typed event streams withou
 use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 
 // 1. Fluent context setup:
-let ctx = Context::new(Memory::new()).with_pubsub(Arc::clone(&pubsub));
+let ctx = Runtime::new(Memory::new()).bootstrap().with_pubsub(Arc::clone(&pubsub));
 
 // 2. Typed subscription streams:
 let mut sub_all = Article::subscribe_all(&pubsub);              // "article:*"
@@ -607,7 +607,7 @@ Resources can explicitly declare a type-level storage target via `store <Type>;`
 4. **Storage-agnostic testing** where a unit test can route everything to `Memory` via `.with_default(memory)` without changing resource code.
 
 ```rust
-use ash_core::{resource, Context, HasStore, StoreRegistry, StoreTag};
+use ash_core::{resource, Runtime, HasStore, StoreRegistry, StoreTag};
 
 // 1. Define type-level store marker tags
 pub struct PrimaryDb;
@@ -662,7 +662,7 @@ let registry = StoreRegistry::new()
     .with_store::<PrimaryDb, _>(primary_sqlite)
     .with_store::<AuditDb, _>(audit_sqlite);
 
-let ctx = Context::new(registry);
+let ctx = Runtime::new(registry).bootstrap();
 
 // 2. Operations automatically route to the right store!
 let user = User::create(&ctx).email("alice@example.com").call().await?; // writes to PrimaryDb
@@ -1199,22 +1199,19 @@ let custom_result = Messenger::dynamic_operation(&ctx)
 
 ---
 
-## 19. Tenant & Context Metadata (`with_tenant`, `with_metadata`, `multitenancy`)
+## 19. Tenant and context metadata
 
-Multi-tenant systems and distributed tracing require carrying contextual request metadata (e.g. current tenant, trace ID, client IP) alongside the actor throughout queries, changesets, validations, generic actions, and event notifications.
+`Runtime` binds the actor and tenant at the application boundary. Context clones and
+transactions retain that immutable scope. Queries, changesets and generated builders
+cannot replace it. See [Scoped access](scoped-access.md) for system scopes,
+credential grants, transport binding and cross-scope transaction behavior.
 
 ### Capabilities
-- **Fluent Tenant Management on `Context`**:
-  - `ctx.with_tenant("org_123")` binds a tenant to the context.
-  - `ctx.without_tenant()` clears the tenant.
-  - `ctx.tenant()` reads `Option<&str>`.
-- **Arbitrary Request Metadata**:
-  - `ctx.with_metadata("trace_id", "abc")` stores typed `Value` in `ctx.metadata`.
-  - `ctx.get_metadata("trace_id")` provides convenient lookup.
-- **Tenant Inheritance & Overrides**:
-  - `Resource::create(&ctx)` automatically inherits the tenant from `ctx`.
-  - Action builders support explicit overrides: `Resource::create(&ctx).tenant("org_custom")`.
-  - Queries inherit `ctx.tenant()` and support overrides: `Resource::query(&ctx).tenant("org_custom")`.
+
+- `runtime.bind(actor, tenant)` creates a request scope. `ctx.tenant()` borrows its tenant.
+- `runtime.system().bind(actor, tenant)` creates an explicit privileged scope that still enforces tenancy.
+- `ctx.with_metadata("trace_id", "abc")` adds request metadata. `ctx.get_metadata("trace_id")` borrows it.
+- Actions and queries use the tenant bound in their context.
 - **ValidationContext & ChangeContext Integration**:
   - `ValidationContext` and `ChangeContext` expose `ctx.tenant: Option<&str>` and `ctx.metadata: &FieldMap`.
   - Custom validations and changes can enforce tenant isolation or automatically populate tenant foreign keys.
@@ -1225,9 +1222,9 @@ Multi-tenant systems and distributed tracing require carrying contextual request
 
 ### Example Usage
 ```rust
-// 1. Build an execution context with tenant and metadata
-let ctx = Context::new(data_layer)
-    .with_tenant("tenant_acme")
+// 1. Bind an execution context with tenant and metadata
+let runtime = Runtime::new(data_layer);
+let ctx = runtime.bind(None, Some("tenant_acme".into()))
     .with_metadata("request_id", "req-xyz-987")
     .with_metadata("client_ip", "192.168.1.1");
 
@@ -1237,9 +1234,9 @@ let doc = Document::create(&ctx)
     .call()
     .await?;
 
-// 3. Or override tenant on the action builder directly
-let doc_alt = Document::create(&ctx)
-    .tenant("tenant_beta")
+// 3. Trusted application code binds another tenant deliberately
+let beta = runtime.bind(None, Some("tenant_beta".into()));
+let doc_alt = Document::create(&beta)
     .title("Partner Overview")
     .call()
     .await?;

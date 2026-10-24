@@ -1,7 +1,7 @@
-use std::time::{Duration, Instant};
 use ash_memory::Memory;
 use helpdesk::ticket::fields as t;
 use helpdesk::{Helpdesk, Status, Ticket, actor_customer};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 async fn run_bench<F, Fut>(name: &str, warmup_dur: Duration, bench_dur: Duration, mut op: F)
@@ -40,9 +40,18 @@ where
     println!("Benchmark: {name}");
     println!("  Iterations:   {:>10}", latencies.len());
     println!("  Throughput:   {:>10.2} ips", ips);
-    println!("  Average:      {:>10.2} µs", avg.as_nanos() as f64 / 1000.0);
-    println!("  Median:       {:>10.2} µs", median.as_nanos() as f64 / 1000.0);
-    println!("  P99:          {:>10.2} µs", p99.as_nanos() as f64 / 1000.0);
+    println!(
+        "  Average:      {:>10.2} µs",
+        avg.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "  Median:       {:>10.2} µs",
+        median.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "  P99:          {:>10.2} µs",
+        p99.as_nanos() as f64 / 1000.0
+    );
     println!("--------------------------------------------------\n");
 }
 
@@ -52,8 +61,9 @@ async fn main() {
 
     // Benchmark 1: Ticket.open
     {
-        let desk = Helpdesk::new(Memory::new());
-        let customer = desk.with_actor(actor_customer(Uuid::new_v4()));
+        let desk_runtime = ash_core::Runtime::new(Memory::new());
+        let customer =
+            Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(Uuid::new_v4())), None));
         run_bench(
             "Ticket.open (validate + changeset + in-memory)",
             Duration::from_secs(2),
@@ -67,7 +77,8 @@ async fn main() {
 
     // Benchmark 2: Representative.create
     {
-        let desk = Helpdesk::new(Memory::new());
+        let desk_runtime = ash_core::Runtime::new(Memory::new());
+        let desk = Helpdesk::from_context(desk_runtime.bootstrap());
         run_bench(
             "Representative.create (validate + in-memory)",
             Duration::from_secs(2),
@@ -81,10 +92,14 @@ async fn main() {
 
     // Benchmark 3: Ticket.read (filter status == open, 100+ records)
     {
-        let desk = Helpdesk::new(Memory::new());
-        let customer = desk.with_actor(actor_customer(Uuid::new_v4()));
+        let desk_runtime = ash_core::Runtime::new(Memory::new());
+        let customer =
+            Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(Uuid::new_v4())), None));
         for i in 1..=100 {
-            customer.open_ticket(&format!("Ticket number {i}")).await.unwrap();
+            customer
+                .open_ticket(&format!("Ticket number {i}"))
+                .await
+                .unwrap();
         }
 
         run_bench(

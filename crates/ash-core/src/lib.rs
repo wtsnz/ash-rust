@@ -56,10 +56,12 @@ pub use changeset::{
     AfterActionHook, AfterTransactionHook, BeforeActionHook, Changeset, DynamicChangeset,
     DynamicChangesetHook, IntoFieldMap, ManagedRelationshipSpec,
 };
-pub use context::Context;
+pub use context::{Context, Runtime};
 pub use data_layer::{
     CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
+// Re-export the deprecated compatibility insert until the write-plan migration.
+#[allow(deprecated)]
 pub use engine::{
     KeysetCursor, Page, Query, RelatedQuery, after_read, build_keyset_filter, count_related_query,
     create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via,

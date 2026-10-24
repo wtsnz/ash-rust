@@ -4,9 +4,9 @@
 
 use ash_core::{
     ActionDef, ActionKind, Actor, Atomic, AtomicCondition, AtomicContext, AtomicExpr, AttrType,
-    AttributeDef, Change, ChangeContext, Check, Context, CustomChange, CustomValidation, DataLayer,
-    ConstValue, Error, FieldMap, PolicyDef, PolicyEffect, PolicyWhen, ResourceDef, Result, Validation,
-    ValidationContext, Value, destroy_dynamic_by_id, update_dynamic,
+    AttributeDef, Change, ChangeContext, Check, ConstValue, Context, CustomChange,
+    CustomValidation, DataLayer, Error, FieldMap, PolicyDef, PolicyEffect, PolicyWhen, ResourceDef,
+    Result, Validation, ValidationContext, Value, destroy_dynamic_by_id, update_dynamic,
     update_existing_dynamic,
 };
 use ash_memory::Memory;
@@ -27,7 +27,10 @@ impl CustomChange for Increment {
         Atomic::Atomic {
             set: vec![(
                 "count".into(),
-                AtomicExpr::Add(Box::new(AtomicExpr::field("count")), Box::new(AtomicExpr::value(1i64))),
+                AtomicExpr::Add(
+                    Box::new(AtomicExpr::field("count")),
+                    Box::new(AtomicExpr::value(1i64)),
+                ),
             )],
             conditions: Vec::new(),
         }
@@ -39,13 +42,24 @@ struct MustBeOpen;
 
 impl CustomValidation for MustBeOpen {
     fn validate(&self, ctx: &ValidationContext<'_>) -> Result<()> {
-        let status = ctx.record.and_then(|r| r.get("status")).and_then(Value::as_str).unwrap_or("");
-        if status == "open" { Ok(()) } else { Err(closed_error(status)) }
+        let status = ctx
+            .record
+            .and_then(|r| r.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if status == "open" {
+            Ok(())
+        } else {
+            Err(closed_error(status))
+        }
     }
 
     fn atomic(&self, _ctx: &AtomicContext<'_>) -> Atomic {
         Atomic::conditions(vec![AtomicCondition::new(
-            AtomicExpr::DistinctFrom(Box::new(AtomicExpr::field("status")), Box::new(AtomicExpr::value("open"))),
+            AtomicExpr::DistinctFrom(
+                Box::new(AtomicExpr::field("status")),
+                Box::new(AtomicExpr::value("open")),
+            ),
             vec!["status".into()],
             |row| closed_error(row.get("status").and_then(Value::as_str).unwrap_or("")),
         )])
@@ -64,7 +78,12 @@ static INCREMENT: Increment = Increment;
 static MUST_BE_OPEN: MustBeOpen = MustBeOpen;
 
 fn shout(ctx: &mut ChangeContext<'_>) -> Result<()> {
-    let name = ctx.fields.get("name").and_then(Value::as_str).unwrap_or("").to_uppercase();
+    let name = ctx
+        .fields
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_uppercase();
     ctx.fields.insert("name".into(), Value::String(name));
     Ok(())
 }
@@ -72,24 +91,39 @@ fn shout(ctx: &mut ChangeContext<'_>) -> Result<()> {
 static ACTIONS: &[ActionDef] = &[
     ActionDef::create("create").accept(&["name", "status", "count", "owner_id"]),
     ActionDef::read("read").primary(),
-    ActionDef::update("rename")
-        .accept(&["name"])
-        .validations(&[Validation::string_length("name", Some(2), None), Validation::present("status")]),
+    ActionDef::update("rename").accept(&["name"]).validations(&[
+        Validation::string_length("name", Some(2), None),
+        Validation::present("status"),
+    ]),
     ActionDef::update("bump").changes(&[Change::Custom(&INCREMENT)]),
     // Under an optimistic lock: it writes only at the version it read.
-    ActionDef::update("locked_bump").changes(&[Change::OptimisticLock { field: "version" }, Change::Custom(&INCREMENT)]),
+    ActionDef::update("locked_bump").changes(&[
+        Change::OptimisticLock { field: "version" },
+        Change::Custom(&INCREMENT),
+    ]),
     ActionDef::update("close")
-        .changes(&[Change::SetAttribute { field: "status", value: ash_core::ConstValue::Str("closed") }])
+        .changes(&[Change::SetAttribute {
+            field: "status",
+            value: ash_core::ConstValue::Str("closed"),
+        }])
         .validations(&[Validation::Custom(&MUST_BE_OPEN)]),
     ActionDef::update("shout").changes(&[Change::Func(shout)]),
-    ActionDef::update("shout_reading_first").changes(&[Change::Func(shout)]).require_atomic(false),
+    ActionDef::update("shout_reading_first")
+        .changes(&[Change::Func(shout)])
+        .require_atomic(false),
     // Only an open counter goes.
     ActionDef::destroy("remove").validations(&[Validation::Custom(&MUST_BE_OPEN)]),
     ActionDef::destroy("shout_and_remove").changes(&[Change::Func(shout)]),
-    ActionDef::destroy("archive")
+    ActionDef::destroy("archive").soft().changes(&[
+        Change::OptimisticLock { field: "version" },
+        Change::SetAttributeFn {
+            field: "archived_at",
+            value: now,
+        },
+    ]),
+    ActionDef::destroy("shout_and_archive")
         .soft()
-        .changes(&[Change::OptimisticLock { field: "version" }, Change::SetAttributeFn { field: "archived_at", value: now }]),
-    ActionDef::destroy("shout_and_archive").soft().changes(&[Change::Func(shout)]),
+        .changes(&[Change::Func(shout)]),
     ActionDef::destroy("shout_and_archive_reading_first")
         .soft()
         .changes(&[Change::Func(shout)])
@@ -105,16 +139,26 @@ fn now() -> Value {
 }
 
 static POLICIES: &[PolicyDef] = &[
-    PolicyDef::when(PolicyWhen::ActionType(ActionKind::Create), &[PolicyEffect::AuthorizeIf(Check::Always)]),
-    PolicyDef::when(PolicyWhen::ActionType(ActionKind::Read), &[PolicyEffect::AuthorizeIf(Check::Always)]),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Create),
+        &[PolicyEffect::AuthorizeIf(Check::Always)],
+    ),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Read),
+        &[PolicyEffect::AuthorizeIf(Check::Always)],
+    ),
     // Only its owner updates a counter, or destroys it.
     PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Update),
-        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor {
+            field: "owner_id",
+        })],
     ),
     PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Destroy),
-        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor {
+            field: "owner_id",
+        })],
     ),
 ];
 
@@ -158,21 +202,31 @@ static COUNTER: ResourceDef = ResourceDef {
 // Counters only their owner, or anyone for a public one, reads; only the owner updates
 // or destroys.
 static SECRET_POLICIES: &[PolicyDef] = &[
-    PolicyDef::when(PolicyWhen::ActionType(ActionKind::Create), &[PolicyEffect::AuthorizeIf(Check::Always)]),
+    PolicyDef::when(
+        PolicyWhen::ActionType(ActionKind::Create),
+        &[PolicyEffect::AuthorizeIf(Check::Always)],
+    ),
     PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Read),
         &[
             PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" }),
-            PolicyEffect::AuthorizeIf(Check::Eq { field: "name", value: ConstValue::Str("public") }),
+            PolicyEffect::AuthorizeIf(Check::Eq {
+                field: "name",
+                value: ConstValue::Str("public"),
+            }),
         ],
     ),
     PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Update),
-        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor {
+            field: "owner_id",
+        })],
     ),
     PolicyDef::when(
         PolicyWhen::ActionType(ActionKind::Destroy),
-        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor { field: "owner_id" })],
+        &[PolicyEffect::AuthorizeIf(Check::RelatesToActor {
+            field: "owner_id",
+        })],
     ),
 ];
 
@@ -188,7 +242,10 @@ fn action(name: &str) -> &'static ActionDef {
 }
 
 fn input(pairs: &[(&str, Value)]) -> FieldMap {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 /// A counter owned by `owner`, open, at zero.
@@ -215,31 +272,56 @@ fn id_of(record: &FieldMap) -> Uuid {
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert!(data.can_update_atomically(&COUNTER));
     let owner = Uuid::new_v4();
-    let ctx = Context::new(data).with_actor(Actor::new(owner));
+    let ctx_runtime = ash_core::Runtime::new(data);
+    let ctx = ctx_runtime.bind(Some(Actor::new(owner)), None);
     let created = counter(&ctx, owner).await;
     let id = id_of(&created);
 
     // What it sets, with `updated_at` moved. With no lock, the version stays.
-    let renamed = update_dynamic(&ctx, &COUNTER, action("rename"), id, input(&[("name", Value::from("second"))]))
-        .await
-        .unwrap();
+    let renamed = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("rename"),
+        id,
+        input(&[("name", Value::from("second"))]),
+    )
+    .await
+    .unwrap();
     assert_eq!(renamed.get("name"), Some(&Value::from("second")));
     assert_eq!(renamed.get("version"), Some(&Value::Int(1)));
     assert_ne!(renamed.get("updated_at"), created.get("updated_at"));
 
     // Setting what it holds changes nothing, so `updated_at` stays, as in Ash.
-    let same = update_dynamic(&ctx, &COUNTER, action("rename"), id, input(&[("name", Value::from("second"))]))
-        .await
-        .unwrap();
+    let same = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("rename"),
+        id,
+        input(&[("name", Value::from("second"))]),
+    )
+    .await
+    .unwrap();
     assert_eq!(same.get("updated_at"), renamed.get("updated_at"));
     assert_eq!(same.get("version"), Some(&Value::Int(1)));
 
     // A value it sets that fails validation fails before the statement.
-    let short = update_dynamic(&ctx, &COUNTER, action("rename"), id, input(&[("name", Value::from("x"))])).await;
-    assert!(matches!(short, Err(Error::Validation { ref field, .. }) if field == "name"), "{short:?}");
+    let short = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("rename"),
+        id,
+        input(&[("name", Value::from("x"))]),
+    )
+    .await;
+    assert!(
+        matches!(short, Err(Error::Validation { ref field, .. }) if field == "name"),
+        "{short:?}"
+    );
 
     // A condition on the stored record fails in the statement, with the error it gives.
-    let closed = update_dynamic(&ctx, &COUNTER, action("close"), id, FieldMap::new()).await.unwrap();
+    let closed = update_dynamic(&ctx, &COUNTER, action("close"), id, FieldMap::new())
+        .await
+        .unwrap();
     assert_eq!(closed.get("status"), Some(&Value::from("closed")));
     let again = update_dynamic(&ctx, &COUNTER, action("close"), id, FieldMap::new()).await;
     match again {
@@ -251,7 +333,10 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     }
 
     // Policies are checked against the stored record: only the owner updates it.
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let forbidden = update_dynamic(&stranger, &COUNTER, action("bump"), id, FieldMap::new()).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
     // A counter with no owner relates to no one: a policy that can't be met forbids.
@@ -259,22 +344,49 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
         &ctx,
         &COUNTER,
         action("create"),
-        input(&[("name", Value::from("nobody's")), ("status", Value::from("open")), ("count", Value::Int(0))]),
+        input(&[
+            ("name", Value::from("nobody's")),
+            ("status", Value::from("open")),
+            ("count", Value::Int(0)),
+        ]),
     )
     .await
     .unwrap();
-    let forbidden = update_dynamic(&ctx, &COUNTER, action("bump"), id_of(&ownerless), FieldMap::new()).await;
+    let forbidden = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("bump"),
+        id_of(&ownerless),
+        FieldMap::new(),
+    )
+    .await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
 
     // No such record: not found.
-    let missing = update_dynamic(&ctx, &COUNTER, action("bump"), Uuid::new_v4(), FieldMap::new()).await;
+    let missing = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("bump"),
+        Uuid::new_v4(),
+        FieldMap::new(),
+    )
+    .await;
     assert!(matches!(missing, Err(Error::NotFound)), "{missing:?}");
 
     // Under a lock, by id: read first, then written at the version read, which it moves on.
-    let locked = update_dynamic(&ctx, &COUNTER, action("locked_bump"), id, FieldMap::new()).await.unwrap();
+    let locked = update_dynamic(&ctx, &COUNTER, action("locked_bump"), id, FieldMap::new())
+        .await
+        .unwrap();
     assert_eq!(locked.get("version"), Some(&Value::Int(2)));
     // The record in hand, from a copy before that: stale.
-    let stale = update_existing_dynamic(&ctx, &COUNTER, action("locked_bump"), created.clone(), FieldMap::new()).await;
+    let stale = update_existing_dynamic(
+        &ctx,
+        &COUNTER,
+        action("locked_bump"),
+        created.clone(),
+        FieldMap::new(),
+    )
+    .await;
     assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
 
     // Increments from the stored count: none lost, however many at once.
@@ -282,14 +394,22 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     let fresh_id = id_of(&fresh);
     let bumps = (0..20).map(|_| {
         let ctx = ctx.clone();
-        tokio::spawn(async move { update_dynamic(&ctx, &COUNTER, action("bump"), fresh_id, FieldMap::new()).await })
+        tokio::spawn(async move {
+            update_dynamic(&ctx, &COUNTER, action("bump"), fresh_id, FieldMap::new()).await
+        })
     });
     for bump in bumps {
         bump.await.unwrap().unwrap();
     }
-    let counted = update_dynamic(&ctx, &COUNTER, action("rename"), fresh_id, input(&[("name", Value::from("done"))]))
-        .await
-        .unwrap();
+    let counted = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("rename"),
+        fresh_id,
+        input(&[("name", Value::from("done"))]),
+    )
+    .await
+    .unwrap();
     assert_eq!(counted.get("count"), Some(&Value::Int(20)));
 
     // Under a lock, at once by id: each written at the version it read, so one that read
@@ -297,7 +417,16 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     // one that succeeded is counted.
     let locked_bumps = (0..20).map(|_| {
         let ctx = ctx.clone();
-        tokio::spawn(async move { update_dynamic(&ctx, &COUNTER, action("locked_bump"), fresh_id, FieldMap::new()).await })
+        tokio::spawn(async move {
+            update_dynamic(
+                &ctx,
+                &COUNTER,
+                action("locked_bump"),
+                fresh_id,
+                FieldMap::new(),
+            )
+            .await
+        })
     });
     let mut succeeded = 0;
     for bump in locked_bumps {
@@ -307,18 +436,39 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
             Err(other) => panic!("a lost race is not found, not {other:?}"),
         }
     }
-    let after = update_dynamic(&ctx, &COUNTER, action("rename"), fresh_id, input(&[("name", Value::from("done"))]))
-        .await
-        .unwrap();
+    let after = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("rename"),
+        fresh_id,
+        input(&[("name", Value::from("done"))]),
+    )
+    .await
+    .unwrap();
     assert_eq!(after.get("count"), Some(&Value::Int(20 + succeeded)));
     assert_eq!(after.get("version"), Some(&Value::Int(1 + succeeded)));
 
     // A change that needs the record in memory: must be atomic, unless it reads first.
     let must = update_dynamic(&ctx, &COUNTER, action("shout"), fresh_id, FieldMap::new()).await;
-    assert!(matches!(must, Err(Error::MustBeAtomic { action: "shout", .. })), "{must:?}");
-    let shouted = update_dynamic(&ctx, &COUNTER, action("shout_reading_first"), fresh_id, FieldMap::new())
-        .await
-        .unwrap();
+    assert!(
+        matches!(
+            must,
+            Err(Error::MustBeAtomic {
+                action: "shout",
+                ..
+            })
+        ),
+        "{must:?}"
+    );
+    let shouted = update_dynamic(
+        &ctx,
+        &COUNTER,
+        action("shout_reading_first"),
+        fresh_id,
+        FieldMap::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(shouted.get("name"), Some(&Value::from("DONE")));
 }
 
@@ -326,16 +476,22 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
 async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
     assert!(data.can_destroy_atomically(&COUNTER));
     let owner = Uuid::new_v4();
-    let ctx = Context::new(data).with_actor(Actor::new(owner));
+    let ctx_runtime = ash_core::Runtime::new(data);
+    let ctx = ctx_runtime.bind(Some(Actor::new(owner)), None);
     let removable = counter(&ctx, owner).await;
     let id = id_of(&removable);
 
     // Policies are checked against the stored record: only the owner destroys it.
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let forbidden = destroy_dynamic_by_id(&stranger, &COUNTER, action("remove"), id).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
     // It returns the record as it was deleted, and then there's none.
-    let removed = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id).await.unwrap();
+    let removed = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id)
+        .await
+        .unwrap();
     assert_eq!(removed.get("name"), Some(&Value::from("first")));
     let missing = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), id).await;
     assert!(matches!(missing, Err(Error::NotFound)), "{missing:?}");
@@ -343,17 +499,21 @@ async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
     // A condition on the stored record fails in the statement, and nothing goes.
     let closing = counter(&ctx, owner).await;
     let closing_id = id_of(&closing);
-    update_dynamic(&ctx, &COUNTER, action("close"), closing_id, FieldMap::new()).await.unwrap();
+    update_dynamic(&ctx, &COUNTER, action("close"), closing_id, FieldMap::new())
+        .await
+        .unwrap();
     let refused = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id).await;
     match refused {
         Err(Error::Validation { message, .. }) => assert_eq!(message, "is closed, not open"),
         other => panic!("expected the closed error, got {other:?}"),
     }
-    let still_there = update_dynamic(&ctx, &COUNTER, action("bump"), closing_id, FieldMap::new()).await;
+    let still_there =
+        update_dynamic(&ctx, &COUNTER, action("bump"), closing_id, FieldMap::new()).await;
     assert!(still_there.is_ok(), "{still_there:?}");
 
     // A hard destroy that can't be one statement reads first, as in Ash.
-    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_remove"), closing_id).await;
+    let shouted =
+        destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_remove"), closing_id).await;
     assert!(shouted.is_ok(), "{shouted:?}");
     let gone = destroy_dynamic_by_id(&ctx, &COUNTER, action("remove"), closing_id).await;
     assert!(matches!(gone, Err(Error::NotFound)), "{gone:?}");
@@ -361,29 +521,51 @@ async fn destroy_scenario<D: DataLayer + Clone + 'static>(data: D) {
     // A soft destroy is an update: the version bumped, the change made.
     let archivable = counter(&ctx, owner).await;
     let archivable_id = id_of(&archivable);
-    let archived = destroy_dynamic_by_id(&ctx, &COUNTER, action("archive"), archivable_id).await.unwrap();
-    assert!(!archived.get("archived_at").is_none_or(Value::is_null), "{archived:?}");
+    let archived = destroy_dynamic_by_id(&ctx, &COUNTER, action("archive"), archivable_id)
+        .await
+        .unwrap();
+    assert!(
+        !archived.get("archived_at").is_none_or(Value::is_null),
+        "{archived:?}"
+    );
     assert_eq!(archived.get("version"), Some(&Value::Int(2)));
 
     // A soft destroy that can't be one statement must be atomic, unless it reads first.
-    let must = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive"), archivable_id).await;
-    assert!(matches!(must, Err(Error::MustBeAtomic { action: "shout_and_archive", .. })), "{must:?}");
-    let shouted = destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive_reading_first"), archivable_id)
-        .await
-        .unwrap();
+    let must =
+        destroy_dynamic_by_id(&ctx, &COUNTER, action("shout_and_archive"), archivable_id).await;
+    assert!(
+        matches!(
+            must,
+            Err(Error::MustBeAtomic {
+                action: "shout_and_archive",
+                ..
+            })
+        ),
+        "{must:?}"
+    );
+    let shouted = destroy_dynamic_by_id(
+        &ctx,
+        &COUNTER,
+        action("shout_and_archive_reading_first"),
+        archivable_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(shouted.get("name"), Some(&Value::from("FIRST")));
 
     // A soft destroy of the record in hand runs as one update too: from a stale copy, stale.
-    let stale = ash_core::DynamicChangeset::for_destroy(&ctx, &COUNTER, action("archive"), archivable)
-        .unwrap()
-        .commit(&ctx)
-        .await;
+    let stale =
+        ash_core::DynamicChangeset::for_destroy(&ctx, &COUNTER, action("archive"), archivable)
+            .unwrap()
+            .commit(&ctx)
+            .await;
     assert!(matches!(stale, Err(Error::StaleRecord { .. })), "{stale:?}");
 }
 
 #[tokio::test]
 async fn updates_run_atomically_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");
@@ -400,7 +582,8 @@ async fn updates_run_atomically_in_memory() {
 
 #[tokio::test]
 async fn destroys_run_atomically_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");
@@ -422,8 +605,12 @@ async fn destroys_run_atomically_in_memory() {
 /// forbidden. As one statement, or reading first.
 async fn read_scope_scenario<D: DataLayer + Clone + 'static>(data: D) {
     let owner = Uuid::new_v4();
-    let ctx = Context::new(data).with_actor(Actor::new(owner));
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()));
+    let ctx_runtime = ash_core::Runtime::new(data);
+    let ctx = ctx_runtime.bind(Some(Actor::new(owner)), None);
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4())),
+        ctx.tenant().map(str::to_owned),
+    );
     let create = |name: &'static str| {
         ash_core::create_dynamic(
             &ctx,
@@ -441,26 +628,55 @@ async fn read_scope_scenario<D: DataLayer + Clone + 'static>(data: D) {
     let public = id_of(&create("public").await.unwrap());
 
     for name in ["bump", "shout_reading_first"] {
-        let hidden = update_dynamic(&stranger, &SECRET_COUNTER, action(name), private, FieldMap::new()).await;
+        let hidden = update_dynamic(
+            &stranger,
+            &SECRET_COUNTER,
+            action(name),
+            private,
+            FieldMap::new(),
+        )
+        .await;
         assert!(matches!(hidden, Err(Error::NotFound)), "{name}: {hidden:?}");
-        let visible = update_dynamic(&stranger, &SECRET_COUNTER, action(name), public, FieldMap::new()).await;
-        assert!(matches!(visible, Err(Error::Forbidden)), "{name}: {visible:?}");
+        let visible = update_dynamic(
+            &stranger,
+            &SECRET_COUNTER,
+            action(name),
+            public,
+            FieldMap::new(),
+        )
+        .await;
+        assert!(
+            matches!(visible, Err(Error::Forbidden)),
+            "{name}: {visible:?}"
+        );
     }
     for name in ["remove", "archive"] {
         let hidden = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), private).await;
         assert!(matches!(hidden, Err(Error::NotFound)), "{name}: {hidden:?}");
         let visible = destroy_dynamic_by_id(&stranger, &SECRET_COUNTER, action(name), public).await;
-        assert!(matches!(visible, Err(Error::Forbidden)), "{name}: {visible:?}");
+        assert!(
+            matches!(visible, Err(Error::Forbidden)),
+            "{name}: {visible:?}"
+        );
     }
 
     // The owner reads and updates either.
-    let bumped = update_dynamic(&ctx, &SECRET_COUNTER, action("bump"), private, FieldMap::new()).await.unwrap();
+    let bumped = update_dynamic(
+        &ctx,
+        &SECRET_COUNTER,
+        action("bump"),
+        private,
+        FieldMap::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(bumped.get("count"), Some(&Value::Int(1)));
 }
 
 #[tokio::test]
 async fn by_id_writes_find_their_record_through_the_read_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");

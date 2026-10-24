@@ -1,13 +1,12 @@
-
+use crate::action::DynamicAfterTransactionHook;
 use crate::action::{ActionKind, PersistKind};
+use crate::changeset::DynamicChangeset;
 use crate::changeset::IntoFieldMap;
+use crate::changeset::dynamic_upsert_identity as upsert_identity;
 use crate::context::Context;
 use crate::data_layer::{CompiledQuery, DataLayer, TransactionSupport};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
-use crate::action::DynamicAfterTransactionHook;
-use crate::changeset::DynamicChangeset;
-use crate::changeset::dynamic_upsert_identity as upsert_identity;
 use crate::pipeline::{action_named, expect_kind, expect_persist, pk_name, visible_scope};
 use crate::resource::Resource;
 use crate::value::{FieldMap, Value};
@@ -249,7 +248,10 @@ struct PreparedRow {
 }
 
 /// Runs `hooks` with a row's outcome.
-fn conclude(hooks: Vec<DynamicAfterTransactionHook>, outcome: std::result::Result<&FieldMap, &Error>) {
+fn conclude(
+    hooks: Vec<DynamicAfterTransactionHook>,
+    outcome: std::result::Result<&FieldMap, &Error>,
+) {
     for hook in hooks {
         hook(outcome);
     }
@@ -279,8 +281,12 @@ struct Scope {
 }
 
 impl Scope {
-    fn new<D: TransactionSupport>(ctx: &Context<D>, transaction: BulkTransaction, stop_on_error: bool) -> Self {
-        let can = ctx.data.can_transact();
+    fn new<D: TransactionSupport>(
+        ctx: &Context<D>,
+        transaction: BulkTransaction,
+        stop_on_error: bool,
+    ) -> Self {
+        let can = ctx.raw_data().can_transact();
         Self {
             per_batch: can && transaction == BulkTransaction::Batch,
             whole: can && transaction == BulkTransaction::All,
@@ -337,7 +343,11 @@ where
 /// Writes one batch: in a transaction of its own when the scope says so, which commits
 /// before the batch's notifications are sent. In a transaction, the first row that fails
 /// ends the batch and rolls it back.
-async fn in_batch<D, F, Fut>(ctx: &Context<D>, scope: Scope, write: F) -> Result<Vec<Result<FieldMap>>>
+async fn in_batch<D, F, Fut>(
+    ctx: &Context<D>,
+    scope: Scope,
+    write: F,
+) -> Result<Vec<Result<FieldMap>>>
 where
     D: TransactionSupport + 'static,
     F: FnOnce(Context<D>) -> Fut + Send,
@@ -420,7 +430,12 @@ fn settle<R: Resource>(
 }
 
 /// Splits prepared rows into what their batch writes and the hooks that wait on it.
-fn split(chunk: Vec<PreparedRow>) -> (Vec<(Value, DynamicChangeset)>, Vec<Vec<DynamicAfterTransactionHook>>) {
+fn split(
+    chunk: Vec<PreparedRow>,
+) -> (
+    Vec<(Value, DynamicChangeset)>,
+    Vec<Vec<DynamicAfterTransactionHook>>,
+) {
     chunk
         .into_iter()
         .map(|row| ((row.id, row.changeset), row.after_transactions))
@@ -449,13 +464,17 @@ where
     if let Some((identity, _)) = &opts.upsert {
         upsert_identity(&R::DEF, identity)?;
     }
-    let inputs: Vec<FieldMap> = inputs.into_iter().map(IntoFieldMap::into_field_map).collect();
+    let inputs: Vec<FieldMap> = inputs
+        .into_iter()
+        .map(IntoFieldMap::into_field_map)
+        .collect();
     let scope = Scope::new(ctx, opts.transaction, opts.stop_on_error);
     in_scope(ctx, scope, inputs.len(), move |ctx| async move {
         let mut result = BulkResult::default();
         let mut prepared = Vec::new();
         for input in inputs {
-            let mut changeset = match DynamicChangeset::for_create(&ctx, &R::DEF, action_def, input) {
+            let mut changeset = match DynamicChangeset::for_create(&ctx, &R::DEF, action_def, input)
+            {
                 Ok(changeset) => changeset,
                 Err(err) => {
                     scope.reject(&mut result, err)?;
@@ -500,7 +519,10 @@ where
                         .iter_mut()
                         .map(|(id, changeset)| (id.clone(), changeset.take_fields()))
                         .collect();
-                    let stored = ctx.data.bulk_create(&R::DEF, ctx.tenant.as_deref(), tuples).await?;
+                    let stored = ctx
+                        .raw_data()
+                        .bulk_create(&R::DEF, ctx.tenant(), tuples)
+                        .await?;
                     stored.into_iter().map(Ok).collect()
                 };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await
@@ -536,9 +558,10 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
         // Fetch existing records for authorization, cascading deletes, and notifications.
         // Tenant scope must match Query::load so knowing a UUID is not enough to delete across tenants.
         let id_filter = Filter::In(pk.to_string(), ids);
-        let (filter, tenant) = visible_scope(&R::DEF, Some(id_filter), ctx.tenant.clone())?;
+        let (filter, tenant) =
+            visible_scope(&R::DEF, Some(id_filter), ctx.tenant().map(str::to_owned))?;
         let rows = ctx
-            .data
+            .raw_data()
             .run_query(
                 &R::DEF,
                 &CompiledQuery {
@@ -567,7 +590,8 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         // A record changed since it was read is left out before anything
                         // runs for it, as Ash's filter leaves a stale record out.
                         if let Some(lock) = crate::engine::lock_of(action_def, &row)
-                            && let Err(err) = crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
+                            && let Err(err) =
+                                crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
                         {
                             match err {
                                 Error::StaleRecord { .. } => outcomes.push(Err(err)),
@@ -577,7 +601,12 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                             continue;
                         }
                         let destroyed = crate::engine::destroy_dynamic_with(
-                            &ctx, &R::DEF, action_def, id, &row, &cascade,
+                            &ctx,
+                            &R::DEF,
+                            action_def,
+                            id,
+                            &row,
+                            &cascade,
                         )
                         .await;
                         match destroyed {
@@ -597,7 +626,8 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
         // deleted together.
         let mut prepared = Vec::new();
         for row in rows {
-            let mut changeset = match DynamicChangeset::for_destroy(&ctx, &R::DEF, action_def, row) {
+            let mut changeset = match DynamicChangeset::for_destroy(&ctx, &R::DEF, action_def, row)
+            {
                 Ok(changeset) => changeset,
                 Err(err) => {
                     scope.reject(&mut result, err)?;
@@ -626,14 +656,20 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                 // one, a row whose relationships can't go fails alone and stays.
                 let parents: Vec<(Value, FieldMap)> = batch
                     .iter()
-                    .map(|(id, changeset)| (id.clone(), changeset.existing().cloned().unwrap_or_default()))
+                    .map(|(id, changeset)| {
+                        (
+                            id.clone(),
+                            changeset.existing().cloned().unwrap_or_default(),
+                        )
+                    })
                     .collect();
                 let mut existing = Vec::with_capacity(batch.len());
                 let mut ids = Vec::with_capacity(batch.len());
                 for (id, fields) in parents {
                     // A stale record is left out before its related records go.
                     if let Some(lock) = crate::engine::lock_of(action_def, &fields)
-                        && let Err(err) = crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
+                        && let Err(err) =
+                            crate::engine::check_lock(&ctx, &R::DEF, id.clone(), &lock).await
                     {
                         match err {
                             Error::StaleRecord { .. } => existing.push(Err(err)),
@@ -642,7 +678,14 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         }
                         continue;
                     }
-                    match crate::engine::handle_cascading_deletes(&ctx, &R::DEF, id.clone(), &fields).await {
+                    match crate::engine::handle_cascading_deletes(
+                        &ctx,
+                        &R::DEF,
+                        id.clone(),
+                        &fields,
+                    )
+                    .await
+                    {
                         Ok(()) => {
                             ids.push(id);
                             existing.push(Ok(fields));
@@ -656,9 +699,11 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                     let cascades = crate::engine::cascades(&R::DEF, action_def);
                     for row in existing.iter_mut() {
                         let Ok(fields) = row else { continue };
-                        let id = crate::pipeline::pk_name(&R::DEF).and_then(|pk| crate::value::required_pk(fields, pk))?;
+                        let id = crate::pipeline::pk_name(&R::DEF)
+                            .and_then(|pk| crate::value::required_pk(fields, pk))?;
                         let lock = crate::engine::lock_of(action_def, fields);
-                        match crate::engine::destroy_guarded(&ctx, &R::DEF, id, lock.as_ref()).await {
+                        match crate::engine::destroy_guarded(&ctx, &R::DEF, id, lock.as_ref()).await
+                        {
                             Ok(()) => {}
                             // Changed after its lock was checked and its related records
                             // went: those must come back, so the batch fails.
@@ -667,7 +712,9 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                         }
                     }
                 } else {
-                    ctx.data.bulk_destroy(&R::DEF, ctx.tenant.as_deref(), &ids).await?;
+                    ctx.raw_data()
+                        .bulk_destroy(&R::DEF, ctx.tenant(), &ids)
+                        .await?;
                 }
                 finish_rows(&ctx, batch, existing, notify, scope.transactional()).await
             })
@@ -712,13 +759,14 @@ where
         let mut result = BulkResult::default();
         let mut prepared = Vec::new();
         for (record, input) in updates {
-            let mut changeset = match DynamicChangeset::for_update(&ctx, &R::DEF, action_def, record, input) {
-                Ok(changeset) => changeset,
-                Err(err) => {
-                    scope.reject(&mut result, err)?;
-                    continue;
-                }
-            };
+            let mut changeset =
+                match DynamicChangeset::for_update(&ctx, &R::DEF, action_def, record, input) {
+                    Ok(changeset) => changeset,
+                    Err(err) => {
+                        scope.reject(&mut result, err)?;
+                        continue;
+                    }
+                };
             let after_transactions = changeset.take_after_transactions();
             match changeset.prepare(&ctx).await {
                 Ok(id) => prepared.push(PreparedRow {
@@ -748,15 +796,25 @@ where
                     .collect();
                 let stored = if action_def.has_optimistic_lock() {
                     // Each record as it was read, under the action's lock.
-                    let locks: Vec<_> =
-                        batch.iter().map(|(_, changeset)| changeset.existing().and_then(|existing| crate::engine::lock_of(action_def, existing))).collect();
+                    let locks: Vec<_> = batch
+                        .iter()
+                        .map(|(_, changeset)| {
+                            changeset
+                                .existing()
+                                .and_then(|existing| crate::engine::lock_of(action_def, existing))
+                        })
+                        .collect();
                     let mut stored = Vec::with_capacity(writes.len());
                     for ((id, changes), lock) in writes.into_iter().zip(locks) {
-                        stored.push(crate::engine::update_guarded(&ctx, &R::DEF, id, changes, lock).await);
+                        stored.push(
+                            crate::engine::update_guarded(&ctx, &R::DEF, id, changes, lock).await,
+                        );
                     }
                     stored
                 } else {
-                    ctx.data.bulk_update(&R::DEF, ctx.tenant.as_deref(), writes).await?
+                    ctx.raw_data()
+                        .bulk_update(&R::DEF, ctx.tenant(), writes)
+                        .await?
                 };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await
             })

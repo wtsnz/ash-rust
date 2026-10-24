@@ -2,8 +2,8 @@ mod dynamic;
 mod input;
 mod managed;
 
-pub use dynamic::{DynamicChangeset, DynamicChangesetHook};
 pub(crate) use dynamic::upsert_identity as dynamic_upsert_identity;
+pub use dynamic::{DynamicChangeset, DynamicChangesetHook};
 pub use input::IntoFieldMap;
 pub use managed::ManagedRelationshipSpec;
 
@@ -57,17 +57,7 @@ impl<R: Resource> Changeset<R> {
     }
 
     pub fn tenant(&self) -> Option<&str> {
-        self.inner.tenant.as_deref()
-    }
-
-    pub fn with_tenant(mut self, tenant: impl Into<String>) -> Self {
-        self.inner.tenant = Some(tenant.into());
-        self
-    }
-
-    pub fn without_tenant(mut self) -> Self {
-        self.inner.tenant = None;
-        self
+        self.inner.tenant()
     }
 
     pub fn metadata(&self) -> &FieldMap {
@@ -102,13 +92,15 @@ impl<R: Resource> Changeset<R> {
     where
         F: FnOnce(&mut Changeset<R>) -> Result<()> + Send + 'static,
     {
-        self.inner = self.inner.before_action(move |inner: &mut DynamicChangeset| {
-            let existing = inner.existing().map(R::from_fields).transpose()?;
-            let mut typed = Changeset::wrap(inner.take(), existing);
-            let result = hook(&mut typed);
-            *inner = typed.inner;
-            result
-        });
+        self.inner = self
+            .inner
+            .before_action(move |inner: &mut DynamicChangeset| {
+                let existing = inner.existing().map(R::from_fields).transpose()?;
+                let mut typed = Changeset::wrap(inner.take(), existing);
+                let result = hook(&mut typed);
+                *inner = typed.inner;
+                result
+            });
         self
     }
 
@@ -155,7 +147,9 @@ impl<R: Resource> Changeset<R> {
         F: IntoFieldMap,
     {
         let inputs = inputs.into_iter().map(|f| f.into_field_map()).collect();
-        self.inner = self.inner.manage_relationship(relationship, inputs, rel_type);
+        self.inner = self
+            .inner
+            .manage_relationship(relationship, inputs, rel_type);
         self
     }
 
@@ -207,7 +201,8 @@ impl<R: Resource> Changeset<R> {
         input: FieldMap,
     ) -> Result<Self> {
         let action = action_named(&R::DEF, action)?;
-        let inner = DynamicChangeset::for_update(ctx, &R::DEF, action, existing.to_fields(), input)?;
+        let inner =
+            DynamicChangeset::for_update(ctx, &R::DEF, action, existing.to_fields(), input)?;
         Ok(Self::wrap(inner, Some(existing)))
     }
 

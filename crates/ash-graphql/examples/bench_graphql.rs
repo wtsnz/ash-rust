@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
+    ActionDef, AttrType, AttributeDef, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
     RelationshipDef, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -214,12 +214,27 @@ where
     println!("┌────────────────────────────────────────────────────────┐");
     println!("│ Benchmark: {:<43}│", name);
     println!("├────────────────────────────────────────────────────────┤");
-    println!("│   Iterations:   {:>12}                       │", latencies.len());
+    println!(
+        "│   Iterations:   {:>12}                       │",
+        latencies.len()
+    );
     println!("│   Throughput:   {:>12.2} ops/sec                 │", ips);
-    println!("│   Average:      {:>12.2} µs                      │", avg.as_nanos() as f64 / 1000.0);
-    println!("│   Median (p50): {:>12.2} µs                      │", median.as_nanos() as f64 / 1000.0);
-    println!("│   P95 Latency:  {:>12.2} µs                      │", p95.as_nanos() as f64 / 1000.0);
-    println!("│   P99 Latency:  {:>12.2} µs                      │", p99.as_nanos() as f64 / 1000.0);
+    println!(
+        "│   Average:      {:>12.2} µs                      │",
+        avg.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "│   Median (p50): {:>12.2} µs                      │",
+        median.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "│   P95 Latency:  {:>12.2} µs                      │",
+        p95.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "│   P99 Latency:  {:>12.2} µs                      │",
+        p99.as_nanos() as f64 / 1000.0
+    );
     println!("└────────────────────────────────────────────────────────┘\n");
 }
 
@@ -230,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("========================================================\n");
 
     let mem = Memory::new();
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
 
     // Seed 5 authors
     let mut author_ids = Vec::new();
@@ -239,7 +254,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut u = FieldMap::new();
         u.insert("id".into(), Value::Uuid(u_id));
         u.insert("name".into(), Value::String(format!("Staff Engineer #{i}")));
-        u.insert("email".into(), Value::String(format!("staff{i}@company.com")));
+        u.insert(
+            "email".into(),
+            Value::String(format!("staff{i}@company.com")),
+        );
         mem.create(&USER_DEF, None, Value::from(u_id), u).await?;
         author_ids.push(u_id);
     }
@@ -257,7 +275,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut t = FieldMap::new();
         t.insert("id".into(), Value::Uuid(t_id));
-        t.insert("title".into(), Value::String(format!("Incident #{i}: Database connection pool exhausted")));
+        t.insert(
+            "title".into(),
+            Value::String(format!("Incident #{i}: Database connection pool exhausted")),
+        );
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("author_id".into(), Value::Uuid(author_id));
@@ -302,7 +323,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // 3. Collection Query (100 records)
-    let collection_query = r#"query { listTickets(first: 100) { results { id title status priority } } }"#;
+    let collection_query =
+        r#"query { listTickets(first: 100) { results { id title status priority } } }"#;
     run_bench(
         "GraphQL Query: 100 Tickets Collection",
         warmup,
@@ -378,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // 7. Full Axum HTTP POST Roundtrip (Routing + Deserialization + Execution + Serialization)
-    let app = ash_graphql::axum::graphql_router(schema.clone());
+    let app = ash_graphql::axum::graphql_router(schema.clone(), ctx.clone());
     let http_payload = serde_json::json!({
         "query": "query { listTickets(first: 20) { results { id title status priority } } }"
     })
@@ -415,11 +437,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     mut_u.insert("id".into(), Value::Uuid(mut_author_id));
     mut_u.insert("name".into(), Value::String("Mut Author".into()));
     mut_u.insert("email".into(), Value::String("mut@example.com".into()));
-    mut_mem.create(&USER_DEF, None, Value::from(mut_author_id), mut_u).await?;
+    mut_mem
+        .create(&USER_DEF, None, Value::from(mut_author_id), mut_u)
+        .await?;
 
-    let mut_ctx = Context::new(mut_mem);
-    let mut_schema = AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF])
-        .finish_with_context(mut_ctx)?;
+    let mut_ctx = ash_core::Runtime::new(mut_mem).bootstrap();
+    let mut_schema =
+        AshGraphQL::from_resources(&[&USER_DEF, &TICKET_DEF]).finish_with_context(mut_ctx)?;
 
     let mutation = format!(
         r#"
@@ -461,7 +485,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     u.insert("id".into(), Value::Uuid(sql_author_id));
     u.insert("name".into(), Value::String("Database Admin".into()));
     u.insert("email".into(), Value::String("dba@company.com".into()));
-    sqlite_db.create(&SQLITE_USER_DEF, None, Value::from(sql_author_id), u).await?;
+    sqlite_db
+        .create(&SQLITE_USER_DEF, None, Value::from(sql_author_id), u)
+        .await?;
 
     for i in 1..=100 {
         let t_id = Uuid::new_v4();
@@ -471,10 +497,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.insert("status".into(), Value::String("OPEN".into()));
         t.insert("priority".into(), Value::Int(1));
         t.insert("author_id".into(), Value::Uuid(sql_author_id));
-        sqlite_db.create(&SQLITE_TICKET_DEF, None, Value::from(t_id), t).await?;
+        sqlite_db
+            .create(&SQLITE_TICKET_DEF, None, Value::from(t_id), t)
+            .await?;
     }
 
-    let sqlite_ctx = Context::new(sqlite_db);
+    let sqlite_ctx = ash_core::Runtime::new(sqlite_db).bootstrap();
     let sqlite_schema = AshGraphQL::from_resources(&[&SQLITE_USER_DEF, &SQLITE_TICKET_DEF])
         .with_dataloader()
         .finish_with_context(sqlite_ctx)?;

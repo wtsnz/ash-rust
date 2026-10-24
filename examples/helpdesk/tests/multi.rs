@@ -9,41 +9,48 @@ use uuid::Uuid;
 #[tokio::test]
 async fn test_multi_memory_success() {
     let mem = Memory::new();
-    let desk = Helpdesk::new(mem);
+    let desk_runtime = ash_core::Runtime::new(mem);
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     // Define a Multi pipeline:
     // 1. Create representative "Alice"
     // 2. Insert metadata "priority"
     // 3. Dynamically create ticket using Representative's presence
     // 4. Custom async run step to assign the ticket
-    let rep_cs = Representative::create(&as_customer)
-        .name("Alice")
-        .changeset()
-        .unwrap();
-
-    let multi = Multi::new()
-        .create("rep", rep_cs)
-        .insert("priority", 42_i64)
-        .create_from("ticket", move |ctx, _results| {
-            Ticket::open(ctx)
-                .subject("Network down in room 3")
+    let results = desk_runtime
+        .transaction(move |runtime| async move {
+            let as_customer = runtime.bind(Some(actor_customer(customer_id)), None);
+            let rep_cs = Representative::create(&as_customer)
+                .name("Alice")
                 .changeset()
-        })
-        .run("assign", move |ctx, results| async move {
-            let rep = results.get::<Representative>("rep")?;
-            let ticket = results.get::<Ticket>("ticket")?;
-            let as_rep = ctx.with_actor(actor_representative(rep.id));
-            ticket
-                .assign_on(&as_rep)
-                .representative_id(rep.id)
-                .call()
-                .await
-        });
+                .unwrap();
 
-    let results = multi.commit(&as_customer).await.unwrap();
+            let multi = Multi::new()
+                .create("rep", rep_cs)
+                .insert("priority", 42_i64)
+                .create_from("ticket", move |ctx, _results| {
+                    Ticket::open(ctx)
+                        .subject("Network down in room 3")
+                        .changeset()
+                })
+                .run("assign", move |_ctx, results| async move {
+                    let rep = results.get::<Representative>("rep")?;
+                    let ticket = results.get::<Ticket>("ticket")?;
+                    let as_rep = runtime.bind(Some(actor_representative(rep.id)), None);
+                    ticket
+                        .assign_on(&as_rep)
+                        .representative_id(rep.id)
+                        .call()
+                        .await
+                });
+
+            multi.execute_without_transaction(&as_customer).await
+        })
+        .await
+        .unwrap();
 
     // Verify all steps produced expected types and values
     assert_eq!(results.len(), 4);
@@ -75,10 +82,11 @@ async fn test_multi_memory_success() {
 #[tokio::test]
 async fn test_multi_memory_rollback_on_validation_failure() {
     let mem = Memory::new();
-    let desk = Helpdesk::new(mem);
+    let desk_runtime = ash_core::Runtime::new(mem);
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     let rep_cs = Representative::create(&as_customer)
         .name("Bob")
@@ -114,10 +122,11 @@ async fn test_multi_memory_rollback_on_validation_failure() {
 #[tokio::test]
 async fn test_multi_memory_rollback_on_custom_step_error() {
     let mem = Memory::new();
-    let desk = Helpdesk::new(mem);
+    let desk_runtime = ash_core::Runtime::new(mem);
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     let rep_cs = Representative::create(&as_customer)
         .name("Charlie")
@@ -141,11 +150,15 @@ async fn test_multi_memory_rollback_on_custom_step_error() {
 #[tokio::test]
 async fn test_multi_sqlite_success_and_domain_run_multi() {
     let db = Sqlite::memory().await.unwrap();
-    let desk = Helpdesk::new(db);
-    desk.install().await.unwrap();
+    let desk_runtime = ash_core::Runtime::new(db);
+    Helpdesk::from_context(desk_runtime.bootstrap())
+        .install()
+        .await
+        .unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     let rep_cs = Representative::create(&as_customer)
         .name("Dana")
@@ -181,11 +194,15 @@ async fn test_multi_sqlite_success_and_domain_run_multi() {
 #[tokio::test]
 async fn test_multi_sqlite_rollback_on_failure() {
     let db = Sqlite::memory().await.unwrap();
-    let desk = Helpdesk::new(db);
-    desk.install().await.unwrap();
+    let desk_runtime = ash_core::Runtime::new(db);
+    Helpdesk::from_context(desk_runtime.bootstrap())
+        .install()
+        .await
+        .unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     let rep_cs = Representative::create(&as_customer)
         .name("Eve")
@@ -195,7 +212,9 @@ async fn test_multi_sqlite_rollback_on_failure() {
     let multi = Multi::new()
         .create("rep", rep_cs)
         .run("bomb", |_ctx, _results| async move {
-            Err::<(), _>(Error::Invalid("database constraint or network error".into()))
+            Err::<(), _>(Error::Invalid(
+                "database constraint or network error".into(),
+            ))
         });
 
     let err = as_customer.run_multi(multi).await.unwrap_err();
@@ -212,11 +231,15 @@ async fn test_multi_sqlite_rollback_on_failure() {
 #[tokio::test]
 async fn test_domain_transaction_and_nested_savepoints_in_sqlite() {
     let db = Sqlite::memory().await.unwrap();
-    let desk = Helpdesk::new(db);
-    desk.install().await.unwrap();
+    let desk_runtime = ash_core::Runtime::new(db);
+    Helpdesk::from_context(desk_runtime.bootstrap())
+        .install()
+        .await
+        .unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     // Outer transaction via desk.transaction
     as_customer
@@ -268,11 +291,15 @@ async fn test_domain_transaction_and_nested_savepoints_in_sqlite() {
 #[tokio::test]
 async fn test_domain_transaction_rollback_when_closure_returns_err() {
     let db = Sqlite::memory().await.unwrap();
-    let desk = Helpdesk::new(db);
-    desk.install().await.unwrap();
+    let desk_runtime = ash_core::Runtime::new(db);
+    Helpdesk::from_context(desk_runtime.bootstrap())
+        .install()
+        .await
+        .unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
 
     let res: ash_core::Result<()> = as_customer
         .transaction(|tx_desk| async move {

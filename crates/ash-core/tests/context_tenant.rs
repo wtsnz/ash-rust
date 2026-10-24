@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 use ash_core::{
-    resource, ChangeContext, Context, CustomChange, CustomValidation, Error,
-    Notification, Result, SyncFnNotifier, ValidationContext, Value,
+    ChangeContext, CustomChange, CustomValidation, Error, Notification, Result, SyncFnNotifier,
+    ValidationContext, Value, resource,
 };
 use ash_memory::Memory;
 
@@ -29,7 +29,8 @@ pub mod tenant_models {
     impl CustomChange for AutoAssignTenantChange {
         fn apply(&self, ctx: &mut ChangeContext<'_>) -> Result<()> {
             if let Some(tenant) = ctx.tenant {
-                ctx.fields.insert("tenant_id".to_string(), Value::String(tenant.to_string()));
+                ctx.fields
+                    .insert("tenant_id".to_string(), Value::String(tenant.to_string()));
             }
             Ok(())
         }
@@ -91,17 +92,18 @@ pub mod tenant_models {
 use tenant_models::Document;
 
 #[tokio::test]
-async fn test_context_fluent_tenant_and_metadata() {
+async fn test_context_bound_tenant_and_metadata() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime.bootstrap();
 
     assert_eq!(ctx.tenant(), None);
     assert!(ctx.metadata().is_empty());
 
-    let ctx_with_tenant = ctx.with_tenant("org_acme");
+    let ctx_with_tenant = ctx_runtime.bind(ctx.actor().cloned(), Some(("org_acme").into()));
     assert_eq!(ctx_with_tenant.tenant(), Some("org_acme"));
 
-    let ctx_cleared = ctx_with_tenant.without_tenant();
+    let ctx_cleared = ctx_runtime.bootstrap();
     assert_eq!(ctx_cleared.tenant(), None);
 
     let ctx_with_meta = ctx_with_tenant
@@ -120,7 +122,8 @@ async fn test_context_fluent_tenant_and_metadata() {
 #[tokio::test]
 async fn test_validation_and_change_context_tenant_propagation() {
     let mem = Memory::new();
-    let ctx = Context::new(mem);
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime.bootstrap();
 
     // 1. Without tenant, custom validation rejects create
     let err = Document::create(&ctx)
@@ -138,7 +141,7 @@ async fn test_validation_and_change_context_tenant_propagation() {
     }
 
     // 2. With tenant on context, validation passes and AutoAssignTenantChange sets tenant_id
-    let tenant_ctx = ctx.with_tenant("tenant_omega");
+    let tenant_ctx = ctx_runtime.bind(ctx.actor().cloned(), Some(("tenant_omega").into()));
     let doc = Document::create(&tenant_ctx)
         .title("Secret Doc")
         .call()
@@ -150,30 +153,22 @@ async fn test_validation_and_change_context_tenant_propagation() {
 }
 
 #[tokio::test]
-async fn test_action_builder_tenant_override() {
-    let mem = Memory::new();
-    let ctx = Context::new(mem);
-
-    // Call with tenant specified directly on action builder instead of context
+async fn test_action_builder_uses_bound_tenant() {
+    let runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = runtime.bind(None, Some("tenant_custom".into()));
     let doc = Document::create(&ctx)
-        .tenant("tenant_custom")
         .title("Custom Tenant Doc")
-        .call()
         .await
-        .expect("should create successfully");
-
+        .unwrap();
     assert_eq!(doc.tenant_id, "tenant_custom");
 
-    // Override context tenant via builder
-    let base_ctx = ctx.with_tenant("tenant_base");
-    let doc_override = Document::create(&base_ctx)
-        .tenant("tenant_overridden")
-        .title("Overridden Doc")
-        .call()
+    let other = runtime.bind(None, Some("tenant_other".into()));
+    let doc = Document::create(&other)
+        .title("Other Tenant Doc")
         .await
-        .expect("should create successfully");
-
-    assert_eq!(doc_override.tenant_id, "tenant_overridden");
+        .unwrap();
+    assert_eq!(doc.tenant_id, "tenant_other");
+    assert_eq!(ctx.tenant(), Some("tenant_custom"));
 }
 
 #[tokio::test]
@@ -196,8 +191,9 @@ async fn test_notification_carries_tenant_and_metadata() {
         Ok(())
     });
 
-    let ctx = Context::new(mem)
-        .with_tenant("tenant_notif")
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime
+        .bind(None, Some(("tenant_notif").into()))
         .with_metadata("client_ip", "127.0.0.1")
         .with_metadata("request_id", "req_abc")
         .with_notifier(Arc::new(notifier));
@@ -209,29 +205,27 @@ async fn test_notification_carries_tenant_and_metadata() {
         .unwrap();
 
     assert_eq!(doc.title, "Notification Test");
-    assert!(notified.load(Ordering::SeqCst), "notifier should have received notification with tenant & metadata");
+    assert!(
+        notified.load(Ordering::SeqCst),
+        "notifier should have received notification with tenant & metadata"
+    );
 }
 
 #[tokio::test]
-async fn test_query_tenant_inheritance_and_overriding() {
-    let mem = Memory::new();
-    let ctx = Context::new(mem).with_tenant("org_1");
-
-    let q1 = Document::query(&ctx);
-    assert_eq!(q1.get_tenant(), Some("org_1"));
-
-    let q2 = q1.clone().tenant("org_2");
-    assert_eq!(q2.get_tenant(), Some("org_2"));
-
-    let q3 = q2.without_tenant();
-    assert_eq!(q3.get_tenant(), None);
+async fn test_query_inherits_bound_tenant() {
+    let runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = runtime.bind(None, Some("org_1".into()));
+    let query = Document::query(&ctx);
+    assert_eq!(query.get_tenant(), Some("org_1"));
+    assert_eq!(query.clone().get_tenant(), Some("org_1"));
 }
 
 #[tokio::test]
 async fn test_generic_action_tenant_and_metadata() {
     let mem = Memory::new();
-    let ctx = Context::new(mem)
-        .with_tenant("corp_alpha")
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime
+        .bind(None, Some(("corp_alpha").into()))
         .with_metadata("request_id", "req_9999");
 
     let res = Document::process_document(&ctx)
@@ -261,8 +255,9 @@ async fn test_multi_pipeline_preserves_tenant_and_metadata() {
         Ok(())
     });
 
-    let ctx = Context::new(mem)
-        .with_tenant("tenant_multi")
+    let ctx_runtime = ash_core::Runtime::new(mem);
+    let ctx = ctx_runtime
+        .bind(None, Some(("tenant_multi").into()))
         .with_metadata("batch_id", "batch_01")
         .with_notifier(Arc::new(notifier));
 

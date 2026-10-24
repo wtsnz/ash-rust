@@ -1,4 +1,3 @@
-use ash_core::Context;
 use ash_memory::Memory;
 use helpdesk::ticket::{fields as t, intake_store};
 use helpdesk::{
@@ -6,17 +5,24 @@ use helpdesk::{
 };
 use uuid::Uuid;
 
-fn ctx() -> Context<Memory> {
-    Context::new(Memory::new())
+fn ctx() -> ash_core::Runtime<Memory> {
+    ash_core::Runtime::new(Memory::new())
 }
 
 #[tokio::test]
 async fn direct_instance_methods_and_into_future() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     // 1. Create with builder and IntoFuture (.await without .call())
     let ticket = Ticket::open(&as_customer)
@@ -41,11 +47,18 @@ async fn direct_instance_methods_and_into_future() {
 
 #[tokio::test]
 async fn static_update_by_id() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer)
         .subject("Keyboard issue")
@@ -61,20 +74,24 @@ async fn static_update_by_id() {
         .unwrap();
     assert_eq!(ticket.representative_id, Some(alice.id));
 
-    let ticket = Ticket::close(&as_alice, ticket.id)
-        .call()
-        .await
-        .unwrap();
+    let ticket = Ticket::close(&as_alice, ticket.id).call().await.unwrap();
     assert_eq!(ticket.status, Status::Closed);
 }
 
 #[tokio::test]
 async fn static_update_by_record_reference() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket = Ticket::open(&as_customer)
         .subject("Keyboard issue")
@@ -88,19 +105,24 @@ async fn static_update_by_record_reference() {
         .unwrap();
     assert_eq!(ticket.representative_id, Some(alice.id));
 
-    let ticket = Ticket::close(&as_alice, &ticket)
-        .await
-        .unwrap();
+    let ticket = Ticket::close(&as_alice, &ticket).await.unwrap();
     assert_eq!(ticket.status, Status::Closed);
 }
 
 #[tokio::test]
 async fn fluent_filter_composition_and_rel_accessors() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let alice = Representative::create(&ctx).name("Alice").await.unwrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
-    let as_alice = ctx.with_actor(actor_representative(alice.id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
+    let as_alice = ctx_runtime.bind(
+        Some(actor_representative(alice.id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     let ticket1 = Ticket::open(&as_customer)
         .subject("Network down")
@@ -145,7 +167,12 @@ async fn fluent_filter_composition_and_rel_accessors() {
     let rep_opt = results[0].representative.as_option().unwrap();
     assert_eq!(rep_opt.unwrap().name, "Alice");
     assert_eq!(
-        results[0].representative.expect_loaded("must be loaded").as_ref().unwrap().name,
+        results[0]
+            .representative
+            .expect_loaded("must be loaded")
+            .as_ref()
+            .unwrap()
+            .name,
         "Alice"
     );
 
@@ -165,9 +192,13 @@ async fn fluent_filter_composition_and_rel_accessors() {
 
 #[tokio::test]
 async fn generic_action_and_manual_intake() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     // Generic action builder
     let analysis = Ticket::analyze_subject(&as_customer)
@@ -194,9 +225,13 @@ async fn generic_action_and_manual_intake() {
 
 #[tokio::test]
 async fn changeset_introspection_before_commit() {
-    let ctx = ctx();
+    let ctx_runtime = ctx();
+    let ctx = ctx_runtime.bootstrap();
     let customer_id = Uuid::new_v4();
-    let as_customer = ctx.with_actor(actor_customer(customer_id));
+    let as_customer = ctx_runtime.bind(
+        Some(actor_customer(customer_id)),
+        ctx.tenant().map(str::to_owned),
+    );
 
     // Changeset can be inspected before committing
     let changeset = Ticket::open(&as_customer)

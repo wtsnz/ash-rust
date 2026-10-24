@@ -123,65 +123,150 @@ async fn integer_keys<D: ash_core::TransactionSupport + Clone + 'static>(ctx: &C
 
     // Got, updated and destroyed by the key, given as the integer it is.
     assert_eq!(Order::get(ctx, first.id).await.unwrap().label, "first");
-    let relabelled = Order::relabel(ctx, first.id).label("renamed").await.unwrap();
-    assert_eq!((relabelled.id, relabelled.label.as_str()), (first.id, "renamed"));
+    let relabelled = Order::relabel(ctx, first.id)
+        .label("renamed")
+        .await
+        .unwrap();
+    assert_eq!(
+        (relabelled.id, relabelled.label.as_str()),
+        (first.id, "renamed")
+    );
     assert_eq!(Order::get(ctx, first.id).await.unwrap().label, "renamed");
 
     // Related by it: a line belongs to an order by its integer key.
-    Line::create(ctx).order_id(second.id).sku("a").await.unwrap();
-    Line::create(ctx).order_id(second.id).sku("b").await.unwrap();
-    let counted = Order::query(ctx).filter(Filter::eq("id", second.id)).load_aggregate("line_count").one().await.unwrap();
+    Line::create(ctx)
+        .order_id(second.id)
+        .sku("a")
+        .await
+        .unwrap();
+    Line::create(ctx)
+        .order_id(second.id)
+        .sku("b")
+        .await
+        .unwrap();
+    let counted = Order::query(ctx)
+        .filter(Filter::eq("id", second.id))
+        .load_aggregate("line_count")
+        .one()
+        .await
+        .unwrap();
     assert_eq!(counted.line_count, Some(2));
     let with_lines = Order::query(ctx)
         .filter(Filter::eq("run", run) & Filter::related("lines", Filter::eq("sku", "b")))
         .all()
         .await
         .unwrap();
-    assert_eq!(with_lines.iter().map(|o| o.id).collect::<Vec<_>>(), [second.id]);
+    assert_eq!(
+        with_lines.iter().map(|o| o.id).collect::<Vec<_>>(),
+        [second.id]
+    );
 
     // Paged by it, the key the keyset's tie-breaker.
-    let page = Order::query(ctx).filter(Filter::eq("run", run)).page_keyset(1, None, None).await.unwrap();
-    assert_eq!(page.results.iter().map(|o| o.id).collect::<Vec<_>>(), [first.id]);
-    let next = Order::query(ctx).filter(Filter::eq("run", run)).page_keyset(1, page.after.as_deref(), None).await.unwrap();
-    assert_eq!(next.results.iter().map(|o| o.id).collect::<Vec<_>>(), [second.id]);
+    let page = Order::query(ctx)
+        .filter(Filter::eq("run", run))
+        .page_keyset(1, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.results.iter().map(|o| o.id).collect::<Vec<_>>(),
+        [first.id]
+    );
+    let next = Order::query(ctx)
+        .filter(Filter::eq("run", run))
+        .page_keyset(1, page.after.as_deref(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        next.results.iter().map(|o| o.id).collect::<Vec<_>>(),
+        [second.id]
+    );
 
     // Created in bulk, each assigned its own.
-    let inputs = ["x", "y"].map(|label| [("run".to_string(), Value::Uuid(run)), ("label".to_string(), Value::from(label))]);
-    let bulk = ash_core::bulk_create::<Order, D, _, _>(ctx, "create", inputs.map(ash_core::FieldMap::from), Default::default()).await.unwrap();
+    let inputs = ["x", "y"].map(|label| {
+        [
+            ("run".to_string(), Value::Uuid(run)),
+            ("label".to_string(), Value::from(label)),
+        ]
+    });
+    let bulk = ash_core::bulk_create::<Order, D, _, _>(
+        ctx,
+        "create",
+        inputs.map(ash_core::FieldMap::from),
+        Default::default(),
+    )
+    .await
+    .unwrap();
     let ids: Vec<i64> = bulk.records.iter().map(|o| o.id).collect();
-    assert!(ids.len() == 2 && ids[0] > second.id && ids[1] > ids[0], "{ids:?}");
+    assert!(
+        ids.len() == 2 && ids[0] > second.id && ids[1] > ids[0],
+        "{ids:?}"
+    );
 
     Order::destroy(ctx, first.id).await.unwrap();
-    assert!(matches!(Order::get(ctx, first.id).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Order::get(ctx, first.id).await,
+        Err(Error::NotFound)
+    ));
 }
 
 async fn text_keys<D: ash_core::TransactionSupport + Clone + 'static>(ctx: &Context<D>) {
     // Unique to the run, as Postgres keeps earlier runs' rows.
     let code = format!("NZ-{}", Uuid::new_v4().simple());
-    let nz = Country::create(ctx).code(code.clone()).name("New Zealand").await.unwrap();
+    let nz = Country::create(ctx)
+        .code(code.clone())
+        .name("New Zealand")
+        .await
+        .unwrap();
     assert_eq!(nz.pk(), Value::String(code.clone()));
 
-    assert_eq!(Country::get(ctx, code.as_str()).await.unwrap().name, "New Zealand");
-    let renamed = Country::rename(ctx, code.as_str()).name("Aotearoa").await.unwrap();
+    assert_eq!(
+        Country::get(ctx, code.as_str()).await.unwrap().name,
+        "New Zealand"
+    );
+    let renamed = Country::rename(ctx, code.as_str())
+        .name("Aotearoa")
+        .await
+        .unwrap();
     assert_eq!(renamed.code, code);
-    assert_eq!(Country::get(ctx, code.clone()).await.unwrap().name, "Aotearoa");
+    assert_eq!(
+        Country::get(ctx, code.clone()).await.unwrap().name,
+        "Aotearoa"
+    );
 
     // The key is given with each record: a second with it is refused, and one without
     // it is missing it.
-    assert!(Country::create(ctx).code(code.clone()).name("again").await.is_err());
-    let missing = ash_core::create_dynamic(ctx, &Country::DEF, Country::DEF.action("create").unwrap(), [("name".to_string(), Value::from("Nowhere"))].into()).await;
+    assert!(
+        Country::create(ctx)
+            .code(code.clone())
+            .name("again")
+            .await
+            .is_err()
+    );
+    let missing = ash_core::create_dynamic(
+        ctx,
+        &Country::DEF,
+        Country::DEF.action("create").unwrap(),
+        [("name".to_string(), Value::from("Nowhere"))].into(),
+    )
+    .await;
     assert!(missing.is_err(), "{missing:?}");
 
     Country::destroy(ctx, code.as_str()).await.unwrap();
-    assert!(matches!(Country::get(ctx, code).await, Err(Error::NotFound)));
+    assert!(matches!(
+        Country::get(ctx, code).await,
+        Err(Error::NotFound)
+    ));
 }
 
 async fn scenario<D: ash_core::TransactionSupport + Clone + 'static>(data: D) {
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
     integer_keys(&ctx).await;
     text_keys(&ctx).await;
     // A record of nothing but its assigned key.
-    let (first, second) = (Tally::create(&ctx).await.unwrap(), Tally::create(&ctx).await.unwrap());
+    let (first, second) = (
+        Tally::create(&ctx).await.unwrap(),
+        Tally::create(&ctx).await.unwrap(),
+    );
     assert!(second.id > first.id, "{first:?} {second:?}");
 }
 
@@ -193,18 +278,24 @@ async fn non_uuid_keys_in_memory() {
 #[tokio::test]
 async fn non_uuid_keys_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
-    sqlite.install(&[&Order::DEF, &Line::DEF, &Country::DEF, &Tally::DEF]).await.unwrap();
+    sqlite
+        .install(&[&Order::DEF, &Line::DEF, &Country::DEF, &Tally::DEF])
+        .await
+        .unwrap();
     scenario(sqlite).await;
 }
 
 #[tokio::test]
 async fn non_uuid_keys_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");
         return;
     };
-    pg.install(&[&Order::DEF, &Line::DEF, &Country::DEF, &Tally::DEF]).await.unwrap();
+    pg.install(&[&Order::DEF, &Line::DEF, &Country::DEF, &Tally::DEF])
+        .await
+        .unwrap();
     scenario(pg).await;
 }

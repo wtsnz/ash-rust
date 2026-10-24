@@ -30,8 +30,8 @@ pub fn router<D: DataLayer + Clone + Send + Sync + 'static>(
     let schema = AshGraphQL::from_resources(&resources())
         .with_pubsub(pubsub)
         .with_dataloader()
-        .finish_with_context(ctx)?;
-    Ok(ash_graphql::axum::graphql_router(schema)
+        .finish_with_context(ctx.clone())?;
+    Ok(ash_graphql::axum::graphql_router(schema, ctx)
         .route("/health", get(|| async { "OK" }))
         .layer(CorsLayer::permissive()))
 }
@@ -45,9 +45,9 @@ pub fn metrics_router(metrics: Option<crate::sim::TickMetrics>, fleet: usize) ->
             let metrics = metrics.clone();
             async move {
                 let simulating = metrics.is_some();
-                let mut body = metrics.map(|m| m.to_json()).unwrap_or_else(|| {
-                    serde_json::json!({ "ticks": 0, "errors": 0, "recent_tick_ms": [] })
-                });
+                let mut body = metrics.map(|m| m.to_json()).unwrap_or_else(
+                    || serde_json::json!({ "ticks": 0, "errors": 0, "recent_tick_ms": [] }),
+                );
                 body["fleet"] = fleet.into();
                 body["simulating"] = simulating.into();
                 axum::Json(body)
@@ -75,7 +75,9 @@ pub fn typescript_sdk() -> Result<String, ash_typescript::CodegenError> {
 /// A notifier-carrying context for the simulation and the API to share.
 pub fn context<D>(data: D, pubsub: &PubSub) -> Context<D> {
     use ash_pubsub::ContextPubSubExt;
-    Context::new(data).with_pubsub(Arc::new(pubsub.clone()))
+    ash_core::Runtime::new(data)
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()))
 }
 
 /// Connects to Postgres at `url`, installs the command center's tables, and empties them,
@@ -87,6 +89,7 @@ pub async fn postgres(url: &str) -> ash_core::Result<ash_postgres::Postgres> {
         .iter()
         .map(|resource| format!("\"{}\"", resource.table))
         .collect();
-    db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", "))).await?;
+    db.execute_sql(&format!("TRUNCATE {} CASCADE", tables.join(", ")))
+        .await?;
     Ok(db)
 }

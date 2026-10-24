@@ -2,7 +2,7 @@
 //! (`transaction;`, Ash's `transaction? true`), and runnable by name with its input as
 //! values (`Resource::run_generic`), as an API serving actions by name runs it.
 
-use ash_core::{Actor, Context, Error, FieldMap, Resource, Value, resource};
+use ash_core::{Actor, Error, FieldMap, Resource, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -76,7 +76,8 @@ fn writer() -> Actor {
 
 #[tokio::test]
 async fn a_generic_action_runs_in_its_transaction() {
-    let ctx = Context::new(Memory::new()).with_actor(writer());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bind(Some(writer()), None);
     let failed = Entry::pair(&ctx).fail(true).call().await;
     assert!(matches!(failed, Err(Error::Invalid(_))), "{failed:?}");
     assert_eq!(Entry::query(&ctx).count().await.unwrap(), 0, "rolled back");
@@ -86,21 +87,40 @@ async fn a_generic_action_runs_in_its_transaction() {
 
 #[tokio::test]
 async fn generic_actions_run_by_name() {
-    let ctx = Context::new(Memory::new()).with_actor(writer());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bind(Some(writer()), None);
     let mut input = FieldMap::new();
     input.insert("word".into(), Value::from("hi"));
-    assert_eq!(Entry::run_generic(&ctx, "shout", input).await.unwrap(), Value::from("HI"));
+    assert_eq!(
+        Entry::run_generic(&ctx, "shout", input).await.unwrap(),
+        Value::from("HI")
+    );
     // Defaults fill in, and the result is the action's own.
-    let id = Entry::run_generic(&ctx, "pair", FieldMap::new()).await.unwrap();
+    let id = Entry::run_generic(&ctx, "pair", FieldMap::new())
+        .await
+        .unwrap();
     assert!(id.as_uuid().is_some(), "{id:?}");
     // A serializable result is what it serializes to; nothing returned is nil.
-    let summary = Entry::run_generic(&ctx, "summarize", FieldMap::new()).await.unwrap();
+    let summary = Entry::run_generic(&ctx, "summarize", FieldMap::new())
+        .await
+        .unwrap();
     assert_eq!(summary.to_plain_json(), serde_json::json!({ "count": 2 }));
-    assert_eq!(Entry::run_generic(&ctx, "noop", FieldMap::new()).await.unwrap(), Value::Null);
+    assert_eq!(
+        Entry::run_generic(&ctx, "noop", FieldMap::new())
+            .await
+            .unwrap(),
+        Value::Null
+    );
     // Missing arguments, and the action's policies, as a run of it.
     let missing = Entry::run_generic(&ctx, "shout", FieldMap::new()).await;
-    assert!(matches!(missing, Err(Error::Missing { ref field }) if field == "word"), "{missing:?}");
-    let stranger = ctx.with_actor(Actor::new(Uuid::new_v4()).with_attr("role", Value::from("reader")));
+    assert!(
+        matches!(missing, Err(Error::Missing { ref field }) if field == "word"),
+        "{missing:?}"
+    );
+    let stranger = ctx_runtime.bind(
+        Some(Actor::new(Uuid::new_v4()).with_attr("role", Value::from("reader"))),
+        ctx.tenant().map(str::to_owned),
+    );
     let forbidden = Entry::run_generic(&stranger, "noop", FieldMap::new()).await;
     assert!(matches!(forbidden, Err(Error::Forbidden)), "{forbidden:?}");
 }

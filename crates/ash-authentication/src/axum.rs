@@ -162,7 +162,8 @@ pub struct AuthRouterState<R: Resource, D: DataLayer> {
 /// Build a standard `/auth` router with `POST /sign-in`, `POST /refresh`, `POST /revoke`,
 /// `POST /change-password`, `POST /request-password-reset`, `POST /reset-password`, and `GET /me`.
 ///
-/// `context` selects the tenant for every route. Access, refresh and reset tokens
+/// Bind `context` through Runtime at the application boundary. The router cannot
+/// replace its actor or tenant. `context` selects the tenant for every route. Access, refresh and reset tokens
 /// must name that same tenant, including when no tenant is selected.
 pub fn auth_router<R, D, S>(
     strategy: AuthStrategy<R>,

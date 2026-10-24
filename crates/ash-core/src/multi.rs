@@ -252,7 +252,7 @@ impl<D: DataLayer + 'static> Multi<D> {
         let (buffered_ctx, queue) = ctx.with_notification_buffer();
         let result = self.run_pipeline(&buffered_ctx).await?;
 
-        crate::notifier::flush_queued_notifications(&queue, &ctx.notifiers).await;
+        crate::notifier::flush_queued_notifications(&queue, ctx.notifiers()).await;
 
         Ok(result)
     }
@@ -277,7 +277,7 @@ impl<D: TransactionSupport + 'static> Multi<D> {
             })
             .await?;
 
-        crate::notifier::flush_queued_notifications(&queue, &ctx.notifiers).await;
+        crate::notifier::flush_queued_notifications(&queue, ctx.notifiers()).await;
 
         Ok(result)
     }

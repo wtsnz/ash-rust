@@ -34,7 +34,7 @@ It demonstrates **Pattern 2: The Macro Decorator / Transformer** architecture, w
 ## Quick Example
 
 ```rust
-use ash_core::{Context, resource};
+use ash_core::{resource};
 use ash_memory::Memory;
 use ash_state_machine::state_machine;
 use uuid::Uuid;
@@ -79,7 +79,7 @@ resource! {
 
 #[tokio::main]
 async fn main() -> ash_core::Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create a record (starts in "open" state)
     let ticket = Ticket::open(&ctx)

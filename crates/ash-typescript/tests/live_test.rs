@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use ash_core::{ActionDef, AttrType, AttributeDef, Context, DomainDef, ResourceDef};
+use ash_core::{ActionDef, AttrType, AttributeDef, DomainDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -16,7 +16,11 @@ static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open").accept(&["title", "priority"]),
     ActionDef::update("reprioritize").accept(&["priority"]),
     ActionDef::destroy("remove"),
-    ActionDef::read("read").primary().pagination(ash_core::Pagination::keyset().countable(ash_core::Countable::Yes).required(false)),
+    ActionDef::read("read").primary().pagination(
+        ash_core::Pagination::keyset()
+            .countable(ash_core::Countable::Yes)
+            .required(false),
+    ),
 ];
 
 static TICKET_DEF: ResourceDef = ResourceDef {
@@ -126,8 +130,14 @@ fn live_sdk_type_checks_with_react_hooks() {
     )
     .unwrap();
     let args = [
-        "--noEmit", "--strict", "--target", "ES2022", "--moduleResolution", "node",
-        "--skipLibCheck", "sdk.ts",
+        "--noEmit",
+        "--strict",
+        "--target",
+        "ES2022",
+        "--moduleResolution",
+        "node",
+        "--skipLibCheck",
+        "sdk.ts",
     ];
     if let Some(output) = run("tsc", &args, dir.path()) {
         assert_success(&output, "tsc");
@@ -261,42 +271,64 @@ main().then(
 #[tokio::test(flavor = "multi_thread")]
 async fn generated_live_queries_stay_in_sync_over_websocket() {
     let pubsub = PubSub::new();
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let mut seed = ash_core::FieldMap::new();
     seed.insert("title".into(), ash_core::Value::String("Seeded".into()));
     seed.insert("priority".into(), ash_core::Value::Int(3));
-    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], seed).await.unwrap();
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], seed)
+        .await
+        .unwrap();
     let schema = AshGraphQL::from_domain(&DOMAIN)
         .with_pubsub(pubsub)
-        .finish_with_context(ctx)
+        .finish_with_context(ctx.clone())
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket_ctx = ctx.clone();
     tokio::spawn(async move {
-        axum::serve(listener, ash_graphql::axum::graphql_router(schema)).await.unwrap();
+        axum::serve(
+            listener,
+            ash_graphql::axum::graphql_router(schema, socket_ctx),
+        )
+        .await
+        .unwrap();
     });
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("sdk.ts"), sdk(false)).unwrap();
     std::fs::write(dir.path().join("main.ts"), PROGRAM).unwrap();
     let compile = [
-        "--strict", "--target", "ES2022", "--module", "commonjs", "--skipLibCheck",
-        "--outDir", "out", "sdk.ts", "main.ts",
+        "--strict",
+        "--target",
+        "ES2022",
+        "--module",
+        "commonjs",
+        "--skipLibCheck",
+        "--outDir",
+        "out",
+        "sdk.ts",
+        "main.ts",
     ];
-    let Some(compiled) = run("tsc", &compile, dir.path()) else { return };
+    let Some(compiled) = run("tsc", &compile, dir.path()) else {
+        return;
+    };
     assert_success(&compiled, "tsc");
 
     let base_url = format!("http://{addr}");
     let dir_path = dir.path().to_path_buf();
-    let output = tokio::task::spawn_blocking(move || {
-        run("node", &["out/main.js", &base_url], &dir_path)
-    })
-    .await
-    .unwrap();
+    let output =
+        tokio::task::spawn_blocking(move || run("node", &["out/main.js", &base_url], &dir_path))
+            .await
+            .unwrap();
     let Some(output) = output else { return };
     assert_success(&output, "the live client");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.starts_with("OK idle,connecting,connected"), "{stdout}");
+    assert!(
+        stdout.starts_with("OK idle,connecting,connected"),
+        "{stdout}"
+    );
 }
 
 const CATCH_UP: &str = r#"
@@ -373,14 +405,18 @@ async fn a_live_query_that_falls_behind_catches_up() {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
     let pubsub = PubSub::with_capacity(1);
-    let ctx = Context::new(Memory::new()).with_pubsub(Arc::new(pubsub.clone()));
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_pubsub(Arc::new(pubsub.clone()));
     let open = |title: String| {
         let ctx = ctx.clone();
         async move {
             let mut input = ash_core::FieldMap::new();
             input.insert("title".into(), ash_core::Value::String(title));
             input.insert("priority".into(), ash_core::Value::Int(3));
-            ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input).await.unwrap();
+            ash_core::create_dynamic(&ctx, &TICKET_DEF, &TICKET_ACTIONS[0], input)
+                .await
+                .unwrap();
         }
     };
     open("Seeded".into()).await;
@@ -390,18 +426,34 @@ async fn a_live_query_that_falls_behind_catches_up() {
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let socket_ctx = ctx.clone();
     tokio::spawn(async move {
-        axum::serve(listener, ash_graphql::axum::graphql_router(schema)).await.unwrap();
+        axum::serve(
+            listener,
+            ash_graphql::axum::graphql_router(schema, socket_ctx),
+        )
+        .await
+        .unwrap();
     });
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("sdk.ts"), sdk(false)).unwrap();
     std::fs::write(dir.path().join("main.ts"), CATCH_UP).unwrap();
     let compile = [
-        "--strict", "--target", "ES2022", "--module", "commonjs", "--skipLibCheck",
-        "--outDir", "out", "sdk.ts", "main.ts",
+        "--strict",
+        "--target",
+        "ES2022",
+        "--module",
+        "commonjs",
+        "--skipLibCheck",
+        "--outDir",
+        "out",
+        "sdk.ts",
+        "main.ts",
     ];
-    let Some(compiled) = run("tsc", &compile, dir.path()) else { return };
+    let Some(compiled) = run("tsc", &compile, dir.path()) else {
+        return;
+    };
     assert_success(&compiled, "tsc");
 
     const BURST: usize = 300;
@@ -450,6 +502,13 @@ async fn a_live_query_that_falls_behind_catches_up() {
     }
     let mut errors = String::new();
     stderr.read_to_string(&mut errors).await.unwrap();
-    assert!(status.success(), "the live client failed:\n{}\n{errors}", out.join("\n"));
-    assert!(out.iter().any(|line| line.starts_with("OK missed=")), "{out:?}");
+    assert!(
+        status.success(),
+        "the live client failed:\n{}\n{errors}",
+        out.join("\n")
+    );
+    assert!(
+        out.iter().any(|line| line.starts_with("OK missed=")),
+        "{out:?}"
+    );
 }

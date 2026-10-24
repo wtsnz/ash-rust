@@ -6,8 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    AtomicCondition, AtomicUpdate, BulkDestroyOptions, BulkTransaction, CompiledQuery, Context, DataLayer, FieldMap, ResourceDef,
-    Result, TransactionSupport, Value, resource,
+    AtomicCondition, AtomicUpdate, BulkDestroyOptions, BulkTransaction, CompiledQuery, DataLayer,
+    FieldMap, ResourceDef, Result, TransactionSupport, Value, resource,
 };
 use ash_memory::Memory;
 use uuid::Uuid;
@@ -25,7 +25,10 @@ struct Racing {
 
 impl Racing {
     fn new() -> Self {
-        Self { inner: Memory::new(), race: Arc::default() }
+        Self {
+            inner: Memory::new(),
+            race: Arc::default(),
+        }
     }
 
     fn arm(&self, resource: &'static str, id: Uuid, fields: FieldMap) {
@@ -34,11 +37,23 @@ impl Racing {
 }
 
 impl DataLayer for Racing {
-    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
+    async fn create(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Value,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         self.inner.create(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value, fields: FieldMap) -> Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: Value,
+        fields: FieldMap,
+    ) -> Result<FieldMap> {
         self.inner.update(resource, tenant, id, fields).await
     }
 
@@ -46,11 +61,22 @@ impl DataLayer for Racing {
         self.inner.destroy(resource, tenant, id).await
     }
 
-    async fn run_query(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<Vec<FieldMap>> {
+    async fn run_query(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+    ) -> Result<Vec<FieldMap>> {
         let rows = self.inner.run_query(resource, query).await?;
         let race = {
             let mut race = self.race.lock().unwrap();
-            if race.as_ref().is_some_and(|(name, _, _)| *name == resource.name) { race.take() } else { None }
+            if race
+                .as_ref()
+                .is_some_and(|(name, _, _)| *name == resource.name)
+            {
+                race.take()
+            } else {
+                None
+            }
         };
         if let Some((_, id, fields)) = race {
             self.inner.update(resource, None, id, fields).await?;
@@ -62,7 +88,12 @@ impl DataLayer for Racing {
         self.inner.can_update_atomically(resource)
     }
 
-    async fn update_atomic(&self, resource: &ResourceDef, query: &CompiledQuery, update: &AtomicUpdate) -> Result<Vec<FieldMap>> {
+    async fn update_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        update: &AtomicUpdate,
+    ) -> Result<Vec<FieldMap>> {
         self.inner.update_atomic(resource, query, update).await
     }
 
@@ -70,7 +101,12 @@ impl DataLayer for Racing {
         self.inner.can_destroy_atomically(resource)
     }
 
-    async fn destroy_atomic(&self, resource: &ResourceDef, query: &CompiledQuery, conditions: &[AtomicCondition]) -> Result<Vec<FieldMap>> {
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
         self.inner.destroy_atomic(resource, query, conditions).await
     }
 
@@ -159,33 +195,76 @@ fn moved_on() -> FieldMap {
 #[tokio::test]
 async fn a_stale_record_keeps_its_related_records() {
     let data = Racing::new();
-    let ctx = Context::new(data.clone());
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
-    let entry = Entry::create(&ctx).ledger_id(ledger.id).amount(5).await.unwrap();
+    let entry = Entry::create(&ctx)
+        .ledger_id(ledger.id)
+        .amount(5)
+        .await
+        .unwrap();
 
     data.arm("Ledger", ledger.id, moved_on());
-    let result = ash_core::bulk_destroy::<Ledger, _, _>(&ctx, "remove", &[ledger.id], BulkDestroyOptions::default()).await.unwrap();
-    assert_eq!((result.count, result.error_count), (0, 0), "the stale record is left out, not failed");
-    assert_eq!(Ledger::get(&ctx, ledger.id).await.unwrap().version, 2, "it stays");
-    assert!(Entry::get(&ctx, entry.id).await.is_ok(), "and so do its entries");
+    let result = ash_core::bulk_destroy::<Ledger, _, _>(
+        &ctx,
+        "remove",
+        &[ledger.id],
+        BulkDestroyOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (result.count, result.error_count),
+        (0, 0),
+        "the stale record is left out, not failed"
+    );
+    assert_eq!(
+        Ledger::get(&ctx, ledger.id).await.unwrap().version,
+        2,
+        "it stays"
+    );
+    assert!(
+        Entry::get(&ctx, entry.id).await.is_ok(),
+        "and so do its entries"
+    );
 }
 
 #[tokio::test]
 async fn a_stale_record_is_left_out_of_a_soft_destroy() {
-    for transaction in [BulkTransaction::Batch, BulkTransaction::All, BulkTransaction::Off] {
+    for transaction in [
+        BulkTransaction::Batch,
+        BulkTransaction::All,
+        BulkTransaction::Off,
+    ] {
         for stop_on_error in [false, true] {
             let data = Racing::new();
-            let ctx = Context::new(data.clone());
+            let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
             let stale = Ledger::create(&ctx).name("Stale").await.unwrap();
             let fresh = Ledger::create(&ctx).name("Fresh").await.unwrap();
 
             data.arm("Ledger", stale.id, moved_on());
-            let opts = BulkDestroyOptions { transaction, stop_on_error, ..BulkDestroyOptions::default() };
-            let result = ash_core::bulk_destroy::<Ledger, _, _>(&ctx, "archive", &[stale.id, fresh.id], opts).await.unwrap();
+            let opts = BulkDestroyOptions {
+                transaction,
+                stop_on_error,
+                ..BulkDestroyOptions::default()
+            };
+            let result = ash_core::bulk_destroy::<Ledger, _, _>(
+                &ctx,
+                "archive",
+                &[stale.id, fresh.id],
+                opts,
+            )
+            .await
+            .unwrap();
             let case = format!("{transaction:?}, stop_on_error {stop_on_error}");
             assert_eq!((result.count, result.error_count), (1, 0), "{case}");
-            let (stale, fresh) = (Ledger::get(&ctx, stale.id).await.unwrap(), Ledger::get(&ctx, fresh.id).await.unwrap());
-            assert!(stale.archived_at.is_none(), "{case}: the stale record isn't archived");
+            let (stale, fresh) = (
+                Ledger::get(&ctx, stale.id).await.unwrap(),
+                Ledger::get(&ctx, fresh.id).await.unwrap(),
+            );
+            assert!(
+                stale.archived_at.is_none(),
+                "{case}: the stale record isn't archived"
+            );
             assert!(fresh.archived_at.is_some(), "{case}: the other is");
         }
     }

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use ash_authentication::{AuthUser, JwtService, auth_router, authentication};
-use ash_core::{Context, Result};
+use ash_core::Result;
 use ash_memory::Memory;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -17,31 +17,31 @@ use uuid::Uuid;
 
 #[authentication]
 ash_core::resource! {
-    Account {
-        table "accounts";
+Account {
+    table "accounts";
 
-    attributes {
-        id: Uuid [pk];
-        email: String;
+attributes {
+    id: Uuid [pk];
+    email: String;
+}
+
+authentication {
+    strategy password {
+        identity_field: email;
+        hashed_password_field: hashed_password;
+        min_password_length: 8;
+        require_confirmation: true;
     }
 
-    authentication {
-        strategy password {
-            identity_field: email;
-            hashed_password_field: hashed_password;
-            min_password_length: 8;
-            require_confirmation: true;
-        }
-
-        strategy tokens {
-            token_lifetime_secs: 7200;
-        }
+    strategy tokens {
+        token_lifetime_secs: 7200;
     }
+}
 
-    actions {
-        read read { primary; }
-    }
-    }}
+actions {
+    read read { primary; }
+}
+}}
 
 #[derive(Clone)]
 struct AppState {
@@ -64,7 +64,8 @@ async fn protected_profile(AuthUser(actor): AuthUser) -> Json<serde_json::Value>
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx_runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = ctx_runtime.bootstrap();
     let jwt_service = Arc::new(JwtService::new(
         "super-secret-ash-jwt-signature-key-at-least-32-bytes-long",
     ));
@@ -79,7 +80,11 @@ async fn main() -> Result<()> {
 
     println!("Seeded account: {} ({})", account.email, account.id);
 
-    let auth_routes = auth_router(Account::auth_strategy(), jwt_service.clone(), ctx);
+    let auth_routes = auth_router(
+        Account::auth_strategy(&ctx_runtime),
+        jwt_service.clone(),
+        ctx,
+    );
 
     let app = Router::new()
         .nest("/auth", auth_routes)
@@ -99,7 +104,9 @@ async fn main() -> Result<()> {
     println!("  • GET  /auth/me                    - Inspect authenticated identity claims");
     println!("  • GET  /api/profile                - Protected application route");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 
     Ok(())

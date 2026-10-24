@@ -1,4 +1,4 @@
-use ash_core::{Context, Error, Resource, resource};
+use ash_core::{Error, Resource, resource};
 use ash_memory::Memory;
 use ash_state_machine::{
     DefaultStateChange, HasStateMachine, InvalidTransition, StateMachineDef, TransitionChange,
@@ -37,47 +37,47 @@ static CANCEL_CHANGE: TransitionChange = TransitionChange::new("status", "cancel
 static DEFAULT_DRAFT_CHANGE: DefaultStateChange = DefaultStateChange::new("status", "draft");
 
 resource! {
-    Order {
-        table "orders";
+Order {
+    table "orders";
 
-    attributes {
-        id: Uuid [pk];
-        total: i64;
-        status: String;
+attributes {
+    id: Uuid [pk];
+    total: i64;
+    status: String;
+}
+
+extensions [
+    &ORDER_STATE_MACHINE,
+]
+
+actions {
+    create draft {
+        primary;
+        accept [total];
+        change custom(&DEFAULT_DRAFT_CHANGE);
     }
 
-    extensions [
-        &ORDER_STATE_MACHINE,
-    ]
-
-    actions {
-        create draft {
-            primary;
-            accept [total];
-            change custom(&DEFAULT_DRAFT_CHANGE);
-        }
-
-        update submit {
-            validate custom(&SUBMIT_VALIDATION);
-            change custom(&SUBMIT_CHANGE);
-        }
-
-        update approve {
-            validate custom(&APPROVE_VALIDATION);
-            change custom(&APPROVE_CHANGE);
-        }
-
-        update reject {
-            validate custom(&REJECT_VALIDATION);
-            change custom(&REJECT_CHANGE);
-        }
-
-        update cancel {
-            validate custom(&CANCEL_VALIDATION);
-            change custom(&CANCEL_CHANGE);
-        }
+    update submit {
+        validate custom(&SUBMIT_VALIDATION);
+        change custom(&SUBMIT_CHANGE);
     }
-    }}
+
+    update approve {
+        validate custom(&APPROVE_VALIDATION);
+        change custom(&APPROVE_CHANGE);
+    }
+
+    update reject {
+        validate custom(&REJECT_VALIDATION);
+        change custom(&REJECT_CHANGE);
+    }
+
+    update cancel {
+        validate custom(&CANCEL_VALIDATION);
+        change custom(&CANCEL_CHANGE);
+    }
+}
+}}
 
 impl HasStateMachine for Order {
     const STATE_MACHINE: StateMachineDef = ORDER_STATE_MACHINE;
@@ -99,7 +99,7 @@ async fn test_state_machine_extension_introspection() {
 
 #[tokio::test]
 async fn test_state_machine_default_initial_and_valid_lifecycle() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Create order: status defaults to "draft"
     let order = Order::draft(&ctx)
@@ -127,7 +127,10 @@ async fn test_state_machine_default_initial_and_valid_lifecycle() {
     assert!(!submitted.can_transition("submit"));
 
     // 3. Transition pending -> approved via approve action
-    let approved = submitted.approve_on(&ctx).await.expect("approve should succeed");
+    let approved = submitted
+        .approve_on(&ctx)
+        .await
+        .expect("approve should succeed");
     assert_eq!(approved.current_state(), "approved");
     assert!(!approved.can_transition("submit"));
     assert!(!approved.can_transition("approve"));
@@ -137,7 +140,7 @@ async fn test_state_machine_default_initial_and_valid_lifecycle() {
 
 #[tokio::test]
 async fn test_state_machine_invalid_transition_rejected() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let order = Order::draft(&ctx)
         .total(200)
@@ -165,21 +168,30 @@ async fn test_state_machine_invalid_transition_rejected() {
 
 #[tokio::test]
 async fn test_state_machine_multi_source_transition() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Cancel from draft
     let order1 = Order::draft(&ctx).total(50).await.unwrap();
-    let cancelled1 = order1.cancel_on(&ctx).await.expect("cancel from draft should work");
+    let cancelled1 = order1
+        .cancel_on(&ctx)
+        .await
+        .expect("cancel from draft should work");
     assert_eq!(cancelled1.current_state(), "cancelled");
 
     // Cancel from pending
     let order2 = Order::draft(&ctx).total(75).await.unwrap();
     let pending2 = order2.submit_on(&ctx).await.unwrap();
-    let cancelled2 = pending2.cancel_on(&ctx).await.expect("cancel from pending should work");
+    let cancelled2 = pending2
+        .cancel_on(&ctx)
+        .await
+        .expect("cancel from pending should work");
     assert_eq!(cancelled2.current_state(), "cancelled");
 
     // Attempting to cancel already cancelled order should fail
-    let err = cancelled2.cancel_on(&ctx).await.expect_err("cannot cancel when already cancelled");
+    let err = cancelled2
+        .cancel_on(&ctx)
+        .await
+        .expect_err("cannot cancel when already cancelled");
     match err {
         Error::Extension(ext_err) => {
             let inv = ext_err

@@ -1,4 +1,4 @@
-use ash_core::{AttrType, AttributeDef, Context, DataLayer, FieldMap, ResourceDef, Value};
+use ash_core::{AttrType, AttributeDef, DataLayer, FieldMap, ResourceDef, Value};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use async_graphql::Request;
@@ -41,7 +41,9 @@ async fn seed_tickets(data: &Memory) {
         map.insert("id".into(), Value::Uuid(id));
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
-        data.create(&TICKET_DEF, None, Value::from(id), map).await.unwrap();
+        data.create(&TICKET_DEF, None, Value::from(id), map)
+            .await
+            .unwrap();
     }
 }
 
@@ -51,7 +53,7 @@ async fn seed_tickets(data: &Memory) {
 async fn list_queries_page_by_keyset() {
     let memory = Memory::new();
     seed_tickets(&memory).await;
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
@@ -68,7 +70,12 @@ async fn list_queries_page_by_keyset() {
         }
     };
     let priorities = |page: &serde_json::Value| -> Vec<i64> {
-        page["results"].as_array().unwrap().iter().map(|t| t["priority"].as_i64().unwrap()).collect()
+        page["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["priority"].as_i64().unwrap())
+            .collect()
     };
 
     // Without paging, every record.
@@ -106,12 +113,15 @@ async fn a_list_without_first_pages_as_many_as_a_page_may_hold() {
         map.insert("id".into(), Value::Uuid(id));
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
-        memory.create(&TICKET_DEF, None, Value::from(id), map).await.unwrap();
+        memory
+            .create(&TICKET_DEF, None, Value::from(id), map)
+            .await
+            .unwrap();
     }
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     let run = |query: String| {
         let (schema, ctx) = (schema.clone(), ctx.clone());
         async move {
@@ -120,7 +130,11 @@ async fn a_list_without_first_pages_as_many_as_a_page_may_hold() {
             res.data.into_json().unwrap()["listTickets"].clone()
         }
     };
-    let page = run("{ listTickets(sort: [{ field: PRIORITY }]) { count results { priority } endKeyset } }".into()).await;
+    let page = run(
+        "{ listTickets(sort: [{ field: PRIORITY }]) { count results { priority } endKeyset } }"
+            .into(),
+    )
+    .await;
     assert_eq!(page["count"], 260);
     assert_eq!(page["results"].as_array().unwrap().len(), 250);
     let after = page["endKeyset"].as_str().expect("a keyset");
@@ -128,7 +142,12 @@ async fn a_list_without_first_pages_as_many_as_a_page_may_hold() {
         r#"{{ listTickets(sort: [{{ field: PRIORITY }}], after: "{after}") {{ results {{ priority }} }} }}"#
     ))
     .await;
-    let rest: Vec<i64> = rest["results"].as_array().unwrap().iter().map(|t| t["priority"].as_i64().unwrap()).collect();
+    let rest: Vec<i64> = rest["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["priority"].as_i64().unwrap())
+        .collect();
     assert_eq!(rest, (250..260).collect::<Vec<_>>());
 }
 
@@ -140,17 +159,30 @@ async fn paging_arguments_that_contradict_are_refused() {
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Memory>()
         .expect("Failed to build schema");
-    let ctx = Context::new(memory);
+    let ctx = ash_core::Runtime::new(memory).bootstrap();
     for (args, message) in [
-        ("first: 1, last: 1", "You can pass either `first` or `last`, not both"),
-        (r#"first: 1, before: "x""#, "You can pass either `first` and `after` cursor, or `last` and `before` cursor"),
-        (r#"last: 1, after: "x""#, "You can pass either `first` and `after` cursor, or `last` and `before` cursor"),
+        (
+            "first: 1, last: 1",
+            "You can pass either `first` or `last`, not both",
+        ),
+        (
+            r#"first: 1, before: "x""#,
+            "You can pass either `first` and `after` cursor, or `last` and `before` cursor",
+        ),
+        (
+            r#"last: 1, after: "x""#,
+            "You can pass either `first` and `after` cursor, or `last` and `before` cursor",
+        ),
         ("last: 1", "You can pass `last` only with `before` cursor"),
         ("first: 0", "`first` must be a positive integer"),
     ] {
         let query = format!("{{ listTickets({args}) {{ results {{ id }} }} }}");
         let res = schema.execute(Request::new(query).data(ctx.clone())).await;
-        assert_eq!(res.errors.first().map(|e| e.message.as_str()), Some(message), "{args}");
+        assert_eq!(
+            res.errors.first().map(|e| e.message.as_str()),
+            Some(message),
+            "{args}"
+        );
     }
 }
 
@@ -175,23 +207,48 @@ impl Slow {
 }
 
 impl DataLayer for Slow {
-    async fn create(&self, resource: &ResourceDef, tenant: Option<&str>, id: ash_core::Value, fields: FieldMap) -> ash_core::Result<FieldMap> {
+    async fn create(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: ash_core::Value,
+        fields: FieldMap,
+    ) -> ash_core::Result<FieldMap> {
         self.inner.create(resource, tenant, id, fields).await
     }
 
-    async fn update(&self, resource: &ResourceDef, tenant: Option<&str>, id: ash_core::Value, fields: FieldMap) -> ash_core::Result<FieldMap> {
+    async fn update(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: ash_core::Value,
+        fields: FieldMap,
+    ) -> ash_core::Result<FieldMap> {
         self.inner.update(resource, tenant, id, fields).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: ash_core::Value) -> ash_core::Result<()> {
+    async fn destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        id: ash_core::Value,
+    ) -> ash_core::Result<()> {
         self.inner.destroy(resource, tenant, id).await
     }
 
-    async fn run_query(&self, resource: &ResourceDef, query: &ash_core::CompiledQuery) -> ash_core::Result<Vec<FieldMap>> {
+    async fn run_query(
+        &self,
+        resource: &ResourceDef,
+        query: &ash_core::CompiledQuery,
+    ) -> ash_core::Result<Vec<FieldMap>> {
         self.read(self.inner.run_query(resource, query)).await
     }
 
-    async fn count(&self, resource: &ResourceDef, query: &ash_core::CompiledQuery) -> ash_core::Result<usize> {
+    async fn count(
+        &self,
+        resource: &ResourceDef,
+        query: &ash_core::CompiledQuery,
+    ) -> ash_core::Result<usize> {
         self.read(self.inner.count(resource, query)).await
     }
 }
@@ -204,11 +261,18 @@ async fn a_page_reads_its_count_alongside_its_records() {
     let schema = AshGraphQL::from_resources(&[&TICKET_DEF])
         .finish::<Slow>()
         .expect("Failed to build schema");
-    let query = "{ listTickets(sort: [{ field: PRIORITY }], first: 2) { count results { priority } } }";
-    let res = schema.execute(Request::new(query).data(Context::new(slow.clone()))).await;
+    let query =
+        "{ listTickets(sort: [{ field: PRIORITY }], first: 2) { count results { priority } } }";
+    let res = schema
+        .execute(Request::new(query).data(ash_core::Runtime::new(slow.clone()).bootstrap()))
+        .await;
     assert!(res.errors.is_empty(), "{:?}", res.errors);
     let page = res.data.into_json().unwrap()["listTickets"].clone();
     assert_eq!(page["count"], 5);
     assert_eq!(page["results"].as_array().unwrap().len(), 2);
-    assert_eq!(slow.most.load(std::sync::atomic::Ordering::SeqCst), 2, "the count and the page are read at once");
+    assert_eq!(
+        slow.most.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the count and the page are read at once"
+    );
 }

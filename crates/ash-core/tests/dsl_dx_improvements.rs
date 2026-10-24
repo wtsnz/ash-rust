@@ -1,4 +1,4 @@
-use ash_core::{ActionTarget, AttrType, Context, Resource, resource};
+use ash_core::{ActionTarget, AttrType, Resource, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -32,55 +32,55 @@ mod engineer {
 use engineer::Engineer;
 
 resource! {
-    /// Ticket resource representation
-    Ticket {
-        table "tickets";
+/// Ticket resource representation
+Ticket {
+    table "tickets";
 
-    attributes {
-        id: Uuid [pk];
-        /// Short summary shown in the queue
-        title: String;
-        status: String;
-        assignee: Option<String>;
-        engineer_id: Option<Uuid>;
+attributes {
+    id: Uuid [pk];
+    /// Short summary shown in the queue
+    title: String;
+    status: String;
+    assignee: Option<String>;
+    engineer_id: Option<Uuid>;
+}
+
+relationships {
+    belongs_to engineer: Engineer [fk: engineer_id];
+}
+
+actions {
+    /// Creates a new ticket
+    create create {
+        primary;
+        accept [title];
+        change set(status = "open");
     }
 
-    relationships {
-        belongs_to engineer: Engineer [fk: engineer_id];
+    /// Primary read action
+    read read {
+        primary;
     }
 
-    actions {
-        /// Creates a new ticket
-        create create {
-            primary;
-            accept [title];
-            change set(status = "open");
-        }
-
-        /// Primary read action
-        read read {
-            primary;
-        }
-
-        /// Assigns a ticket to an engineer
-        update assign {
-            accept [assignee, engineer_id];
-            change set(status = "in_progress");
-        }
-
-        /// Closes and deletes a ticket
-        destroy close {
-            primary;
-        }
-
-        generic summarize {
-            /// Extra notes included in the summary
-            argument notes: String;
-            returns String;
-            run |input| async move { Ok(input.notes) };
-        }
+    /// Assigns a ticket to an engineer
+    update assign {
+        accept [assignee, engineer_id];
+        change set(status = "in_progress");
     }
-    }}
+
+    /// Closes and deletes a ticket
+    destroy close {
+        primary;
+    }
+
+    generic summarize {
+        /// Extra notes included in the summary
+        argument notes: String;
+        returns String;
+        run |input| async move { Ok(input.notes) };
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_action_target_conversions() {
@@ -116,7 +116,7 @@ async fn test_action_target_conversions() {
 
 #[tokio::test]
 async fn test_inherent_action_invocations_without_trait_imports() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // 1. Inherent create without trait imports
     let ticket = Ticket::create(&ctx).title("Network down").await.unwrap();
@@ -278,7 +278,7 @@ fn test_field_constants_and_relationship_probe_compile() {
 
 #[tokio::test]
 async fn test_documented_builder_setters_and_belongs_to_fk() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let engineer = Engineer::create(&ctx).name("Ada").await.unwrap();
     let ticket = Ticket::create(&ctx).title("Printer jam").await.unwrap();
@@ -299,7 +299,7 @@ async fn test_documented_builder_setters_and_belongs_to_fk() {
 
 #[tokio::test]
 async fn test_permissive_punctuation_and_empty_sections() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let ticket = PermissiveTicket::create(&ctx)
         .title("Permissive syntax")
@@ -314,7 +314,7 @@ async fn test_permissive_punctuation_and_empty_sections() {
 
 #[tokio::test]
 async fn test_destination_aggregates_and_generic_run_probe() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let post = Post::create(&ctx).title("Hello").await.unwrap();
     assert_eq!(post.title, "Hello");
@@ -367,7 +367,7 @@ use scored::ScoredItem;
 
 #[tokio::test]
 async fn test_non_i64_integers_round_trip() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let item = ScoredItem::create(&ctx)
         .priority(3)

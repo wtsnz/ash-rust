@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Uuid;
 
-use ash_core::{ActionKind, Context, Error, Resource, ResourceExt, Result, SyncFnNotifier, resource};
+use ash_core::{ActionKind, Error, Resource, ResourceExt, Result, SyncFnNotifier, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 
@@ -302,9 +302,9 @@ pub mod join_mod {
 }
 
 pub mod article_mod {
-    use super::*;
     use super::join_mod::ArticleTag;
     use super::tag_mod::Tag;
+    use super::*;
 
     resource! {
         Article {
@@ -363,16 +363,33 @@ async fn test_cascading_delete_multi_level_in_memory() -> Result<()> {
         Ok(())
     }));
 
-    let ctx = Context::new(Memory::new()).with_notifier(notifier);
+    let ctx = ash_core::Runtime::new(Memory::new())
+        .bootstrap()
+        .with_notifier(notifier);
 
     let author = Author::create(&ctx).name("J.K. Rowling").await?;
 
-    let post1 = Post::create(&ctx).author_id(author.id).title("Book 1").await?;
-    let post2 = Post::create(&ctx).author_id(author.id).title("Book 2").await?;
+    let post1 = Post::create(&ctx)
+        .author_id(author.id)
+        .title("Book 1")
+        .await?;
+    let post2 = Post::create(&ctx)
+        .author_id(author.id)
+        .title("Book 2")
+        .await?;
 
-    let _c1 = Comment::create(&ctx).post_id(post1.id).content("Great!").await?;
-    let _c2 = Comment::create(&ctx).post_id(post1.id).content("Loved it!").await?;
-    let _c3 = Comment::create(&ctx).post_id(post2.id).content("Awesome!").await?;
+    let _c1 = Comment::create(&ctx)
+        .post_id(post1.id)
+        .content("Great!")
+        .await?;
+    let _c2 = Comment::create(&ctx)
+        .post_id(post1.id)
+        .content("Loved it!")
+        .await?;
+    let _c3 = Comment::create(&ctx)
+        .post_id(post2.id)
+        .content("Awesome!")
+        .await?;
 
     // Verify setup
     assert_eq!(Post::query(&ctx).all().await?.len(), 2);
@@ -394,15 +411,22 @@ async fn test_cascading_delete_multi_level_in_memory() -> Result<()> {
 
 #[tokio::test]
 async fn test_restrict_delete_prevents_parent_deletion() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let engineering = Department::create(&ctx).name("Engineering").await?;
-    let emp = Employee::create(&ctx).dept_id(engineering.id).name("Alice").await?;
+    let emp = Employee::create(&ctx)
+        .dept_id(engineering.id)
+        .name("Alice")
+        .await?;
 
     // Attempting to delete engineering must fail because it has 1 dependent employee
     let res = engineering.destroy(&ctx).await;
     match res {
-        Err(Error::DeleteRestricted { resource, relationship, count }) => {
+        Err(Error::DeleteRestricted {
+            resource,
+            relationship,
+            count,
+        }) => {
             assert_eq!(resource, "Department");
             assert_eq!(relationship, "employees");
             assert_eq!(count, 1);
@@ -424,11 +448,17 @@ async fn test_restrict_delete_prevents_parent_deletion() -> Result<()> {
 
 #[tokio::test]
 async fn test_nilify_delete_clears_foreign_key() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let team = Team::create(&ctx).name("Warriors").await?;
-    let player1 = Player::create(&ctx).team_id(Some(team.id)).name("Curry").await?;
-    let player2 = Player::create(&ctx).team_id(Some(team.id)).name("Thompson").await?;
+    let player1 = Player::create(&ctx)
+        .team_id(Some(team.id))
+        .name("Curry")
+        .await?;
+    let player2 = Player::create(&ctx)
+        .team_id(Some(team.id))
+        .name("Thompson")
+        .await?;
 
     // Destroy team -> players should have team_id set to None
     team.destroy(&ctx).await?;
@@ -447,14 +477,20 @@ async fn test_nilify_delete_clears_foreign_key() -> Result<()> {
 
 #[tokio::test]
 async fn test_many_to_many_cascades_join_rows() -> Result<()> {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     let article = Article::create(&ctx).title("Rust Async").await?;
     let tag_rust = Tag::create(&ctx).label("rust").await?;
     let tag_async = Tag::create(&ctx).label("async").await?;
 
-    ArticleTag::create(&ctx).article_id(article.id).tag_id(tag_rust.id).await?;
-    ArticleTag::create(&ctx).article_id(article.id).tag_id(tag_async.id).await?;
+    ArticleTag::create(&ctx)
+        .article_id(article.id)
+        .tag_id(tag_rust.id)
+        .await?;
+    ArticleTag::create(&ctx)
+        .article_id(article.id)
+        .tag_id(tag_async.id)
+        .await?;
 
     assert_eq!(ArticleTag::query(&ctx).all().await?.len(), 2);
 
@@ -473,12 +509,19 @@ async fn test_many_to_many_cascades_join_rows() -> Result<()> {
 #[tokio::test]
 async fn test_cascading_delete_in_sqlite() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = Context::new(sqlite);
-    ctx.install(&[&Author::DEF, &Post::DEF, &Comment::DEF]).await?;
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
+    ctx.install(&[&Author::DEF, &Post::DEF, &Comment::DEF])
+        .await?;
 
     let author = Author::create(&ctx).name("George R.R. Martin").await?;
-    let post = Post::create(&ctx).author_id(author.id).title("A Game of Thrones").await?;
-    let _comm = Comment::create(&ctx).post_id(post.id).content("Winter is coming").await?;
+    let post = Post::create(&ctx)
+        .author_id(author.id)
+        .title("A Game of Thrones")
+        .await?;
+    let _comm = Comment::create(&ctx)
+        .post_id(post.id)
+        .content("Winter is coming")
+        .await?;
 
     assert_eq!(Comment::query(&ctx).all().await?.len(), 1);
 

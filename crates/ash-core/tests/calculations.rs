@@ -1,4 +1,4 @@
-use ash_core::{resource, Context, FieldMap, Resource, Result, SchemaSupport, Value};
+use ash_core::{FieldMap, Resource, Result, SchemaSupport, Value, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -59,7 +59,7 @@ pub use item::Item;
 #[test]
 async fn test_calculations_in_memory() {
     let data = Memory::new();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     let _item1 = Item::create(&ctx)
         .name("Laptop")
@@ -110,8 +110,8 @@ async fn test_calculations_in_memory() {
     // Verify item 1 (Laptop)
     let laptop = results.iter().find(|i| i.name == "Laptop").unwrap();
     assert_eq!(laptop.total_price, Some(2000)); // 1000 * 2
-    assert_eq!(laptop.bonus_views, Some(900));  // 800 + 100
-    assert_eq!(laptop.name_len, Some(6));      // "Laptop".len()
+    assert_eq!(laptop.bonus_views, Some(900)); // 800 + 100
+    assert_eq!(laptop.name_len, Some(6)); // "Laptop".len()
     assert_eq!(laptop.upper_code, Some("LP-100".into()));
     assert_eq!(laptop.display_name, Some("Laptop".into())); // null nickname -> name
     assert_eq!(laptop.badge, Some("Popular".into())); // views >= 500
@@ -141,8 +141,8 @@ async fn test_calculations_in_memory() {
         .all()
         .await
         .unwrap();
-    assert_eq!(sorted_by_total[0].name, "Laptop");   // 2000
-    assert_eq!(sorted_by_total[1].name, "Mouse");    // 100
+    assert_eq!(sorted_by_total[0].name, "Laptop"); // 2000
+    assert_eq!(sorted_by_total[1].name, "Mouse"); // 100
     assert_eq!(sorted_by_total[2].name, "Keyboard"); // 45
 
     // Invariant 4: Calculation with runtime arguments
@@ -153,7 +153,10 @@ async fn test_calculations_in_memory() {
         .all()
         .await
         .unwrap();
-    let laptop = discounted_items.iter().find(|i| i.name == "Laptop").unwrap();
+    let laptop = discounted_items
+        .iter()
+        .find(|i| i.name == "Laptop")
+        .unwrap();
     assert_eq!(laptop.discounted, Some(900)); // 1000 - 100
     let mouse = discounted_items.iter().find(|i| i.name == "Mouse").unwrap();
     assert_eq!(mouse.discounted, Some(-75)); // 25 - 100
@@ -164,7 +167,7 @@ async fn test_calculations_in_memory() {
 async fn test_calculations_in_sqlite() {
     let data = Sqlite::memory().await.unwrap();
     data.install_resources(&[&Item::DEF]).await.unwrap();
-    let ctx = Context::new(data);
+    let ctx = ash_core::Runtime::new(data).bootstrap();
 
     Item::create(&ctx)
         .name("Laptop")
@@ -247,7 +250,10 @@ async fn test_calculations_in_sqlite() {
         .all()
         .await
         .unwrap();
-    let laptop = discounted_items.iter().find(|i| i.name == "Laptop").unwrap();
+    let laptop = discounted_items
+        .iter()
+        .find(|i| i.name == "Laptop")
+        .unwrap();
     assert_eq!(laptop.discounted, Some(900)); // 1000 - 100
     let mouse = discounted_items.iter().find(|i| i.name == "Mouse").unwrap();
     assert_eq!(mouse.discounted, Some(-75)); // 25 - 100

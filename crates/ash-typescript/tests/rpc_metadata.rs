@@ -48,7 +48,11 @@ fn rank_items(_arguments: &FieldMap, records: &mut [FieldMap]) -> ash_core::Resu
 }
 
 fn note_tags(ctx: &mut ChangeContext<'_>) -> ash_core::Result<()> {
-    let count = ctx.arguments.get("tags").and_then(Value::as_array).map_or(0, <[Value]>::len) as i64;
+    let count = ctx
+        .arguments
+        .get("tags")
+        .and_then(Value::as_array)
+        .map_or(0, <[Value]>::len) as i64;
     ctx.after_action(move |record| {
         put_metadata(record, "tag_count", count);
         put_metadata(record, "echo", "hi");
@@ -61,8 +65,12 @@ fn rpc() -> Rpc<Memory> {
     Rpc::new()
         .action::<Item>("list_ranked", "ranked")
         .action::<Item>("create_item", "create")
-        .action_with::<Item>("create_quietly", "create", |options| options.show_metadata(&["tag_count"]))
-        .action_with::<Item>("create_renamed", "create", |options| options.metadata_field_names(&[("tag_count", "tags_given")]))
+        .action_with::<Item>("create_quietly", "create", |options| {
+            options.show_metadata(&["tag_count"])
+        })
+        .action_with::<Item>("create_renamed", "create", |options| {
+            options.metadata_field_names(&[("tag_count", "tags_given")])
+        })
 }
 
 async fn run(ctx: &Context<Memory>, request: Json) -> Json {
@@ -71,32 +79,56 @@ async fn run(ctx: &Context<Memory>, request: Json) -> Json {
 
 #[tokio::test]
 async fn a_write_shows_its_metadata_beside_its_data() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let created = run(&ctx, json!({ "action": "create_item", "input": { "name": "a", "tags": ["x", "y"] }, "fields": ["name"] })).await;
-    assert_eq!(created, json!({ "success": true, "data": { "name": "a" }, "metadata": { "tagCount": 2, "echo": "hi" } }));
+    assert_eq!(
+        created,
+        json!({ "success": true, "data": { "name": "a" }, "metadata": { "tagCount": 2, "echo": "hi" } })
+    );
 
     // Only what it asks for, and only what's exposed.
-    let asked = run(&ctx, json!({ "action": "create_item", "input": { "name": "b" }, "metadataFields": ["echo"] })).await;
-    assert_eq!(asked, json!({ "success": true, "data": {}, "metadata": { "echo": "hi" } }));
+    let asked = run(
+        &ctx,
+        json!({ "action": "create_item", "input": { "name": "b" }, "metadataFields": ["echo"] }),
+    )
+    .await;
+    assert_eq!(
+        asked,
+        json!({ "success": true, "data": {}, "metadata": { "echo": "hi" } })
+    );
     let quiet = run(&ctx, json!({ "action": "create_quietly", "input": { "name": "c" }, "fields": ["name"], "metadataFields": ["echo", "tagCount"] })).await;
     assert_eq!(quiet["metadata"], json!({ "tagCount": 0 }));
 
     // Under the name the client knows it by.
     let renamed = run(&ctx, json!({ "action": "create_renamed", "input": { "name": "d", "tags": ["x"] }, "fields": ["name"] })).await;
-    assert_eq!(renamed["metadata"], json!({ "tags_given": 1, "echo": "hi" }));
+    assert_eq!(
+        renamed["metadata"],
+        json!({ "tags_given": 1, "echo": "hi" })
+    );
 }
 
 #[tokio::test]
 async fn a_read_merges_the_metadata_asked_for_into_its_records() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     for name in ["b", "a", "c"] {
-        run(&ctx, json!({ "action": "create_item", "input": { "name": name } })).await;
+        run(
+            &ctx,
+            json!({ "action": "create_item", "input": { "name": name } }),
+        )
+        .await;
     }
     // Unasked, a read shows none.
     let plain = run(&ctx, json!({ "action": "list_ranked", "fields": ["name"] })).await;
-    assert_eq!(plain["data"], json!([{ "name": "a" }, { "name": "b" }, { "name": "c" }]));
+    assert_eq!(
+        plain["data"],
+        json!([{ "name": "a" }, { "name": "b" }, { "name": "c" }])
+    );
 
-    let ranked = run(&ctx, json!({ "action": "list_ranked", "fields": ["name"], "metadataFields": ["rank", "note"] })).await;
+    let ranked = run(
+        &ctx,
+        json!({ "action": "list_ranked", "fields": ["name"], "metadataFields": ["rank", "note"] }),
+    )
+    .await;
     assert_eq!(
         ranked["data"],
         json!([
@@ -110,7 +142,8 @@ async fn a_read_merges_the_metadata_asked_for_into_its_records() {
 #[test]
 #[should_panic(expected = "which `create` doesn't declare")]
 fn showing_undeclared_metadata_is_refused() {
-    let _ = Rpc::<Memory>::new().action_with::<Item>("bad", "create", |options| options.show_metadata(&["nope"]));
+    let _ = Rpc::<Memory>::new()
+        .action_with::<Item>("bad", "create", |options| options.show_metadata(&["nope"]));
 }
 
 #[test]
@@ -118,7 +151,14 @@ fn actions_declare_their_metadata() {
     use ash_core::{AttrType, Resource};
     let create = Item::DEF.action("create").unwrap();
     assert_eq!(create.metadata.len(), 2);
-    assert_eq!((create.metadata[0].name, create.metadata[0].ty, create.metadata[0].allow_nil), ("tag_count", AttrType::Integer, false));
+    assert_eq!(
+        (
+            create.metadata[0].name,
+            create.metadata[0].ty,
+            create.metadata[0].allow_nil
+        ),
+        ("tag_count", AttrType::Integer, false)
+    );
     let ranked = Item::DEF.action("ranked").unwrap();
     assert!(ranked.metadata[1].allow_nil);
 }

@@ -69,7 +69,12 @@ where
 
     let mut planets = BTreeMap::new();
     for (name, gravity, position, atmosphere) in [
-        ("Earth", "9.81", vector(1.0, 0.0, 0.0), Atmosphere::Breathable),
+        (
+            "Earth",
+            "9.81",
+            vector(1.0, 0.0, 0.0),
+            Atmosphere::Breathable,
+        ),
         ("Luna", "1.62", vector(1.0026, 0.0, 0.0), Atmosphere::Vacuum),
         ("Mars", "3.72", vector(-1.52, 0.1, 0.03), Atmosphere::Thin),
         ("Ceres", "0.28", vector(0.5, 2.7, 0.2), Atmosphere::Vacuum),
@@ -86,13 +91,49 @@ where
 
     let mut ports = BTreeMap::new();
     for (planet, code, name, kind, relay) in [
-        ("Earth", "KSC", "Kennedy Ground", PortKind::Ground, "10.0.1.1"),
-        ("Earth", "LEO", "Gateway Station", PortKind::LowOrbit, "10.0.2.1"),
-        ("Luna", "SHK", "Shackleton Base", PortKind::Ground, "10.1.0.1"),
+        (
+            "Earth",
+            "KSC",
+            "Kennedy Ground",
+            PortKind::Ground,
+            "10.0.1.1",
+        ),
+        (
+            "Earth",
+            "LEO",
+            "Gateway Station",
+            PortKind::LowOrbit,
+            "10.0.2.1",
+        ),
+        (
+            "Luna",
+            "SHK",
+            "Shackleton Base",
+            PortKind::Ground,
+            "10.1.0.1",
+        ),
         ("Mars", "OLY", "Olympus Field", PortKind::Ground, "10.4.0.1"),
-        ("Mars", "DMS", "Deimos Anchorage", PortKind::Lagrange, "10.4.1.1"),
-        ("Ceres", "PZZ", "Piazzi Station", PortKind::Geostationary, "10.7.0.1"),
-        ("Europa", "CNM", "Conamara Ice Port", PortKind::Ground, "fd00:5::1"),
+        (
+            "Mars",
+            "DMS",
+            "Deimos Anchorage",
+            PortKind::Lagrange,
+            "10.4.1.1",
+        ),
+        (
+            "Ceres",
+            "PZZ",
+            "Piazzi Station",
+            PortKind::Geostationary,
+            "10.7.0.1",
+        ),
+        (
+            "Europa",
+            "CNM",
+            "Conamara Ice Port",
+            PortKind::Ground,
+            "fd00:5::1",
+        ),
     ] {
         let port = Port::open(&authority)
             .planet_id(planets[planet].id)
@@ -140,12 +181,16 @@ where
         (RED_DUST, "Sally", Role::Shipper),
         (CUSTOMS, "Chen", Role::Customs),
     ] {
-        let member = CrewMember::register_with_password(&authority.clone().with_tenant(line))
-            .email(ci(&format!("{}@{line}.example", first.to_lowercase())))
-            .name(first)
-            .role(role)
-            .password(PASSWORD)
-            .await?;
+        let member = CrewMember::register_with_password(
+            &app.runtime()
+                .system()
+                .bind(authority.actor().cloned(), Some(line.into())),
+        )
+        .email(ci(&format!("{}@{line}.example", first.to_lowercase())))
+        .name(first)
+        .role(role)
+        .password(PASSWORD)
+        .await?;
         crew.insert(first, member);
     }
 
@@ -153,10 +198,42 @@ where
     let mut ships = BTreeMap::new();
     let mut api_keys = BTreeMap::new();
     for (dispatcher, name, registry, class, mass, slots, captain) in [
-        ("Ada", "Long Haul", "HF-001", ShipClass::Freighter, 7_500, 6, Some("Yuri")),
-        ("Ada", "Tin Kettle", "HF-002", ShipClass::Hauler, 2_400, 3, Some("Valentina")),
-        ("Ada", "Behemoth", "HF-003", ShipClass::Tanker, 48_000, 12, None),
-        ("Mae", "Dust Devil", "RD-101", ShipClass::Freighter, 7_000, 6, Some("Neil")),
+        (
+            "Ada",
+            "Long Haul",
+            "HF-001",
+            ShipClass::Freighter,
+            7_500,
+            6,
+            Some("Yuri"),
+        ),
+        (
+            "Ada",
+            "Tin Kettle",
+            "HF-002",
+            ShipClass::Hauler,
+            2_400,
+            3,
+            Some("Valentina"),
+        ),
+        (
+            "Ada",
+            "Behemoth",
+            "HF-003",
+            ShipClass::Tanker,
+            48_000,
+            12,
+            None,
+        ),
+        (
+            "Mae",
+            "Dust Devil",
+            "RD-101",
+            ShipClass::Freighter,
+            7_000,
+            6,
+            Some("Neil"),
+        ),
     ] {
         let dispatch = app.as_crew(&crew[dispatcher]);
         let ship = Ship::commission(&dispatch)

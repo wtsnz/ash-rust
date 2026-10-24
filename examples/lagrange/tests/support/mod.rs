@@ -55,7 +55,9 @@ impl<D: FleetDb> Harness<D> {
 
     /// The customs officer, inspecting cargo of `line`.
     pub fn customs(&self, line: &str) -> Context<D> {
-        self.ctx["Chen"].clone().with_tenant(line)
+        self.app
+            .runtime()
+            .bind(self.ctx["Chen"].actor().cloned(), Some(line.into()))
     }
 }
 
@@ -90,7 +92,9 @@ pub async fn postgres_fleet() -> Option<Postgres> {
         return None;
     };
     // Setup SQL runs through a pool of its own: the data layer's is tokio-postgres's.
-    let admin = sqlx::PgPool::connect(&base).await.expect("connect to DATABASE_URL");
+    let admin = sqlx::PgPool::connect(&base)
+        .await
+        .expect("connect to DATABASE_URL");
     // Extensions are database-wide and racing `CREATE EXTENSION` calls collide, so
     // install them once, under a lock, before any schema migrates.
     let mut tx = admin.begin().await.unwrap();

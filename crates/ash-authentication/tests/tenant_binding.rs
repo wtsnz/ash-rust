@@ -1,4 +1,4 @@
-//! Authentication audit item 3: attribute-tenant credentials and signed claims.
+//! Authentication with attribute tenancy: credential lookups and signed tenant claims.
 //! Each scenario runs on memory, SQLite and Postgres with a same-tenant control.
 
 use ash_authentication::{
@@ -50,16 +50,17 @@ struct Fixture<D: DataLayer> {
 }
 
 async fn fixture<D: DataLayer>(data: D) -> Fixture<D> {
-    let root = Context::new(data);
-    let a = root.clone().with_tenant("a");
-    let b = root.clone().with_tenant("b");
+    let root_runtime = ash_core::Runtime::new(data);
+    let root = root_runtime.bootstrap();
+    let a = root_runtime.bind(root.actor().cloned(), Some(("a").into()));
+    let b = root_runtime.bind(root.actor().cloned(), Some(("b").into()));
     let alice = User::register_with_password(&a)
         .email(EMAIL)
         .password(PASSWORD)
         .password_confirmation(PASSWORD)
         .await
         .unwrap();
-    let strategy = User::auth_strategy().with_jwt_service(JwtService::new(SECRET));
+    let strategy = User::auth_strategy(&root_runtime).with_jwt_service(JwtService::new(SECRET));
     Fixture {
         root,
         a,
@@ -299,7 +300,7 @@ on_backends!(reset_token_tenant_claim_is_checked);
 async fn inconsistent_or_tenantless_claims_cannot_reset_a_password<D: DataLayer>(f: Fixture<D>) {
     let jwt = f.strategy.jwt_service().unwrap();
     // Seed credentials directly: the fixed lookup cannot issue these inconsistent
-    // tokens. Preserve the original audit's subject-in-A, claim-in-B case too.
+    // tokens. Cover the subject-in-A, claim-in-B case too.
     for tenant in [Some("b".to_string()), None] {
         let token = jwt.sign_reset_token(f.alice.id, tenant).unwrap();
         let claims = jwt

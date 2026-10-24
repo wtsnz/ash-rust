@@ -4,7 +4,7 @@
 //! nulls last ascending and first descending unless a sort places them otherwise.
 
 use ash_core::{
-    Actor, CompiledQuery, Context, DataLayer, FieldMap, Filter, Resource, Sort, Value, build_keyset_filter,
+    Actor, CompiledQuery, DataLayer, FieldMap, Filter, Resource, Sort, Value, build_keyset_filter,
     guard_input_filter, guard_input_sort, keyset_sort, redact_fields,
 };
 use ash_memory::Memory;
@@ -53,7 +53,11 @@ fn member(id: Uuid) -> Actor {
 }
 
 fn sort(field: &str, descending: bool) -> Sort {
-    Sort { field: field.into(), descending, ..Default::default() }
+    Sort {
+        field: field.into(),
+        descending,
+        ..Default::default()
+    }
 }
 
 /// The notes `query` reads, as `actor` may see them.
@@ -70,25 +74,52 @@ async fn read<D: DataLayer>(data: &D, actor: &Actor, query: CompiledQuery) -> Ve
 async fn found<D: DataLayer>(data: &D, actor: &Actor, scope: &Filter, filter: Filter) -> Vec<Uuid> {
     let filter = guard_input_filter(&Note::DEF, Some(actor), filter).unwrap();
     let filter = Filter::and([scope.clone(), filter]);
-    let query = CompiledQuery { filter: Some(filter), sort: vec![sort("id", false)], ..CompiledQuery::default() };
-    read(data, actor, query).await.iter().map(|row| row["id"].as_uuid().unwrap()).collect()
+    let query = CompiledQuery {
+        filter: Some(filter),
+        sort: vec![sort("id", false)],
+        ..CompiledQuery::default()
+    };
+    read(data, actor, query)
+        .await
+        .iter()
+        .map(|row| row["id"].as_uuid().unwrap())
+        .collect()
 }
 
 /// Every note `scope` holds, page by page of two, after (or before) the last page's last
 /// (or first) record, in `sorts` from a client, as `actor` reads them.
-async fn walk<D: DataLayer>(data: &D, actor: &Actor, scope: &Filter, sorts: Vec<Sort>, forward: bool) -> Vec<Uuid> {
-    let sorts = keyset_sort(&Note::DEF, guard_input_sort(&Note::DEF, Some(actor), sorts).unwrap());
-    let read_sorts: Vec<Sort> =
-        sorts.iter().map(|s| if forward { s.clone() } else { s.reversed() }).collect();
+async fn walk<D: DataLayer>(
+    data: &D,
+    actor: &Actor,
+    scope: &Filter,
+    sorts: Vec<Sort>,
+    forward: bool,
+) -> Vec<Uuid> {
+    let sorts = keyset_sort(
+        &Note::DEF,
+        guard_input_sort(&Note::DEF, Some(actor), sorts).unwrap(),
+    );
+    let read_sorts: Vec<Sort> = sorts
+        .iter()
+        .map(|s| if forward { s.clone() } else { s.reversed() })
+        .collect();
     let mut seen = Vec::new();
     let mut last: Option<FieldMap> = None;
     loop {
         let filter = last.as_ref().and_then(|row| {
-            let values: Vec<Value> = sorts.iter().map(|s| row.get(&s.field).cloned().unwrap_or(Value::Null)).collect();
+            let values: Vec<Value> = sorts
+                .iter()
+                .map(|s| row.get(&s.field).cloned().unwrap_or(Value::Null))
+                .collect();
             build_keyset_filter(&Note::DEF, &sorts, &values, forward)
         });
         let filter = Some(Filter::and([scope.clone()].into_iter().chain(filter)));
-        let query = CompiledQuery { filter, sort: read_sorts.clone(), limit: Some(2), ..CompiledQuery::default() };
+        let query = CompiledQuery {
+            filter,
+            sort: read_sorts.clone(),
+            limit: Some(2),
+            ..CompiledQuery::default()
+        };
         let page = read(data, actor, query).await;
         if page.is_empty() {
             break;
@@ -108,8 +139,10 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
     // Ids in order, so ties break predictably.
     let mut ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
     ids.sort();
-    let [n1, n2, n3, n4, n5] = ids[..] else { unreachable!() };
-    let ctx = Context::new(data.clone());
+    let [n1, n2, n3, n4, n5] = ids[..] else {
+        unreachable!()
+    };
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
     for (id, owner, rank, secret) in [
         (n1, a, Some(1), Some("alpha")),
         (n2, a, None, Some("beta")),
@@ -117,34 +150,106 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
         (n4, b, Some(2), None),
         (n5, c, None, Some("gamma")),
     ] {
-        Note::create(&ctx).id(id).owner_id(owner).rank(rank).secret(secret.map(str::to_string)).await.unwrap();
+        Note::create(&ctx)
+            .id(id)
+            .owner_id(owner)
+            .rank(rank)
+            .secret(secret.map(str::to_string))
+            .await
+            .unwrap();
     }
-    let (owner, admin) = (member(a), Actor::new(Uuid::new_v4()).with_attr("role", Value::from("admin")));
-    let scope = &Filter::in_list("owner_id", vec![Value::Uuid(a), Value::Uuid(b), Value::Uuid(c)]);
+    let (owner, admin) = (
+        member(a),
+        Actor::new(Uuid::new_v4()).with_attr("role", Value::from("admin")),
+    );
+    let scope = &Filter::in_list(
+        "owner_id",
+        vec![Value::Uuid(a), Value::Uuid(b), Value::Uuid(c)],
+    );
 
     // Only the secrets the actor may read can be found.
-    assert_eq!(found(&data, &owner, scope, Filter::eq("secret", "alpha")).await, [n1]);
-    assert_eq!(found(&data, &admin, scope, Filter::eq("secret", "alpha")).await, [n1, n3]);
+    assert_eq!(
+        found(&data, &owner, scope, Filter::eq("secret", "alpha")).await,
+        [n1]
+    );
+    assert_eq!(
+        found(&data, &admin, scope, Filter::eq("secret", "alpha")).await,
+        [n1, n3]
+    );
     // Negated too: a hidden secret is neither "alpha" nor not.
-    assert_eq!(found(&data, &owner, scope, !Filter::eq("secret", "alpha")).await, [n2]);
-    assert_eq!(found(&data, &owner, scope, Filter::or([Filter::eq("secret", "beta"), Filter::eq("rank", 3)])).await, [n2, n3]);
+    assert_eq!(
+        found(&data, &owner, scope, !Filter::eq("secret", "alpha")).await,
+        [n2]
+    );
+    assert_eq!(
+        found(
+            &data,
+            &owner,
+            scope,
+            Filter::or([Filter::eq("secret", "beta"), Filter::eq("rank", 3)])
+        )
+        .await,
+        [n2, n3]
+    );
     // A hidden secret reads as nil.
-    assert_eq!(found(&data, &owner, scope, Filter::is_nil("secret")).await, [n3, n4, n5]);
-    assert_eq!(found(&data, &owner, scope, !Filter::is_nil("secret")).await, [n1, n2]);
-    assert_eq!(found(&data, &admin, scope, Filter::is_nil("secret")).await, [n4]);
+    assert_eq!(
+        found(&data, &owner, scope, Filter::is_nil("secret")).await,
+        [n3, n4, n5]
+    );
+    assert_eq!(
+        found(&data, &owner, scope, !Filter::is_nil("secret")).await,
+        [n1, n2]
+    );
+    assert_eq!(
+        found(&data, &admin, scope, Filter::is_nil("secret")).await,
+        [n4]
+    );
 
     // Nulls last ascending, first descending, page by page either way.
     for forward in [true, false] {
-        assert_eq!(walk(&data, &owner, scope, vec![sort("rank", false)], forward).await, [n1, n4, n3, n2, n5], "forward {forward}");
-        assert_eq!(walk(&data, &owner, scope, vec![sort("rank", true)], forward).await, [n2, n5, n3, n4, n1], "forward {forward}");
+        assert_eq!(
+            walk(&data, &owner, scope, vec![sort("rank", false)], forward).await,
+            [n1, n4, n3, n2, n5],
+            "forward {forward}"
+        );
+        assert_eq!(
+            walk(&data, &owner, scope, vec![sort("rank", true)], forward).await,
+            [n2, n5, n3, n4, n1],
+            "forward {forward}"
+        );
         // Or where the sort puts them: Ash's `++rank` and `--rank`.
-        let nulls = |descending, first| vec![Sort { nulls_first: Some(first), ..sort("rank", descending) }];
-        assert_eq!(walk(&data, &owner, scope, nulls(false, true), forward).await, [n2, n5, n1, n4, n3], "forward {forward}");
-        assert_eq!(walk(&data, &owner, scope, nulls(true, false), forward).await, [n3, n4, n1, n2, n5], "forward {forward}");
+        let nulls = |descending, first| {
+            vec![Sort {
+                nulls_first: Some(first),
+                ..sort("rank", descending)
+            }]
+        };
+        assert_eq!(
+            walk(&data, &owner, scope, nulls(false, true), forward).await,
+            [n2, n5, n1, n4, n3],
+            "forward {forward}"
+        );
+        assert_eq!(
+            walk(&data, &owner, scope, nulls(true, false), forward).await,
+            [n3, n4, n1, n2, n5],
+            "forward {forward}"
+        );
         // A hidden secret sorts as null: the owner's own first, then the rest by id.
-        assert_eq!(walk(&data, &owner, scope, vec![sort("secret", false)], forward).await, [n1, n2, n3, n4, n5], "forward {forward}");
-        assert_eq!(walk(&data, &owner, scope, vec![sort("secret", true)], forward).await, [n3, n4, n5, n2, n1], "forward {forward}");
-        assert_eq!(walk(&data, &admin, scope, vec![sort("secret", false)], forward).await, [n1, n3, n2, n5, n4], "forward {forward}");
+        assert_eq!(
+            walk(&data, &owner, scope, vec![sort("secret", false)], forward).await,
+            [n1, n2, n3, n4, n5],
+            "forward {forward}"
+        );
+        assert_eq!(
+            walk(&data, &owner, scope, vec![sort("secret", true)], forward).await,
+            [n3, n4, n5, n2, n1],
+            "forward {forward}"
+        );
+        assert_eq!(
+            walk(&data, &admin, scope, vec![sort("secret", false)], forward).await,
+            [n1, n3, n2, n5, n4],
+            "forward {forward}"
+        );
     }
 }
 
@@ -162,7 +267,8 @@ async fn client_inputs_in_sqlite() {
 
 #[tokio::test]
 async fn client_inputs_in_postgres() {
-    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/ash_test".into());
     let Ok(pg) = Postgres::connect(&url).await else {
         assert!(std::env::var("CI").is_err(), "CI runs Postgres");
         eprintln!("PostgreSQL not reachable; skipping test");

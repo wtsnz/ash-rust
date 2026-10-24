@@ -19,7 +19,7 @@ where
 {
     let action_def = action_named(&R::DEF, action)?;
     expect_kind(action_def, ActionKind::Generic)?;
-    authorize_write(&R::DEF, action_def, ctx.actor.as_ref(), None)?;
+    authorize_write(&R::DEF, action_def, ctx.authorization_actor(), None)?;
     let result = f().await?;
 
     let notification = crate::notifier::Notification::new(
@@ -29,9 +29,10 @@ where
         Uuid::nil(),
         crate::value::FieldMap::new(),
         None,
-        ctx.actor.clone(),
-        ctx.metadata.clone(),
-    ).with_tenant(ctx.tenant.clone());
+        ctx.actor().cloned(),
+        ctx.metadata().clone(),
+    )
+    .with_tenant(ctx.tenant().map(str::to_owned));
     crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
 
     Ok(result)

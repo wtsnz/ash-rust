@@ -40,7 +40,14 @@ pub async fn load_related<D: DataLayer>(
     relationship: &str,
     sources: &[FieldMap],
 ) -> Result<Vec<Vec<FieldMap>>> {
-    load_related_query(ctx, resource, relationship, sources, &RelatedQuery::default()).await
+    load_related_query(
+        ctx,
+        resource,
+        relationship,
+        sources,
+        &RelatedQuery::default(),
+    )
+    .await
 }
 
 /// How a relationship's rows are read, as a query given to `Ash.Query.load` shapes
@@ -98,7 +105,10 @@ pub async fn load_related_query<D: DataLayer>(
     // Each source's key, and each key's rows.
     let (keys, groups) = match rel.kind {
         RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
-            let keys: Vec<Option<Vec<Value>>> = sources.iter().map(|source| rel.source_key(source)).collect();
+            let keys: Vec<Option<Vec<Value>>> = sources
+                .iter()
+                .map(|source| rel.source_key(source))
+                .collect();
             let columns = rel.destination_columns();
             let first_values: Vec<Value> = keys
                 .iter()
@@ -114,7 +124,8 @@ pub async fn load_related_query<D: DataLayer>(
             let read = related_read(ctx, dest, None, &query.reading(&columns))?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
             let by = PerKey::Attribute(columns[0]);
-            if columns.len() == 1 && paged(&read) && ctx.data.can_run_query_per_key(dest, &by) {
+            if columns.len() == 1 && paged(&read) && ctx.raw_data().can_run_query_per_key(dest, &by)
+            {
                 let per_key = read_per_key(ctx, dest, &read, &by, &first_values).await?;
                 for (value, rows) in first_values.into_iter().zip(per_key) {
                     groups.insert(vec![value], rows);
@@ -136,22 +147,41 @@ pub async fn load_related_query<D: DataLayer>(
         RelKind::ManyToMany => {
             let keys: Vec<Option<Vec<Value>>> = sources
                 .iter()
-                .map(|source| required_pk(source, rel.source_attribute).ok().map(|id| vec![id]))
+                .map(|source| {
+                    required_pk(source, rel.source_attribute)
+                        .ok()
+                        .map(|id| vec![id])
+                })
                 .collect();
-            let source_ids: Vec<Value> =
-                keys.iter().flatten().flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+            let source_ids: Vec<Value> = keys
+                .iter()
+                .flatten()
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             let through = rel.through.ok_or_else(|| {
                 Error::Invalid(format!(
                     "many_to_many relationship `{}` on `{}` requires through join resource",
                     rel.name, resource.name
                 ))
             })?();
-            let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
-            let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
+            let source_on_join = rel
+                .source_attribute_on_join_resource
+                .unwrap_or(rel.source_attribute);
+            let dest_on_join = rel
+                .destination_attribute_on_join_resource
+                .unwrap_or(rel.destination_attribute);
             if source_ids.is_empty() {
                 return Ok(vec![Vec::new(); sources.len()]);
             }
-            let read = related_read(ctx, dest, None, &query.reading(&[rel.destination_attribute]))?;
+            let read = related_read(
+                ctx,
+                dest,
+                None,
+                &query.reading(&[rel.destination_attribute]),
+            )?;
             let mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>> = BTreeMap::new();
             // The join rows as the actor reads them, linking each source to its rows.
             let joins = related_read(ctx, through, None, &RelatedQuery::default())?;
@@ -162,29 +192,42 @@ pub async fn load_related_query<D: DataLayer>(
                 destination: dest_on_join,
                 attribute: rel.destination_attribute,
             };
-            if paged(&read) && ctx.data.can_run_query_per_key(dest, &by) {
+            if paged(&read) && ctx.raw_data().can_run_query_per_key(dest, &by) {
                 let per_key = read_per_key(ctx, dest, &read, &by, &source_ids).await?;
                 for (value, rows) in source_ids.into_iter().zip(per_key) {
                     groups.insert(vec![value], rows);
                 }
             } else {
-                let join_rows = read_batch(ctx, through, source_on_join, source_ids, joins.clone()).await?;
+                let join_rows =
+                    read_batch(ctx, through, source_on_join, source_ids, joins.clone()).await?;
                 let mut source_to_dest: HashMap<Value, HashSet<Value>> = HashMap::new();
                 let mut all_dest_ids: BTreeSet<Value> = BTreeSet::new();
                 for j_row in &join_rows.rows {
-                    if let (Ok(s_id), Ok(d_id)) = (required_pk(j_row, source_on_join), required_pk(j_row, dest_on_join)) {
+                    if let (Ok(s_id), Ok(d_id)) = (
+                        required_pk(j_row, source_on_join),
+                        required_pk(j_row, dest_on_join),
+                    ) {
                         source_to_dest.entry(s_id).or_default().insert(d_id.clone());
                         all_dest_ids.insert(d_id);
                     }
                 }
                 // Each source's rows keep the destination read's order.
-                let related =
-                    read_batch(ctx, dest, rel.destination_attribute, all_dest_ids.into_iter().collect(), read).await?;
+                let related = read_batch(
+                    ctx,
+                    dest,
+                    rel.destination_attribute,
+                    all_dest_ids.into_iter().collect(),
+                    read,
+                )
+                .await?;
                 for (source_id, linked) in source_to_dest {
                     let rows = related
                         .rows
                         .iter()
-                        .filter(|row| required_pk(row, rel.destination_attribute).is_ok_and(|id| linked.contains(&id)))
+                        .filter(|row| {
+                            required_pk(row, rel.destination_attribute)
+                                .is_ok_and(|id| linked.contains(&id))
+                        })
                         .cloned()
                         .collect();
                     groups.insert(vec![source_id], related.page(rows));
@@ -218,32 +261,45 @@ pub async fn count_related_query<D: DataLayer>(
         ))
     })?;
     let dest = (rel.destination)();
-    let shape = RelatedQuery { filter: query.filter.clone(), calculation_args: query.calculation_args.clone(), ..RelatedQuery::default() };
+    let shape = RelatedQuery {
+        filter: query.filter.clone(),
+        calculation_args: query.calculation_args.clone(),
+        ..RelatedQuery::default()
+    };
     // The rows the page links: their keys readable to the actor.
     let linkable = |columns: &[&str]| -> Result<CompiledQuery> {
         let mut base = unpaged(related_read(ctx, dest, None, &shape)?);
-        if let Some(readable) = crate::policy::readable_condition(dest, columns, ctx.actor.as_ref())? {
-            base.filter = Some(Filter::and(base.filter.take().into_iter().chain([readable])));
+        if let Some(readable) =
+            crate::policy::readable_condition(dest, columns, ctx.authorization_actor())?
+        {
+            base.filter = Some(Filter::and(
+                base.filter.take().into_iter().chain([readable]),
+            ));
         }
         Ok(base)
     };
     match rel.kind {
         RelKind::BelongsTo | RelKind::HasMany | RelKind::HasOne => {
-            let keys: Vec<Option<Vec<Value>>> = sources.iter().map(|source| rel.source_key(source)).collect();
+            let keys: Vec<Option<Vec<Value>>> = sources
+                .iter()
+                .map(|source| rel.source_key(source))
+                .collect();
             if keys.iter().all(Option::is_none) {
                 return Ok(vec![0; sources.len()]);
             }
             let base = linkable(&rel.destination_columns())?;
             let mut counts: BTreeMap<Vec<Value>, usize> = BTreeMap::new();
             for source in sources {
-                let Some(key) = rel.source_key(source) else { continue };
+                let Some(key) = rel.source_key(source) else {
+                    continue;
+                };
                 if counts.contains_key(&key) {
                     continue;
                 }
                 let mut read = base.clone();
                 let link = rel.destination_filter(source).expect("a present key links");
                 read.filter = Some(Filter::and(read.filter.take().into_iter().chain([link])));
-                counts.insert(key, ctx.data.count(dest, &read).await?);
+                counts.insert(key, ctx.raw_data().count(dest, &read).await?);
             }
             Ok(keys
                 .into_iter()
@@ -255,7 +311,13 @@ pub async fn count_related_query<D: DataLayer>(
                 .iter()
                 .map(|source| required_pk(source, rel.source_attribute).ok())
                 .collect();
-            let source_ids: Vec<Value> = keys.iter().flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+            let source_ids: Vec<Value> = keys
+                .iter()
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             if source_ids.is_empty() {
                 return Ok(vec![0; sources.len()]);
             }
@@ -265,15 +327,22 @@ pub async fn count_related_query<D: DataLayer>(
                     rel.name, resource.name
                 ))
             })?();
-            let source_on_join = rel.source_attribute_on_join_resource.unwrap_or(rel.source_attribute);
-            let dest_on_join = rel.destination_attribute_on_join_resource.unwrap_or(rel.destination_attribute);
+            let source_on_join = rel
+                .source_attribute_on_join_resource
+                .unwrap_or(rel.source_attribute);
+            let dest_on_join = rel
+                .destination_attribute_on_join_resource
+                .unwrap_or(rel.destination_attribute);
             let mut joins = related_read(ctx, through, None, &RelatedQuery::default())?;
             joins.limit = None;
             joins.offset = None;
             let join_rows = read_batch(ctx, through, source_on_join, source_ids, joins).await?;
             let mut linked: BTreeMap<Value, BTreeSet<Value>> = BTreeMap::new();
             for row in &join_rows.rows {
-                if let (Ok(source_id), Ok(dest_id)) = (required_pk(row, source_on_join), required_pk(row, dest_on_join)) {
+                if let (Ok(source_id), Ok(dest_id)) = (
+                    required_pk(row, source_on_join),
+                    required_pk(row, dest_on_join),
+                ) {
                     linked.entry(source_id).or_default().insert(dest_id);
                 }
             }
@@ -288,9 +357,12 @@ pub async fn count_related_query<D: DataLayer>(
                     continue;
                 };
                 let mut read = base.clone();
-                let among = Filter::In(rel.destination_attribute.to_string(), ids.iter().cloned().collect());
+                let among = Filter::In(
+                    rel.destination_attribute.to_string(),
+                    ids.iter().cloned().collect(),
+                );
                 read.filter = Some(Filter::and(read.filter.take().into_iter().chain([among])));
-                counts.insert(source_id.clone(), ctx.data.count(dest, &read).await?);
+                counts.insert(source_id.clone(), ctx.raw_data().count(dest, &read).await?);
             }
             Ok(keys
                 .into_iter()
@@ -314,9 +386,16 @@ fn unpaged(mut read: CompiledQuery) -> CompiledQuery {
 
 /// Each source's rows, by its key. Sources sharing a key (posts by one author) each get
 /// its rows: copies for all but the last, which takes them.
-fn distribute(keys: Vec<Option<Vec<Value>>>, mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>>) -> Vec<Vec<FieldMap>> {
+fn distribute(
+    keys: Vec<Option<Vec<Value>>>,
+    mut groups: BTreeMap<Vec<Value>, Vec<FieldMap>>,
+) -> Vec<Vec<FieldMap>> {
     let mut seen = BTreeSet::new();
-    let last: Vec<bool> = keys.iter().rev().map(|key| key.as_ref().is_some_and(|key| seen.insert(key))).collect();
+    let last: Vec<bool> = keys
+        .iter()
+        .rev()
+        .map(|key| key.as_ref().is_some_and(|key| seen.insert(key)))
+        .collect();
     keys.iter()
         .zip(last.into_iter().rev())
         .map(|(key, last)| match key {
@@ -344,9 +423,12 @@ async fn read_per_key<D: DataLayer>(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let mut per_key = ctx.data.run_query_per_key(dest, read, by, keys).await?;
+    let mut per_key = ctx
+        .raw_data()
+        .run_query_per_key(dest, read, by, keys)
+        .await?;
     for row in per_key.iter_mut().flatten() {
-        crate::policy::redact_fields(dest, ctx.actor.as_ref(), row)?;
+        crate::policy::redact_fields(dest, ctx.authorization_actor(), row)?;
     }
     Ok(per_key)
 }
@@ -383,7 +465,7 @@ fn related_read<D>(
     super::read::scope_read(
         dest,
         dest.default_read(),
-        ctx.actor.as_ref(),
+        ctx.authorization_actor(),
         &FieldMap::new(),
         CompiledQuery {
             filter: match Filter::and([filter, shape.filter.clone()].into_iter().flatten()) {
@@ -397,7 +479,7 @@ fn related_read<D>(
             aggregates: shape.aggregates.clone(),
             calculations: shape.calculations.clone(),
             calculation_args: shape.calculation_args.clone(),
-            tenant: ctx.tenant.clone(),
+            tenant: ctx.tenant().map(str::to_owned),
             ..CompiledQuery::default()
         },
     )
@@ -425,9 +507,9 @@ async fn read_batch<D: DataLayer>(
         Some(filter) => Filter::and([by_key, filter]),
         None => by_key,
     });
-    related.rows = ctx.data.run_query(dest, &read).await?;
+    related.rows = ctx.raw_data().run_query(dest, &read).await?;
     for row in &mut related.rows {
-        crate::policy::redact_fields(dest, ctx.actor.as_ref(), row)?;
+        crate::policy::redact_fields(dest, ctx.authorization_actor(), row)?;
     }
     Ok(related)
 }

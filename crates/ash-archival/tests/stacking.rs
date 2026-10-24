@@ -4,7 +4,7 @@
 
 use ash_archival::{archival, archive_def};
 use ash_authentication::authentication;
-use ash_core::{Context, Resource, ResourceExt};
+use ash_core::{Resource, ResourceExt};
 use ash_memory::Memory;
 use ash_state_machine::{StateMachineDef, state_machine};
 
@@ -133,7 +133,7 @@ async fn archival_then_state_machine() {
     assert!(archive_def::<Ticket>().is_some());
     let _: Ticket = Ticket::default();
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let ticket = Ticket::create(&ctx).title("Printer").await.unwrap();
     assert_eq!(ticket.status, "open");
     let closed = Ticket::close(&ctx, ticket.id).await.unwrap();
@@ -148,14 +148,14 @@ async fn state_machine_then_archival() {
     assert!(Job::DEF.extension::<StateMachineDef>().is_some());
     assert!(archive_def::<Job>().is_some());
 
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let job = Job::create(&ctx).kind("export").await.unwrap();
     assert_eq!(Job::run(&ctx, job.id).await.unwrap().status, "running");
 }
 
 #[tokio::test]
 async fn authentication_extends_a_register_action_it_finds() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let member = Member::register_with_password(&ctx)
         .email("ada@example.com")
         .name("Ada")

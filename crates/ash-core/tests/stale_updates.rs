@@ -59,7 +59,10 @@ async fn neither_update_undoes_the_other<D: DataLayer>(ctx: Context<D>) {
     telemetry.report_on(&ctx).speed_kph(42).await.unwrap();
 
     let stored = Vehicle::get(&ctx, id).await.unwrap();
-    assert_eq!((stored.status.as_str(), stored.speed_kph), ("returning", 42));
+    assert_eq!(
+        (stored.status.as_str(), stored.speed_kph),
+        ("returning", 42)
+    );
 }
 
 /// Setting a field to the value the copy already holds isn't a change, as in Ash: it
@@ -84,8 +87,8 @@ async fn an_unchanged_value_is_not_written<D: DataLayer>(ctx: Context<D>) {
 
 #[tokio::test]
 async fn memory_updates_write_only_their_changes() {
-    neither_update_undoes_the_other(Context::new(Memory::new())).await;
-    an_unchanged_value_is_not_written(Context::new(Memory::new())).await;
+    neither_update_undoes_the_other(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
+    an_unchanged_value_is_not_written(ash_core::Runtime::new(Memory::new()).bootstrap()).await;
 }
 
 #[tokio::test]
@@ -93,7 +96,7 @@ async fn sqlite_updates_write_only_their_changes() {
     for check in 0..2 {
         let db = Sqlite::memory().await.unwrap();
         db.install_resources(&[&Vehicle::DEF]).await.unwrap();
-        let ctx = Context::new(db);
+        let ctx = ash_core::Runtime::new(db).bootstrap();
         match check {
             0 => neither_update_undoes_the_other(ctx).await,
             _ => an_unchanged_value_is_not_written(ctx).await,

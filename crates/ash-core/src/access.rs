@@ -25,16 +25,20 @@ pub struct ReadRequest {
 
 /// Server configuration allowing credential reads of one resource without its read
 /// policies or redaction. Authentication must inspect hashes before an actor exists.
-/// This permit never bypasses tenancy. Do not construct it from request input.
+/// Runtime issues this permit at server bootstrap. It never bypasses tenancy.
+///
+/// ```compile_fail
+/// fn forge(resource: &'static ash_core::ResourceDef) {
+///     let _ = ash_core::CredentialReadPermit::new(resource);
+/// }
+/// ```
 #[derive(Clone)]
 pub struct CredentialReadPermit {
     resource: &'static ResourceDef,
 }
 
 impl CredentialReadPermit {
-    /// Grant trusted server code credential access to this resource. Grant issuance
-    /// is public until server-owned scope binding is introduced in migration step 2.
-    pub fn new(resource: &'static ResourceDef) -> Self {
+    pub(crate) fn new(resource: &'static ResourceDef) -> Self {
         Self { resource }
     }
 }
@@ -78,18 +82,18 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         let query = crate::scope_read(
             resource,
             action,
-            self.ctx.actor.as_ref(),
+            self.ctx.authorization_actor(),
             arguments,
             CompiledQuery {
                 filter: request.filter,
                 sort: request.sort,
                 limit: request.limit,
                 offset: request.offset,
-                tenant: self.ctx.tenant.clone(),
+                tenant: self.ctx.tenant().map(str::to_owned),
                 ..Default::default()
             },
         )?;
-        let mut rows = self.ctx.data.run_query(resource, &query).await?;
+        let mut rows = self.ctx.raw_data().run_query(resource, &query).await?;
         crate::after_read(action, arguments, &mut rows)?;
         Ok(rows)
     }
@@ -106,10 +110,10 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         let (filter, tenant) = crate::pipeline::apply_tenant_scope(
             permit.resource,
             Some(filter),
-            self.ctx.tenant.clone(),
+            self.ctx.tenant().map(str::to_owned),
         )?;
         self.ctx
-            .data
+            .raw_data()
             .run_query(
                 permit.resource,
                 &CompiledQuery {

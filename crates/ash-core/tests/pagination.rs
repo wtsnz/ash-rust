@@ -1,33 +1,33 @@
-use ash_core::{Context, Resource, resource};
+use ash_core::{Resource, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
 
 resource! {
-    Article {
-        table "articles";
+Article {
+    table "articles";
 
-    attributes {
-        id: Uuid [pk];
-        title: String;
-        views: i64;
+attributes {
+    id: Uuid [pk];
+    title: String;
+    views: i64;
+}
+
+actions {
+    create create {
+        primary;
+        accept [title, views];
     }
 
-    actions {
-        create create {
-            primary;
-            accept [title, views];
-        }
-
-        read read {
-            primary;
-        }
+    read read {
+        primary;
     }
-    }}
+}
+}}
 
 #[tokio::test]
 async fn test_offset_pagination_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Create 10 articles
     for i in 1..=10 {
@@ -77,7 +77,7 @@ async fn test_offset_pagination_in_memory() {
 async fn test_offset_pagination_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     for i in 1..=7 {
         Article::create(&ctx)
@@ -87,27 +87,18 @@ async fn test_offset_pagination_in_sqlite() {
             .unwrap();
     }
 
-    let page1 = Article::query(&ctx)
-        .page_offset(3, 0, true)
-        .await
-        .unwrap();
+    let page1 = Article::query(&ctx).page_offset(3, 0, true).await.unwrap();
 
     assert_eq!(page1.results.len(), 3);
     assert!(page1.has_more);
     assert_eq!(page1.total_count, Some(7));
 
-    let page2 = Article::query(&ctx)
-        .page_offset(3, 3, true)
-        .await
-        .unwrap();
+    let page2 = Article::query(&ctx).page_offset(3, 3, true).await.unwrap();
 
     assert_eq!(page2.results.len(), 3);
     assert!(page2.has_more);
 
-    let page3 = Article::query(&ctx)
-        .page_offset(3, 6, true)
-        .await
-        .unwrap();
+    let page3 = Article::query(&ctx).page_offset(3, 6, true).await.unwrap();
 
     assert_eq!(page3.results.len(), 1);
     assert!(!page3.has_more);
@@ -115,7 +106,7 @@ async fn test_offset_pagination_in_sqlite() {
 
 #[tokio::test]
 async fn test_keyset_pagination_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     for i in 1..=7 {
         Article::create(&ctx)
@@ -168,7 +159,7 @@ async fn test_keyset_pagination_in_memory() {
 async fn test_keyset_pagination_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
     for i in 1..=5 {
         Article::create(&ctx)
@@ -207,16 +198,40 @@ async fn test_keyset_pagination_in_sqlite() {
 
 #[tokio::test]
 async fn test_keyset_pagination_with_custom_sort_and_before_in_memory() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
 
     // Create 6 articles with known views (including tie to test secondary PK tie-breaker)
     // 500, 400, 300 (A), 300 (B), 200, 100
-    let a1 = Article::create(&ctx).title("Art 500").views(500).await.unwrap();
-    let a2 = Article::create(&ctx).title("Art 400").views(400).await.unwrap();
-    let a3 = Article::create(&ctx).title("Art 300-A").views(300).await.unwrap();
-    let a4 = Article::create(&ctx).title("Art 300-B").views(300).await.unwrap();
-    let a5 = Article::create(&ctx).title("Art 200").views(200).await.unwrap();
-    let a6 = Article::create(&ctx).title("Art 100").views(100).await.unwrap();
+    let a1 = Article::create(&ctx)
+        .title("Art 500")
+        .views(500)
+        .await
+        .unwrap();
+    let a2 = Article::create(&ctx)
+        .title("Art 400")
+        .views(400)
+        .await
+        .unwrap();
+    let a3 = Article::create(&ctx)
+        .title("Art 300-A")
+        .views(300)
+        .await
+        .unwrap();
+    let a4 = Article::create(&ctx)
+        .title("Art 300-B")
+        .views(300)
+        .await
+        .unwrap();
+    let a5 = Article::create(&ctx)
+        .title("Art 200")
+        .views(200)
+        .await
+        .unwrap();
+    let a6 = Article::create(&ctx)
+        .title("Art 100")
+        .views(100)
+        .await
+        .unwrap();
 
     // Determine deterministic expected order: views DESC, then id ascending, as Ash breaks ties
     let mut all = [a1, a2, a3, a4, a5, a6];
@@ -274,9 +289,18 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_memory() {
         .unwrap();
 
     assert_eq!(prev_page2.results.len(), 2);
-    assert_eq!(prev_page2.results[0].id, all[2].id, "must return immediately preceding page item 1");
-    assert_eq!(prev_page2.results[1].id, all[3].id, "must return immediately preceding page item 2");
-    assert!(prev_page2.has_more, "there are more preceding pages before page 2");
+    assert_eq!(
+        prev_page2.results[0].id, all[2].id,
+        "must return immediately preceding page item 1"
+    );
+    assert_eq!(
+        prev_page2.results[1].id, all[3].id,
+        "must return immediately preceding page item 2"
+    );
+    assert!(
+        prev_page2.has_more,
+        "there are more preceding pages before page 2"
+    );
 
     // From Page 2, requesting `before` page2.before (all[2]) with limit 2 MUST return Page 1 (all[0..2])!
     let cursor_p2_before = prev_page2.before.as_deref().unwrap();
@@ -296,14 +320,38 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_memory() {
 async fn test_keyset_pagination_with_custom_sort_and_before_in_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
-    let a1 = Article::create(&ctx).title("Sqlite 500").views(500).await.unwrap();
-    let a2 = Article::create(&ctx).title("Sqlite 400").views(400).await.unwrap();
-    let a3 = Article::create(&ctx).title("Sqlite 300-A").views(300).await.unwrap();
-    let a4 = Article::create(&ctx).title("Sqlite 300-B").views(300).await.unwrap();
-    let a5 = Article::create(&ctx).title("Sqlite 200").views(200).await.unwrap();
-    let a6 = Article::create(&ctx).title("Sqlite 100").views(100).await.unwrap();
+    let a1 = Article::create(&ctx)
+        .title("Sqlite 500")
+        .views(500)
+        .await
+        .unwrap();
+    let a2 = Article::create(&ctx)
+        .title("Sqlite 400")
+        .views(400)
+        .await
+        .unwrap();
+    let a3 = Article::create(&ctx)
+        .title("Sqlite 300-A")
+        .views(300)
+        .await
+        .unwrap();
+    let a4 = Article::create(&ctx)
+        .title("Sqlite 300-B")
+        .views(300)
+        .await
+        .unwrap();
+    let a5 = Article::create(&ctx)
+        .title("Sqlite 200")
+        .views(200)
+        .await
+        .unwrap();
+    let a6 = Article::create(&ctx)
+        .title("Sqlite 100")
+        .views(100)
+        .await
+        .unwrap();
 
     let mut all = [a1, a2, a3, a4, a5, a6];
     all.sort_by(|x, y| match y.views.cmp(&x.views) {
@@ -376,12 +424,28 @@ async fn test_keyset_pagination_with_custom_sort_and_before_in_sqlite() {
 async fn test_keyset_pagination_duplicate_keys_across_boundary_sqlite() {
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Article::DEF]).await.unwrap();
-    let ctx = Context::new(sqlite);
+    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
 
-    let a1 = Article::create(&ctx).title("Item 1 (500)").views(500).await.unwrap();
-    let a2 = Article::create(&ctx).title("Item 2 (300)").views(300).await.unwrap();
-    let a3 = Article::create(&ctx).title("Item 3 (300)").views(300).await.unwrap();
-    let a4 = Article::create(&ctx).title("Item 4 (100)").views(100).await.unwrap();
+    let a1 = Article::create(&ctx)
+        .title("Item 1 (500)")
+        .views(500)
+        .await
+        .unwrap();
+    let a2 = Article::create(&ctx)
+        .title("Item 2 (300)")
+        .views(300)
+        .await
+        .unwrap();
+    let a3 = Article::create(&ctx)
+        .title("Item 3 (300)")
+        .views(300)
+        .await
+        .unwrap();
+    let a4 = Article::create(&ctx)
+        .title("Item 4 (100)")
+        .views(100)
+        .await
+        .unwrap();
 
     let mut expected_order = [a1, a2, a3, a4];
     expected_order.sort_by(|x, y| match y.views.cmp(&x.views) {
@@ -411,8 +475,15 @@ async fn test_keyset_pagination_duplicate_keys_across_boundary_sqlite() {
         .await
         .unwrap();
 
-    assert_eq!(page2.results.len(), 2, "Page 2 must contain 2 items, no items lost to duplicate keys");
-    assert_eq!(page2.results[0].id, expected_order[2].id, "The duplicate-keyed item must be retrieved on page 2");
+    assert_eq!(
+        page2.results.len(),
+        2,
+        "Page 2 must contain 2 items, no items lost to duplicate keys"
+    );
+    assert_eq!(
+        page2.results[0].id, expected_order[2].id,
+        "The duplicate-keyed item must be retrieved on page 2"
+    );
     assert_eq!(page2.results[1].id, expected_order[3].id);
     assert!(!page2.has_more);
 }
@@ -452,9 +523,15 @@ fn keyset_sort_breaks_ties_as_ash_does() {
         fields(keyset_sort(&Article::DEF, sort(&[("views", true)]))),
         fields(sort(&[("views", true), ("id", false)]))
     );
-    assert_eq!(fields(keyset_sort(&Article::DEF, Vec::new())), fields(sort(&[("id", false)])));
     assert_eq!(
-        fields(keyset_sort(&Article::DEF, sort(&[("id", true), ("views", false)]))),
+        fields(keyset_sort(&Article::DEF, Vec::new())),
+        fields(sort(&[("id", false)]))
+    );
+    assert_eq!(
+        fields(keyset_sort(
+            &Article::DEF,
+            sort(&[("id", true), ("views", false)])
+        )),
         fields(sort(&[("id", true), ("views", false)]))
     );
     assert_eq!(
@@ -507,6 +584,9 @@ fn reads_declare_how_they_page() {
             required: false,
         })
     );
-    assert_eq!(def.action("recent").unwrap().pagination, Some(Pagination::keyset()));
+    assert_eq!(
+        def.action("recent").unwrap().pagination,
+        Some(Pagination::keyset())
+    );
     assert_eq!(def.action("everything").unwrap().pagination, None);
 }

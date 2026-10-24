@@ -165,21 +165,19 @@ pub fn workspace_with_owner_multi<D: ash_core::DataLayer + 'static>(
     name: &str,
     slug: &str,
 ) -> Result<Multi<D>> {
-    let ws_cs = Workspace::create(ctx)
-        .name(name)
-        .slug(slug)
-        .changeset()?;
+    let ws_cs = Workspace::create(ctx).name(name).slug(slug).changeset()?;
 
-    let multi = Multi::new()
-        .create("workspace", ws_cs)
-        .create_from("membership", move |ctx, results| {
-            let ws = results.get::<Workspace>("workspace")?;
-            WorkspaceMember::add(ctx)
-                .workspace_id(ws.id)
-                .user_id(owner_id)
-                .role("admin")
-                .changeset()
-        });
+    let multi =
+        Multi::new()
+            .create("workspace", ws_cs)
+            .create_from("membership", move |ctx, results| {
+                let ws = results.get::<Workspace>("workspace")?;
+                WorkspaceMember::add(ctx)
+                    .workspace_id(ws.id)
+                    .user_id(owner_id)
+                    .role("admin")
+                    .changeset()
+            });
 
     Ok(multi)
 }
@@ -204,10 +202,7 @@ pub fn move_card_multi<D: ash_core::DataLayer + 'static>(
 
     if let Some(body) = note {
         multi = multi.create_from("movement_comment", move |ctx, _results| {
-            Comment::create(ctx)
-                .card_id(card_id)
-                .body(body)
-                .changeset()
+            Comment::create(ctx).card_id(card_id).body(body).changeset()
         });
     }
 
@@ -235,21 +230,28 @@ pub fn add_checklist_items_multi<D: ash_core::DataLayer + 'static>(
 
 pub async fn open_sqlite_app(
     path: impl AsRef<Path>,
-) -> Result<(Workspaces<Sqlite>, Kanban<Sqlite>)> {
+) -> Result<(
+    ash_core::Runtime<Sqlite>,
+    Workspaces<Sqlite>,
+    Kanban<Sqlite>,
+)> {
     if let Some(parent) = path.as_ref().parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| ash_core::Error::DataLayer(format!("create database directory: {err}")))?;
+        std::fs::create_dir_all(parent).map_err(|err| {
+            ash_core::Error::DataLayer(format!("create database directory: {err}"))
+        })?;
     }
     let db = Sqlite::file(path).await?;
-    let workspaces = Workspaces::new(db.clone());
-    let kanban = Kanban::new(db);
+    let workspaces_runtime = ash_core::Runtime::new(db.clone());
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
+    let kanban_runtime = ash_core::Runtime::new(db);
+    let kanban = Kanban::from_context(kanban_runtime.bootstrap());
 
     workspaces.install().await?;
     kanban.install().await?;
 
-    Ok((workspaces, kanban))
+    Ok((workspaces_runtime, workspaces, kanban))
 }
 
 pub async fn demo() -> Result<()> {
@@ -258,20 +260,31 @@ pub async fn demo() -> Result<()> {
     println!("=== Kanban / Trello Example on ash-rust ===");
 
     let mem = Memory::new();
-    let workspaces = Workspaces::new(mem.clone());
-    let kanban = Kanban::new(mem);
+    let workspaces_runtime = ash_core::Runtime::new(mem.clone());
+    let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
+    let kanban_runtime = ash_core::Runtime::new(mem);
 
     // 1. Register users
-    let alice = workspaces.register_user("Alice", "alice@example.com").await?;
+    let alice = workspaces
+        .register_user("Alice", "alice@example.com")
+        .await?;
     let bob = workspaces.register_user("Bob", "bob@example.com").await?;
-    println!("Registered users: {} ({}), {} ({})", alice.name, alice.email, bob.name, bob.email);
+    println!(
+        "Registered users: {} ({}), {} ({})",
+        alice.name, alice.email, bob.name, bob.email
+    );
 
     // 2. Create Workspace with Alice as owner and Admin member via Multi
-    let as_alice = workspaces.with_actor(actor_user(alice.id));
-    let ws_multi = workspace_with_owner_multi(&as_alice.ctx, alice.id, "Acme Engineering", "acme-eng")?;
+    let as_alice =
+        Workspaces::from_context(workspaces_runtime.bind(Some(actor_user(alice.id)), None));
+    let ws_multi =
+        workspace_with_owner_multi(&as_alice.ctx, alice.id, "Acme Engineering", "acme-eng")?;
     let ws_results = as_alice.run_multi(ws_multi).await?;
     let workspace = ws_results.get::<Workspace>("workspace")?;
-    println!("Created workspace: {} (slug: {})", workspace.name, workspace.slug);
+    println!(
+        "Created workspace: {} (slug: {})",
+        workspace.name, workspace.slug
+    );
 
     // Add Bob as a Member
     let member_cs = WorkspaceMember::add(&as_alice.ctx)
@@ -283,7 +296,8 @@ pub async fn demo() -> Result<()> {
     println!("Added Bob as workspace member");
 
     // 3. Create a Board with default lists and welcome card via atomic Multi pipeline
-    let as_alice_kanban = kanban.with_actor(actor_user(alice.id));
+    let as_alice_kanban =
+        Kanban::from_context(kanban_runtime.bind(Some(actor_user(alice.id)), None));
     let board_multi = board_template_multi(
         &as_alice_kanban.ctx,
         workspace.id,
@@ -293,7 +307,10 @@ pub async fn demo() -> Result<()> {
     let board_results = as_alice_kanban.run_multi(board_multi).await?;
     let board = board_results.get::<Board>("board")?;
     let welcome_card = board_results.get::<Card>("welcome_card")?;
-    println!("Created board: {} with welcome card: '{}'", board.name, welcome_card.title);
+    println!(
+        "Created board: {} with welcome card: '{}'",
+        board.name, welcome_card.title
+    );
 
     // 4. Inspect board with aggregates
     let loaded_board = as_alice_kanban

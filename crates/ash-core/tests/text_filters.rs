@@ -56,10 +56,10 @@ async fn names<D: DataLayer>(ctx: &Context<D>, filter: Filter) -> Vec<String> {
 
 #[tokio::test]
 async fn text_filters_match_in_memory_and_sqlite() {
-    let mem_ctx = Context::new(Memory::new());
+    let mem_ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let sqlite = Sqlite::memory().await.unwrap();
     sqlite.install(&[&Contact::DEF]).await.unwrap();
-    let sql_ctx = Context::new(sqlite);
+    let sql_ctx = ash_core::Runtime::new(sqlite).bootstrap();
     seed(&mem_ctx).await;
     seed(&sql_ctx).await;
 
@@ -78,27 +78,50 @@ async fn text_filters_match_in_memory_and_sqlite() {
         (Filter::like("name", "Grace 100\\%"), vec!["Grace 100%"]),
         (Filter::like("name", "%[%"), vec![]),
         (Filter::like("email", "%EXAMPLE.ORG"), vec!["Linus_T"]),
-        (Contact::email.contains("EXAMPLE.COM"), vec!["Ada Lovelace", "Grace 100%"]),
+        (
+            Contact::email.contains("EXAMPLE.COM"),
+            vec!["Ada Lovelace", "Grace 100%"],
+        ),
         (Contact::email.starts_with("ada@"), vec!["Ada Lovelace"]),
         (Contact::email.ends_with(".ORG"), vec!["Linus_T"]),
         // A null email makes the match unknown, and NOT of unknown is still unknown.
         (!Contact::email.contains("EXAMPLE.COM"), vec!["Linus_T"]),
-        (!Contact::email.eq(CiString::parse("ada@example.com").unwrap()), vec!["Grace 100%", "Linus_T"]),
         (
-            !Filter::or([Contact::email.ends_with(".org"), Filter::IsNil("email".into())]),
+            !Contact::email.eq(CiString::parse("ada@example.com").unwrap()),
+            vec!["Grace 100%", "Linus_T"],
+        ),
+        (
+            !Filter::or([
+                Contact::email.ends_with(".org"),
+                Filter::IsNil("email".into()),
+            ]),
             vec!["Ada Lovelace", "Grace 100%"],
         ),
         (
-            Filter::or([!Contact::email.contains("example"), Contact::name.contains("Email")]),
+            Filter::or([
+                !Contact::email.contains("example"),
+                Contact::name.contains("Email"),
+            ]),
             vec!["No Email"],
         ),
         (
-            !Filter::In("email".into(), vec!["linus@example.org".into(), ash_core::Value::Null]),
+            !Filter::In(
+                "email".into(),
+                vec!["linus@example.org".into(), ash_core::Value::Null],
+            ),
             vec![],
         ),
     ];
     for (filter, expected) in cases {
-        assert_eq!(names(&mem_ctx, filter.clone()).await, expected, "memory: {filter:?}");
-        assert_eq!(names(&sql_ctx, filter.clone()).await, expected, "sqlite: {filter:?}");
+        assert_eq!(
+            names(&mem_ctx, filter.clone()).await,
+            expected,
+            "memory: {filter:?}"
+        );
+        assert_eq!(
+            names(&sql_ctx, filter.clone()).await,
+            expected,
+            "sqlite: {filter:?}"
+        );
     }
 }

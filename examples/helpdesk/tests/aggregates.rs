@@ -1,7 +1,5 @@
 use helpdesk::representative::fields as r;
-use helpdesk::{
-    Helpdesk, Representative, actor_customer, actor_representative,
-};
+use helpdesk::{Helpdesk, Representative, actor_customer, actor_representative};
 use uuid::Uuid;
 
 mod order {
@@ -93,15 +91,18 @@ use order::Order;
 #[tokio::test]
 async fn memory_aggregates_loading_and_filtering() {
     let mem = ash_memory::Memory::new();
-    let desk = Helpdesk::new(mem);
+    let desk_runtime = ash_core::Runtime::new(mem);
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
 
     let alice = desk.create_representative("Alice").await.unwrap();
     let bob = desk.create_representative("Bob").await.unwrap();
     let _carol = desk.create_representative("Carol").await.unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
-    let as_alice = desk.with_actor(actor_representative(alice.id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
+    let as_alice =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(alice.id)), None));
 
     // Alice gets 2 tickets (1 open, 1 closed)
     let t1 = as_customer.open_ticket("Printer broke").await.unwrap();
@@ -112,7 +113,8 @@ async fn memory_aggregates_loading_and_filtering() {
     as_alice.close_ticket(&t2_assigned).await.unwrap();
 
     // Bob gets 1 ticket (open)
-    let as_bob = desk.with_actor(actor_representative(bob.id));
+    let as_bob =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(bob.id)), None));
     let t3 = as_customer.open_ticket("Need new monitor").await.unwrap();
     as_bob.assign_ticket(&t3, bob.id).await.unwrap();
 
@@ -184,7 +186,8 @@ async fn memory_aggregates_loading_and_filtering() {
 #[tokio::test]
 async fn sqlite_aggregates_loading_and_filtering() {
     let db = ash_sqlite::Sqlite::memory().await.unwrap();
-    let desk = Helpdesk::new(db);
+    let desk_runtime = ash_core::Runtime::new(db);
+    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
     desk.install().await.unwrap();
 
     let alice = desk.create_representative("Alice").await.unwrap();
@@ -192,8 +195,10 @@ async fn sqlite_aggregates_loading_and_filtering() {
     let _carol = desk.create_representative("Carol").await.unwrap();
 
     let customer_id = Uuid::new_v4();
-    let as_customer = desk.with_actor(actor_customer(customer_id));
-    let as_alice = desk.with_actor(actor_representative(alice.id));
+    let as_customer =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_customer(customer_id)), None));
+    let as_alice =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(alice.id)), None));
 
     // Alice gets 2 tickets (1 open, 1 closed)
     let t1 = as_customer.open_ticket("Printer broke").await.unwrap();
@@ -204,13 +209,20 @@ async fn sqlite_aggregates_loading_and_filtering() {
     as_alice.close_ticket(&t2_assigned).await.unwrap();
 
     // Bob gets 1 ticket (open)
-    let as_bob = desk.with_actor(actor_representative(bob.id));
+    let as_bob =
+        Helpdesk::from_context(desk_runtime.bind(Some(actor_representative(bob.id)), None));
     let t3 = as_customer.open_ticket("Keyboard missing").await.unwrap();
     as_bob.assign_ticket(&t3, bob.id).await.unwrap();
 
     // Aggregates count only the tickets the reader may read, as Ash authorizes them:
     // none, for a reader who isn't signed in.
-    let anonymous = desk.representatives().aggregate(r::ticket_count).sort(r::name).all().await.unwrap();
+    let anonymous = desk
+        .representatives()
+        .aggregate(r::ticket_count)
+        .sort(r::name)
+        .all()
+        .await
+        .unwrap();
     assert!(anonymous.iter().all(|rep| rep.ticket_count == Some(0)));
 
     // Query across SQLite using domain accessors, as the customer who opened them all.
@@ -290,12 +302,9 @@ async fn sqlite_aggregates_loading_and_filtering() {
 #[tokio::test]
 async fn sum_and_filtered_aggregates_on_orders() {
     let mem = ash_memory::Memory::new();
-    let ctx = ash_core::Context::new(mem);
+    let ctx = ash_core::Runtime::new(mem).bootstrap();
 
-    let order = Order::create(&ctx)
-        .customer_name("Will")
-        .await
-        .unwrap();
+    let order = Order::create(&ctx).customer_name("Will").await.unwrap();
 
     // Add line items
     LineItem::create(&ctx)
@@ -335,7 +344,7 @@ async fn sum_and_filtered_aggregates_on_orders() {
 
     assert_eq!(loaded.item_count, Some(3));
     assert_eq!(loaded.total_amount, Some(350)); // 120 + 80 + 150
-    assert_eq!(loaded.paid_amount, Some(200));  // 120 + 80
+    assert_eq!(loaded.paid_amount, Some(200)); // 120 + 80
     assert_eq!(loaded.has_items, Some(true));
     assert_eq!(loaded.pending_item_sku.as_deref(), Some("MONITOR-ARM"));
 }

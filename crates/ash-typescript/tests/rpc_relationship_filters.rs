@@ -1,7 +1,7 @@
 //! A relationship in a client's filter reaches only the related rows the actor may read,
 //! as Ash authorizes each relationship path in a filter it's given.
 
-use ash_core::{Context, resource};
+use ash_core::resource;
 use ash_memory::Memory;
 use ash_typescript::rpc::Rpc;
 use serde_json::json;
@@ -67,15 +67,32 @@ use parent::Parent;
 
 #[tokio::test]
 async fn a_filter_reaches_only_the_related_rows_the_actor_may_read() {
-    let ctx = Context::new(Memory::new());
+    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
     let parent = Parent::create(&ctx).name("a").await.unwrap();
-    Child::create(&ctx).parent_id(parent.id).body("secret").internal(true).await.unwrap();
-    Child::create(&ctx).parent_id(parent.id).body("hello").internal(false).await.unwrap();
+    Child::create(&ctx)
+        .parent_id(parent.id)
+        .body("secret")
+        .internal(true)
+        .await
+        .unwrap();
+    Child::create(&ctx)
+        .parent_id(parent.id)
+        .body("hello")
+        .internal(false)
+        .await
+        .unwrap();
     let rpc = Rpc::new().action::<Parent>("list_parents", "read");
     let list = |body: &str| json!({ "action": "list_parents", "fields": ["name"], "filter": { "children": { "body": { "eq": body } } } });
 
     let hidden = rpc.run(&ctx, &list("secret")).await;
-    assert_eq!(hidden, json!({ "success": true, "data": [] }), "found by a child it can't read");
+    assert_eq!(
+        hidden,
+        json!({ "success": true, "data": [] }),
+        "found by a child it can't read"
+    );
     let visible = rpc.run(&ctx, &list("hello")).await;
-    assert_eq!(visible, json!({ "success": true, "data": [{ "name": "a" }] }));
+    assert_eq!(
+        visible,
+        json!({ "success": true, "data": [{ "name": "a" }] })
+    );
 }

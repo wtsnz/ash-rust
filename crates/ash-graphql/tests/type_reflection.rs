@@ -3,8 +3,8 @@ use ash_core::{
     PolicyEffect, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
-use async_graphql::dynamic::*;
 use async_graphql::Request;
+use async_graphql::dynamic::*;
 use uuid::Uuid;
 
 static TICKET_ATTRS: &[AttributeDef] = &[
@@ -20,16 +20,16 @@ static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::optional("secret_notes", AttrType::String),
 ];
 
-static TICKET_CALCS: &[CalculationDef] = &[
-    CalculationDef::new("upper_title", AttrType::String, Expr::Upper(&Expr::Field("title"))),
-];
+static TICKET_CALCS: &[CalculationDef] = &[CalculationDef::new(
+    "upper_title",
+    AttrType::String,
+    Expr::Upper(&Expr::Field("title")),
+)];
 
-static TICKET_FIELD_POLICIES: &[FieldPolicyDef] = &[
-    FieldPolicyDef {
-        field: "secret_notes",
-        checks: &[PolicyEffect::AuthorizeIf(Check::ActorPresent)],
-    },
-];
+static TICKET_FIELD_POLICIES: &[FieldPolicyDef] = &[FieldPolicyDef {
+    field: "secret_notes",
+    checks: &[PolicyEffect::AuthorizeIf(Check::ActorPresent)],
+}];
 
 static TICKET_DEF: ResourceDef = ResourceDef {
     name: "Ticket",
@@ -75,30 +75,44 @@ async fn test_phase1_type_reflection_and_schema_assembly() {
     let res = schema.execute(query).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let data_str = res.data.to_string();
-    assert!(data_str.contains("Ticket"), "Schema must contain Ticket type");
-    assert!(data_str.contains("TicketStatus"), "Schema must contain the TicketStatus enum");
+    assert!(
+        data_str.contains("Ticket"),
+        "Schema must contain Ticket type"
+    );
+    assert!(
+        data_str.contains("TicketStatus"),
+        "Schema must contain the TicketStatus enum"
+    );
 }
 
 #[tokio::test]
 async fn test_phase1_field_resolver_and_policy_redaction() {
+    let runtime = ash_core::Runtime::new(ash_memory::Memory::new());
     // Construct schema with a custom top-level query returning a Ticket
     let mut query = Object::new("Query");
     let ticket_id = Uuid::new_v4();
 
-    query = query.field(Field::new("ticket", TypeRef::named("Ticket"), move |_ctx| {
-        let mut map = FieldMap::new();
-        map.insert("id".into(), Value::Uuid(ticket_id));
-        map.insert("title".into(), Value::String("Fix GraphQL bug".into()));
-        map.insert("status".into(), Value::String("open".into()));
-        map.insert("secret_notes".into(), Value::String("Top secret diagnostics".into()));
-        FieldFuture::new(async move {
-            Ok(Some(FieldValue::owned_any(map)))
-        })
-    }));
+    query = query.field(Field::new(
+        "ticket",
+        TypeRef::named("Ticket"),
+        move |_ctx| {
+            let mut map = FieldMap::new();
+            map.insert("id".into(), Value::Uuid(ticket_id));
+            map.insert("title".into(), Value::String("Fix GraphQL bug".into()));
+            map.insert("status".into(), Value::String("open".into()));
+            map.insert(
+                "secret_notes".into(),
+                Value::String("Top secret diagnostics".into()),
+            );
+            FieldFuture::new(async move { Ok(Some(FieldValue::owned_any(map))) })
+        },
+    ));
 
     let mut builder = Schema::build("Query", None, None).register(query);
     builder = builder.register(Scalar::new("Json"));
-    builder = builder.register(ash_graphql::build_resource_object::<ash_memory::Memory>(&TICKET_DEF));
+    builder = builder.register(ash_graphql::build_resource_object::<ash_memory::Memory>(
+        &TICKET_DEF,
+    ));
     for e in ash_graphql::collect_enums_for_resource(&TICKET_DEF) {
         builder = builder.register(e);
     }
@@ -117,24 +131,38 @@ async fn test_phase1_field_resolver_and_policy_redaction() {
     "#;
 
     // 1. Unauthenticated request (no actor) -> secret_notes must be redacted (null)
-    let res = schema.execute(Request::new(gql_query)).await;
+    let res = schema
+        .execute(Request::new(gql_query).data(runtime.bootstrap()))
+        .await;
     // Reported as AshGraphql reports a field a policy hides: a `forbidden_field` error
     // at its path.
-    let [error] = &res.errors[..] else { panic!("Errors: {:?}", res.errors) };
+    let [error] = &res.errors[..] else {
+        panic!("Errors: {:?}", res.errors)
+    };
     assert_eq!(error.message, "forbidden field");
-    let code = error.extensions.as_ref().and_then(|e| e.get("code")).cloned();
+    let code = error
+        .extensions
+        .as_ref()
+        .and_then(|e| e.get("code"))
+        .cloned();
     assert_eq!(code, Some(async_graphql::Value::from("forbidden_field")));
-    assert_eq!(serde_json::to_value(&error.path).unwrap(), serde_json::json!(["ticket", "secretNotes"]));
+    assert_eq!(
+        serde_json::to_value(&error.path).unwrap(),
+        serde_json::json!(["ticket", "secretNotes"])
+    );
     let val = res.data.into_json().unwrap();
     let ticket_json = &val["ticket"];
     assert_eq!(ticket_json["title"], "Fix GraphQL bug");
     assert_eq!(ticket_json["status"], "OPEN");
     assert_eq!(ticket_json["upperTitle"], "FIX GRAPHQL BUG");
-    assert!(ticket_json["secretNotes"].is_null(), "secret_notes should be redacted when no actor is present");
+    assert!(
+        ticket_json["secretNotes"].is_null(),
+        "secret_notes should be redacted when no actor is present"
+    );
 
     // 2. Authenticated request (actor present) -> secret_notes must be visible
     let actor = Actor::new(Uuid::new_v4());
-    let req = Request::new(gql_query).data(actor);
+    let req = Request::new(gql_query).data(runtime.bind(Some(actor), None));
     let res = schema.execute(req).await;
     assert!(res.errors.is_empty(), "Errors: {:?}", res.errors);
     let val = res.data.into_json().unwrap();

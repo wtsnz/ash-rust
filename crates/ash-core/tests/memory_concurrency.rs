@@ -1,38 +1,38 @@
-use ash_core::{Context, Error, Resource, TransactionSupport, resource};
+use ash_core::{Error, Resource, TransactionSupport, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
 resource! {
-    ConcurrentUser {
-        table "concurrent_users";
+ConcurrentUser {
+    table "concurrent_users";
 
-    attributes {
-        id: Uuid [pk];
-        name: String;
-        email: String;
+attributes {
+    id: Uuid [pk];
+    name: String;
+    email: String;
+}
+
+actions {
+    create create {
+        primary;
+        accept [name, email];
     }
 
-    actions {
-        create create {
-            primary;
-            accept [name, email];
-        }
-
-        read read {
-            primary;
-        }
-
-        update update {
-            primary;
-            accept [name, email];
-        }
+    read read {
+        primary;
     }
-    }}
+
+    update update {
+        primary;
+        accept [name, email];
+    }
+}
+}}
 
 #[tokio::test]
 async fn test_memory_transaction_does_not_discard_concurrent_writes() {
     let mem = Memory::new();
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
 
     // 1. Initial user
     let alice = ConcurrentUser::create(&ctx)
@@ -51,7 +51,7 @@ async fn test_memory_transaction_does_not_discard_concurrent_writes() {
             .transaction(|tx_mem| {
                 let tx_mem = tx_mem.clone();
                 async move {
-                    let tx_ctx = Context::new(tx_mem);
+                    let tx_ctx = ash_core::Runtime::new(tx_mem).bootstrap();
                     // In-transaction write: create Carol
                     let carol = ConcurrentUser::create(&tx_ctx)
                         .name("Carol")
@@ -84,7 +84,10 @@ async fn test_memory_transaction_does_not_discard_concurrent_writes() {
     // Signal tx to commit
     write_done_tx.send(()).unwrap();
 
-    let carol = tx_handle.await.unwrap().expect("tx should commit successfully");
+    let carol = tx_handle
+        .await
+        .unwrap()
+        .expect("tx should commit successfully");
 
     // Invariant: ALL THREE users must exist in memory! Bob must NOT be discarded!
     let all = ConcurrentUser::query(&ctx).all().await.unwrap();
@@ -92,14 +95,20 @@ async fn test_memory_transaction_does_not_discard_concurrent_writes() {
 
     let ids: Vec<Uuid> = all.iter().map(Resource::id).collect();
     assert!(ids.contains(&alice.id), "Alice must be present");
-    assert!(ids.contains(&bob.id), "Bob must NOT have been discarded by tx commit");
-    assert!(ids.contains(&carol.id), "Carol must be present from tx commit");
+    assert!(
+        ids.contains(&bob.id),
+        "Bob must NOT have been discarded by tx commit"
+    );
+    assert!(
+        ids.contains(&carol.id),
+        "Carol must be present from tx commit"
+    );
 }
 
 #[tokio::test]
 async fn test_memory_transaction_detects_concurrent_write_conflict_on_same_record() {
     let mem = Memory::new();
-    let ctx = Context::new(mem.clone());
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
 
     // 1. Initial user Dave
     let dave = ConcurrentUser::create(&ctx)
@@ -118,7 +127,7 @@ async fn test_memory_transaction_detects_concurrent_write_conflict_on_same_recor
             .transaction(|tx_mem| {
                 let tx_mem = tx_mem.clone();
                 async move {
-                    let tx_ctx = Context::new(tx_mem);
+                    let tx_ctx = ash_core::Runtime::new(tx_mem).bootstrap();
                     // Update Dave in transaction
                     ConcurrentUser::update(&tx_ctx, dave_id)
                         .name("Dave from Tx")
@@ -151,6 +160,8 @@ async fn test_memory_transaction_detects_concurrent_write_conflict_on_same_recor
     );
 
     // Dave's live record must remain "Dave Concurrent"
-    let dave_live = ash_core::get::<ConcurrentUser, _>(&ctx, dave.id).await.unwrap();
+    let dave_live = ash_core::get::<ConcurrentUser, _>(&ctx, dave.id)
+        .await
+        .unwrap();
     assert_eq!(dave_live.name, "Dave Concurrent");
 }
