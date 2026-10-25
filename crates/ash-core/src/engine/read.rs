@@ -24,15 +24,37 @@ pub fn scope_read(
     action: &ActionDef,
     actor: Option<&Actor>,
     arguments: &FieldMap,
-    mut query: CompiledQuery,
+    query: CompiledQuery,
 ) -> Result<CompiledQuery> {
+    scope_discovery(resource, action, actor, arguments, query, false)
+}
+
+/// Hard cascade discovery includes archived records, retaining all other read rules.
+pub(crate) fn scope_discovery(
+    resource: &ResourceDef,
+    action: &ActionDef,
+    actor: Option<&Actor>,
+    arguments: &FieldMap,
+    mut query: CompiledQuery,
+    hard: bool,
+) -> Result<CompiledQuery> {
+    let soft_delete = hard
+        .then(|| {
+            resource
+                .extensions
+                .iter()
+                .find_map(|extension| extension.soft_delete_attribute())
+        })
+        .flatten();
     let mut filters = Vec::new();
     let mut prepared_sort = Vec::new();
     for preparation in action.preparations {
         match *preparation {
             PreparationDef::Filter(build) => {
                 let crate::TrustedExpr::Filter(filter) = build();
-                filters.push(filter);
+                if !matches!(&filter, Filter::IsNil(field) if Some(field.as_str()) == soft_delete) {
+                    filters.push(filter);
+                }
             }
             PreparationDef::FilterWithArgs(build) => {
                 let crate::TrustedExpr::Filter(filter) = build(arguments);

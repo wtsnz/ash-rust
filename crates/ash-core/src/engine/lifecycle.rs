@@ -209,6 +209,16 @@ pub async fn destroy_dynamic_via<D: DataLayer>(
         );
         match found_first(ctx, resource, id.clone(), &scope, planned).await? {
             (Ok(plan), arguments) => {
+                if super::managed::cascades(resource, action) {
+                    return ctx
+                        .atomically(move |tx| async move {
+                            DynamicChangeset::commit_atomic_by_id(
+                                &tx, resource, action, id, arguments, plan, scope,
+                            )
+                            .await
+                        })
+                        .await;
+                }
                 return DynamicChangeset::commit_atomic_by_id(
                     ctx, resource, action, id, arguments, plan, scope,
                 )

@@ -14,7 +14,7 @@ use crate::engine::Cascade;
 use crate::error::{Error, Result};
 use crate::pipeline::{
     action_named, apply_changes_with_context, apply_tenant_to_fields, expect_kind, expect_persist,
-    generate_pk, pk_name, prepare_create_fields, prepare_update_fields, run_validations,
+    pk_name, prepare_create_fields, prepare_update_fields, run_validations,
     run_validations_with_context, split_input, validate,
 };
 use crate::policy::authorize_write;
@@ -510,6 +510,22 @@ impl DynamicChangeset {
         self.commit_within(ctx, &Cascade::new(true)).await
     }
 
+    /// Internal relationship keys must survive reader-specific field projection.
+    pub(crate) async fn commit_related<D: DataLayer>(
+        mut self,
+        ctx: &Context<D>,
+    ) -> Result<FieldMap> {
+        let stored = Arc::new(std::sync::Mutex::new(FieldMap::new()));
+        let capture = Arc::clone(&stored);
+        self.after_actions.push(Box::new(move |raw| {
+            *capture.lock().unwrap() = raw.fields().clone();
+            Ok(())
+        }));
+        self.commit(ctx).await?;
+        let fields = std::mem::take(&mut *stored.lock().unwrap());
+        Ok(fields)
+    }
+
     /// [`commit`](Self::commit) inside a destroy `cascade`, which decides whether it
     /// notifies.
     ///
@@ -552,11 +568,7 @@ impl DynamicChangeset {
     fn writes_beyond_record(&self) -> bool {
         !self.managed_relationships.is_empty()
             || (self.action.kind == ActionKind::Destroy
-                && self
-                    .resource
-                    .relationships
-                    .iter()
-                    .any(|rel| rel.kind != crate::resource::RelKind::BelongsTo))
+                && crate::engine::cascades(self.resource, self.action))
     }
 
     /// The update of the record in hand as one statement, as Ash upgrades an update of a
@@ -818,7 +830,22 @@ impl DynamicChangeset {
             };
             let dest_def = (rel.destination)();
             let child_pk = pk_name(dest_def)?;
+            if rel.kind == crate::resource::RelKind::BelongsTo && managed.inputs.len() > 1 {
+                return Err(Error::Invalid(
+                    "belongs_to accepts one related record".into(),
+                ));
+            }
             for child_fields in &managed.inputs {
+                // A supplied destination id reads a record; it runs no create/update action.
+                if child_fields.contains_key(child_pk)
+                    && matches!(
+                        rel.kind,
+                        crate::resource::RelKind::BelongsTo | crate::resource::RelKind::ManyToMany
+                    )
+                {
+                    continue;
+                }
+
                 let is_update = child_fields.contains_key(child_pk)
                     && managed.rel_type == ManagedRelType::DirectControl;
                 let kind = if is_update {
@@ -846,37 +873,20 @@ impl DynamicChangeset {
             }
             let dest_def = (rel.destination)();
             let dest_pk = pk_name(dest_def)?;
-            let Some(mut child_fields) = managed.inputs.pop() else {
+            let Some(child_fields) = managed.inputs.pop() else {
                 continue;
             };
-            // The related row, so every key column can be copied from it.
-            let related: FieldMap = if let Ok(cid) = required_pk(&child_fields, dest_pk) {
-                if rel.destination_columns() == [dest_pk] {
-                    child_fields
-                } else {
-                    ctx.raw_data()
-                        .run_query(
-                            dest_def,
-                            &crate::data_layer::CompiledQuery {
-                                filter: Some(crate::filter::Filter::eq(dest_pk, cid)),
-                                tenant: ctx.tenant().map(str::to_owned),
-                                ..crate::data_layer::CompiledQuery::default()
-                            },
-                        )
-                        .await?
-                        .into_iter()
-                        .next()
-                        .ok_or(Error::NotFound)?
-                }
-            } else if let Some(create_act) = primary_action(dest_def, ActionKind::Create) {
-                Box::pin(Self::for_create(ctx, dest_def, create_act, child_fields)?.commit(ctx))
-                    .await?
-                    .into_fields()
+            let related = if child_fields.contains_key(dest_pk) {
+                let id = required_pk(&child_fields, dest_pk).map_err(|_| Error::NotFound)?;
+                ctx.access().resolve_related(dest_def, id).await?
             } else {
-                generate_pk(dest_def, &mut child_fields);
-                let cid = required_pk(&child_fields, dest_pk)?;
-                ctx.raw_data()
-                    .create(dest_def, ctx.tenant(), cid, child_fields)
+                let action = primary_action(dest_def, ActionKind::Create).ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "managed relationship needs a create action on {}",
+                        dest_def.name
+                    ))
+                })?;
+                Box::pin(Self::for_create(ctx, dest_def, action, child_fields)?.commit_related(ctx))
                     .await?
             };
             for (source, destination) in rel.key_pairs() {
@@ -980,23 +990,14 @@ impl DynamicChangeset {
             id
         };
         let managed = std::mem::take(&mut self.managed_relationships);
-        if let Err(err) = crate::engine::handle_managed_relationships(
+        crate::engine::handle_managed_relationships(
             ctx,
             self.resource,
             id.clone(),
             &stored,
             managed,
         )
-        .await
-        {
-            if self.action.kind == ActionKind::Create {
-                let _ = ctx
-                    .raw_data()
-                    .destroy(self.resource, ctx.tenant(), id)
-                    .await;
-            }
-            return Err(err);
-        }
+        .await?;
 
         let mut raw = RawRecord::from(stored);
         for hook in std::mem::take(&mut self.after_actions) {

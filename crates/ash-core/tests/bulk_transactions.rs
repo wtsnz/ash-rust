@@ -159,10 +159,15 @@ async fn without_a_transaction_a_row_fails_alone() {
     );
     assert_eq!(notified.load(Ordering::SeqCst), 2);
 
-    // ash-memory can't transact, as Ash's ETS layer can't, so it writes rows alone too.
+    // Explicitly disabling transactions also writes memory rows alone.
     let (ctx, readings, notified) = sensors(Memory::new()).await;
     assert_eq!(
-        record(&ctx, &readings, BulkUpdateOptions::new()).await,
+        record(
+            &ctx,
+            &readings,
+            BulkUpdateOptions::new().transaction(BulkTransaction::Off)
+        )
+        .await,
         (2, 1, vec![10, -1, 30])
     );
     assert_eq!(notified.load(Ordering::SeqCst), 2);

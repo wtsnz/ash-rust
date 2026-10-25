@@ -91,6 +91,10 @@ impl ResourceExtension for ArchiveDef {
         "archive"
     }
 
+    fn soft_delete_attribute(&self) -> Option<&'static str> {
+        Some(self.attribute)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

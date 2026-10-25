@@ -84,25 +84,14 @@ async fn test_memory_transaction_does_not_discard_concurrent_writes() {
     // Signal tx to commit
     write_done_tx.send(()).unwrap();
 
-    let carol = tx_handle
-        .await
-        .unwrap()
-        .expect("tx should commit successfully");
-
-    // Invariant: ALL THREE users must exist in memory! Bob must NOT be discarded!
+    let result = tx_handle.await.unwrap();
+    assert!(matches!(result, Err(Error::DataLayer(ref msg)) if msg.contains("conflict")));
     let all = ConcurrentUser::query(&ctx).all().await.unwrap();
-    assert_eq!(all.len(), 3, "must contain Alice, Bob, and Carol");
-
+    assert_eq!(all.len(), 2);
     let ids: Vec<Uuid> = all.iter().map(Resource::id).collect();
-    assert!(ids.contains(&alice.id), "Alice must be present");
-    assert!(
-        ids.contains(&bob.id),
-        "Bob must NOT have been discarded by tx commit"
-    );
-    assert!(
-        ids.contains(&carol.id),
-        "Carol must be present from tx commit"
-    );
+    assert!(ids.contains(&alice.id));
+    assert!(ids.contains(&bob.id));
+    assert!(!all.iter().any(|user| user.name == "Carol"));
 }
 
 #[tokio::test]

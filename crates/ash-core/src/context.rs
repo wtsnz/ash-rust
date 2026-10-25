@@ -296,39 +296,38 @@ impl<D: SchemaSupport> Context<D> {
 }
 
 impl<D: DataLayer> Context<D> {
-    /// Runs `f` in one transaction where the data layer has them
-    /// ([`DataLayer::in_transaction`]), its notifications sent once it commits, as Ash
-    /// runs an action in a transaction; within one already, or where the data layer has
-    /// none, as it is.
+    /// Multi-record actions require a real transaction, including inside notification buffers.
     pub(crate) async fn atomically<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(Context<D>) -> Fut + Send,
         Fut: Future<Output = Result<T>> + Send,
         T: Send,
     {
-        if self.notification_queue.is_some() {
-            return f(self.clone()).await;
-        }
         let queue = Arc::new(Mutex::new(Vec::new()));
         let outside = self.clone();
         let tx_queue = Arc::clone(&queue);
         let result = self
             .data
-            .in_transaction(move |tx_data| {
-                let ctx = match tx_data {
-                    Some(tx_data) => Context {
-                        data: Arc::new(tx_data),
-                        notification_queue: Some(tx_queue),
-                        ..outside
-                    },
-                    None => outside,
-                };
-                f(ctx)
+            .in_transaction(move |tx_data| match tx_data {
+                Some(data) => futures_util::future::Either::Left(f(Context {
+                    data: Arc::new(data),
+                    notification_queue: Some(tx_queue),
+                    ..outside
+                })),
+                None => futures_util::future::Either::Right(std::future::ready(Err(
+                    crate::Error::AtomicityUnsupported,
+                ))),
             })
             .await;
-        match &result {
-            Ok(_) => crate::notifier::flush_queued_notifications(&queue, &self.notifiers).await,
-            Err(_) => queue.lock().unwrap().clear(),
+        if result.is_ok() {
+            if let Some(outer) = &self.notification_queue {
+                outer
+                    .lock()
+                    .unwrap()
+                    .extend(queue.lock().unwrap().drain(..));
+            } else {
+                crate::notifier::flush_queued_notifications(&queue, &self.notifiers).await;
+            }
         }
         result
     }

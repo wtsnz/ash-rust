@@ -117,6 +117,12 @@ pub trait ResourceExtension: Send + Sync + Debug + 'static {
     /// Identifier or name for the extension (e.g. `"StateMachine"`, `"AuditTrail"`).
     fn name(&self) -> &'static str;
 
+    /// Attribute hidden by a soft-delete read filter. Hard cascades may remove that
+    /// exact visibility filter while retaining every other preparation and policy.
+    fn soft_delete_attribute(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Downcasting helper to retrieve the concrete extension struct.
     fn as_any(&self) -> &dyn Any;
 }

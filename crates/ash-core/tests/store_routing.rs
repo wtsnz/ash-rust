@@ -162,8 +162,9 @@ async fn test_multi_instance_sqlite_routing() {
         "AuditLog table should not exist in primary db"
     );
 
-    // Invariant 4: Multi pipeline spanning multiple stores atomically
-    ctx.multi()
+    // Independent stores cannot promise one atomic pipeline. Reject it before either write.
+    let result = ctx
+        .multi()
         .create(
             "new_customer",
             Customer::create(&ctx).email("bob@example.com").name("Bob"),
@@ -175,14 +176,14 @@ async fn test_multi_instance_sqlite_routing() {
                 .changeset()
         })
         .commit()
-        .await
-        .unwrap();
+        .await;
+    assert!(matches!(result, Err(Error::AtomicityUnsupported)));
 
     let all_customers = Customer::query(&ctx).all().await.unwrap();
-    assert_eq!(all_customers.len(), 2);
+    assert_eq!(all_customers.len(), 1);
 
     let all_logs = AuditLog::query(&ctx).all().await.unwrap();
-    assert_eq!(all_logs.len(), 2);
+    assert_eq!(all_logs.len(), 1);
 }
 
 // ============================================================================

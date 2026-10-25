@@ -4,6 +4,8 @@ use std::fmt;
 pub enum Error {
     Forbidden,
     NotFound,
+    /// The backend cannot guarantee rollback for a multi-record action.
+    AtomicityUnsupported,
     TooMany(usize),
     UnknownAction {
         resource: &'static str,
@@ -163,6 +165,10 @@ impl fmt::Display for Error {
         match self {
             Self::Forbidden => write!(f, "forbidden"),
             Self::NotFound => write!(f, "not found"),
+            Self::AtomicityUnsupported => write!(
+                f,
+                "multi-record atomicity is unsupported by this data layer"
+            ),
             Self::TooMany(n) => write!(f, "expected one record, found {n}"),
             Self::UnknownAction { resource, name } => {
                 write!(f, "unknown action `{name}` on {resource}")
