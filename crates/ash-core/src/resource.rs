@@ -371,13 +371,13 @@ impl ResourceDef {
             .iter()
             .filter_map(|prep| match prep {
                 crate::action::PreparationDef::Filter(build) => {
-                    let crate::TrustedExpr::Filter(filter) = build();
+                    let filter = build().into_filter();
                     Some(filter)
                 }
                 crate::action::PreparationDef::FilterWithArgs(build) => {
                     let mut arguments = crate::FieldMap::new();
                     crate::apply_argument_defaults(read.arguments, &mut arguments);
-                    let crate::TrustedExpr::Filter(filter) = build(&arguments);
+                    let filter = build(&arguments).into_filter();
                     Some(filter)
                 }
                 _ => None,

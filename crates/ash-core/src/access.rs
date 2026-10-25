@@ -17,6 +17,8 @@ use crate::value::FieldMap;
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct ReadRequest {
+    pub lock: Option<crate::ReadLock>,
+    pub distinct_on: Option<crate::DistinctOn>,
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     pub limit: Option<usize>,
@@ -85,6 +87,8 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
             self.ctx.authorization_actor(),
             arguments,
             CompiledQuery {
+                lock: request.lock,
+                distinct_on: request.distinct_on,
                 filter: request.filter,
                 sort: request.sort,
                 limit: request.limit,

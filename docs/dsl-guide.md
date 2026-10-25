@@ -385,6 +385,15 @@ calculations {
 
 Calculation arguments use `(name: Type)` after the calculation name and `arg(name)` in the expression. Load them with `query.calc_with_args(Item::discounted, args)`.
 
+Trusted SQL calculations use `fragment(PATH_TO_CONST_SQL_FRAGMENT)`. Field parts
+supply their dependency list, so hidden inputs hide the result unless it declares
+`declassify`. Read actions can use `prepare trusted_filter(callback);`, where
+`callback: fn(&FieldMap) -> TrustedExpr` binds a fragment's parameters. Sort by a
+fragment calculation with the usual `prepare sort(calculation, desc);`. See
+[Trusted data-layer nodes](trusted-data-layer-nodes.md) for bound parameters,
+backend tags, locks, distinct reads and a full-text search example.
+
+
 Built-ins: `string_length`, `length`, `concat`, `coalesce`, `lower`, `upper`, `if_else`, `custom`, arithmetic, comparisons, and `null`. Quoted `"string_length(title)"` is an error.
 
 ### Aggregates

@@ -4,6 +4,7 @@ use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Expr {
+    Fragment(crate::SqlFragment),
     Field(&'static str),
     LitInt(i64),
     LitString(&'static str),
@@ -38,6 +39,7 @@ impl Expr {
     /// Fields used by every branch, including coalesce fallbacks and conditions.
     pub fn fields(&self, out: &mut Vec<&'static str>) {
         match self {
+            Self::Fragment(fragment) => fragment.fields(out),
             Self::Field(name) | Self::StringLength(name) => out.push(name),
             Self::Length(e) | Self::Lower(e) | Self::Upper(e) => e.fields(out),
             Self::Concat(parts) | Self::Coalesce(parts) => {
@@ -93,7 +95,8 @@ impl Expr {
                 then_expr,
                 else_expr,
             } => cond.is_custom() || then_expr.is_custom() || else_expr.is_custom(),
-            Self::Field(_)
+            Self::Fragment(_)
+            | Self::Field(_)
             | Self::LitInt(_)
             | Self::LitString(_)
             | Self::LitBool(_)
@@ -107,6 +110,7 @@ impl Expr {
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Fragment(a), Self::Fragment(b)) => a == b,
             (Self::Field(a), Self::Field(b)) => a == b,
             (Self::Arg(a), Self::Arg(b)) => a == b,
             (Self::LitInt(a), Self::LitInt(b)) => a == b,
@@ -237,6 +241,10 @@ pub fn eval(expr: &Expr, fields: &FieldMap) -> Result<Value> {
 
 pub fn eval_with_args(expr: &Expr, fields: &FieldMap, args: &FieldMap) -> Result<Value> {
     match *expr {
+        Expr::Fragment(_) => Err(Error::UnsupportedPlanNode {
+            node: "sql_fragment",
+            data_layer: crate::DataLayerKind::Memory,
+        }),
         Expr::Field(name) => Ok(fields.get(name).cloned().unwrap_or(Value::Null)),
         Expr::Arg(name) => Ok(args.get(name).cloned().unwrap_or(Value::Null)),
         Expr::LitInt(n) => Ok(Value::Int(n)),

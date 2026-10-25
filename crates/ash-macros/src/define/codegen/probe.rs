@@ -274,7 +274,8 @@ pub fn expand_ide_probe(def: &ResourceDefinition) -> TokenStream {
                         let _: ::ash_core::Filter = #filter_tokens;
                     });
                 }
-                PreparationSpec::Limit(_)
+                PreparationSpec::TrustedFilter(_)
+                | PreparationSpec::Limit(_)
                 | PreparationSpec::Offset(_)
                 | PreparationSpec::AfterAction(_) => {}
             }
@@ -741,6 +742,9 @@ fn collect_calc_field_probes(expr: &CalculationExprSpec, probes: &mut Vec<TokenS
         | CalculationExprSpec::LitString(_)
         | CalculationExprSpec::LitBool(_)
         | CalculationExprSpec::Null => {}
+        CalculationExprSpec::Fragment(path) => {
+            probes.push(quote! { let _: ::ash_core::SqlFragment = #path; });
+        }
         CalculationExprSpec::Custom(path) => {
             probes.push(quote_spanned! { path.span() =>
                 let _: fn(&::ash_core::FieldMap) -> ::ash_core::Result<::ash_core::Value> = #path;
@@ -852,6 +856,7 @@ fn calc_expr_typed(expr: &CalculationExprSpec) -> Option<TokenStream> {
         }
         CalculationExprSpec::Coalesce(_)
         | CalculationExprSpec::Null
+        | CalculationExprSpec::Fragment(_)
         | CalculationExprSpec::Custom(_) => None,
     }
 }

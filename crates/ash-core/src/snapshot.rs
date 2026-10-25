@@ -25,6 +25,9 @@ impl Filter {
     /// and calculation predicates require an event-query implementation.
     pub fn validate_snapshot(&self, resource: &ResourceDef) -> Result<()> {
         match self {
+            Self::DataLayer(_) | Self::Keyset(_) => Err(Error::Invalid(
+                "subscription filters cannot execute trusted SQL or page boundaries".into(),
+            )),
             Self::Related { .. } | Self::Traversal(_) => Err(Error::Invalid(
                 "subscription filters cannot depend on relationships".into(),
             )),
@@ -55,7 +58,7 @@ impl Filter {
 
 fn needs_data(filter: &Filter, resource: &ResourceDef, fields: &FieldMap) -> bool {
     match filter {
-        Filter::Client(_) => true,
+        Filter::DataLayer(_) | Filter::Keyset(_) | Filter::Client(_) => true,
         Filter::Traversal(node) => {
             // A snapshot does not carry the join row needed to establish its scope.
             node.join_filter().is_some()

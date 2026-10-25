@@ -16,18 +16,21 @@ use ash_core::{
 #[derive(Clone, Debug, Default)]
 pub struct Memory {
     tables: Arc<RwLock<Tables>>,
+    in_transaction: bool,
 }
 
 impl Memory {
     pub fn new() -> Self {
         Self {
             tables: Arc::new(RwLock::new(HashMap::new())),
+            in_transaction: false,
         }
     }
 
     pub fn from_tables(tables: HashMap<String, HashMap<Value, FieldMap>>) -> Self {
         Self {
             tables: Arc::new(RwLock::new(tables)),
+            in_transaction: false,
         }
     }
 
@@ -349,6 +352,8 @@ impl DataLayer for Memory {
         update: &ash_core::AtomicUpdate,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
+            query.validate_lock(self.in_transaction)?;
+            query.validate_data_layer(resource, ash_core::DataLayerKind::Memory)?;
             let mut tables = self.write()?;
             query.validate_calculations(resource)?;
             let tenant = query.tenant.as_deref();
@@ -424,6 +429,8 @@ impl DataLayer for Memory {
         conditions: &[ash_core::AtomicCondition],
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
+            query.validate_lock(self.in_transaction)?;
+            query.validate_data_layer(resource, ash_core::DataLayerKind::Memory)?;
             let mut tables = self.write()?;
             query.validate_calculations(resource)?;
             let tenant = query.tenant.as_deref();
@@ -488,6 +495,8 @@ impl DataLayer for Memory {
         query: &CompiledQuery,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         ready((|| {
+            query.validate_lock(self.in_transaction)?;
+            query.validate_data_layer(resource, ash_core::DataLayerKind::Memory)?;
             let tables = self.read()?;
             query.validate_calculations(resource)?;
             let tenant = query.tenant.as_deref();
@@ -771,6 +780,8 @@ fn eval_filter(
             eval_filter(tables, tenant, resource, inner, row).map(|matched| !matched)
         }
         // `EXISTS (...)` in SQL: true or false, never unknown.
+        Filter::DataLayer(_) => None,
+        Filter::Keyset(inner) => eval_filter(tables, tenant, resource, inner, row),
         Filter::Client(_) => None,
         Filter::Projected(inner) => eval_filter(
             tables,
@@ -1250,7 +1261,8 @@ impl TransactionSupport for Memory {
         T: Send,
     {
         let snapshot = self.read()?.clone();
-        let tx_mem = Memory::from_tables(snapshot.clone());
+        let mut tx_mem = Memory::from_tables(snapshot.clone());
+        tx_mem.in_transaction = true;
         let value = f(&tx_mem).await?;
         let committed = tx_mem.read()?.clone();
         let mut live = self.write()?;

@@ -38,6 +38,8 @@ pub struct Query<'a, R, D> {
     loads: Vec<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    lock: Option<crate::ReadLock>,
+    distinct_on: Option<crate::DistinctOn>,
     _resource: PhantomData<R>,
 }
 
@@ -55,6 +57,8 @@ impl<'a, R, D> Clone for Query<'a, R, D> {
             loads: self.loads.clone(),
             limit: self.limit,
             offset: self.offset,
+            lock: self.lock,
+            distinct_on: self.distinct_on.clone(),
             _resource: PhantomData,
         }
     }
@@ -108,6 +112,23 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         self
     }
 
+    pub fn lock(mut self, lock: crate::ReadLock) -> Self {
+        self.lock = Some(lock);
+        self
+    }
+
+    pub fn for_update(self) -> Self {
+        self.lock(crate::ReadLock::ForUpdate)
+    }
+
+    pub fn distinct_on(mut self, fields: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.distinct_on = Some(crate::DistinctOn {
+            fields: fields.into_iter().map(Into::into).collect(),
+            sort: Vec::new(),
+        });
+        self
+    }
+
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
@@ -155,6 +176,9 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         query: CompiledQuery,
     ) -> Result<CompiledQuery> {
         let tenant = self.ctx.tenant().map(str::to_owned);
+        let mut query = query;
+        query.lock = self.lock;
+        query.distinct_on = self.distinct_on.clone();
         scope_read(
             &R::DEF,
             action,
@@ -227,6 +251,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 aggregates,
                 limit: this.limit,
                 offset: this.offset,
+                lock: this.lock,
+                distinct_on: this.distinct_on.clone(),
             },
         )?;
         let mut rows = this.ctx.raw_data().run_query(&R::DEF, &query).await?;
@@ -259,7 +285,13 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let mut keysets = Vec::new();
         for row in rows {
             if let Some(sort) = keyset_sort {
-                keysets.push(this.ctx.seal_keyset(&R::DEF, action.name, sort, &row)?);
+                keysets.push(this.ctx.seal_keyset_with_distinct(
+                    &R::DEF,
+                    action.name,
+                    sort,
+                    query.distinct_on.as_ref(),
+                    &row,
+                )?);
             }
             let view = this.ctx.present(&R::DEF, row.into(), None)?;
             let mut fields = view.into_fields();
@@ -306,6 +338,8 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
             action,
             CompiledQuery {
                 filter: self.filter.clone(),
+                sort: self.sort.clone(),
+                calculation_args: self.calculation_args.clone(),
                 ..CompiledQuery::default()
             },
         )?;
@@ -322,19 +356,10 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         offset: usize,
         count_total: bool,
     ) -> Result<Page<R>> {
-        let count_query = count_total.then(|| Query {
-            ctx: self.ctx,
-            action: self.action,
-            arguments: self.arguments.clone(),
-            filter: self.filter.clone(),
-            sort: Vec::new(),
-            calculations: Vec::new(),
-            calculation_args: std::collections::HashMap::new(),
-            aggregates: Vec::new(),
-            loads: Vec::new(),
-            limit: None,
-            offset: None,
-            _resource: PhantomData::<R>,
+        let count_query = count_total.then(|| {
+            let mut count = self.clone();
+            count.lock = None;
+            count
         });
 
         self.limit = Some(limit + 1);
@@ -382,6 +407,7 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 ..Default::default()
             },
         )?;
+        self.distinct_on = scoped.distinct_on;
         self.sort = keyset_sort(&R::DEF, scoped.sort);
         // Each record's keyset holds the values it sorts by: an aggregate or calculation
         // sorted by loads with it.
@@ -399,9 +425,14 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         let target_cursor_str = if is_before { before } else { after };
 
         if let Some(token) = target_cursor_str {
-            let filter =
-                self.ctx
-                    .keyset_filter(&R::DEF, action.name, &self.sort, token, !is_before)?;
+            let filter = self.ctx.keyset_filter_with_distinct(
+                &R::DEF,
+                action.name,
+                &self.sort,
+                self.distinct_on.as_ref(),
+                token,
+                !is_before,
+            )?;
             self = self.filter(filter);
         }
 
@@ -535,6 +566,8 @@ pub fn query<R: Resource, D: DataLayer>(ctx: &Context<D>) -> Query<'_, R, D> {
         loads: Vec::new(),
         limit: None,
         offset: None,
+        lock: None,
+        distinct_on: None,
         _resource: PhantomData,
     }
 }

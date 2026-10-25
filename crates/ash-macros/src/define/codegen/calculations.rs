@@ -115,6 +115,7 @@ pub fn calc_expr_to_tokens(expr: &CalculationExprSpec) -> TokenStream {
                 }
             }
         }
+        CalculationExprSpec::Fragment(path) => quote! { ::ash_core::Expr::Fragment(#path) },
         CalculationExprSpec::Custom(path) => {
             quote! { ::ash_core::Expr::Custom(#path) }
         }

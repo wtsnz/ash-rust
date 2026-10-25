@@ -1003,6 +1003,7 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
         let content;
         syn::parenthesized!(content in input);
         match func_name.to_string().as_str() {
+            "trusted_filter" => Ok(PreparationSpec::TrustedFilter(content.parse()?)),
             "filter" => {
                 let expr: Expr = content.parse()?;
                 Ok(PreparationSpec::Filter { expr })
@@ -1037,8 +1038,14 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
             }
             "after_action" => Ok(PreparationSpec::AfterAction(content.parse()?)),
             _ => {
-                const PREPARATION_NAMES: &[&str] =
-                    &["filter", "sort", "limit", "offset", "after_action"];
+                const PREPARATION_NAMES: &[&str] = &[
+                    "filter",
+                    "trusted_filter",
+                    "sort",
+                    "limit",
+                    "offset",
+                    "after_action",
+                ];
                 Err(crate::ast_helpers::unknown_ident_error(
                     &func_name,
                     PREPARATION_NAMES,
@@ -1078,8 +1085,14 @@ pub fn parse_preparation(input: ParseStream) -> Result<PreparationSpec> {
                 Ok(PreparationSpec::Offset(val))
             }
             _ => {
-                const PREPARATION_NAMES: &[&str] =
-                    &["filter", "sort", "limit", "offset", "after_action"];
+                const PREPARATION_NAMES: &[&str] = &[
+                    "filter",
+                    "trusted_filter",
+                    "sort",
+                    "limit",
+                    "offset",
+                    "after_action",
+                ];
                 Err(crate::ast_helpers::unknown_ident_error(
                     &func_name,
                     PREPARATION_NAMES,

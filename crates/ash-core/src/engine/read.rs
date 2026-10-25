@@ -51,13 +51,13 @@ pub(crate) fn scope_discovery(
     for preparation in action.preparations {
         match *preparation {
             PreparationDef::Filter(build) => {
-                let crate::TrustedExpr::Filter(filter) = build();
+                let filter = build().into_filter();
                 if !matches!(&filter, Filter::IsNil(field) if Some(field.as_str()) == soft_delete) {
                     filters.push(filter);
                 }
             }
             PreparationDef::FilterWithArgs(build) => {
-                let crate::TrustedExpr::Filter(filter) = build(arguments);
+                let filter = build(arguments).into_filter();
                 filters.push(filter);
             }
             PreparationDef::Sort { field, descending } => prepared_sort.push(Sort {
@@ -98,6 +98,11 @@ pub(crate) fn scope_discovery(
     let (filter, tenant) = apply_tenant_scope(resource, filter, query.tenant.take())?;
     query.filter = filter;
     query.tenant = tenant;
+    if let Some(distinct) = &mut query.distinct_on
+        && distinct.sort.is_empty()
+    {
+        distinct.sort = crate::keyset_sort(resource, query.sort.clone());
+    }
     query.actor = actor.cloned();
     Ok(query)
 }

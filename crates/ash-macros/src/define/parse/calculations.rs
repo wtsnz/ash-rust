@@ -275,7 +275,13 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                         else_expr,
                     })
                 }
-                "custom" => {
+                "custom" | "fragment" => {
+                    if func_ident == "fragment" && call.args.len() != 1 {
+                        return Err(Error::new_spanned(
+                            call,
+                            "expected fragment(CONST_SQL_FRAGMENT)",
+                        ));
+                    }
                     let first = call
                         .args
                         .first()
@@ -284,7 +290,11 @@ pub fn parse_calc_expr(expr: &syn::Expr) -> Result<CalculationExprSpec> {
                         syn::Expr::Path(p) => p.path.clone(),
                         _ => return Err(Error::new_spanned(first, "expected function path")),
                     };
-                    Ok(CalculationExprSpec::Custom(path))
+                    if func_ident == "fragment" {
+                        Ok(CalculationExprSpec::Fragment(path))
+                    } else {
+                        Ok(CalculationExprSpec::Custom(path))
+                    }
                 }
                 other => Err(Error::new_spanned(
                     func_ident,

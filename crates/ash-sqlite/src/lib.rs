@@ -518,6 +518,7 @@ impl DataLayer for Sqlite {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
+        query.validate_lock(matches!(self.source, SqliteSource::Tx(_)))?;
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         let qb = sql::select_query(resource, query)?;
         let rows = self.fetch_all(&qb).await?;
@@ -587,6 +588,7 @@ impl DataLayer for Sqlite {
     }
 
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        query.validate_lock(matches!(self.source, SqliteSource::Tx(_)))?;
         use sqlx::Row;
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         let rows = self.fetch_all(&sql::count_query(resource, query)?).await?;

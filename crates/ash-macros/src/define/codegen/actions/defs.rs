@@ -266,6 +266,10 @@ pub fn expand_action_defs(def: &ResourceDefinition) -> Result<(Vec<TokenStream>,
             let mut prep_tokens = Vec::new();
             for (idx, prep) in act.preparations.iter().enumerate() {
                 match prep {
+                    PreparationSpec::TrustedFilter(path) => {
+                        prep_tokens
+                            .push(quote! { ::ash_core::PreparationDef::FilterWithArgs(#path) });
+                    }
                     PreparationSpec::Filter { expr } => {
                         let prep_fn_name = format_ident!("__prep_{}_{}_filter", act.name, idx);
                         let filter_tokens = filter_expr_to_tokens(expr, resource);

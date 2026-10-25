@@ -9,8 +9,8 @@ read_when:
 # Scoped access
 
 `Context::access()` returns a borrowed `ScopedAccess` handle. Its reads use the
-context's actor and tenant. `ReadRequest` supplies only filter, sort, limit and
-offset, so it cannot replace execution identity.
+context's actor and tenant. `ReadRequest` supplies query shape and trusted read operations, so it cannot replace
+execution identity.
 
 ## Bind at the application boundary
 
@@ -445,3 +445,12 @@ forbidden-field error for inherited or explicit calculation restrictions and exp
 aggregate restrictions. An aggregate whose source values project to null has a null
 value without an extra forbidden-field error. System scopes bypass field and row
 policies, while still requiring valid custom calculation declarations.
+
+## Trusted data-layer operations
+
+Scoped reads accept developer-owned SQL fragments, Postgres row locks and
+`distinct_on` through [trusted data-layer nodes](trusted-data-layer-nodes.md).
+The planner retains tenancy and row policies; `View` retains field policies and
+calculation dependency visibility. Unsupported backends return a typed planning
+error before reading data. Read locks require a real transaction. Step 8 can remove
+raw execution without removing these scoped SQL operations.
