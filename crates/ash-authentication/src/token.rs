@@ -207,11 +207,7 @@ impl JwtService {
     }
 
     /// Generate and sign a short-lived password reset token (`purpose = "password_reset"`).
-    pub fn sign_reset_token(
-        &self,
-        user_id: Uuid,
-        tenant: Option<String>,
-    ) -> Result<String> {
+    pub fn sign_reset_token(&self, user_id: Uuid, tenant: Option<String>) -> Result<String> {
         self.sign_custom_token(
             user_id,
             "password_reset",
@@ -222,11 +218,7 @@ impl JwtService {
     }
 
     /// Generate and sign an email confirmation token (`purpose = "email_confirmation"`).
-    pub fn sign_confirmation_token(
-        &self,
-        user_id: Uuid,
-        tenant: Option<String>,
-    ) -> Result<String> {
+    pub fn sign_confirmation_token(&self, user_id: Uuid, tenant: Option<String>) -> Result<String> {
         self.sign_custom_token(
             user_id,
             "email_confirmation",

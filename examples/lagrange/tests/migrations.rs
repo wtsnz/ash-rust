@@ -8,10 +8,14 @@ use ash_sqlite::Sqlite;
 use cargo_ash::codegen::{self, CodegenOptions, CodegenOutcome, Dialect, Mode, NonInteractive};
 
 fn resources() -> Vec<&'static ash_core::ResourceDef> {
-    [&lagrange::WORLD_DEF, &lagrange::FLEET_DEF, &lagrange::CARGO_DEF]
-        .into_iter()
-        .flat_map(|domain| domain.resources.iter().copied())
-        .collect()
+    [
+        &lagrange::WORLD_DEF,
+        &lagrange::FLEET_DEF,
+        &lagrange::CARGO_DEF,
+    ]
+    .into_iter()
+    .flat_map(|domain| domain.resources.iter().copied())
+    .collect()
 }
 
 #[test]
@@ -25,7 +29,11 @@ fn migrations_match_the_resources() {
             ..CodegenOptions::new(dialect)
         };
         let outcome = codegen::run(&resources(), &options, &mut NonInteractive).unwrap();
-        assert_eq!(outcome, CodegenOutcome::NoChanges, "{dialect:?} migrations are behind the resources");
+        assert_eq!(
+            outcome,
+            CodegenOutcome::NoChanges,
+            "{dialect:?} migrations are behind the resources"
+        );
     }
 }
 
@@ -61,19 +69,33 @@ async fn sqlite_history_renames_without_losing_rows() {
     let db = Sqlite::file(dir.path().join("fleet.db")).await.unwrap();
     let v1 = first_migration("sqlite");
     assert_eq!(db.migrate(v1.path()).await.unwrap().len(), 1);
-    sqlx::raw_sql(SEED_V1).execute(db.pool().unwrap()).await.unwrap();
+    sqlx::raw_sql(SEED_V1)
+        .execute(db.pool().unwrap())
+        .await
+        .unwrap();
 
-    assert_eq!(db.migrate(lagrange::migrations_dir()).await.unwrap().len(), 4);
+    assert_eq!(
+        db.migrate(lagrange::migrations_dir()).await.unwrap().len(),
+        4
+    );
     let code: String = sqlx::query_scalar("SELECT berth_code FROM berth_reservations")
         .fetch_one(db.pool().unwrap())
         .await
         .unwrap();
     assert_eq!(code, "A1");
-    let berths: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM berths").fetch_one(db.pool().unwrap()).await.unwrap();
+    let berths: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM berths")
+        .fetch_one(db.pool().unwrap())
+        .await
+        .unwrap();
     assert_eq!(berths, 1);
 
     // Down migrations undo the whole history.
-    while db.rollback(lagrange::migrations_dir()).await.unwrap().is_some() {}
+    while db
+        .rollback(lagrange::migrations_dir())
+        .await
+        .unwrap()
+        .is_some()
+    {}
     let tables: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_ash%' ESCAPE '\\' AND name NOT LIKE 'sqlite%'",
     )
@@ -92,7 +114,10 @@ async fn postgres_history_renames_without_losing_rows() {
     // Setup and checks run through a pool of their own: the data layer's is tokio-postgres's.
     let admin = sqlx::PgPool::connect(&base).await.unwrap();
     let schema = format!("lagrange_history_{}", uuid::Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA \"{schema}\"")).execute(&admin).await.unwrap();
+    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+        .execute(&admin)
+        .await
+        .unwrap();
     let separator = if base.contains('?') { '&' } else { '?' };
     let url = format!("{base}{separator}options=-c%20search_path%3D{schema}%2Cpublic");
     let db = Postgres::connect(&url).await.unwrap();
@@ -101,7 +126,10 @@ async fn postgres_history_renames_without_losing_rows() {
     let v1 = first_migration("postgres");
     assert_eq!(db.migrate(v1.path()).await.unwrap().len(), 1);
     sqlx::raw_sql(SEED_V1).execute(&raw).await.unwrap();
-    assert_eq!(db.migrate(lagrange::migrations_dir()).await.unwrap().len(), 4);
+    assert_eq!(
+        db.migrate(lagrange::migrations_dir()).await.unwrap().len(),
+        4
+    );
     // Timestamps are `timestamptz`, so an offset is kept as the same instant.
     let commissioned: bool =
         sqlx::query_scalar("SELECT created_at = '2187-01-01T08:00:00Z'::timestamptz FROM ships")
@@ -122,11 +150,24 @@ async fn postgres_history_renames_without_losing_rows() {
     .fetch_all(&raw)
     .await
     .unwrap();
-    for expected in ["berth_reservations_no_overlap", "ck_berths_positive_mass", "fk_berth_reservations_berth", "fk_berths_port"] {
-        assert!(constraints.iter().any(|c| c == expected), "{expected} in {constraints:?}");
+    for expected in [
+        "berth_reservations_no_overlap",
+        "ck_berths_positive_mass",
+        "fk_berth_reservations_berth",
+        "fk_berths_port",
+    ] {
+        assert!(
+            constraints.iter().any(|c| c == expected),
+            "{expected} in {constraints:?}"
+        );
     }
 
-    while db.rollback(lagrange::migrations_dir()).await.unwrap().is_some() {}
+    while db
+        .rollback(lagrange::migrations_dir())
+        .await
+        .unwrap()
+        .is_some()
+    {}
     let tables: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename NOT LIKE '\\_ash%'",
     )
