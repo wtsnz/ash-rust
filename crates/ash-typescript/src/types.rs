@@ -44,7 +44,6 @@ pub fn atom_values(one_of: &[&str], name: Option<&str>) -> Vec<String> {
     }
 }
 
-
 /// `call_sign` → `CALL_SIGN`, as GraphQL names sort fields.
 pub fn to_upper_snake(s: &str) -> String {
     s.to_ascii_uppercase()
@@ -61,9 +60,7 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         | AttrType::Binary
         | AttrType::UtcDatetime { .. }
         | AttrType::Inet
-        | AttrType::Decimal => {
-            "string".to_string()
-        }
+        | AttrType::Decimal => "string".to_string(),
         AttrType::Float | AttrType::Integer => "number".to_string(),
         AttrType::Vector { .. } => "number[]".to_string(),
         AttrType::Boolean => "boolean".to_string(),
@@ -72,7 +69,10 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
                 "string".to_string()
             } else {
                 atom_values(one_of, *name)
-                    .iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(" | ")
+                    .iter()
+                    .map(|s| format!("\"{s}\""))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             }
         }
         AttrType::Map => "Record<string, unknown>".to_string(),
@@ -85,7 +85,12 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
                 .iter()
                 .map(|field| {
                     let nil = if field.allow_nil { " | null" } else { "" };
-                    format!("{}{}: {}{nil}", to_camel_case(field.name), if field.allow_nil { "?" } else { "" }, attr_type_to_ts(&field.ty))
+                    format!(
+                        "{}{}: {}{nil}",
+                        to_camel_case(field.name),
+                        if field.allow_nil { "?" } else { "" },
+                        attr_type_to_ts(&field.ty)
+                    )
                 })
                 .collect();
             format!("{{ {} }}", fields.join("; "))
@@ -93,7 +98,13 @@ pub fn attr_type_to_ts(ty: &AttrType) -> String {
         // One member's object, as GraphQL serves the union.
         AttrType::Union { name, members } => members
             .iter()
-            .map(|member| format!("{{ __typename: \"{name}{}\"; value: {} }}", to_pascal_case(member.name), attr_type_to_ts(&member.ty)))
+            .map(|member| {
+                format!(
+                    "{{ __typename: \"{name}{}\"; value: {} }}",
+                    to_pascal_case(member.name),
+                    attr_type_to_ts(&member.ty)
+                )
+            })
             .collect::<Vec<_>>()
             .join(" | "),
     }
@@ -172,7 +183,11 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
     for attr in res.attributes {
         let ts_type = attr_type_to_ts(&attr.ty);
         if attr.allow_nil {
-            out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(attr.name), ts_type));
+            out.push_str(&format!(
+                "  {}?: {} | null;\n",
+                to_camel_case(attr.name),
+                ts_type
+            ));
         } else {
             out.push_str(&format!("  {}: {};\n", to_camel_case(attr.name), ts_type));
         }
@@ -183,10 +198,18 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
         let dest_name = (rel.destination)().name;
         match rel.kind {
             RelKind::BelongsTo | RelKind::HasOne => {
-                out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(rel.name), dest_name));
+                out.push_str(&format!(
+                    "  {}?: {} | null;\n",
+                    to_camel_case(rel.name),
+                    dest_name
+                ));
             }
             RelKind::HasMany | RelKind::ManyToMany => {
-                out.push_str(&format!("  {}?: {}[];\n", to_camel_case(rel.name), dest_name));
+                out.push_str(&format!(
+                    "  {}?: {}[];\n",
+                    to_camel_case(rel.name),
+                    dest_name
+                ));
             }
         }
     }
@@ -194,13 +217,21 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
     // Calculations
     for calc in res.calculations {
         let ts_type = attr_type_to_ts(&calc.ty);
-        out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(calc.name), ts_type));
+        out.push_str(&format!(
+            "  {}?: {} | null;\n",
+            to_camel_case(calc.name),
+            ts_type
+        ));
     }
 
     // Aggregates
     for agg in res.aggregates {
         let ts_type = attr_type_to_ts(&agg.ty);
-        out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(agg.name), ts_type));
+        out.push_str(&format!(
+            "  {}?: {} | null;\n",
+            to_camel_case(agg.name),
+            ts_type
+        ));
     }
 
     out.push_str("}\n\n");
@@ -247,7 +278,11 @@ pub fn generate_action_input_interface(res: &ResourceDef, action_name: &str) -> 
         if required {
             out.push_str(&format!("  {}: {};\n", to_camel_case(field), ts_type));
         } else {
-            out.push_str(&format!("  {}?: {} | null;\n", to_camel_case(field), ts_type));
+            out.push_str(&format!(
+                "  {}?: {} | null;\n",
+                to_camel_case(field),
+                ts_type
+            ));
         }
     }
     out.push_str("}\n\n");
@@ -276,7 +311,10 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     }
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;
-        out.push_str(&format!("  {}?: {dest_name}FilterInput;\n", to_camel_case(rel.name)));
+        out.push_str(&format!(
+            "  {}?: {dest_name}FilterInput;\n",
+            to_camel_case(rel.name)
+        ));
     }
     out.push_str(&format!("  and?: {name}FilterInput[];\n"));
     out.push_str(&format!("  or?: {name}FilterInput[];\n"));
@@ -292,7 +330,12 @@ pub fn sort_fields(res: &ResourceDef) -> Vec<&'static str> {
         .iter()
         .map(|a| a.name)
         .chain(res.aggregates.iter().map(|a| a.name))
-        .chain(res.calculations.iter().filter(|c| c.arguments.is_empty()).map(|c| c.name))
+        .chain(
+            res.calculations
+                .iter()
+                .filter(|c| c.arguments.is_empty())
+                .map(|c| c.name),
+        )
         .collect()
 }
 
@@ -318,7 +361,10 @@ pub fn generate_resource_include_input(res: &ResourceDef) -> String {
     out.push_str(&format!("export interface {name}Include {{\n"));
     for rel in res.relationships {
         let dest_name = (rel.destination)().name;
-        out.push_str(&format!("  {}?: boolean | {dest_name}Include;\n", to_camel_case(rel.name)));
+        out.push_str(&format!(
+            "  {}?: boolean | {dest_name}Include;\n",
+            to_camel_case(rel.name)
+        ));
     }
     out.push_str("}\n\n");
     out

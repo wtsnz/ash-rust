@@ -78,7 +78,10 @@ impl<D: DataLayer + Send + Sync + 'static> Notifier for AuditNotifier<D> {
                 .action(notification.action.clone())
                 // Every resource the line audits has a UUID key.
                 .record_id(notification.id.as_uuid().ok_or_else(|| {
-                    ash_core::Error::Invalid(format!("{} has no UUID key to audit", notification.resource))
+                    ash_core::Error::Invalid(format!(
+                        "{} has no UUID key to audit",
+                        notification.resource
+                    ))
                 })?)
                 .client_ip(client_ip)
                 .at(UtcDateTime::parse(&ash_core::utc_now_iso8601())?)
