@@ -87,6 +87,7 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
 
     pub async fn store_token(&self, claims: &Claims) -> Result<AshToken> {
         self.token_filter(claims)?;
+        self.prune_expired().await?;
         AshToken::store(&self.context)
             .resource(self.resource)
             .tenant_key(self.tenant_key())
@@ -139,27 +140,16 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
         Ok(())
     }
 
-    /// Server-side JTI revocation within this resource and tenant. Public input policy
-    /// and retention are separate from durable storage.
+    /// Trusted server-side revocation within this resource and tenant. Missing state
+    /// already fails authentication, so unknown JTIs need no tombstone.
     pub async fn revoke_jti(&self, jti: &str) -> Result<()> {
         let filter = self.namespace() & Filter::eq("jti", jti);
-        if self.revoke_filter(filter).await? == 0 {
-            AshToken::store(&self.context)
-                .resource(self.resource)
-                .tenant_key(self.tenant_key())
-                .jti(jti)
-                .subject(Uuid::nil())
-                .purpose("revocation")
-                .expires_at(i64::MAX)
-                .revoked(true)
-                .consumed(false)
-                .extra(None)
-                .await?;
-        }
+        self.revoke_filter(filter).await?;
         Ok(())
     }
 
     async fn revoke_filter(&self, filter: Filter) -> Result<usize> {
+        self.prune_expired().await?;
         let fields = FieldMap::from([("revoked".into(), Value::Bool(true))]);
         Ok(self
             .context
@@ -176,9 +166,16 @@ impl<D: DataLayer> DatabaseTokenStore<D> {
         .await
     }
 
+    /// Remove expired rows and legacy permanent JTI tombstones in this namespace.
+    /// Issuance and revocation call this automatically. Schedule it for idle namespaces.
     pub async fn prune_expired(&self) -> Result<usize> {
+        let legacy_tombstone = Filter::eq("purpose", "revocation")
+            & Filter::eq("subject", Uuid::nil())
+            & Filter::eq("expires_at", i64::MAX);
         let expired = AshToken::query(&self.context)
-            .filter(self.namespace() & Filter::lt("expires_at", Self::now_secs()))
+            .filter(
+                self.namespace() & (Filter::lte("expires_at", Self::now_secs()) | legacy_tombstone),
+            )
             .all()
             .await?;
         let count = expired.len();

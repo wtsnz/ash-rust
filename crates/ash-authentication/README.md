@@ -6,17 +6,17 @@ Declarative authentication engine for [`ash-rust`](https://github.com/will/ash-r
 
 ## Features
 
-- 🔒 **Argon2id Password Strategy**: Memory-hard password hashing with RFC 9106 recommended defaults, constant-time verification, password confirmation checking, password change, and single-use password reset flows.
+- 🔒 **Argon2id Password Strategy**: Memory-hard password hashing with the argon2 crate's defaults, password confirmation checking, password change, and single-use password reset flows.
 - 🔄 **Refresh Token Rotation & `AshToken` Resource**: Persistent database-backed token storage (`AshToken`), single-use refresh token rotation preventing replay attacks, and expired token pruning.
 - 🎟️ **JWT Token Service**: Cryptographically signed bearer tokens (`HS256` via `jsonwebtoken`), token pairs (`TokenPair`), persisted session revocation, and claims mapping.
-- 🔑 **API Key Strategy**: Salted SHA-256 tokens for machine-to-machine service accounts with constant-time equality checks.
+- 🔑 **API Key Strategy**: SHA-256 hashes of high-entropy random keys for machine-to-machine service accounts, with configured prefixes and constant-time hash comparison.
 - 🪄 **Macro Transformer (`#[authentication]`)**: Automatically injects `hashed_password`, registration actions, and password hashing changeset hooks into `ash_core::resource!`.
 - 🚀 **Axum HTTP Integration**:
   - `AuthUser` extractor for a live actor bound to its tenant.
   - Pre-built `/auth` router:
     - `POST /auth/sign-in`: Returns access and refresh token pair.
     - `POST /auth/refresh`: Rotates refresh token, issuing a new token pair and revoking the old one.
-    - `POST /auth/revoke`: Invalidates an active token or session.
+    - `POST /auth/revoke`: Revokes a signed token itself, or all sessions of an authenticated owner.
     - `POST /auth/change-password`: Verifies current password, validates new password, and updates hash.
     - `POST /auth/request-password-reset`: Generates a single-use password reset token.
     - `POST /auth/reset-password`: Consumes the reset token and securely sets the new password.
@@ -224,6 +224,59 @@ outer transaction because its later rollback could invalidate an already sent
 message. A sender failure is returned after commit; the stored token remains.
 Other token operations can participate in a caller's required transaction.
 
+## Public reset and revocation contracts
+
+`POST /auth/request-password-reset` returns HTTP 200 and
+`{"status":"reset_requested"}` for every valid request body, including unknown
+accounts and persistence or sender failures. The strategy API still returns errors
+to trusted callers. Only existing accounts receive mail, after token commit.
+Both known and unknown identities perform the scoped lookup and generate and
+verify a random reset JWT. No password is supplied, so neither path hashes a
+password. Unknown-account JWTs are discarded without persistence or mail. This is
+response uniformity, not a constant-time guarantee: lookup results, database writes,
+commit and sender latency can still differ. Use a fast queue-backed sender and
+request rate limits where timing exposure matters. Delivery failures need monitoring
+in the application's sender; the HTTP response does not report delivery success.
+
+`POST /auth/revoke` accepts exactly one of these JSON bodies:
+
+- `{"token":"<JWT>"}` verifies signature and expiry, and revokes only that JWT in
+  the router's resource and exact tenant. Access, refresh and reset tokens can
+  revoke themselves. Repeating a still-unexpired JWT is idempotent. No bearer header
+  is required because possession of the signed token authorizes self-revocation.
+- `{"all_sessions":true}` requires `Authorization: Bearer <access JWT>`. The token
+  must authenticate against persisted state and a live subject. Only that owner's
+  JWT sessions in the resolved resource/tenant are revoked, in a required
+  transaction. API keys are independent. No subject ID or raw JTI is accepted.
+
+Invalid tokens or missing/invalid owner authentication return HTTP 401. JSON bodies
+with extra fields or a shape that matches neither variant return HTTP 422.
+Malformed JSON syntax uses Axum's HTTP 400 rejection. Success returns HTTP 200 and
+`{"status":"revoked"}`. A verified but unpersisted JWT creates no state and
+revokes no other session; expiry cleanup may still remove expired rows.
+
+Revocation retains the original token expiry. Issuance and revocation automatically
+call `DatabaseTokenStore::prune_expired`, removing rows with `expires_at <= now` in
+the current resource/tenant namespace, including consumed and revoked rows. Cleanup
+failure propagates. Schedule that method for each idle namespace if expired rows
+must be removed while it has no token writes. Retention is until expiry plus the
+next cleanup; there is no background timer. Trusted raw-JTI revocation updates
+existing rows only, so unknown JTIs create no tombstones or permanent storage.
+
+## API-key format and hashing
+
+`AuthStrategy::api_key_service()` uses `ApiKeyStrategyDef::key_prefix` for generation
+and parsing. The default is `ash_`. Keys have that prefix followed by 64 hex
+characters from two random UUIDv4 values, providing 244 random bits. Authentication
+requires this format and the configured prefix before looking up the hash.
+
+The stored value is unsalted SHA-256 of the entire raw key, including the prefix.
+These machine-generated secrets have enough entropy to resist offline guessing;
+they do not need the salt and expensive password hashing required for human-chosen
+passwords. Store only the hash and show the raw key once. `verify_api_key` checks
+the format and compares the computed hash in constant time. Strategy authentication
+uses a database hash lookup and does not claim constant-time request processing.
+
 GraphQL's `RequestData::apply_async` and `connection_init_async` let adapters await
 this authentication decision before binding HTTP requests or either WebSocket
 protocol. Existing synchronous binders remain supported for already trusted
@@ -260,9 +313,36 @@ acceptance window. Newly signed JWTs without a persisted row are also rejected.
    `AshToken` write permit for `revoked` and `consumed`. Its token methods take
    `Claims`, retaining the complete namespace.
 
+Step 11 adds these breaking changes:
+
+- `AuthStrategy::revoke_token` accepts signed JWTs only. Trusted code that previously
+  passed raw JTIs must use `AuthStrategy::revoke_jti` or
+  `DatabaseTokenStore::revoke_jti`. These methods require no signer and no longer
+  create tombstones for unknown JTIs. They do not preempt future token issuance.
+- `RevokeTokenRequest` is now an enum. Replace Rust struct literals with
+  `RevokeTokenRequest::Token { token }` or `OwnSessions { all_sessions: true }`.
+  Existing HTTP `{"token":"<JWT>"}` bodies still work. Raw-JTI bodies now return
+  401, and extra fields are rejected. Use the owner body and bearer header to log
+  out all of an owner's sessions.
+- Reset-request HTTP errors are replaced by the generic 200 response. Use the
+  strategy or sender instrumentation for operational errors, and never interpret
+  HTTP success as confirmation that an account exists or mail was delivered.
+- Configured key prefixes and the 64-hex payload are now enforced. Installations
+  that generated keys with an ignored prefix or stored arbitrary key formats must
+  reissue keys using the configured service, or configure the prefix actually used
+  by existing generated keys. Prefix changes require key reissuance.
+- JWT verification now rejects `exp <= now`, matching persisted session expiry.
+  It no longer accepts a token during its expiration second.
+
+No schema or dependency change is required for step 11. Pruning also removes legacy
+permanent tombstones identified by `purpose = 'revocation'`, a nil subject and
+`expires_at = i64::MAX`, within the current namespace. These rows are unnecessary
+because missing session state fails authentication. Run pruning once per existing
+namespace during deployment, including namespaces with no new token traffic.
+
 `MemoryRevocationStore`, `TokenRevocationStore` and the JwtService revocation
 methods/configuration are removed. Use async strategy revocation backed by the
 subject database. `TokenStrategyDef::track_revocations` remains as a legacy flag;
-authentication always checks persisted revocation. The public revoke endpoint's input restrictions and tombstone
-retention, uniform reset-request responses, API-key prefix configuration and the
-remaining documentation corrections are separate follow-up changes.
+authentication always checks persisted revocation. Confirmation/reconfirmation,
+refresh-family revocation, API-key expiry and a separate key-state resource remain
+deferred, as does termination of active subscriptions.

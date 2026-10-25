@@ -44,13 +44,18 @@ impl<R: Resource> AuthStrategy<R> {
             .and_then(|auth| auth.password.as_ref())
             .map(|password| password.hashed_password_field);
         let credential_write = runtime.credential_writes::<R>(fields);
+        let api_key_service = resource_def
+            .extension::<AuthenticationDef>()
+            .and_then(|auth| auth.api_key.as_ref())
+            .map(|key| ApiKeyService::new(key.key_prefix))
+            .unwrap_or_default();
         Self {
             resource_def,
             credential_read,
             credential_write,
             token_write: runtime.credential_writes::<AshToken>(["revoked", "consumed"]),
             password_service: PasswordService::new(),
-            api_key_service: ApiKeyService::default(),
+            api_key_service,
             jwt_service: None,
             sender: Arc::new(NoopSender),
             _phantom: std::marker::PhantomData,
@@ -375,21 +380,35 @@ impl<R: Resource> AuthStrategy<R> {
         .map_err(AuthError::Core)
     }
 
-    /// Revoke a JWT or a server-provided JTI in the resolved resource/tenant namespace.
-    /// Public revoke input restrictions and tombstone retention are configured separately.
-    pub async fn revoke_token<D: DataLayer>(
+    /// Revoke a verified JWT in the resolved resource/tenant namespace. Possession
+    /// authorizes revoking only that token. Repeated revocation is idempotent.
+    pub async fn revoke_token<D: DataLayer>(&self, ctx: &Context<D>, token: &str) -> Result<()> {
+        let claims = self.jwt()?.verify_token(token)?;
+        self.token_store(ctx).revoke_token(&claims).await
+    }
+
+    /// Trusted server-only revocation of existing JTI state. No signer is needed,
+    /// and unknown JTIs create no rows. Never forward untrusted HTTP input here.
+    pub async fn revoke_jti<D: DataLayer>(&self, ctx: &Context<D>, jti: &str) -> Result<()> {
+        self.token_store(ctx).revoke_jti(jti).await
+    }
+
+    /// Authenticate an access token and revoke only its owner's sessions in the
+    /// resolved resource/tenant namespace, within one required transaction.
+    pub async fn revoke_own_sessions<D: DataLayer>(
         &self,
         ctx: &Context<D>,
-        token_or_jti: &str,
+        access_token: &str,
     ) -> Result<()> {
-        let store = self.token_store(ctx);
-        if let Some(jwt) = self.jwt_service.as_ref()
-            && let Ok(claims) = jwt.verify_token(token_or_jti)
-        {
-            store.revoke_token(&claims).await
-        } else {
-            store.revoke_jti(token_or_jti).await
-        }
+        ctx.required_transaction(|tx| async move {
+            let identity = self.authenticate(&tx, access_token).await?;
+            self.token_store(&tx)
+                .revoke_all_for_subject(identity.actor().id)
+                .await?;
+            Ok(())
+        })
+        .await
+        .map_err(AuthError::Core)
     }
 
     /// Validate/hash before the write transaction. The stored hash comparison prevents
@@ -478,18 +497,24 @@ impl<R: Resource> AuthStrategy<R> {
             )
             .await?
             .into_iter()
-            .next()
-            .ok_or(AuthError::UserNotFound)?;
-        let user = R::from_fields(&user_raw)?;
+            .next();
+        let user = user_raw.as_ref().map(R::from_fields).transpose()?;
+        // Unknown identities do the same signing and verification work. No
+        // password is supplied here, so neither path performs password hashing.
+        let (subject, version) = match &user {
+            Some(user) => (user.id(), self.version(user)?),
+            None => (Uuid::new_v4(), 0),
+        };
         let token = self.jwt()?.sign_reset_token(
-            user.id(),
+            subject,
             ctx.tenant().map(str::to_owned),
             self.resource_def.name,
-            self.version(&user)?,
+            version,
         )?;
         let claims = self
             .jwt()?
             .verify_token_with_purpose(&token, "password_reset")?;
+        let user = user.ok_or(AuthError::UserNotFound)?;
         ctx.required_transaction(|tx| async move {
             self.token_store(&tx).store_token(&claims).await?;
             Ok(())
@@ -557,6 +582,7 @@ impl<R: Resource> AuthStrategy<R> {
             .api_key
             .unwrap_or_else(crate::def::ApiKeyStrategyDef::default);
 
+        self.api_key_service.validate_key(raw_api_key)?;
         let hash = self.api_key_service.hash_api_key(raw_api_key);
 
         let filter = Filter::eq(api_key_cfg.api_key_field, Value::String(hash));

@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1 through 8 in review; step 9 implemented, pending review; step 10 planned. See §5.
+- **Status**: All migration steps are implemented and in review. See §5 for separately planned capabilities.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -93,6 +93,7 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | Managed relationships through scoped destination and join actions; scoped cascade discovery; required transactions and memory snapshot commits | 7 | In review (#92). See [Managed relationships and cascades](../scoped-access.md#managed-relationships-and-cascades) |
 | Delete raw data-layer access; opaque scope-bound plans for every execution operation; Runtime-owned schema installation | 8 | In review (#94) |
 | Private events; scoped subscriptions, with deduplicated groups keyed on a bound `Scope` | 9 | In review (#95). See [Events and subscriptions](../scoped-access.md#events-and-subscriptions) |
-| Durable, atomic session state | 10 | Implemented, pending review. Async persisted authentication, subject credential versions and conditional reset/refresh transactions. See [Durable sessions](../../crates/ash-authentication/README.md#durable-sessions) |
+| Durable, atomic session state | 10 | In review (#96). Async persisted authentication, subject credential versions and conditional reset/refresh transactions. See [Durable sessions](../../crates/ash-authentication/README.md#durable-sessions) |
+| Remaining local authentication behavior | 11 | In review. Uniform reset responses, signed self-revocation and authenticated owner revocation, expiry pruning and configured API-key prefixes. See [Public reset and revocation contracts](../../crates/ash-authentication/README.md#public-reset-and-revocation-contracts) |
 
 Step 8 makes `Context` backend storage private and removes `ash_core::insert`, raw upserts and their compiler compatibility method. Every data-layer execution operation now requires an opaque core-built plan carrying its bound scope. Schema installation requires Runtime authority; request contexts cannot execute resource SQL statements. Extensions submit identity-free read requests and receive Views. Applications can keep their own database pool for reporting and migrations, outside these guarantees. Step 9 adds private events, projected notifications, Runtime-issued sink grants, scoped PubSub admission and bound generic subscription groups. Both WebSocket protocols validate connection-init credentials through the server binder. Step 10 persists all JWT sessions, checks live subjects and credential versions asynchronously, and makes reset/refresh consumption transactional. Legacy tokens without version/resource claims are rejected immediately. API keys retain their independent lifecycle. Active subscription termination on revocation remains deferred.

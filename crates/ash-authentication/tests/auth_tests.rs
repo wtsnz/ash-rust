@@ -517,8 +517,8 @@ async fn test_database_token_store_prune_expired() -> Result<()> {
         jti: "valid-jti-1".into(),
         ..expired.clone()
     };
-    store.store_token(&expired).await?;
     store.store_token(&valid).await?;
+    store.store_token(&expired).await?;
 
     // Expired token is not returned as valid
     assert!(store.get_valid_token(&expired).await?.is_none());

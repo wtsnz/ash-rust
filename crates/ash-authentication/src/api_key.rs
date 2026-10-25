@@ -41,8 +41,19 @@ impl ApiKeyService {
         hex::encode(result)
     }
 
+    /// Require the configured prefix and the generated 64-character hex payload.
+    pub(crate) fn validate_key(&self, raw_key: &str) -> Result<()> {
+        match raw_key.strip_prefix(&self.prefix) {
+            Some(key) if key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+                Ok(())
+            }
+            _ => Err(AuthError::InvalidCredentials),
+        }
+    }
+
     /// Verify a raw API key against a stored SHA-256 hash in constant time.
     pub fn verify_api_key(&self, raw_key: &str, stored_hash: &str) -> Result<bool> {
+        self.validate_key(raw_key)?;
         let computed = self.hash_api_key(raw_key);
         // Constant-time comparison
         use subtle::ConstantTimeEq;
