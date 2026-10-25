@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use ash_authentication::JwtService;
 use ash_core::{Actor, Context, Resource, StoreRegistry};
+use ash_graphql::axum::{BoundRequest, RequestData, SubscriptionHub};
 use async_graphql::dynamic::Schema;
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
@@ -51,6 +52,43 @@ struct ApiState<D> {
     jwt: Arc<JwtService>,
 }
 
+struct SocketBinding<D>(Arc<ApiState<D>>);
+impl<D: ash_core::DataLayer + Clone + Send + Sync + 'static> RequestData for SocketBinding<D> {
+    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
+        match request_context(&self.0, headers) {
+            Ok(context) => BoundRequest::new(request, context),
+            Err(_) => BoundRequest::unbound(request),
+        }
+    }
+    fn connection_init(
+        &self,
+        headers: &HeaderMap,
+        params: Option<&serde_json::Value>,
+    ) -> ash_core::Result<HeaderMap> {
+        let mut headers = headers.clone();
+        if let Some(params) = params.filter(|value| !value.is_null()) {
+            for (name, value) in params.as_object().ok_or(ash_core::Error::Forbidden)? {
+                if !name.eq_ignore_ascii_case("authorization") {
+                    return Err(ash_core::Error::Forbidden);
+                }
+                let value = value.as_str().ok_or(ash_core::Error::Forbidden)?;
+                if headers
+                    .get("authorization")
+                    .is_some_and(|header| header != value)
+                {
+                    return Err(ash_core::Error::Forbidden);
+                }
+                headers.insert(
+                    "authorization",
+                    value.parse().map_err(|_| ash_core::Error::Forbidden)?,
+                );
+            }
+        }
+        request_context(&self.0, &headers).map_err(|_| ash_core::Error::Forbidden)?;
+        Ok(headers)
+    }
+}
+
 #[derive(Deserialize)]
 struct SignIn {
     line: String,
@@ -74,14 +112,18 @@ where
     D: ash_core::DataLayer + Clone + Send + Sync + 'static,
 {
     let schema = schema(&app)?;
-    let subscriptions = GraphQLSubscription::new(schema.clone());
     let state = Arc::new(ApiState { app, schema, jwt });
+    let subscriptions = ash_graphql::axum::graphql_subscription_router_with(
+        state.schema.clone(),
+        Arc::new(SubscriptionHub::default()),
+        Arc::new(SocketBinding(Arc::clone(&state))),
+    );
     Ok(Router::new()
         .route("/auth/sign-in", post(sign_in::<D>))
         .route("/graphql", post(graphql::<D>).get(graphiql))
-        .route_service("/graphql/ws", subscriptions)
         .route("/health", get(|| async { "OK" }))
-        .with_state(state))
+        .with_state(state)
+        .merge(subscriptions))
 }
 
 async fn sign_in<D>(

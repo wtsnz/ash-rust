@@ -4,78 +4,50 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::action::ActionKind;
-use crate::actor::Actor;
 use crate::error::Result;
 use crate::value::{FieldMap, Value};
 
-/// Payload sent to notifiers after a resource action has committed.
+/// A committed event projected for one reader. Action arguments and actor attributes
+/// are never part of this payload. Metadata is empty unless explicitly allowlisted.
 #[derive(Clone, Debug)]
 pub struct Notification {
-    /// Name of the resource that was acted upon (e.g. `"Order"`).
     pub resource: &'static str,
-    /// Name of the action that was executed (e.g. `"create"`, `"pay"`, `"cancel"`).
     pub action: String,
-    /// Kind of action (`Create`, `Update`, or `Destroy`).
     pub action_kind: ActionKind,
-    /// Primary key of the affected record.
     pub id: Value,
-    /// Fields of the record after the action was committed.
-    pub record_fields: FieldMap,
-    /// Previous fields before the action, if available (e.g. for update and destroy).
-    pub previous_fields: Option<FieldMap>,
-    /// Actor who performed the action, if present.
-    pub actor: Option<Actor>,
-    /// Tenant under which the action was executed, if any.
+    pub record: crate::View,
+    pub previous: Option<crate::View>,
     pub tenant: Option<String>,
-    /// Additional context or action arguments passed during invocation.
     pub metadata: FieldMap,
+    /// Present only when a bootstrap notifier grant explicitly requests actor IDs.
+    pub actor_id: Option<uuid::Uuid>,
 }
 
 impl Notification {
-    /// Create a new notification payload.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        resource: &'static str,
-        action: impl Into<String>,
-        action_kind: ActionKind,
-        id: impl Into<Value>,
-        record_fields: FieldMap,
-        previous_fields: Option<FieldMap>,
-        actor: Option<Actor>,
-        metadata: FieldMap,
-    ) -> Self {
-        Self {
-            resource,
-            action: action.into(),
-            action_kind,
-            id: id.into(),
-            record_fields,
-            previous_fields,
-            actor,
-            tenant: None,
-            metadata,
-        }
-    }
-
-    /// Set the tenant for this notification.
-    pub fn with_tenant(mut self, tenant: Option<String>) -> Self {
-        self.tenant = tenant;
-        self
-    }
-
-    /// Read an attribute value from the committed record.
     pub fn get(&self, field: &str) -> Option<&Value> {
-        self.record_fields.get(field)
+        self.record.get(field)
     }
-
-    /// Read a previous attribute value before the change was applied.
     pub fn previous(&self, field: &str) -> Option<&Value> {
-        self.previous_fields.as_ref().and_then(|m| m.get(field))
+        self.previous.as_ref().and_then(|view| view.get(field))
     }
 }
 
 /// Asynchronous event consumer notified when an action commits.
 pub trait Notifier: Send + Sync + Debug + 'static {
+    /// Route an opaque event. The default consumer reads as anonymous in the event's
+    /// tenant. Brokers may project it for their registered readers instead.
+    fn notify_event<'a>(
+        &'a self,
+        event: &'a crate::CommittedEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if let Some(notification) = event.public_notification()? {
+                self.notify(&notification).await?;
+            }
+            Ok(())
+        })
+    }
+
     /// Handle a notification payload.
     fn notify<'a>(
         &'a self,
@@ -84,6 +56,12 @@ pub trait Notifier: Send + Sync + Debug + 'static {
 }
 
 impl Notifier for Arc<dyn Notifier> {
+    fn notify_event<'a>(
+        &'a self,
+        event: &'a crate::CommittedEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        (**self).notify_event(event)
+    }
     fn notify<'a>(
         &'a self,
         notification: &'a Notification,
@@ -139,36 +117,36 @@ pub async fn flush_queued_notifications(
     };
     for item in queued {
         for notifier in context_notifiers {
-            let _ = notifier.notify(&item.notification).await;
+            let _ = notifier.notify_event(&item.event).await;
         }
         for notifier in item.resource_notifiers {
-            let _ = notifier.notify(&item.notification).await;
+            let _ = notifier.notify_event(&item.event).await;
         }
     }
 }
 
 /// Dispatch a notification to context notifiers and resource notifiers, or buffer if an atomic transaction queue is present.
-pub async fn dispatch_notification<D>(
+pub(crate) async fn dispatch_notification<D>(
     ctx: &crate::context::Context<D>,
-    resource_def: &crate::resource::ResourceDef,
-    notification: Notification,
+    resource_def: &'static crate::resource::ResourceDef,
+    event: crate::CommittedEvent,
 ) -> Result<()> {
     if let Some(ref queue) = ctx.notification_queue {
         queue
             .lock()
             .unwrap()
             .push(crate::context::QueuedNotification {
-                notification,
+                event,
                 resource_notifiers: resource_def.notifiers,
             });
         return Ok(());
     }
 
     for notifier in ctx.notifiers() {
-        let _ = notifier.notify(&notification).await;
+        let _ = notifier.notify_event(&event).await;
     }
     for notifier in resource_def.notifiers {
-        let _ = notifier.notify(&notification).await;
+        let _ = notifier.notify_event(&event).await;
     }
     Ok(())
 }

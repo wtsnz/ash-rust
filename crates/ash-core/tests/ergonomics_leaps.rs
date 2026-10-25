@@ -92,8 +92,8 @@ async fn test_leap3_typed_pubsub_ergonomics() {
         .with_pubsub(Arc::clone(&pubsub));
 
     // Leap 3: Typed subscription streams on Resource and Record
-    let mut sub_all = Article::subscribe_all(&pubsub);
-    let mut sub_publish = Article::subscribe_action(&pubsub, "publish");
+    let mut sub_all = Article::subscribe_all(&pubsub, &ctx).unwrap();
+    let mut sub_publish = Article::subscribe_action(&pubsub, &ctx, "publish").unwrap();
 
     // Publish an article
     let article = Article::publish(&ctx)
@@ -113,7 +113,7 @@ async fn test_leap3_typed_pubsub_ergonomics() {
     assert_eq!(notif_publish.id, ash_core::Value::from(article.id));
 
     // Subscribe to a specific record instance
-    let mut sub_record = article.subscribe(&pubsub, Some("archive"));
+    let mut sub_record = article.subscribe(&pubsub, &ctx, Some("archive")).unwrap();
 
     // Archive the article
     let _ = article

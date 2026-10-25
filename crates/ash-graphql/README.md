@@ -195,8 +195,7 @@ otherwise they load directly.
 Every read (`get`, `list`, custom read actions, relationships and subscriptions) runs as the request's `Context<D>`, through the same scoping as the typed
 API (`ash_core::scope_read`): the read action's preparations and argument filters, the
 actor's read policies, and the context's tenant. A record a typed read wouldn't return
-isn't reachable over GraphQL either. An `Actor` given in the request data acts for a
-context that carries none.
+isn't reachable over GraphQL either. Identity comes only from the bound Context.
 
 ### 6. Realtime Subscriptions
 
@@ -285,3 +284,20 @@ To run a fast smoke verification:
 ```bash
 cargo bench -p ash-graphql --bench graphql_bench --features axum -- --test
 ```
+
+## Subscription binding compatibility
+
+`RequestData::apply` returns `BoundRequest::new(request, bound_context)` instead of a
+request/string pair. Each authenticated scope resolves its own results. For sharing,
+use `BoundRequest::for_subscription_group(request, member_context, generic_context.clone())`; the retained group context
+supplies the actor for all resolution. Anonymous readers share by default within
+one Runtime, backend and tenant. App strings cannot grant sharing.
+
+Both WebSocket protocols use the HTTP binder and validate connection-init credentials
+through `RequestData::connection_init`. Its default rejects nonempty parameters.
+Unsupported snapshot filters and missing required tenants fail at registration.
+See [Events and subscriptions](../../docs/scoped-access.md#events-and-subscriptions)
+for breaking changes, credential precedence and migration examples.
+
+For custom HTTP handlers, merge `graphql_subscription_router_with(schema, hub, binder)`
+after supplying their state. It serves only the bound WebSocket endpoint.

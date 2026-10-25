@@ -104,6 +104,9 @@ impl Registry {
                 if self.first(resource.name) {
                     self.embedded.push(resource);
                     for attr in resource.attributes {
+                        if resource.sensitive_attribute(attr.name) {
+                            continue;
+                        }
                         self.output(attr.ty);
                     }
                 }
@@ -180,6 +183,9 @@ impl Registry {
                 let resource = embedded.resource();
                 let mut input = InputObject::new(&name);
                 for attr in resource.attributes {
+                    if resource.sensitive_attribute(attr.name) {
+                        continue;
+                    }
                     let required = !attr.allow_nil && attr.default_fn.is_none() && !attr.generated;
                     input = input.field(InputValue::new(
                         camel(attr.name),
@@ -238,6 +244,9 @@ pub(crate) fn register_composites<D: DataLayer + Clone + 'static>(
         .extend(resources.iter().map(|resource| resource.name.to_string()));
     for resource in resources {
         for attr in resource.attributes {
+            if resource.sensitive_attribute(attr.name) {
+                continue;
+            }
             registry.output(attr.ty);
             registry.input(resource.name, attr.name, attr.ty);
         }

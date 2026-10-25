@@ -25,6 +25,9 @@ pub fn build_resource_object<D: DataLayer + Clone + 'static>(
 
     // 1. Attributes
     for attr in resource.attributes {
+        if resource.sensitive_attribute(attr.name) {
+            continue;
+        }
         let attr_name = attr.name;
         let attr_ty = attr.ty;
         let has_field_policy = resource

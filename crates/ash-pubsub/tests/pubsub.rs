@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-use ash_core::{ActionKind, resource};
+use ash_core::{ActionKind, Resource, resource};
 use ash_memory::Memory;
 use ash_pubsub::{PubSub, PubSubNotifier, topic_matches};
 
@@ -65,9 +65,9 @@ async fn test_pubsub_topic_and_wildcard_subscriptions() {
         .with_notifier(notifier);
 
     // Subscribe with wildcard: "order:*"
-    let mut sub_all = pubsub.subscribe("order:*");
+    let mut sub_all = pubsub.subscribe(&ctx, &Order::DEF, "order:*").unwrap();
     // Subscribe with exact: "order:create"
-    let mut sub_create = pubsub.subscribe("order:create");
+    let mut sub_create = pubsub.subscribe(&ctx, &Order::DEF, "order:create").unwrap();
 
     let order = Order::create(&ctx)
         .customer("Bob")
@@ -114,12 +114,12 @@ async fn test_pubsub_topic_and_wildcard_subscriptions() {
 async fn test_pubsub_deduplicated_multi_topic_delivery() {
     let pubsub = Arc::new(PubSub::new());
     // Wildcard subscriber that matches both "order:create" and "order:<id>:create"
-    let mut sub_all = pubsub.subscribe("order:*");
-
     let notifier = Arc::new(PubSubNotifier::new(Arc::clone(&pubsub)));
     let ctx = ash_core::Runtime::new(Memory::new())
         .bootstrap()
         .with_notifier(notifier);
+
+    let mut sub_all = pubsub.subscribe(&ctx, &Order::DEF, "order:*").unwrap();
 
     let _order = Order::create(&ctx)
         .customer("Charlie")
@@ -154,7 +154,9 @@ async fn test_pubsub_custom_topic_formatting() {
         .bootstrap()
         .with_notifier(notifier);
 
-    let mut sub = pubsub.subscribe("events.Order.create");
+    let mut sub = pubsub
+        .subscribe(&ctx, &Order::DEF, "events.Order.create")
+        .unwrap();
 
     let order = Order::create(&ctx)
         .customer("Diana")
@@ -169,16 +171,15 @@ async fn test_pubsub_custom_topic_formatting() {
     assert_eq!(notif.id, ash_core::Value::from(order.id));
 }
 
-/// Every subscriber to a topic receives the same notification, not a copy of it, so
-/// delivering to many doesn't copy the record for each.
+/// Each queue contains a View projected for its registered reader.
 #[tokio::test]
-async fn subscribers_share_one_notification() {
+async fn subscribers_receive_independently_projected_notifications() {
     let pubsub = Arc::new(PubSub::new());
     let ctx = ash_core::Runtime::new(Memory::new())
         .bootstrap()
         .with_notifier(Arc::new(PubSubNotifier::new(pubsub.clone())));
-    let mut first = pubsub.subscribe("order:*");
-    let mut second = pubsub.subscribe("order:*");
+    let mut first = pubsub.subscribe(&ctx, &Order::DEF, "order:*").unwrap();
+    let mut second = pubsub.subscribe(&ctx, &Order::DEF, "order:*").unwrap();
 
     Order::create(&ctx)
         .customer("Ada".to_string())
@@ -187,6 +188,7 @@ async fn subscribers_share_one_notification() {
         .unwrap();
 
     let (a, b) = (first.recv().await.unwrap(), second.recv().await.unwrap());
-    assert!(Arc::ptr_eq(&a, &b));
+    assert!(!Arc::ptr_eq(&a, &b));
+    assert_eq!(a.record.fields(), b.record.fields());
     assert_eq!(a.action_kind, ActionKind::Create);
 }

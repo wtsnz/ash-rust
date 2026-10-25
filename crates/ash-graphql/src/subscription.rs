@@ -1,7 +1,7 @@
-use ash_core::{ActionKind, Actor, Context, DataLayer, ResourceDef, record_visible};
+use ash_core::{ActionKind, Context, DataLayer, ResourceDef, View};
 
 use crate::preload::{load_selected, preload, selected};
-use crate::request::{request_actor, request_context};
+use crate::request::request_context;
 use ash_pubsub::PubSub;
 use async_graphql::ErrorExtensions;
 use async_graphql::dynamic::*;
@@ -42,23 +42,10 @@ async fn next_event(
     }
 }
 
-/// The subscriber's actor and tenant, as the request's other resolvers see them.
-fn subscriber<D: DataLayer + 'static>(
-    ctx: &ResolverContext<'_>,
-) -> (Option<Actor>, Option<String>) {
-    let tenant = ctx
-        .ctx
-        .data_opt::<Context<D>>()
-        .and_then(|context| context.tenant().map(str::to_owned));
-    (request_actor::<D>(ctx).cloned(), tenant)
-}
-
-/// What a subscription's payload carries: the record created or updated, as stored (its
-/// payload redacts it for the subscriber once it has loaded what it selects), or the id
-/// of the one destroyed.
+/// An event contains only the registered subscriber's View or a readable destroy ID.
 #[derive(Clone)]
 enum Event {
-    Record(ash_core::FieldMap),
+    Record(Box<View>),
     Id(String),
 }
 
@@ -103,15 +90,13 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                         // AshGraphql loads a subscription's record with the query its
                         // selection builds: aggregates, calculations and relationships,
                         // as the subscriber reads them.
-                        // Loaded before it's redacted, so field policies hide what loads too.
+                        // Core retains protected loader keys inside the View.
                         Some(Event::Record(record))
                             if ctx.ctx.data_opt::<Context<D>>().is_some() =>
                         {
                             let ash = request_context::<D>(&ctx)?;
                             let fields = selected(ctx.ctx.field(), None);
-                            let mut record = ash
-                                .present(resource, record.clone().into(), None)
-                                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                            let mut record = record.as_ref().clone();
                             load_selected(
                                 &ash,
                                 resource,
@@ -124,10 +109,7 @@ pub fn register_subscription_results<D: DataLayer + Clone + 'static>(
                             Some(FieldValue::owned_any(record))
                         }
                         Some(Event::Record(record)) => {
-                            let ash = request_context::<D>(&ctx)?;
-                            let record = ash
-                                .present(resource, record.clone().into(), None)
-                                .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                            let record = record.as_ref().clone();
                             Some(FieldValue::owned_any(record))
                         }
                         Some(Event::Id(id)) => {
@@ -159,21 +141,20 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                 move |ctx| {
                     let pubsub = pubsub.clone();
                     SubscriptionFieldFuture::new(async move {
-                        let (actor, tenant) = subscriber::<D>(&ctx);
                         let ash = request_context::<D>(&ctx)?;
                         // An argument given as `null`, as an unset variable is, means none.
                         let filter = match ctx.args.get("filter").filter(|arg| !arg.is_null()) {
-                            Some(filter) => Some(parse_subscription_filter(resource, filter.as_value())?.into_filter()),
+                            Some(filter) => {
+                                Some(parse_subscription_filter(resource, filter.as_value())?)
+                            }
                             None => None,
                         };
-                        let filter = filter.map(|filter| ash_core::plan_filter(resource, actor.as_ref(), tenant.as_deref(), ash_core::TrustedExpr::Filter(filter)))
-                            .transpose().map_err(|e| async_graphql::Error::new(e.to_string()))?;
-                        let visibility = ash_core::scope_read(resource, resource.default_read(), ash.authorization_actor(), &ash_core::FieldMap::new(), ash_core::CompiledQuery { tenant: tenant.clone(), ..Default::default() })
+                        let reader = ash
+                            .event_reader(resource, filter)
                             .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-                        for predicate in filter.iter().chain(visibility.filter.iter()) {
-                            predicate.validate_snapshot(resource).map_err(|e| async_graphql::Error::new(e.to_string()))?;
-                        }
-                        let mut sub = pubsub.subscribe(format!("{}:*", resource.name.to_lowercase()));
+                        let mut sub = pubsub
+                            .subscribe_reader(reader, format!("{}:*", resource.name.to_lowercase()))
+                            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
 
                         let stream = async_stream::stream! {
                             while let Some(event) = next_event(&mut sub).await {
@@ -187,25 +168,11 @@ pub fn build_resource_subscriptions<D: DataLayer + 'static>(
                                 if notif.action_kind != kind {
                                     continue;
                                 }
-                                // Another tenant's change reaches no one here, as AshGraphql
-                                // resolves none from another tenant: a context tenant's
-                                // records carry no tenant attribute to filter on.
-                                if resource.multitenancy.is_some() && notif.tenant.as_deref() != tenant.as_deref() {
-                                    continue;
-                                }
-                                if let Some(f) = &filter
-                                    && f.snapshot_match(resource, &notif.record_fields) != ash_core::FilterMatch::Match
-                                {
-                                    continue;
-                                }
-                                if !record_visible(resource, actor.as_ref(), tenant.as_deref(), &notif.record_fields) {
-                                    continue;
-                                }
                                 let event = if kind == ActionKind::Destroy {
                                     Event::Id(notif.id.to_string())
                                 } else {
-                                    // Shared with every other subscriber: copy only what this one sends.
-                                    Event::Record(notif.record_fields.clone())
+                                    // Core has already admitted and projected this reader.
+                                    Event::Record(Box::new(notif.record.clone()))
                                 };
                                 yield Ok(FieldValue::owned_any(event));
                             }

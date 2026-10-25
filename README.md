@@ -26,7 +26,7 @@ migrate to the [plan interface](docs/scoped-access.md#implementing-a-data-layer)
 - **Declarative State Machines (`ash-state-machine`)**: Model lifecycles, valid transitions, and state checks with zero boilerplate.
 - **Optimistic Concurrency Control**: As in Ash, an action with `change optimistic_lock(version);` writes only at the version the record was read at, else `Error::StaleRecord`, preventing lost updates.
 - **Keyset & Offset Pagination**: Cursor-based keyset pagination (`page_keyset`) and offset pagination (`page_offset`) returning a uniform `Page<T>`.
-- **PubSub & Action Notifiers**: Decoupled post-commit event broadcasts with wildcard topic subscriptions (`"orders:*"`, `"order:create"`) and atomic transactional buffering in `Multi`.
+- **PubSub & Action Notifiers**: Decoupled post-commit event broadcasts with scope-bound, tenant-keyed wildcard topic subscriptions (`"orders:*"`, `"order:create"`) and atomic transactional buffering in `Multi`.
 - **Resource & Field-Level Authorization**: Role- and actor-based policies with automatic read redaction and mutation enforcement.
 - **Declarative Ergonomics**: DRY `accept [field1, field2]`, zero-import field operators (`Resource::field`), fluid `ctx.multi()`, and record lifecycle helpers (`reload`, `destroy`).
 

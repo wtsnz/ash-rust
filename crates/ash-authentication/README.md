@@ -144,3 +144,12 @@ async fn profile_handler(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
 ```bash
 cargo run --example auth_server --features axum -p ash-authentication
 ```
+
+## Credential presentation
+
+Configured password and API-key hash attributes are sensitive storage fields.
+Ordinary action results and reads hide them, and generated GraphQL/TypeScript
+schemas omit them. This is a breaking change for callers that inspected returned
+hashes. Use a Runtime-issued credential read permit in trusted authentication code.
+Registration notifications contain no password arguments or automatic metadata.
+See [Events and subscriptions](../../docs/scoped-access.md#events-and-subscriptions).

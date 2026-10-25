@@ -1,8 +1,7 @@
 use ash_authentication::{JwtService, authentication};
 use ash_core::Result;
 use ash_mailer::{
-    AuthMailerSender, ConsoleMailer, ContextMailerExt, Email, EmailNotifier, Mailer, MailerError,
-    MemoryMailer,
+    AuthMailerSender, ConsoleMailer, Email, EmailNotifier, Mailer, MailerError, MemoryMailer,
 };
 use ash_memory::Memory;
 use uuid::Uuid;
@@ -22,6 +21,11 @@ mod order_mod {
             status: String = "pending";
         }
 
+        policies {
+            policy action_type(read) { authorize_if actor_present; }
+            policy action_type(create) { authorize_if always; }
+            policy action_type(update) { authorize_if always; }
+        }
         actions {
             create place {
                 primary;
@@ -191,7 +195,10 @@ async fn test_email_notifier_on_resource_action() -> Result<()> {
     });
 
     let ctx_runtime = ash_core::Runtime::new(Memory::new());
-    let ctx = ctx_runtime.bootstrap().with_email_notifier(notifier);
+    let grant = ctx_runtime.notifier_grant::<Order>(&["customer_email", "amount"])?;
+    let ctx = ctx_runtime
+        .bootstrap()
+        .with_notifier(grant.attach(std::sync::Arc::new(notifier)));
 
     // 1. Create order: "place" action -> should NOT trigger email
     let order = Order::place(&ctx)

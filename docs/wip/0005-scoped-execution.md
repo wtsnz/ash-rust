@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1 through 7b in review; step 8 implemented, pending review; the rest planned. See §5.
+- **Status**: Proposed. Steps 1 through 8 in review; step 9 implemented, pending review; step 10 planned. See §5.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -91,8 +91,8 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | Core-owned upsert plans; tenant, write-policy and version guards on single/bulk conflicts; scoped returns; memory no-change semantics | 6 | In review (#91). See [Guarded upsert conflicts](../scoped-access.md#guarded-upsert-conflicts) |
 | Data-layer-specific trusted plan nodes | 7b | In review (#93). Typed SQL fragments, transactional Postgres row locks and distinct reads. See [Trusted data-layer nodes](../trusted-data-layer-nodes.md) |
 | Managed relationships through scoped destination and join actions; scoped cascade discovery; required transactions and memory snapshot commits | 7 | In review (#92). See [Managed relationships and cascades](../scoped-access.md#managed-relationships-and-cascades) |
-| Delete raw data-layer access; opaque scope-bound plans for every execution operation; Runtime-owned schema installation | 8 | Implemented, pending review |
-| Private events; scoped subscriptions, with deduplicated groups keyed on a bound `Scope` | 9 | Planned |
+| Delete raw data-layer access; opaque scope-bound plans for every execution operation; Runtime-owned schema installation | 8 | In review (#94) |
+| Private events; scoped subscriptions, with deduplicated groups keyed on a bound `Scope` | 9 | Implemented, pending review. See [Events and subscriptions](../scoped-access.md#events-and-subscriptions) |
 | Durable, atomic session state | 10 | Planned |
 
-Step 8 makes `Context` backend storage private and removes `ash_core::insert`, raw upserts and their compiler compatibility method. Every data-layer execution operation now requires an opaque core-built plan carrying its bound scope. Schema installation requires Runtime authority; request contexts cannot execute resource SQL statements. Extensions submit identity-free read requests and receive Views. Applications can keep their own database pool for reporting and migrations, outside these guarantees. Events/subscriptions and session durability remain steps 9 and 10.
+Step 8 makes `Context` backend storage private and removes `ash_core::insert`, raw upserts and their compiler compatibility method. Every data-layer execution operation now requires an opaque core-built plan carrying its bound scope. Schema installation requires Runtime authority; request contexts cannot execute resource SQL statements. Extensions submit identity-free read requests and receive Views. Applications can keep their own database pool for reporting and migrations, outside these guarantees. Step 9 adds private events, projected notifications, Runtime-issued sink grants, scoped PubSub admission and bound generic subscription groups. Both WebSocket protocols validate connection-init credentials through the server binder. Session durability remains step 10.

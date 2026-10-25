@@ -26,18 +26,17 @@ where
     authorize_write(&R::DEF, action_def, ctx.authorization_actor(), None)?;
     let result = f().await?;
 
-    let notification = crate::notifier::Notification::new(
-        R::DEF.name,
+    let event = crate::CommittedEvent::new(
+        ctx,
+        &R::DEF,
         action_def.name,
         ActionKind::Generic,
-        Uuid::nil(),
-        crate::value::FieldMap::new(),
+        Uuid::nil().into(),
+        crate::FieldMap::new(),
         None,
-        ctx.actor().cloned(),
         ctx.metadata().clone(),
-    )
-    .with_tenant(ctx.tenant().map(str::to_owned));
-    crate::notifier::dispatch_notification(ctx, &R::DEF, notification).await?;
+    );
+    crate::notifier::dispatch_notification(ctx, &R::DEF, event).await?;
 
     result.present(ctx)
 }

@@ -123,6 +123,11 @@ pub trait ResourceExtension: Send + Sync + Debug + 'static {
         None
     }
 
+    /// Credential storage attributes excluded from ordinary presentation and public schemas.
+    fn sensitive_attribute(&self, _field: &str) -> bool {
+        false
+    }
+
     /// Downcasting helper to retrieve the concrete extension struct.
     fn as_any(&self) -> &dyn Any;
 }

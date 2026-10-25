@@ -221,6 +221,9 @@ pub fn generate_resource_zod_schema(res: &ResourceDef) -> String {
     out.push_str(&format!("export const {schema_name} = z.object({{\n"));
 
     for attr in res.attributes {
+        if res.sensitive_attribute(attr.name) {
+            continue;
+        }
         let field_schema = generate_attr_zod(&attr.ty, attr.allow_nil);
         out.push_str(&format!(
             "  {}: {},\n",

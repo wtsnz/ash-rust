@@ -181,6 +181,9 @@ pub fn generate_resource_interface(res: &ResourceDef) -> String {
 
     // Attributes
     for attr in res.attributes {
+        if res.sensitive_attribute(attr.name) {
+            continue;
+        }
         let ts_type = attr_type_to_ts(&attr.ty);
         if attr.allow_nil {
             out.push_str(&format!(
@@ -245,6 +248,9 @@ pub fn input_fields(res: &ResourceDef, action: &ActionDef) -> Vec<(&'static str,
     let mut fields = Vec::new();
     if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
         for attr in res.attributes {
+            if res.sensitive_attribute(attr.name) {
+                continue;
+            }
             if action.accept.contains(&attr.name) {
                 let required = action.kind == ActionKind::Create
                     && !attr.allow_nil
@@ -301,6 +307,7 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
     let fields = res
         .attributes
         .iter()
+        .filter(|attr| !res.sensitive_attribute(attr.name))
         .map(|attr| (attr.name, attr.ty))
         .chain(res.aggregates.iter().map(|agg| (agg.name, agg.ty)))
         .chain(res.calculations.iter().map(|calc| (calc.name, calc.ty)));
@@ -328,6 +335,7 @@ pub fn generate_resource_filter_input(res: &ResourceDef) -> String {
 pub fn sort_fields(res: &ResourceDef) -> Vec<&'static str> {
     res.attributes
         .iter()
+        .filter(|attr| !res.sensitive_attribute(attr.name))
         .map(|a| a.name)
         .chain(res.aggregates.iter().map(|a| a.name))
         .chain(

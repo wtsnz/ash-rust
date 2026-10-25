@@ -4,6 +4,7 @@ read_when:
   - Migrating direct Context.data reads into the core engine
   - Changing record presentation, field policies, hooks or response adapters
   - Implementing a data layer or changing upsert conflict behavior
+  - Registering event readers, notifier grants or shared subscription groups
 ---
 
 # Scoped access
@@ -202,9 +203,9 @@ changes, checks attribute types and retains the bound tenant. These grants belon
 in trusted authentication configuration, never request input. Durable session
 consumption and credential versioning remain separate work.
 
-Credential grants are bound to the Runtime that issued them. Use that Runtime or
-its clones to bind authentication contexts; Runtime transactions retain the same
-authority. A grant from another Runtime returns `Forbidden`, even if both runtimes
+Credential grants are bound to the Runtime that issued them. Use that Runtime, its clones or
+explicitly derived `with_backend` runtimes to bind authentication contexts; Runtime
+transactions retain the same authority. A grant from an unrelated Runtime returns `Forbidden`, even if both runtimes
 wrap the same backend. Constructing an unrelated Runtime cannot grant credential
 access to an existing Context.
 
@@ -354,10 +355,8 @@ the request's selected fields, including nested selections. Neither adapter comp
 field-policy masks from an already redacted record.
 
 Step 5 applies dependency visibility to calculations and projects aggregate source
-values for the reader. See [Derived values](#derived-values). Step 9 will feed private
-committed events through the same presenter for each subscriber or bound group scope. Notification and PubSub payloads remain
-unchanged; the existing GraphQL subscription response path presents each event for
-its current reader.
+values for the reader. See [Derived values](#derived-values). Private committed events use the same presenter for each subscriber or explicitly
+bound group scope. See [Events and subscriptions](#events-and-subscriptions).
 
 ## Credential reads
 
@@ -419,8 +418,117 @@ headers or channel connection credentials to select tenancy. GraphQL uses only t
 For per-request identity use `graphql_router_with` and implement `RequestData` by
 calling Runtime's binder. HTTP, `graphql-transport-ws` and legacy `graphql-ws` all
 apply this binder. A network request without a request-local context fails even if
-the schema contains a privileged default. Connection-init credential processing
-remains follow-up work. Legacy subscriptions keep their existing unshared behavior.
+the schema contains a privileged default. Both protocols validate connection-init
+parameters through `RequestData::connection_init` before acknowledging the connection.
+Legacy subscriptions keep unshared streams, while honoring explicit group identity.
+
+## Events and subscriptions
+
+Breaking changes replace raw notification maps and string-only subscription groups.
+A `CommittedEvent` is opaque and core-created. It retains the stored snapshot and
+preimage for admission, including after destroy. It exposes no raw field or actor
+accessors, argument bag, constructor or serialization. Debug output is redacted.
+Transaction queues retain these opaque events and dispatch only after commit.
+
+`Notification` now contains `record: View`, `previous: Option<View>`, resource/action
+identity, record ID and tenant. Use `notification.get(name)`, `record.fields()` or
+`previous(name)` for projected values. `record_fields`, `previous_fields`, `actor`,
+`Notification::new` and `with_tenant` are removed. Default notifiers read as anonymous
+in the event's tenant. A record that the default read excludes produces no notification.
+Arguments are never copied, and arbitrary context/changeset metadata is no longer
+exported. Metadata starts empty. Actor attributes are never exported.
+
+Register a reader from a bound context and use it for PubSub or a `ScopedNotifier`:
+
+```rust,ignore
+let reader = ctx.event_reader(&Ticket::DEF, client_filter)?
+    .select(vec!["id".into(), "title".into()])
+    .with_metadata(&[MetadataDef::new("request_id", AttrType::String)]);
+let mut events = pubsub.subscribe_reader(reader, "ticket:*")?;
+let event = events.recv().await?;
+assert_eq!(event.tenant.as_deref(), ctx.tenant());
+```
+
+Metadata declarations name both the key and its type. Core recursively projects
+resource-valued metadata. The previous snapshot must independently pass the reader's
+read predicate before its fields are projected. An ownership transfer therefore does
+not disclose a former owner's preimage to the new owner.
+
+All PubSub registration requires a resource and bound context, or an `EventReader`:
+`pubsub.subscribe(&ctx, &Ticket::DEF, "ticket:*")?`. Typed helpers also take `&ctx`
+and return `Result<Subscription>`: `Ticket::subscribe_all(&pubsub, &ctx)?`,
+`Ticket::subscribe_action(&pubsub, &ctx, "create")?` and
+`ticket.subscribe(&pubsub, &ctx, None)?`. `TopicKey` separates `tenant` from the
+pattern. Wildcards and delimiter characters in tenant names cannot cross that
+boundary. Core also checks the event's exact tenant and issuing Runtime independently
+of topics, then rechecks the default read and evaluates the client filter against the
+private snapshot. Queues contain only admitted, projected notifications. The old
+shared raw `Arc<Notification>` fan-out is gone. Dropping a subscription removes its
+queue. Publish methods now accept an opaque `&CommittedEvent` and return `Result<usize>`,
+counting admitted subscriber queues rather than matched patterns.
+Custom topic formatters receive the reader's projected notification.
+
+Unsupported relationship, calculation, aggregate, trusted SQL and page-boundary
+predicates fail at registration, including dependencies in default-read preparations.
+A required missing tenant also fails registration. `NeedsData` never admits an event.
+Selecting relationships and derived fields in GraphQL remains supported through
+scoped follow-up reads. Snapshot filtering does not execute those reads.
+
+Mail and logging consumers needing additional fields declare a Runtime grant:
+
+```rust,ignore
+let mail = runtime.notifier_grant::<Order>(&["customer_email", "amount"])?;
+let runtime = runtime.with_notifier(mail.attach(Arc::new(email_notifier)));
+let log = runtime.notifier_grant::<Order>(&[])?
+    .with_actor_id()
+    .with_metadata(&[MetadataDef::new("request_id", AttrType::String)]);
+```
+
+A grant is resource-bound and valid only on its issuing Runtime and clones. It can
+receive events across that Runtime's tenants, with only its named stored attributes,
+and deliberately bypasses row and field policies for those fields. Actor IDs and
+metadata require separate declarations. It grants no action arguments or actor
+attributes. Treat attaching such a sink as trusted startup configuration. Reissue
+grants when constructing an unrelated Runtime, even over the same backend.
+`runtime.with_backend(registry)` deliberately derives a Runtime with the same
+application authority, notifiers and grants over another startup-configured backend.
+Use it when a StoreRegistry and direct store writes publish to the same broker.
+It is unavailable on Context; backend identity still separates shared stream keys. Authentication
+reset tokens continue through `AuthSender`/`AuthMailerSender`, not broadcasts.
+Authentication extensions mark configured password and API-key hashes sensitive.
+Ordinary Views hide them, and GraphQL/TypeScript generated schemas omit them. Existing
+applications must use credential permits for credential reads; system contexts and
+explicit field grants retain deliberate access.
+
+`RequestData::apply` now returns `BoundRequest`, replacing `(Request, String)`:
+
+```rust,ignore
+fn apply(&self, headers: &HeaderMap, request: Request) -> BoundRequest {
+    let member = self.runtime.bind(authenticate(headers), verified_tenant(headers));
+    BoundRequest::for_subscription_group(request, member, self.public_staff_context.clone())
+}
+```
+
+Use `BoundRequest::new` to resolve each authenticated subscriber in its own
+scope. For grouping, bind and retain the generic actor's context at startup, then
+clone it here. Subscription execution replaces the member context with that group
+context before resolving anything. HTTP, WebSocket queries and mutations retain the
+member context. The key contains the complete sealed scope and backend identity,
+plus document, operation name and variables. Authenticated bindings share only when
+cloning the same bound group; matching IDs, roles or app strings cannot merge them.
+Anonymous ordinary bindings share by default within one Runtime, backend and tenant.
+System authority, another Runtime or another tenant never joins that public group.
+Request metadata is not a grouping key; applications must put every authorization
+input in the bound actor or tenant and use an explicit group for group-specific
+execution. The generic context supplies the group's metadata too.
+
+`RequestData::connection_init(headers, params)` validates supported credentials and
+returns the headers used for subsequent binding. Implement verification and define
+header/parameter precedence in this server method. The default accepts absent/null
+parameters and an empty object, and rejects nonempty or malformed parameters. A
+rejection closes either protocol with code 4403 before acknowledgment; supplied
+credentials are never silently ignored. The framework does not interpret arbitrary
+connection parameters as trusted actor or tenant data.
 
 ## Limits
 
@@ -433,15 +541,14 @@ restricted to Runtime, while credential lookup results remain privileged maps.
 
 Cross-tenant lookup grants still need a resource/action declaration and a backend
 contract for discovering tenant namespaces. Lagrange therefore still requires a line
-at login. Subscription deduplication still trusts the application's string key and resolves
-with the first member's context. That stays the case until groups bind
-their own complete Scope and resolve as the group actor. Keyset cursors are sealed by Runtime in step 3. Backend-specific trusted
+at login. Subscription groups bind their own complete scope and resolve as the group
+actor. Keyset cursors are sealed by Runtime in step 3. Backend-specific trusted
 plan expressions are implemented. See [Trusted data-layer nodes](trusted-data-layer-nodes.md). Scope has no public constructor or layout,
 so those additions do not require changing the binding API.
 
 This change does not fix token namespace isolation, durable access revocation,
 deleted-user validation, session invalidation or atomic reset/refresh consumption.
-Subscription authorization and payloads remain planned work. The design and the full migration sequence are in
+Live credential revocation and subscription termination on revocation remain follow-up work. The design and the full migration sequence are in
 [RFC 0005: Scoped execution](wip/0005-scoped-execution.md).
 
 ## Verification

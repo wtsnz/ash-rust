@@ -21,7 +21,6 @@ pub struct Lagrange<D> {
     fleet: D,
     telemetry: Sqlite,
     pubsub: PubSub,
-    notifiers: Vec<Arc<dyn Notifier>>,
     base: Runtime<D>,
 }
 
@@ -47,7 +46,6 @@ where
             fleet,
             telemetry,
             pubsub,
-            notifiers,
             base,
         }
     }
@@ -101,7 +99,7 @@ where
     }
 
     pub fn registry_runtime(&self) -> Runtime<StoreRegistry> {
-        attach(&self.notifiers, Runtime::new(self.registry()))
+        self.base.with_backend(self.registry())
     }
 
     /// Acts as `crew` within their line.
@@ -137,7 +135,7 @@ where
             .authenticate_api_key(&self.base.bind(None, Some(line.into())), api_key)
             .await
             .map_err(|_| ash_core::Error::Forbidden)?;
-        Ok(ash_core::Runtime::new(self.registry()).bind(
+        Ok(self.registry_runtime().bind(
             Some(strategy.to_actor(&transponder)),
             Some(transponder.line.clone()),
         ))
@@ -145,15 +143,32 @@ where
 }
 
 fn attach<T>(notifiers: &[Arc<dyn Notifier>], ctx: Runtime<T>) -> Runtime<T> {
-    notifiers
+    use ash_core::{AttrType, MetadataDef};
+    let mut ctx = ctx.with_notifier(Arc::clone(&notifiers[0]));
+    // Declare the log's exact disclosure separately for each resource and Runtime.
+    for resource in crate::World::<T>::DEF
+        .resources
         .iter()
-        .fold(ctx, |ctx, notifier| ctx.with_notifier(Arc::clone(notifier)))
+        .chain(crate::Fleet::<T>::DEF.resources)
+        .chain(crate::Cargo::<T>::DEF.resources)
+    {
+        let grant = ctx
+            .notifier_grant_for(resource, &[])
+            .expect("declared resource")
+            .with_actor_id()
+            .with_metadata(&[MetadataDef::new("client_ip", AttrType::String)]);
+        ctx = ctx.with_notifier(grant.attach(Arc::clone(&notifiers[1])));
+    }
+    let mail = ctx
+        .notifier_grant::<Contract>(&["shipper_email", "external_ref"])
+        .expect("declared mail fields");
+    ctx.with_notifier(mail.attach(Arc::clone(&notifiers[2])))
 }
 
 /// Emails the shipper when their contract is delivered.
 fn delivery_notices(mailer: impl Mailer) -> EmailNotifier {
     EmailNotifier::new(mailer).on_action(Contract::DEF.name, "deliver", |notification| {
-        let field = |name: &str| match notification.record_fields.get(name) {
+        let field = |name: &str| match notification.record.get(name) {
             Some(ash_core::Value::String(value)) => value.clone(),
             _ => String::new(),
         };

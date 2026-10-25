@@ -95,6 +95,9 @@ pub fn register_resource_filter_inputs(
         builder.register(field_filter(input, ty, items_nullable))
     };
     for attr in resource.attributes {
+        if resource.sensitive_attribute(attr.name) {
+            continue;
+        }
         builder = add(builder, attr.name, attr.ty, attr.allow_nil);
     }
     for agg in resource.aggregates {

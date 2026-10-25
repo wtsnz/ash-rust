@@ -348,3 +348,9 @@ console.log(page.results, page.count);
 ## License
 
 MIT
+
+Subscription connection parameters require a server `RequestData::connection_init`
+implementation that verifies those credentials. Both supported WebSocket protocols
+use that binder; the default rejects nonempty parameters. Configured authentication
+hash fields are omitted from generated types and schemas. See the
+[event and transport migration guide](../../docs/scoped-access.md#events-and-subscriptions).

@@ -90,7 +90,7 @@ fn recording() -> (Context<Memory>, Arc<Mutex<Vec<Notification>>>) {
 }
 
 #[tokio::test]
-async fn every_write_path_notifies_with_its_arguments() {
+async fn every_write_path_notifies_without_action_arguments() {
     let (ctx, sent) = recording();
     let owner = Uuid::new_v4();
     Note::write(&ctx)
@@ -112,11 +112,16 @@ async fn every_write_path_notifies_with_its_arguments() {
     .unwrap();
 
     let sent = sent.lock().unwrap();
-    let reasons: Vec<_> = sent
+    assert_eq!(sent.len(), 3);
+    assert!(
+        sent.iter()
+            .all(|notification| notification.metadata.is_empty())
+    );
+    let bodies: Vec<_> = sent
         .iter()
-        .map(|n| n.metadata.get("reason").cloned())
+        .map(|notification| notification.get("body").and_then(Value::as_str))
         .collect();
-    assert_eq!(reasons, vec![Some(Value::String("filing".into())); 3]);
+    assert_eq!(bodies, [Some("typed"), Some("dynamic"), Some("bulk")]);
 }
 
 #[tokio::test]

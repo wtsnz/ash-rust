@@ -25,13 +25,13 @@ It provides the abstractions for static resource metadata, action pipelines, val
 - **Preparations Engine**: Query preparations on read actions that inject default filters, sorting, limits, and offsets.
 - **Expressions & Calculations**: Rich AST (`Expr`) supporting arithmetic, SQL string functions, coalesce, conditionals, and custom functions.
 - **Type-Safe Multi-Store Routing (`StoreRegistry` / `StoreTag`)**: Route operations across multiple instances of the same database engine (e.g. primary vs audit SQLite) or 3rd-party data layers with zero core changes and optional compile-time presence verification (`HasStore`).
-- **Tenant & Context Metadata**: Runtime-bound tenant isolation (`runtime.bind(actor, tenant)`) and arbitrary request metadata propagation to `ValidationContext`, `ChangeContext`, generic actions, and `Notification` payloads.
+- **Tenant & Context Metadata**: Runtime-bound tenant isolation (`runtime.bind(actor, tenant)`) and arbitrary request metadata propagation to `ValidationContext`, `ChangeContext`, and generic actions. Event metadata requires an explicit allowlist.
 - **Transactional Pipelines (`Multi`)**: Composable atomic batches inspired by `Ash.Multi`. Steps can create, update, destroy, or compute derived data, guaranteeing all-or-nothing rollback on failure.
 - **Bulk & Batch Operations**: High-throughput `bulk_create` and `bulk_destroy` with chunking, upserting, cascading deletes, and chunked query streaming.
 - **Declarative Action Lifecycle Hooks**: `before_action`, `after_action`, and `after_transaction` hooks at the action level, via `Change`, and inside `CustomChange` plugins.
 - **Generic Actions**: Type-safe arbitrary domain operations (`generic <name> { returns <Type>; ... }`) with strongly-typed arguments, policies, and notification dispatch.
 - **Managed Relationships**: Declarative and nested writes (`manage_relationship`) across `has_one`, `has_many`, `belongs_to`, and `many_to_many`.
-- **Event Notification Primitives**: Core `Notification` payload and `Notifier` trait. Notifications generated during `Multi` pipelines are atomically buffered and only dispatched after database commit.
+- **Event Notification Primitives**: Reader-projected `Notification` Views, opaque committed events and the `Notifier` trait. Notifications generated during `Multi` pipelines are atomically buffered and only dispatched after database commit.
 - **Record Lifecycle Helpers (`ResourceExt`)**: Fluent helpers including `record.reload(&ctx)` and `record.destroy(&ctx)`.
 
 ---
@@ -136,3 +136,12 @@ async fn main() -> ash_core::Result<()> {
 ## License
 
 Licensed under the [MIT License](../../LICENSE).
+
+## Event migration
+
+Notification payloads now contain `record: View` and `previous: Option<View>`.
+The former raw record maps, actor and public constructor are removed. Arguments are
+never copied. Default notifiers read as anonymous in the event tenant; use
+`ScopedNotifier` for another bound reader. Mail/logging sinks can request explicit
+resource-and-field grants from Runtime. See [Events and subscriptions](../../docs/scoped-access.md#events-and-subscriptions)
+for every breaking API change and migration examples.
