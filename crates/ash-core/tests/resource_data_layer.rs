@@ -1,4 +1,4 @@
-use ash_core::{DataLayerKind, DataLayerRegistry, Resource, SchemaSupport, resource};
+use ash_core::{DataLayerKind, DataLayerRegistry, Error, Resource, SchemaSupport, resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -115,8 +115,8 @@ async fn test_resource_bound_data_layer_registry() {
     let mem_sessions = Session::query(&mem_ctx).all().await.unwrap();
     assert_eq!(mem_sessions.len(), 1);
 
-    // Invariant 5: Multi pipeline combining steps across both data layers seamlessly
-    let multi_res = ctx
+    // Invariant 5: Independent stores reject atomic pipelines before either write.
+    let result = ctx
         .multi()
         .create(
             "create_bob",
@@ -130,16 +130,8 @@ async fn test_resource_bound_data_layer_registry() {
                 .changeset()
         })
         .commit()
-        .await
-        .unwrap();
-
-    let bob: &User = multi_res.get("create_bob").unwrap();
-    let bob_session: &Session = multi_res.get("create_bob_session").unwrap();
-
-    assert_eq!(bob.email, "bob@example.com");
-    assert_eq!(bob_session.user_id, bob.id);
-
-    // Verify both stores have the updated counts
-    assert_eq!(User::query(&ctx).count().await.unwrap(), 2);
-    assert_eq!(Session::query(&ctx).count().await.unwrap(), 2);
+        .await;
+    assert!(matches!(result, Err(Error::AtomicityUnsupported)));
+    assert_eq!(User::query(&ctx).count().await.unwrap(), 1);
+    assert_eq!(Session::query(&ctx).count().await.unwrap(), 1);
 }

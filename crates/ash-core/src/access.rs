@@ -100,6 +100,57 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
             .collect()
     }
 
+    /// Engine-only discovery retains stored keys and policy operands until the write.
+    /// Hard cascades include archived rows, retaining other preparations and policies.
+    pub(crate) async fn related_rows(
+        &self,
+        resource: &ResourceDef,
+        filter: Filter,
+        hard: bool,
+    ) -> Result<Vec<FieldMap>> {
+        let action = crate::pipeline::read_action(resource, None)?;
+        let query = crate::engine::scope_discovery(
+            resource,
+            action,
+            self.ctx.authorization_actor(),
+            &FieldMap::new(),
+            CompiledQuery {
+                filter: Some(filter),
+                tenant: self.ctx.tenant().map(str::to_owned),
+                ..Default::default()
+            },
+            hard,
+        )?;
+        let mut rows = self.ctx.raw_data().run_query(resource, &query).await?;
+        crate::after_read(action, &FieldMap::new(), &mut rows)?;
+        Ok(rows)
+    }
+
+    pub(crate) async fn resolve_related(
+        &self,
+        resource: &ResourceDef,
+        id: crate::Value,
+    ) -> Result<FieldMap> {
+        let pk = resource
+            .primary_key()
+            .ok_or(Error::NoPrimaryKey(resource.name))?;
+        let id = crate::value::pk_cast(pk.ty, &id).ok_or(Error::NotFound)?;
+        crate::pipeline::check_type(pk, &id).map_err(|_| Error::NotFound)?;
+        self.related_rows(
+            resource,
+            Filter::eq(crate::pipeline::pk_name(resource)?, id),
+            false,
+        )
+        .await
+        .map_err(|error| match error {
+            Error::Forbidden => Error::NotFound,
+            other => other,
+        })?
+        .into_iter()
+        .next()
+        .ok_or(Error::NotFound)
+    }
+
     /// Look up credentials using an explicit resource-bound server permit. There is
     /// no caller-supplied `CompiledQuery` that could forget the attribute tenant
     /// predicate or replace the schema tenant.

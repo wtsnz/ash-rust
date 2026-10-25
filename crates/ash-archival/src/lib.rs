@@ -91,6 +91,10 @@ impl ResourceExtension for ArchiveDef {
         "archive"
     }
 
+    fn soft_delete_attribute(&self) -> Option<&'static str> {
+        Some(self.attribute)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -127,7 +131,9 @@ impl CustomChange for ArchiveChange {
         ash_core::Atomic::Atomic {
             set: vec![(
                 self.attribute.to_string(),
-                ash_core::AtomicExpr::Value(ash_core::AshType::to_value(&ash_core::UtcDateTimeUsec::now())),
+                ash_core::AtomicExpr::Value(ash_core::AshType::to_value(
+                    &ash_core::UtcDateTimeUsec::now(),
+                )),
             )],
             conditions: Vec::new(),
         }
@@ -154,7 +160,10 @@ impl CustomChange for UnarchiveChange {
 
     fn atomic(&self, _ctx: &ash_core::AtomicContext<'_>) -> ash_core::Atomic {
         ash_core::Atomic::Atomic {
-            set: vec![(self.attribute.to_string(), ash_core::AtomicExpr::Value(Value::Null))],
+            set: vec![(
+                self.attribute.to_string(),
+                ash_core::AtomicExpr::Value(Value::Null),
+            )],
             conditions: Vec::new(),
         }
     }
@@ -164,10 +173,12 @@ impl CustomChange for UnarchiveChange {
 ///
 /// Primary reads hide archived records, so the record is loaded with the first of
 /// `exclude_read_actions`, which keeps read policies and tenancy in force.
-pub async fn unarchive<R: Resource, D: DataLayer>(ctx: &Context<D>, id: impl Into<ash_core::Value>) -> Result<R> {
-    let def = archive_def::<R>().ok_or_else(|| {
-        Error::Invalid(format!("{} does not use #[archival]", R::DEF.name))
-    })?;
+pub async fn unarchive<R: Resource, D: DataLayer>(
+    ctx: &Context<D>,
+    id: impl Into<ash_core::Value>,
+) -> Result<R> {
+    let def = archive_def::<R>()
+        .ok_or_else(|| Error::Invalid(format!("{} does not use #[archival]", R::DEF.name)))?;
     let action = def.unarchive_action.ok_or_else(|| {
         Error::Invalid(format!(
             "{} needs `unarchive_action` in its archive block",

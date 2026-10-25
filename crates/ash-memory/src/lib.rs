@@ -147,6 +147,16 @@ fn table_key(resource: &ResourceDef, tenant: Option<&str>) -> String {
 }
 
 impl DataLayer for Memory {
+    async fn in_transaction<T, F, Fut>(&self, work: F) -> Result<T>
+    where
+        Self: Sized,
+        F: FnOnce(Option<Self>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        self.transaction(move |tx| work(Some(tx.clone()))).await
+    }
+
     fn create(
         &self,
         resource: &ResourceDef,
@@ -1239,99 +1249,19 @@ impl TransactionSupport for Memory {
         Fut: Future<Output = Result<T>> + Send,
         T: Send,
     {
-        let snapshot = {
-            let tables = self.read()?;
-            tables.clone()
-        };
-
+        let snapshot = self.read()?.clone();
         let tx_mem = Memory::from_tables(snapshot.clone());
-
-        match f(&tx_mem).await {
-            Ok(val) => {
-                let committed = {
-                    let tables = tx_mem.read()?;
-                    tables.clone()
-                };
-                let mut live = self.write()?;
-
-                // 1. Detect concurrent write conflicts for rows touched by tx_mem
-                for (table_name, committed_table) in &committed {
-                    let snap_table = snapshot.get(table_name);
-                    for (id, comm_row) in committed_table {
-                        let snap_row = snap_table.and_then(|t| t.get(id));
-                        if snap_row != Some(comm_row) {
-                            // Row was inserted or updated by tx_mem
-                            let live_table = live.get(table_name);
-                            let live_row = live_table.and_then(|t| t.get(id));
-                            if live_row != snap_row {
-                                return Err(Error::DataLayer(format!(
-                                    "concurrent write conflict in {table_name} for record {id}"
-                                )));
-                            }
-                        }
-                    }
-                }
-
-                // Check for deletions made by tx_mem
-                for (table_name, snap_table) in &snapshot {
-                    if let Some(comm_table) = committed.get(table_name) {
-                        for (id, snap_row) in snap_table {
-                            if !comm_table.contains_key(id) {
-                                // Row was deleted by tx_mem
-                                let live_table = live.get(table_name);
-                                let live_row = live_table.and_then(|t| t.get(id));
-                                if live_row != Some(snap_row) {
-                                    return Err(Error::DataLayer(format!(
-                                        "concurrent write conflict in {table_name} for deleted record {id}"
-                                    )));
-                                }
-                            }
-                        }
-                    } else {
-                        let live_table = live.get(table_name);
-                        if live_table != Some(snap_table) {
-                            return Err(Error::DataLayer(format!(
-                                "concurrent write conflict in deleted table {table_name}"
-                            )));
-                        }
-                    }
-                }
-
-                // 2. Selectively apply mutations into live store (preserving untouched concurrent writes!)
-                for (table_name, committed_table) in &committed {
-                    let snap_table = snapshot.get(table_name);
-                    let live_table = live.entry(table_name.clone()).or_default();
-                    for (id, comm_row) in committed_table {
-                        let snap_row = snap_table.and_then(|t| t.get(id));
-                        if snap_row != Some(comm_row) {
-                            live_table.insert(id.clone(), comm_row.clone());
-                        }
-                    }
-                }
-
-                for (table_name, snap_table) in snapshot {
-                    if let Some(comm_table) = committed.get(&table_name) {
-                        if let Some(live_table) = live.get_mut(&table_name) {
-                            for (id, _) in snap_table {
-                                if !comm_table.contains_key(&id) {
-                                    live_table.remove(&id);
-                                }
-                            }
-                        }
-                    } else {
-                        live.remove(&table_name);
-                    }
-                }
-
-                Ok(val)
-            }
-            Err(err) => Err(err),
+        let value = f(&tx_mem).await?;
+        let committed = tx_mem.read()?.clone();
+        let mut live = self.write()?;
+        // Validate the whole snapshot, including discovery reads and absent rows.
+        // Merging only touched rows permits phantoms and conflicting unique inserts.
+        if *live != snapshot {
+            return Err(Error::DataLayer(
+                "concurrent memory transaction conflict".into(),
+            ));
         }
-    }
-
-    /// No, as Ash's ETS layer can't transact: a transaction here copies every table, too
-    /// much to do for each batch of a bulk action.
-    fn can_transact(&self) -> bool {
-        false
+        *live = committed;
+        Ok(value)
     }
 }

@@ -3,15 +3,16 @@ use std::collections::{HashMap, HashSet};
 use crate::action::{ActionDef, ActionKind, ManagedRelType};
 use crate::changeset::ManagedRelationshipSpec;
 use crate::context::Context;
-use crate::data_layer::{CompiledQuery, DataLayer};
+use crate::data_layer::DataLayer;
 use crate::error::{Error, Result};
 use crate::filter::Filter;
-use crate::pipeline::{generate_pk, pk_name};
+use crate::pipeline::pk_name;
 use crate::resource::{OnDelete, RelKind, ResourceDef};
 use crate::value::{FieldMap, Value, required_pk};
 
-use super::lifecycle::{create_dynamic, destroy_dynamic, destroy_dynamic_with};
+use super::lifecycle::{destroy_dynamic, destroy_dynamic_with};
 use crate::changeset::DynamicChangeset;
+use crate::changeset::primary_action;
 
 /// State shared by one destroy and everything it cascades into.
 pub(crate) struct Cascade {
@@ -69,6 +70,14 @@ async fn destroy_child<D: DataLayer>(
             .await?;
         }
         None => {
+            static HARD_DESTROY: ActionDef = ActionDef::destroy("cascade_destroy");
+            let action = primary_action(dest_def, ActionKind::Destroy).unwrap_or(&HARD_DESTROY);
+            crate::policy::authorize_write(
+                dest_def,
+                action,
+                ctx.authorization_actor(),
+                Some(child_row),
+            )?;
             if cascade.enter(dest_def, child_id.clone()) {
                 Box::pin(cascade_deletes(
                     ctx,
@@ -78,9 +87,7 @@ async fn destroy_child<D: DataLayer>(
                     cascade,
                 ))
                 .await?;
-                ctx.raw_data()
-                    .destroy(dest_def, ctx.tenant(), child_id)
-                    .await?;
+                super::lock::destroy_guarded(ctx, dest_def, child_id, None).await?;
             }
         }
     }
@@ -123,26 +130,10 @@ pub(crate) async fn cascade_destroy_related<D: DataLayer>(
                 dest_def.name
             )));
         }
-        let Some(related) = rel.destination_filter(&parent) else {
+        let Some(filter) = rel.destination_filter(&parent) else {
             continue;
         };
-        let read_filter = if hard {
-            None
-        } else {
-            dest_def.primary_read_filter()
-        };
-        let filter = Filter::and([Some(related), read_filter].into_iter().flatten());
-        let rows = ctx
-            .raw_data()
-            .run_query(
-                dest_def,
-                &CompiledQuery {
-                    filter: Some(filter),
-                    tenant: ctx.tenant().map(str::to_owned),
-                    ..CompiledQuery::default()
-                },
-            )
-            .await?;
+        let rows = ctx.access().related_rows(dest_def, filter, hard).await?;
         let child_pk = pk_name(dest_def)?;
         for child_row in rows {
             let child_id = required_pk(&child_row, child_pk)?;
@@ -168,12 +159,29 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
     if !cascade.enter(resource, id.clone()) {
         return Ok(existing_fields.clone());
     }
+    let stored = if cascades(resource, action) {
+        let stored = ctx
+            .access()
+            .related_rows(
+                resource,
+                Filter::eq(pk_name(resource)?, id.clone()),
+                !action.soft,
+            )
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(Error::NotFound)?;
+        crate::policy::authorize_write(resource, action, ctx.authorization_actor(), Some(&stored))?;
+        stored
+    } else {
+        existing_fields.clone()
+    };
     let lock = super::lock::lock_of(action, existing_fields);
     if action.soft {
         // The guarded write comes first, so a stale record archives nothing.
         let changes = soft_destroy_changes(resource, action, existing_fields, fields);
         let stored = super::lock::update_guarded(ctx, resource, id.clone(), changes, lock).await?;
-        cascade_destroy_related(ctx, resource, action, id, existing_fields, cascade).await?;
+        cascade_destroy_related(ctx, resource, action, id, &stored, cascade).await?;
         return Ok(stored);
     }
     // A stale record's related records stay: its lock is checked before they go.
@@ -182,20 +190,21 @@ pub(crate) async fn persist_destroy<D: DataLayer>(
     {
         super::lock::check_lock(ctx, resource, id.clone(), lock).await?;
     }
-    cascade_destroy_related(ctx, resource, action, id.clone(), existing_fields, cascade).await?;
-    cascade_deletes(ctx, resource, id.clone(), existing_fields, cascade).await?;
+    cascade_destroy_related(ctx, resource, action, id.clone(), &stored, cascade).await?;
+    cascade_deletes(ctx, resource, id.clone(), &stored, cascade).await?;
     super::lock::destroy_guarded(ctx, resource, id, lock.as_ref()).await?;
-    Ok(existing_fields.clone())
+    Ok(stored)
 }
 
 /// Whether a hard destroy through `action` acts on related records before the record
 /// goes: its `cascade_destroy`, or a relationship's `on_delete`.
 pub(crate) fn cascades(resource: &ResourceDef, action: &ActionDef) -> bool {
     !action.cascade_destroy.is_empty()
-        || resource.relationships.iter().any(|rel| {
-            matches!(rel.kind, RelKind::HasMany | RelKind::HasOne)
-                && rel.on_delete != OnDelete::Nothing
-        })
+        || (!action.soft
+            && resource
+                .relationships
+                .iter()
+                .any(|rel| rel.kind != RelKind::BelongsTo && rel.on_delete != OnDelete::Nothing))
 }
 
 /// What a soft destroy writes: the fields its changes set, a raised lock version, and a
@@ -229,11 +238,28 @@ pub async fn handle_cascading_deletes<D: DataLayer>(
     ctx: &Context<D>,
     resource: &'static ResourceDef,
     parent_id: Value,
-    parent_fields: &FieldMap,
+    _parent_fields: &FieldMap,
 ) -> Result<()> {
-    let cascade = Cascade::new(true);
-    cascade.enter(resource, parent_id.clone());
-    cascade_deletes(ctx, resource, parent_id, parent_fields, &cascade).await
+    ctx.atomically(|tx| async move {
+        let stored = tx
+            .access()
+            .related_rows(
+                resource,
+                Filter::eq(pk_name(resource)?, parent_id.clone()),
+                true,
+            )
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(Error::NotFound)?;
+        static DESTROY: ActionDef = ActionDef::destroy("cascade_destroy");
+        let action = primary_action(resource, ActionKind::Destroy).unwrap_or(&DESTROY);
+        crate::policy::authorize_write(resource, action, tx.authorization_actor(), Some(&stored))?;
+        let cascade = Cascade::new(true);
+        cascade.enter(resource, parent_id.clone());
+        cascade_deletes(&tx, resource, parent_id, &stored, &cascade).await
+    })
+    .await
 }
 
 /// [`handle_cascading_deletes`] within a destroy that is already under way. The parent is
@@ -255,17 +281,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                     let Some(filter) = rel.destination_filter(&parent) else {
                         continue;
                     };
-                    let rows = ctx
-                        .raw_data()
-                        .run_query(
-                            dest_def,
-                            &CompiledQuery {
-                                filter: Some(filter),
-                                tenant: ctx.tenant().map(str::to_owned),
-                                ..CompiledQuery::default()
-                            },
-                        )
-                        .await?;
+                    let rows = ctx.access().related_rows(dest_def, filter, true).await?;
                     if !rows.is_empty() {
                         return Err(Error::DeleteRestricted {
                             resource: resource.name,
@@ -279,17 +295,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                     let Some(filter) = rel.destination_filter(&parent) else {
                         continue;
                     };
-                    let rows = ctx
-                        .raw_data()
-                        .run_query(
-                            dest_def,
-                            &CompiledQuery {
-                                filter: Some(filter),
-                                tenant: ctx.tenant().map(str::to_owned),
-                                ..CompiledQuery::default()
-                            },
-                        )
-                        .await?;
+                    let rows = ctx.access().related_rows(dest_def, filter, true).await?;
                     let child_pk = pk_name(dest_def)?;
                     for child_row in rows {
                         let child_id = required_pk(&child_row, child_pk)?;
@@ -301,27 +307,25 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                     let Some(filter) = rel.destination_filter(&parent) else {
                         continue;
                     };
-                    let rows = ctx
-                        .raw_data()
-                        .run_query(
-                            dest_def,
-                            &CompiledQuery {
-                                filter: Some(filter),
-                                tenant: ctx.tenant().map(str::to_owned),
-                                ..CompiledQuery::default()
-                            },
-                        )
-                        .await?;
-                    let child_pk = pk_name(dest_def)?;
+                    let rows = ctx.access().related_rows(dest_def, filter, true).await?;
                     for child_row in rows {
-                        let child_id = required_pk(&child_row, child_pk)?;
                         let mut patch = FieldMap::new();
                         for column in rel.destination_columns() {
                             patch.insert(column.to_string(), Value::Null);
                         }
-                        ctx.raw_data()
-                            .update(dest_def, ctx.tenant(), child_id, patch)
-                            .await?;
+                        static NILIFY: ActionDef =
+                            ActionDef::update("cascade_nilify").require_atomic(false);
+                        let action =
+                            primary_action(dest_def, ActionKind::Update).unwrap_or(&NILIFY);
+                        update_child(
+                            ctx,
+                            dest_def,
+                            action,
+                            child_row,
+                            FieldMap::new(),
+                            &patch.into_iter().collect::<Vec<_>>(),
+                        )
+                        .await?;
                     }
                 }
             },
@@ -337,17 +341,7 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                     match rel.on_delete {
                         OnDelete::Nothing => {}
                         OnDelete::Restrict => {
-                            let rows = ctx
-                                .raw_data()
-                                .run_query(
-                                    through_def,
-                                    &CompiledQuery {
-                                        filter: Some(filter),
-                                        tenant: ctx.tenant().map(str::to_owned),
-                                        ..CompiledQuery::default()
-                                    },
-                                )
-                                .await?;
+                            let rows = ctx.access().related_rows(through_def, filter, true).await?;
                             if !rows.is_empty() {
                                 return Err(Error::DeleteRestricted {
                                     resource: resource.name,
@@ -357,22 +351,26 @@ pub(crate) async fn cascade_deletes<D: DataLayer>(
                             }
                         }
                         OnDelete::Cascade => {
-                            let rows = ctx
-                                .raw_data()
-                                .run_query(
-                                    through_def,
-                                    &CompiledQuery {
-                                        filter: Some(filter),
-                                        tenant: ctx.tenant().map(str::to_owned),
-                                        ..CompiledQuery::default()
-                                    },
-                                )
-                                .await?;
+                            let rows = ctx.access().related_rows(through_def, filter, true).await?;
                             let join_pk = pk_name(through_def)?;
                             for join_row in rows {
                                 let join_id = required_pk(&join_row, join_pk)?;
-                                destroy_child(ctx, through_def, true, join_id, &join_row, cascade)
-                                    .await?;
+                                let action =
+                                    child_destroy_action(through_def, true).ok_or_else(|| {
+                                        Error::Invalid(format!(
+                                            "cascade needs a hard destroy action on {}",
+                                            through_def.name
+                                        ))
+                                    })?;
+                                Box::pin(destroy_dynamic_with(
+                                    ctx,
+                                    through_def,
+                                    action,
+                                    join_id,
+                                    &join_row,
+                                    cascade,
+                                ))
+                                .await?;
                             }
                         }
                         OnDelete::Nilify => {}
@@ -397,10 +395,10 @@ async fn create_child<D: DataLayer>(
 ) -> Result<FieldMap> {
     let forced = link.iter().cloned().collect();
     Box::pin(
-        DynamicChangeset::for_create_forcing(ctx, dest_def, action, input, forced)?.commit(ctx),
+        DynamicChangeset::for_create_forcing(ctx, dest_def, action, input, forced)?
+            .commit_related(ctx),
     )
     .await
-    .map(crate::View::into_fields)
 }
 
 /// Updates the managed child `existing` through its update action, forcing `link` as
@@ -416,10 +414,34 @@ async fn update_child<D: DataLayer>(
     let forced = link.iter().cloned().collect();
     Box::pin(
         DynamicChangeset::for_update_forcing(ctx, dest_def, action, existing, input, forced)?
-            .commit(ctx),
+            .commit_related(ctx),
     )
     .await
-    .map(crate::View::into_fields)
+}
+
+fn required_action(resource: &'static ResourceDef, kind: ActionKind) -> Result<&'static ActionDef> {
+    primary_action(resource, kind).ok_or_else(|| {
+        Error::Invalid(format!(
+            "managed relationship needs a {} action on {}",
+            kind.as_str(),
+            resource.name,
+        ))
+    })
+}
+
+async fn target<D: DataLayer>(
+    ctx: &Context<D>,
+    dest: &'static ResourceDef,
+    input: FieldMap,
+) -> Result<FieldMap> {
+    let pk = pk_name(dest)?;
+    if input.contains_key(pk) {
+        let id = required_pk(&input, pk).map_err(|_| Error::NotFound)?;
+        ctx.access().resolve_related(dest, id).await
+    } else {
+        let action = required_action(dest, ActionKind::Create)?;
+        create_child(ctx, dest, action, input, &[]).await
+    }
 }
 
 pub async fn handle_managed_relationships<D: DataLayer>(
@@ -429,395 +451,183 @@ pub async fn handle_managed_relationships<D: DataLayer>(
     parent_fields: &FieldMap,
     managed_list: Vec<ManagedRelationshipSpec>,
 ) -> Result<()> {
-    let parent = with_primary_key(resource, parent_id.clone(), parent_fields)?;
+    if managed_list.is_empty() {
+        return Ok(());
+    }
+    ctx.atomically(|tx| async move {
+        manage(&tx, resource, parent_id, parent_fields, managed_list).await
+    })
+    .await
+}
+
+async fn manage<D: DataLayer>(
+    ctx: &Context<D>,
+    resource: &'static ResourceDef,
+    parent_id: Value,
+    parent_fields: &FieldMap,
+    managed_list: Vec<ManagedRelationshipSpec>,
+) -> Result<()> {
+    let parent = with_primary_key(resource, parent_id, parent_fields)?;
     for managed in managed_list {
         let rel = resource.relationship(managed.relationship).ok_or_else(|| {
             Error::Invalid(format!(
                 "unknown relationship `{}` on {}",
-                managed.relationship, resource.name
+                managed.relationship, resource.name,
             ))
         })?;
-
+        let dest = (rel.destination)();
         match rel.kind {
             RelKind::HasMany | RelKind::HasOne => {
-                let dest_def = (rel.destination)();
-                // Children take every key column from the parent.
-                let link: Vec<(String, Value)> = rel
+                let link: Vec<_> = rel
                     .key_pairs()
                     .into_iter()
                     .map(|(source, destination)| {
-                        let value = parent.get(source).cloned().unwrap_or(Value::Null);
-                        (destination.to_string(), value)
+                        (
+                            destination.to_string(),
+                            parent.get(source).cloned().unwrap_or(Value::Null),
+                        )
                     })
                     .collect();
-                let child_pk = pk_name(dest_def)?;
-                let child_create_action = dest_def
-                    .actions
-                    .iter()
-                    .find(|a| a.kind == ActionKind::Create && a.primary)
-                    .or_else(|| {
-                        dest_def
-                            .actions
-                            .iter()
-                            .find(|a| a.kind == ActionKind::Create)
-                    });
-                let child_update_action = dest_def
-                    .actions
-                    .iter()
-                    .find(|a| a.kind == ActionKind::Update && a.primary)
-                    .or_else(|| {
-                        dest_def
-                            .actions
-                            .iter()
-                            .find(|a| a.kind == ActionKind::Update)
-                    });
-                let child_destroy_action = dest_def
-                    .actions
-                    .iter()
-                    .find(|a| a.kind == ActionKind::Destroy && a.primary)
-                    .or_else(|| {
-                        dest_def
-                            .actions
-                            .iter()
-                            .find(|a| a.kind == ActionKind::Destroy)
-                    });
-
-                match managed.rel_type {
-                    ManagedRelType::Create | ManagedRelType::Append => {
-                        for mut child_fields in managed.inputs {
-                            if let Some(create_act) = child_create_action {
-                                create_child(ctx, dest_def, create_act, child_fields, &link)
-                                    .await?;
-                            } else {
-                                child_fields.extend(link.iter().cloned());
-                                generate_pk(dest_def, &mut child_fields);
-                                ctx.raw_data()
-                                    .create(
-                                        dest_def,
-                                        ctx.tenant(),
-                                        crate::pipeline::new_pk(dest_def, &child_fields)?,
-                                        child_fields,
-                                    )
-                                    .await?;
-                            }
-                        }
+                let pk = pk_name(dest)?;
+                let mut existing = HashMap::new();
+                if managed.rel_type == ManagedRelType::DirectControl {
+                    for row in ctx
+                        .access()
+                        .related_rows(
+                            dest,
+                            rel.destination_filter(&parent).unwrap_or(Filter::False),
+                            false,
+                        )
+                        .await?
+                    {
+                        existing.insert(required_pk(&row, pk)?, row);
                     }
-                    ManagedRelType::DirectControl => {
-                        let filter = rel.destination_filter(&parent).unwrap_or(Filter::False);
-                        let existing_rows = ctx
-                            .raw_data()
-                            .run_query(
-                                dest_def,
-                                &CompiledQuery {
-                                    filter: Some(filter),
-                                    tenant: ctx.tenant().map(str::to_owned),
-                                    ..CompiledQuery::default()
-                                },
-                            )
-                            .await?;
-
-                        let mut existing_map = HashMap::new();
-                        for row in existing_rows {
-                            if let Ok(id) = required_pk(&row, child_pk) {
-                                existing_map.insert(id, row);
-                            }
+                }
+                let mut kept = HashSet::new();
+                for mut input in managed.inputs {
+                    let id = input
+                        .get(pk)
+                        .and_then(|value| crate::value::pk_cast(dest.primary_key()?.ty, value));
+                    if managed.rel_type == ManagedRelType::DirectControl
+                        && let Some(id) = id
+                        && let Some(row) = existing.get(&id)
+                    {
+                        kept.insert(id);
+                        input.remove(pk);
+                        update_child(
+                            ctx,
+                            dest,
+                            required_action(dest, ActionKind::Update)?,
+                            row.clone(),
+                            input,
+                            &link,
+                        )
+                        .await?;
+                    } else {
+                        // An unmatched DirectControl id must never select or become the new child.
+                        if managed.rel_type == ManagedRelType::DirectControl {
+                            input.remove(pk);
                         }
-
-                        let mut kept_ids = HashSet::new();
-                        for mut child_fields in managed.inputs {
-                            let given_id = child_fields.get(child_pk).and_then(|v| {
-                                crate::value::pk_cast(
-                                    dest_def
-                                        .primary_key()
-                                        .map_or(crate::resource::AttrType::Uuid, |pk| pk.ty),
-                                    v,
-                                )
-                            });
-
-                            if let Some(child_id) = given_id
-                                && let Some(existing) = existing_map.get(&child_id)
-                            {
-                                kept_ids.insert(child_id.clone());
-                                if let Some(update_act) = child_update_action {
-                                    child_fields.remove(child_pk);
-                                    update_child(
-                                        ctx,
-                                        dest_def,
-                                        update_act,
-                                        existing.clone(),
-                                        child_fields,
-                                        &link,
-                                    )
-                                    .await?;
-                                } else {
-                                    child_fields.extend(link.iter().cloned());
-                                    ctx.raw_data()
-                                        .update(dest_def, ctx.tenant(), child_id, child_fields)
-                                        .await?;
-                                }
-                            } else {
-                                // An id that names no child of this parent doesn't pick the new one's.
-                                child_fields.remove(child_pk);
-                                let new_id = if let Some(create_act) = child_create_action {
-                                    let stored = create_child(
-                                        ctx,
-                                        dest_def,
-                                        create_act,
-                                        child_fields,
-                                        &link,
-                                    )
-                                    .await?;
-                                    required_pk(&stored, child_pk)?
-                                } else {
-                                    child_fields.extend(link.iter().cloned());
-                                    generate_pk(dest_def, &mut child_fields);
-                                    let stored = ctx
-                                        .raw_data()
-                                        .create(
-                                            dest_def,
-                                            ctx.tenant(),
-                                            crate::pipeline::new_pk(dest_def, &child_fields)?,
-                                            child_fields,
-                                        )
-                                        .await?;
-
-                                    crate::value::required_pk(&stored, child_pk)?
-                                };
-                                kept_ids.insert(new_id);
-                            }
-                        }
-
-                        // Remove omitted children
-                        for (existing_id, existing_fields) in existing_map {
-                            if !kept_ids.contains(&existing_id) {
-                                if rel.on_delete == OnDelete::Nilify {
-                                    if let Some(update_act) = child_update_action {
-                                        let unlink: Vec<(String, Value)> = link
-                                            .iter()
-                                            .map(|(column, _)| (column.clone(), Value::Null))
-                                            .collect();
-                                        update_child(
-                                            ctx,
-                                            dest_def,
-                                            update_act,
-                                            existing_fields,
-                                            FieldMap::new(),
-                                            &unlink,
-                                        )
-                                        .await?;
-                                    } else {
-                                        let mut updated = existing_fields;
-                                        for (column, _) in &link {
-                                            updated.insert(column.clone(), Value::Null);
-                                        }
-                                        ctx.raw_data()
-                                            .update(dest_def, ctx.tenant(), existing_id, updated)
-                                            .await?;
-                                    }
-                                } else if let Some(destroy_act) = child_destroy_action {
-                                    Box::pin(destroy_dynamic(
-                                        ctx,
-                                        dest_def,
-                                        destroy_act,
-                                        existing_id,
-                                        &existing_fields,
-                                    ))
-                                    .await?;
-                                } else {
-                                    ctx.raw_data()
-                                        .destroy(dest_def, ctx.tenant(), existing_id)
-                                        .await?;
-                                }
-                            }
-                        }
+                        let row = create_child(
+                            ctx,
+                            dest,
+                            required_action(dest, ActionKind::Create)?,
+                            input,
+                            &link,
+                        )
+                        .await?;
+                        kept.insert(required_pk(&row, pk)?);
+                    }
+                }
+                for (id, row) in existing {
+                    if kept.contains(&id) {
+                        continue;
+                    }
+                    if rel.on_delete == OnDelete::Nilify {
+                        let unlink: Vec<_> = link
+                            .iter()
+                            .map(|(name, _)| (name.clone(), Value::Null))
+                            .collect();
+                        update_child(
+                            ctx,
+                            dest,
+                            required_action(dest, ActionKind::Update)?,
+                            row,
+                            FieldMap::new(),
+                            &unlink,
+                        )
+                        .await?;
+                    } else {
+                        Box::pin(destroy_dynamic(
+                            ctx,
+                            dest,
+                            required_action(dest, ActionKind::Destroy)?,
+                            id,
+                            &row,
+                        ))
+                        .await?;
                     }
                 }
             }
             RelKind::ManyToMany => {
-                if let Some(through_fn) = rel.through {
-                    let through_def = through_fn();
-                    let dest_def = (rel.destination)();
-                    let source_fk = rel.source_attribute_on_join_resource.unwrap_or("source_id");
-                    let dest_fk = rel
-                        .destination_attribute_on_join_resource
-                        .unwrap_or("dest_id");
-                    let join_pk = pk_name(through_def)?;
-                    let dest_pk = pk_name(dest_def)?;
-
-                    match managed.rel_type {
-                        ManagedRelType::DirectControl => {
-                            let join_filter = Filter::eq(source_fk, parent_id.clone());
-                            let existing_joins = ctx
-                                .raw_data()
-                                .run_query(
-                                    through_def,
-                                    &CompiledQuery {
-                                        filter: Some(join_filter),
-                                        tenant: ctx.tenant().map(str::to_owned),
-                                        ..CompiledQuery::default()
-                                    },
-                                )
-                                .await?;
-
-                            let mut existing_join_map = HashMap::new();
-                            for j_row in existing_joins {
-                                if let Some(target_val) = j_row.get(dest_fk)
-                                    && let Ok(join_id) = required_pk(&j_row, join_pk)
-                                    && let Some(target_uuid) = crate::value::pk_cast(
-                                        dest_def
-                                            .primary_key()
-                                            .map_or(crate::resource::AttrType::Uuid, |pk| pk.ty),
-                                        target_val,
-                                    )
-                                {
-                                    existing_join_map.insert(target_uuid, (join_id, j_row));
-                                }
-                            }
-
-                            let mut kept_targets = HashSet::new();
-                            for mut child_fields in managed.inputs {
-                                let target_id = if let Ok(id) = required_pk(&child_fields, dest_pk)
-                                {
-                                    id
-                                } else {
-                                    let create_act = dest_def
-                                        .actions
-                                        .iter()
-                                        .find(|a| a.kind == ActionKind::Create && a.primary)
-                                        .or_else(|| {
-                                            dest_def
-                                                .actions
-                                                .iter()
-                                                .find(|a| a.kind == ActionKind::Create)
-                                        });
-                                    if let Some(create_act) = create_act {
-                                        let stored = Box::pin(create_dynamic(
-                                            ctx,
-                                            dest_def,
-                                            create_act,
-                                            child_fields,
-                                        ))
-                                        .await?;
-                                        required_pk(stored.fields(), dest_pk)?
-                                    } else {
-                                        generate_pk(dest_def, &mut child_fields);
-                                        let stored = ctx
-                                            .raw_data()
-                                            .create(
-                                                dest_def,
-                                                ctx.tenant(),
-                                                crate::pipeline::new_pk(dest_def, &child_fields)?,
-                                                child_fields,
-                                            )
-                                            .await?;
-
-                                        crate::value::required_pk(&stored, dest_pk)?
-                                    }
-                                };
-                                kept_targets.insert(target_id.clone());
-
-                                if !existing_join_map.contains_key(&target_id) {
-                                    let mut join_fields = FieldMap::new();
-                                    join_fields.insert(source_fk.to_string(), parent_id.clone());
-                                    join_fields.insert(dest_fk.to_string(), target_id);
-                                    generate_pk(through_def, &mut join_fields);
-                                    ctx.raw_data()
-                                        .create(
-                                            through_def,
-                                            ctx.tenant(),
-                                            crate::pipeline::new_pk(through_def, &join_fields)?,
-                                            join_fields,
-                                        )
-                                        .await?;
-                                }
-                            }
-
-                            // Destroy join rows for omitted targets
-                            let join_destroy_action = through_def
-                                .actions
-                                .iter()
-                                .find(|a| a.kind == ActionKind::Destroy && a.primary)
-                                .or_else(|| {
-                                    through_def
-                                        .actions
-                                        .iter()
-                                        .find(|a| a.kind == ActionKind::Destroy)
-                                });
-
-                            for (target_id, (join_id, join_row)) in existing_join_map {
-                                if !kept_targets.contains(&target_id) {
-                                    if let Some(destroy_act) = join_destroy_action {
-                                        Box::pin(destroy_dynamic(
-                                            ctx,
-                                            through_def,
-                                            destroy_act,
-                                            join_id,
-                                            &join_row,
-                                        ))
-                                        .await?;
-                                    } else {
-                                        ctx.raw_data()
-                                            .destroy(through_def, ctx.tenant(), join_id)
-                                            .await?;
-                                    }
-                                }
-                            }
-                        }
-                        ManagedRelType::Create | ManagedRelType::Append => {
-                            for mut child_fields in managed.inputs {
-                                let target_id = if let Ok(id) = required_pk(&child_fields, dest_pk)
-                                {
-                                    id
-                                } else {
-                                    let create_act = dest_def
-                                        .actions
-                                        .iter()
-                                        .find(|a| a.kind == ActionKind::Create && a.primary)
-                                        .or_else(|| {
-                                            dest_def
-                                                .actions
-                                                .iter()
-                                                .find(|a| a.kind == ActionKind::Create)
-                                        });
-                                    if let Some(create_act) = create_act {
-                                        let stored = Box::pin(create_dynamic(
-                                            ctx,
-                                            dest_def,
-                                            create_act,
-                                            child_fields,
-                                        ))
-                                        .await?;
-                                        required_pk(stored.fields(), dest_pk)?
-                                    } else {
-                                        generate_pk(dest_def, &mut child_fields);
-                                        let stored = ctx
-                                            .raw_data()
-                                            .create(
-                                                dest_def,
-                                                ctx.tenant(),
-                                                crate::pipeline::new_pk(dest_def, &child_fields)?,
-                                                child_fields,
-                                            )
-                                            .await?;
-
-                                        crate::value::required_pk(&stored, dest_pk)?
-                                    }
-                                };
-
-                                let mut join_fields = FieldMap::new();
-                                join_fields.insert(source_fk.to_string(), parent_id.clone());
-                                join_fields.insert(dest_fk.to_string(), target_id);
-                                generate_pk(through_def, &mut join_fields);
-                                ctx.raw_data()
-                                    .create(
-                                        through_def,
-                                        ctx.tenant(),
-                                        crate::pipeline::new_pk(through_def, &join_fields)?,
-                                        join_fields,
-                                    )
-                                    .await?;
-                            }
-                        }
+                let through = rel
+                    .through
+                    .ok_or_else(|| Error::Invalid("many_to_many needs a join resource".into()))?(
+                );
+                let source_fk = rel.source_attribute_on_join_resource.unwrap_or("source_id");
+                let dest_fk = rel
+                    .destination_attribute_on_join_resource
+                    .unwrap_or("dest_id");
+                let source = parent
+                    .get(rel.source_attribute)
+                    .cloned()
+                    .ok_or(Error::NotFound)?;
+                let join_pk = pk_name(through)?;
+                let mut existing = HashMap::new();
+                if managed.rel_type == ManagedRelType::DirectControl {
+                    for row in ctx
+                        .access()
+                        .related_rows(through, Filter::eq(source_fk, source.clone()), false)
+                        .await?
+                    {
+                        let target = row.get(dest_fk).cloned().ok_or(Error::NotFound)?;
+                        existing.insert(target, row);
+                    }
+                }
+                let mut kept = HashSet::new();
+                for input in managed.inputs {
+                    let row = target(ctx, dest, input).await?;
+                    let target = row
+                        .get(rel.destination_attribute)
+                        .cloned()
+                        .ok_or(Error::NotFound)?;
+                    kept.insert(target.clone());
+                    if !existing.contains_key(&target) {
+                        let link = [
+                            (source_fk.to_string(), source.clone()),
+                            (dest_fk.to_string(), target),
+                        ];
+                        create_child(
+                            ctx,
+                            through,
+                            required_action(through, ActionKind::Create)?,
+                            FieldMap::new(),
+                            &link,
+                        )
+                        .await?;
+                    }
+                }
+                for (target, row) in existing {
+                    if !kept.contains(&target) {
+                        let id = required_pk(&row, join_pk)?;
+                        Box::pin(destroy_dynamic(
+                            ctx,
+                            through,
+                            required_action(through, ActionKind::Destroy)?,
+                            id,
+                            &row,
+                        ))
+                        .await?;
                     }
                 }
             }

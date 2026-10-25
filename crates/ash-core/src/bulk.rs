@@ -13,9 +13,8 @@ use crate::value::{FieldMap, Value};
 
 /// How a bulk action uses transactions: Ash's `transaction` option.
 ///
-/// A data layer that can't transact runs every batch without one, as Ash asks
-/// `data_layer_can?(resource, :transact)` first: ash-memory can't, as Ash's ETS layer
-/// can't.
+/// A data layer that cannot transact runs batches without one. Individual managed
+/// writes and cascades still require a transaction-capable execution mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BulkTransaction {
     /// The whole action in one transaction (`transaction: :all`). After-transaction
@@ -278,6 +277,7 @@ struct Scope {
     /// The whole action runs in one.
     whole: bool,
     stop_on_error: bool,
+    unsupported: bool,
 }
 
 impl Scope {
@@ -291,6 +291,7 @@ impl Scope {
             per_batch: can && transaction == BulkTransaction::Batch,
             whole: can && transaction == BulkTransaction::All,
             stop_on_error,
+            unsupported: !can && transaction == BulkTransaction::All,
         }
     }
 
@@ -326,6 +327,9 @@ where
     F: FnOnce(Context<D>) -> Fut + Send,
     Fut: Future<Output = Result<BulkResult<R>>> + Send,
 {
+    if scope.unsupported {
+        return Err(Error::AtomicityUnsupported);
+    }
     if !scope.whole {
         return action(ctx.clone()).await;
     }
@@ -442,6 +446,41 @@ fn split(
         .unzip()
 }
 
+/// Managed rows must prepare their belongs-to writes inside the same transaction.
+async fn managed_rows<R: Resource, D: TransactionSupport + 'static>(
+    ctx: &Context<D>,
+    scope: Scope,
+    mut rows: Vec<DynamicChangeset>,
+    mut result: BulkResult<R>,
+    batch_size: Option<usize>,
+    notify: bool,
+    return_records: bool,
+) -> Result<BulkResult<R>> {
+    let chunk_size = batch_size.unwrap_or(rows.len()).max(1);
+    while !rows.is_empty() {
+        let mut batch: Vec<_> = rows.drain(..chunk_size.min(rows.len())).collect();
+        let hooks = batch
+            .iter_mut()
+            .map(DynamicChangeset::take_after_transactions)
+            .collect();
+        let outcomes = in_batch(ctx, scope, move |tx| async move {
+            let mut outcomes = Vec::new();
+            for changeset in batch {
+                let cascade = crate::engine::Cascade::new(notify);
+                let outcome = changeset.commit_within(&tx, &cascade).await;
+                match outcome {
+                    Err(error) if scope.transactional() => return Err(error),
+                    outcome => outcomes.push(outcome),
+                }
+            }
+            Ok(outcomes)
+        })
+        .await;
+        settle(&mut result, scope, return_records, hooks, outcomes)?;
+    }
+    Ok(result)
+}
+
 /// Create multiple records in a single batch or in chunked batches.
 ///
 /// Each row runs through the same changeset as a single create: accept, changes,
@@ -471,7 +510,7 @@ where
     let scope = Scope::new(ctx, opts.transaction, opts.stop_on_error);
     in_scope(ctx, scope, inputs.len(), move |ctx| async move {
         let mut result = BulkResult::default();
-        let mut prepared = Vec::new();
+        let mut changesets = Vec::new();
         for input in inputs {
             let mut changeset = match DynamicChangeset::for_create(&ctx, &R::DEF, action_def, input)
             {
@@ -485,6 +524,25 @@ where
                 let update_fields: Vec<&str> = update_fields.iter().map(String::as_str).collect();
                 changeset = changeset.with_upsert(identity, &update_fields);
             }
+            changesets.push(changeset);
+        }
+        if changesets
+            .iter()
+            .any(|row| !row.managed_relationships().is_empty())
+        {
+            return managed_rows(
+                &ctx,
+                scope,
+                changesets,
+                result,
+                opts.batch_size,
+                opts.notify,
+                opts.return_records,
+            )
+            .await;
+        }
+        let mut prepared = Vec::new();
+        for mut changeset in changesets {
             let after_transactions = changeset.take_after_transactions();
             match changeset.prepare(&ctx).await {
                 Ok(id) => prepared.push(PreparedRow {
@@ -577,7 +635,7 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
 
         // Soft and cascading destroys run each record's changes and cascades, so they go
         // one record at a time instead of through a single bulk delete.
-        if action_def.soft || !action_def.cascade_destroy.is_empty() {
+        if action_def.soft || crate::engine::cascades(&R::DEF, action_def) {
             let mut rows = rows.into_iter().peekable();
             while rows.peek().is_some() {
                 let batch: Vec<FieldMap> = rows.by_ref().take(chunk_size).collect();
@@ -757,9 +815,9 @@ where
     let scope = Scope::new(ctx, opts.transaction, opts.stop_on_error);
     in_scope(ctx, scope, updates.len(), move |ctx| async move {
         let mut result = BulkResult::default();
-        let mut prepared = Vec::new();
+        let mut changesets = Vec::new();
         for (record, input) in updates {
-            let mut changeset =
+            let changeset =
                 match DynamicChangeset::for_update(&ctx, &R::DEF, action_def, record, input) {
                     Ok(changeset) => changeset,
                     Err(err) => {
@@ -767,6 +825,25 @@ where
                         continue;
                     }
                 };
+            changesets.push(changeset);
+        }
+        if changesets
+            .iter()
+            .any(|row| !row.managed_relationships().is_empty())
+        {
+            return managed_rows(
+                &ctx,
+                scope,
+                changesets,
+                result,
+                opts.batch_size,
+                opts.notify,
+                opts.return_records,
+            )
+            .await;
+        }
+        let mut prepared = Vec::new();
+        for mut changeset in changesets {
             let after_transactions = changeset.take_after_transactions();
             match changeset.prepare(&ctx).await {
                 Ok(id) => prepared.push(PreparedRow {

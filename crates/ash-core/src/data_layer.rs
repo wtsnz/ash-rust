@@ -182,8 +182,8 @@ pub trait DataLayer: Send + Sync {
 
     /// Runs `work` in one of this data layer's transactions, given the data layer that
     /// writes within it, as Ash runs an action in a transaction (`transaction?: true`)
-    /// where its data layer can transact. One that can't, as Ash's ETS layer can't, gives
-    /// `None` and `work` runs as it is: the default.
+    /// where its data layer can transact. Unsupported backends pass `None`; the core
+    /// rejects multi-record actions before invoking their work.
     fn in_transaction<T, F, Fut>(&self, work: F) -> impl Future<Output = Result<T>> + Send
     where
         Self: Sized,

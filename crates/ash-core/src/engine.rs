@@ -22,5 +22,6 @@ pub(crate) use managed::{Cascade, cascade_destroy_related, cascades, persist_des
 pub use managed::{handle_cascading_deletes, handle_managed_relationships};
 pub use pagination::{KeysetCursor, Page, build_keyset_filter, keyset_sort, keyset_values};
 pub use query::{Query, query};
+pub(crate) use read::scope_discovery;
 pub use read::{after_read, record_visible, scope_read};
 pub use relations::{RelatedQuery, count_related_query, load_related, load_related_query};

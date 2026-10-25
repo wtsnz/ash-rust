@@ -2,8 +2,8 @@ mod dynamic;
 mod input;
 mod managed;
 
-pub(crate) use dynamic::upsert_identity as dynamic_upsert_identity;
 pub use dynamic::{DynamicChangeset, DynamicChangesetHook};
+pub(crate) use dynamic::{primary_action, upsert_identity as dynamic_upsert_identity};
 pub use input::IntoFieldMap;
 pub use managed::ManagedRelationshipSpec;
 

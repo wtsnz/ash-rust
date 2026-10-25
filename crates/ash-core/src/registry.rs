@@ -529,13 +529,13 @@ impl SchemaSupport for StoreRegistry {
 }
 
 impl TransactionSupport for StoreRegistry {
-    async fn transaction<F, Fut, T>(&self, f: F) -> Result<T>
+    async fn transaction<F, Fut, T>(&self, _f: F) -> Result<T>
     where
         F: FnOnce(&Self) -> Fut + Send,
         Fut: Future<Output = Result<T>> + Send,
         T: Send,
     {
-        f(self).await
+        Err(Error::AtomicityUnsupported)
     }
 
     /// Its stores each keep their own transactions, which this doesn't open, so a bulk

@@ -143,6 +143,73 @@ helper accept the same plan. Until step 8, `DataLayer::upsert_raw` and
 raw backend integrations. They do not provide action authorization. Ordinary
 framework writes always use the guarded plan, including through `StoreRegistry`.
 
+## Managed relationships and cascades
+
+A supplied belongs-to or many-to-many destination ID resolves through the
+resource's default read action before core copies any key into a foreign key or
+join row. Resolution applies tenant predicates, preparations, after-read hooks and
+row policies. Composite belongs-to relationships copy every referenced column
+from that resolved row. Unknown IDs, foreign-tenant IDs and IDs hidden by read
+policies or preparation filters return `Error::NotFound`, with no record details.
+Malformed IDs have the same outcome. A belongs-to input accepts one record.
+
+System scopes bypass row policies but still enforce tenancy and preparations.
+They cannot link a destination in another tenant. Bind a separate scope inside
+`runtime.transaction` for intentional work across tenants.
+
+Managed creates and updates run the destination's actions. Join creates and
+destroys run the join resource's actions, including changes, validations, policies,
+tenant stamping and hooks. Missing actions fail instead of falling back to raw
+writes. Link columns are forced by core after checking the destination; caller
+input cannot replace them. Existing has-many DirectControl behavior remains:
+only a current child can be updated by its supplied ID. An unmatched ID creates
+a new child with a new key and leaves the named row alone.
+
+Core retains stored link keys internally until linking finishes, even when field
+policies hide those columns from the returned View. Discovery of existing children
+and joins uses the same scoped read planner as destination resolution.
+
+Before discovering cascade children, core re-resolves the stored parent and checks
+its destroy policy. Caller-supplied parent fields cannot select another set of
+children. Discovery includes tenant and read-policy predicates, and child writes
+retain their own action authorization and tenant guards. Hard cascades include
+archived children by omitting only the exact soft-delete visibility filter declared
+by `ResourceExtension::soft_delete_attribute`. Other preparations and read hooks
+still run. An archival child without a hard destroy action retains referential hard
+delete behavior, checked against its declared destroy policy. Join cascades require
+a hard destroy action. Nilify uses an update action, or an implicit scoped update
+when the resource has none.
+
+Managed actions and cascades require a storage transaction, including when the
+caller disabled bulk batch transactions or attached a notification buffer. A later
+failure rolls back the parent and all earlier related writes. Bulk managed rows
+prepare inside that transaction so creating a belongs-to record cannot escape it.
+Soft cascades reached by an atomic update also open a transaction. Notifications
+from failed work are discarded; successful nested work joins the outer buffer.
+
+SQLite and Postgres use their real transactions and nested savepoints. Memory uses
+a private snapshot for each transaction, with nested snapshots acting as savepoints.
+Commit compares the entire live store with its starting snapshot under the store's
+write lock, then publishes all changes together. Any concurrent store change returns
+`Error::DataLayer` with a transaction-conflict message and publishes none of the
+snapshot. Applications may retry the whole operation. This deliberately rejects
+unrelated concurrent changes too, preventing phantom discovery results and unique
+identity races. Memory now supports transactional bulk batches as well.
+
+A backend whose `DataLayer::in_transaction` supplies `None` returns
+`Error::AtomicityUnsupported` before a multi-record action writes. A notification
+buffer alone grants no transaction capability. StoreRegistry has no coordinated
+transaction across its stores, so it rejects managed actions, cascades and explicit
+Context/Runtime transactions. `BulkTransaction::All` also rejects unsupported
+backends. Ordinary bulk batches keep their existing capability check; `Off` runs
+independent rows, while each managed row or cascade still requires its own transaction.
+
+Breaking behavior changes include missing managed actions, unresolved supplied IDs,
+unsupported explicit transactions, and memory transaction conflicts on any concurrent
+store change. `Error::AtomicityUnsupported` is a new public error variant.
+`ResourceExtension::soft_delete_attribute` is an additive method with a default of
+`None`. No dependencies are added.
+
 ## Reader-specific results
 
 Core presents ordinary execution results before returning them. The private presenter
@@ -276,7 +343,7 @@ presentation and protect derived values.
 public but deprecated until engine reads and writes use executable plans. Core uses a
 private backend accessor for those paths. Existing adapter code and raw-backend tests
 carry documented deprecation allowances. New caller code still receives warnings.
-There is no opaque executable plan yet. DataLayer transports still use raw maps;
+Upsert conflicts use an opaque executable plan; other backend transports remain raw until step 8. DataLayer transports still use raw maps;
 core wraps hook and presentation records in RawRecord. Credential issuance
 is restricted to Runtime, while credential results remain raw maps.
 
@@ -290,8 +357,7 @@ so those additions do not require changing the binding API.
 
 This change does not fix token namespace isolation, durable access revocation,
 deleted-user validation, session invalidation or atomic reset/refresh consumption.
-It also does not fix managed relationships, upsert conflicts, subscription
-authorization and payloads. The design and the full migration sequence are in
+Subscription authorization and payloads remain planned work. The design and the full migration sequence are in
 [RFC 0005: Scoped execution](wip/0005-scoped-execution.md).
 
 ## Verification

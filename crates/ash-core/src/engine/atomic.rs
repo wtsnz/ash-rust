@@ -248,10 +248,10 @@ pub(crate) fn plan_update(
         if !action.cascade_destroy.is_empty() {
             return Ok(Err("it cascades to related records".into()));
         }
-        let deletes_related = resource.relationships.iter().any(|rel| {
-            matches!(rel.kind, RelKind::HasMany | RelKind::HasOne)
-                && rel.on_delete != OnDelete::Nothing
-        });
+        let deletes_related = resource
+            .relationships
+            .iter()
+            .any(|rel| rel.kind != RelKind::BelongsTo && rel.on_delete != OnDelete::Nothing);
         if deletes_related {
             return Ok(Err(
                 "its relationships act on related records when it's deleted".into(),
