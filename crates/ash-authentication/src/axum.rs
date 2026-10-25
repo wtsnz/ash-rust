@@ -112,10 +112,12 @@ pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }
 
-/// DTO for token revocation requests.
+/// Self-revocation with a signed JWT, or all sessions of the authenticated owner.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RevokeTokenRequest {
-    pub token: String,
+#[serde(untagged, deny_unknown_fields)]
+pub enum RevokeTokenRequest {
+    Token { token: String },
+    OwnSessions { all_sessions: bool },
 }
 
 /// DTO for password change requests.
@@ -260,13 +262,35 @@ async fn refresh_handler<R: Resource, D: DataLayer>(
 
 async fn revoke_handler<R: Resource, D: DataLayer>(
     State(state): State<Arc<AuthRouterState<R, D>>>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<RevokeTokenRequest>,
 ) -> Result<Json<serde_json::Value>, AuthRejection> {
-    state
-        .strategy
-        .revoke_token(&state.context, &payload.token)
-        .await
-        .map_err(AuthRejection::AuthError)?;
+    match payload {
+        RevokeTokenRequest::Token { token } => {
+            state.strategy.revoke_token(&state.context, &token).await
+        }
+        RevokeTokenRequest::OwnSessions { all_sessions: true } => {
+            let header = headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or(AuthRejection::MissingHeader)?;
+            let token = header
+                .strip_prefix("Bearer ")
+                .ok_or(AuthRejection::InvalidHeader)?;
+            state
+                .strategy
+                .revoke_own_sessions(&state.context, token)
+                .await
+        }
+        RevokeTokenRequest::OwnSessions {
+            all_sessions: false,
+        } => {
+            return Err(AuthRejection::InvalidToken(
+                "all_sessions must be true".into(),
+            ));
+        }
+    }
+    .map_err(AuthRejection::AuthError)?;
 
     Ok(Json(serde_json::json!({ "status": "revoked" })))
 }
@@ -313,11 +337,12 @@ async fn request_password_reset_handler<R: Resource, D: DataLayer>(
     State(state): State<Arc<AuthRouterState<R, D>>>,
     Json(payload): Json<RequestPasswordResetRequest>,
 ) -> Result<Json<serde_json::Value>, AuthRejection> {
-    let (_user, _reset_token) = state
+    // Account absence and operational failures share the same public response.
+    // Trusted callers can use the strategy directly to observe delivery errors.
+    let _ = state
         .strategy
         .request_password_reset(&state.context, &payload.email)
-        .await
-        .map_err(AuthRejection::AuthError)?;
+        .await;
 
     Ok(Json(serde_json::json!({
         "status": "reset_requested"

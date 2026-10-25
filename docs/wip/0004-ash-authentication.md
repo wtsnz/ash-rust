@@ -12,11 +12,11 @@
 This RFC specifies the architecture, DSL design, cryptographic primitives, and HTTP integration of **`ash-authentication`**, a modular extension crate bringing first-class authentication to `ash-rust`.
 
 Modeled after **`ash_authentication`** in the Elixir Ash ecosystem, `ash-authentication` eliminates hand-rolled cryptography, ad-hoc session tracking, and bespoke user sign-in handlers by transforming authentication into **declarative resource strategies**:
-1. **Password Strategy**: Secure Argon2id password hashing, constant-time credential verification, password confirmation checks, and action lifecycles (`register_with_password`, `sign_in_with_password`, `change_password`).
-2. **Token & JWT Service**: Cryptographically signed bearer tokens (HMAC-SHA256 via `jsonwebtoken`), configurable token expiration, payload claims (`sub`, `iss`, `aud`, `exp`, `jti`, roles), and token revocation tracking.
-3. **API Key Strategy**: Salted SHA-256 API token generation and validation for machine-to-machine authentication.
+1. **Password Strategy**: Argon2id password hashing, password confirmation checks, and action lifecycles (`register_with_password`, `sign_in_with_password`, `change_password`).
+2. **Token & JWT Service**: Cryptographically signed bearer tokens (HMAC-SHA256 via `jsonwebtoken`), configurable expiration, namespaced claims, and persisted token revocation.
+3. **API Key Strategy**: Unsalted SHA-256 hashes of high-entropy random API keys for machine-to-machine authentication. The configured prefix applies to generation and parsing. Expensive password hashing is unnecessary for these randomly generated secrets.
 4. **Declarative Transformer Macro (`#[authentication]`)**: Injects required authentication fields (e.g. `hashed_password`), registers validation changes, and sets up authentication actions with zero boilerplate.
-5. **Axum HTTP Extractor & Authentication Router**: Pluggable `AuthUser<U>` extractor for Axum handlers, bearer token middleware, and automated endpoints (`/auth/register`, `/auth/sign-in`, `/auth/refresh`, `/auth/me`).
+5. **Axum HTTP Extractor & Authentication Router**: `AuthUser` extracts a `BoundIdentity` through `RequestAuthenticator`. The router provides sign-in, refresh, revoke, password lifecycle and `/me` endpoints. Registration uses resource actions, not a built-in HTTP route.
 6. **Zero-Bypass Policy Integration**: Seamlessly maps authenticated identities into `ash_core::Actor`, guaranteeing all downstream resource actions and field policies enforce authorization transparently.
 
 ---
@@ -56,17 +56,17 @@ In Elixir's Ash, **`ash_authentication`** treats authentication as an extension 
                              │
  ┌───────────────────────────▼────────────────────────────┐
  │            ash-authentication Axum Router              │
- │  POST /auth/register   POST /auth/sign-in   GET /auth/me │
+ │  POST /auth/sign-in   POST /auth/refresh   GET /auth/me │
  └───────────────────────────┬────────────────────────────┘
                              │
-              AuthUser<User> / Token Verification
+              AuthUser / Persisted Authentication
                              │
  ┌───────────────────────────▼────────────────────────────┐
  │               ash-authentication Strategies            │
  │     PasswordStrategy      ApiKeyStrategy      JwtService│
  └───────────────────────────┬────────────────────────────┘
                              │
-                    Sets Context.actor
+                 Binds identity through Runtime
                              │
  ┌───────────────────────────▼────────────────────────────┐
  │               ash-core Resource Pipeline               │
@@ -82,8 +82,8 @@ In Elixir's Ash, **`ash_authentication`** treats authentication as an extension 
 
 Passwords must be stored using modern memory-hard password hashing algorithms:
 - **Default Algorithm**: **Argon2id** (Argon2 version 0x13) via the pure-Rust `argon2` crate.
-- **Parameters**: RFC 9106 recommended defaults (19 MiB memory, 2 iterations, 1 parallelism).
-- **Constant-Time Verification**: Verification uses constant-time string comparison (`subtle` / constant-time equality) to protect against side-channel timing attacks.
+- **Parameters**: The argon2 crate's defaults, 19 MiB memory, 2 iterations and 1 lane. These are not RFC 9106's recommended parameter sets.
+- **Verification**: The argon2 crate verifies PHC password hashes. This does not make the entire sign-in or reset HTTP request constant time.
 - **Salt Generation**: Cryptographically secure random salts (16 bytes) generated via `getrandom`.
 
 ### 4.2 Token Management (`JwtService`)
@@ -97,16 +97,16 @@ Bearer authentication uses persisted session and subject state:
       pub sub: Uuid,           // Subject (User ID)
       pub resource: String,    // Subject resource namespace
       pub credential_version: i64,
-      pub exp: usize,          // Expiration timestamp
-      pub iat: usize,          // Issued-at timestamp
+      pub exp: u64,            // Expiration timestamp
+      pub iat: u64,            // Issued-at timestamp
       pub jti: String,         // Unique JWT token identifier
+      pub purpose: String,    // access, refresh, password_reset, etc.
       pub role: Option<String>,
       pub tenant: Option<String>,
-      pub extra: FieldMap,
   }
   ```
 - **Persisted authentication**: `JwtService::verify_token` checks cryptography and
-  expiry only. `AuthStrategy::authenticate` is async and checks the resolved tenant,
+  requires `exp > now`. `AuthStrategy::authenticate` is async and checks the resolved tenant,
   persisted session state, live subject and credential version in one required
   backend transaction. Uncoordinated subject/token stores are rejected. It returns a
   `BoundIdentity` carrying actor and tenant together.
@@ -177,9 +177,12 @@ and validates snapshot commits. SQLite uses its writer lock, and Postgres uses
 row locking in the conditional update. Refresh rotation consumes the old token
 and persists both successor tokens in the same required transaction.
 
-`DatabaseTokenStore::prune_expired` removes expired records in its resource/tenant
-namespace. Public revoke-input restrictions and bounded tombstone retention remain
-follow-up work.
+`DatabaseTokenStore::prune_expired` removes records with `expires_at <= now` in its
+resource/tenant namespace. Issuance and revocation call it automatically. Schedule
+it for idle namespaces that need cleanup without token writes. Revocation preserves
+token expiry; unknown raw JTIs create no tombstones. Trusted server code can call
+`AuthStrategy::revoke_jti` without a signer to revoke existing state. This API is
+not exposed on the public router.
 
 ### 4.5 Password lifecycle
 
@@ -205,6 +208,13 @@ The subject and token store must share one transactional backend. A split store 
 `AtomicityUnsupported`. Authentication may bind its resulting identity to a registry
 afterward. Reset requests commit their token before sending mail and reject an
 outer transaction that could later roll back. Sender errors occur after commit.
+The public reset-request endpoint always returns 200 with
+`{"status":"reset_requested"}` for valid JSON, including unknown identities and
+operational failures. Trusted strategy callers still receive errors. Both account
+paths perform the scoped lookup, random JWT generation and signature verification;
+neither hashes a password. Unknown identities persist nothing and send no mail.
+Database writes, commit and mail latency still differ, so request timing is not
+constant. Queue-backed senders and rate limits belong at the application boundary.
 
 Schema upgrades, the immediate rejection of older JWTs and the changed extractor,
 signer and token-store APIs are described in the
@@ -235,20 +245,36 @@ async fn profile_handler(AuthUser(identity): AuthUser) -> Json<serde_json::Value
 |---|---|---|---|
 | `POST` | `/auth/sign-in` | Authenticate with credentials, return access + refresh tokens | Public |
 | `POST` | `/auth/refresh` | Rotate refresh token, return new token pair | Public (refresh token) |
-| `POST` | `/auth/revoke` | Invalidate an active token | Bearer / token |
+| `POST` | `/auth/revoke` | `{"token":"<JWT>"}` revokes itself; `{"all_sessions":true}` revokes the owner's JWT sessions | Signed token / persisted bearer access session |
 | `POST` | `/auth/change-password` | Change user password | Bearer `<token>` |
 | `POST` | `/auth/request-password-reset` | Request single-use password reset token | Public |
 | `POST` | `/auth/reset-password` | Complete password reset with token | Public (reset token) |
-| `GET` | `/auth/me` | Inspect claims of authenticated actor | Bearer `<token>` |
+| `GET` | `/auth/me` | Inspect the live authenticated identity | Bearer `<token>` |
+
+Revoke checks signature, expiry and exact resource/tenant for self-revocation.
+Owner revocation authenticates a live access session and accepts no subject or JTI
+input. Invalid credentials return 401, unmatched/extra body fields return 422, and
+success returns 200 with `{"status":"revoked"}`. Repeating an unexpired signed
+token is idempotent. API keys and other subjects/tenants remain valid.
+
+Breaking changes: raw JTIs are no longer accepted by `revoke_token` or HTTP revoke;
+`RevokeTokenRequest` is an enum; tokens are rejected during their expiry second;
+reset-request operational errors are hidden by the
+generic HTTP response; configured API-key prefixes and payload format are enforced.
+The [migration guide](../../crates/ash-authentication/README.md#migrate-existing-installations)
+covers server-side JTI calls, Rust DTO construction, legacy tombstone cleanup and
+reissuing keys generated under a previously ignored prefix. Keys contain the
+configured prefix and 64 hex characters from two UUIDv4 values, with 244 random
+bits. SHA-256 covers the entire raw key without salt.
 
 ---
 
 ## 5. Security & Safety Checklist
 
 - [x] **No Plaintext Passwords**: Passwords never enter the database; hashed immediately in changeset before persistence.
-- [x] **Timing-Attack Resistance**: Password comparison runs in constant-time.
+- [x] **Password verification**: Uses the argon2 crate's verifier; full request timing can vary.
 - [x] **Field Policy Redaction**: Password hashes are shielded from API serializers by default.
-- [x] **Secret Key Hygiene**: Enforces non-empty, high-entropy signing secrets for JWT tokens.
+- [ ] **Secret key hygiene**: Applications must supply a high-entropy signing secret. `JwtService::new` does not enforce secret strength.
 - [x] **Zero Memory-Unsafe Dependencies**: Pure Rust cryptography (`argon2`, `jsonwebtoken`).
 
 

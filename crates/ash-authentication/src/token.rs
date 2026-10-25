@@ -282,6 +282,13 @@ impl JwtService {
         })?;
 
         let claims = token_data.claims;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| AuthError::Crypto(error.to_string()))?
+            .as_secs();
+        if claims.exp <= now {
+            return Err(AuthError::TokenExpired);
+        }
 
         Ok(claims)
     }
@@ -302,6 +309,19 @@ impl JwtService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokens_expiring_now_are_rejected() {
+        let service =
+            JwtService::new("expiry-boundary-secret-key-0123456789").with_lifetime(Duration::ZERO);
+        let token = service
+            .sign_access_token(Uuid::new_v4(), None, None, "User", 0)
+            .unwrap();
+        assert!(matches!(
+            service.verify_token(&token),
+            Err(AuthError::TokenExpired)
+        ));
+    }
 
     #[test]
     fn test_jwt_sign_and_verify() {

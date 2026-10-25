@@ -940,7 +940,7 @@ async fn raw_jti_revocation_remains_available_without_a_signer<D: DataLayer>(f: 
         .verify_token(&pair.access_token)
         .unwrap();
     let strategy = User::auth_strategy(&f.runtime);
-    strategy.revoke_token(&f.ctx, &claims.jti).await.unwrap();
+    strategy.revoke_jti(&f.ctx, &claims.jti).await.unwrap();
     assert!(
         f.strategy
             .authenticate(&f.ctx, &pair.access_token)
