@@ -55,7 +55,11 @@ pub fn pk_name(def: &ResourceDef) -> Result<&'static str> {
         .ok_or(Error::NoPrimaryKey(def.name))
 }
 
-pub fn split_input(resource: &ResourceDef, action: &ActionDef, input: FieldMap) -> Result<(FieldMap, FieldMap)> {
+pub fn split_input(
+    resource: &ResourceDef,
+    action: &ActionDef,
+    input: FieldMap,
+) -> Result<(FieldMap, FieldMap)> {
     let mut fields = FieldMap::new();
     let mut arguments = FieldMap::new();
     for (field, mut value) in input {
@@ -100,7 +104,6 @@ pub(crate) fn cast_text(ty: AttrType, value: &mut Value) {
         }
     }
 }
-
 
 /// Gives a new record its generated primary key where it has none: a UUID made here, as
 /// Ash's `uuid_primary_key`. Any other generated key (an integer, as Ash's
@@ -287,12 +290,21 @@ pub fn run_validations_with_context(
     // Every validation runs, and every failure is reported, as Ash's are.
     let mut errors = Vec::new();
     for validation in action.validations {
-        let ctx = crate::action::ValidationContext { record, fields, actor, tenant, metadata, arguments };
+        let ctx = crate::action::ValidationContext {
+            record,
+            fields,
+            actor,
+            tenant,
+            metadata,
+            arguments,
+        };
         let result = match validation {
             Validation::Present { field }
             | Validation::StringLength { field, .. }
             | Validation::OneOf { field, .. }
-            | Validation::Numericality { field, .. } => check_builtin_validation(validation, get_val(field)),
+            | Validation::Numericality { field, .. } => {
+                check_builtin_validation(validation, get_val(field))
+            }
             Validation::Custom(c) => c.validate(&ctx),
             Validation::Func(f) => f(&ctx),
         };
@@ -305,7 +317,10 @@ pub fn run_validations_with_context(
 
 /// Checks a built-in validation (`present`, `string_length`, `one_of`, `numericality`)
 /// against the value it validates, as its field will hold it.
-pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&Value>) -> Result<()> {
+pub(crate) fn check_builtin_validation(
+    validation: &Validation,
+    value: Option<&Value>,
+) -> Result<()> {
     let fails = match *validation {
         Validation::Present { .. } => match value {
             None | Some(Value::Null) => true,
@@ -319,7 +334,9 @@ pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&V
             }
             _ => false,
         },
-        Validation::OneOf { allowed, .. } => matches!(value, Some(Value::String(s)) if !allowed.contains(&s.as_str())),
+        Validation::OneOf { allowed, .. } => {
+            matches!(value, Some(Value::String(s)) if !allowed.contains(&s.as_str()))
+        }
         Validation::Numericality { field, min, max } => {
             // Integers, and floats and decimals stored as their text, as Ash's
             // numericality checks every kind of number.
@@ -332,7 +349,9 @@ pub(crate) fn check_builtin_validation(validation: &Validation, value: Option<&V
                 },
                 Some(_) => return Err(Error::validation(field, "must be a number", Vec::new())),
             };
-            number.is_some_and(|n| min.is_some_and(|min| n < min as f64) || max.is_some_and(|max| n > max as f64))
+            number.is_some_and(|n| {
+                min.is_some_and(|min| n < min as f64) || max.is_some_and(|max| n > max as f64)
+            })
         }
         Validation::Custom(_) | Validation::Func(_) => false,
     };
@@ -376,10 +395,7 @@ pub fn visible_scope(
     tenant: Option<String>,
 ) -> Result<(Option<Filter>, Option<String>)> {
     let (filter, tenant) = apply_tenant_scope(resource, filter, tenant)?;
-    Ok((
-        and_filters(filter, resource.primary_read_filter()),
-        tenant,
-    ))
+    Ok((and_filters(filter, resource.primary_read_filter()), tenant))
 }
 
 /// Stamp or require a tenant on write fields. Attribute strategy writes `tenant` onto `fields`.
@@ -471,9 +487,16 @@ pub(crate) fn check_type(attribute: &AttributeDef, value: &Value) -> Result<()> 
         | (AttrType::String, Value::String(_))
         | (AttrType::Integer, Value::Int(_))
         | (AttrType::Boolean, Value::Bool(_))
-        | (AttrType::Map | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. }, Value::Map(_))
+        | (
+            AttrType::Map
+            | AttrType::Embedded(_)
+            | AttrType::TypedMap { .. }
+            | AttrType::Union { .. },
+            Value::Map(_),
+        )
         | (AttrType::Array { .. }, Value::Array(_)) => true,
-        (AttrType::UtcDatetime { precision }, Value::String(got)) => match precision.normalize(got) {
+        (AttrType::UtcDatetime { precision }, Value::String(got)) => match precision.normalize(got)
+        {
             Ok(_) => true,
             Err(_) => {
                 return Err(Error::Constraint {
@@ -596,9 +619,17 @@ pub(crate) fn prepare_create_fields(def: &ResourceDef, fields: &mut FieldMap) {
 
 /// Values an update sets before its action's changes run: the next lock version, where
 /// the action has an optimistic lock (as Ash's adds one to it), and a new `updated_at`.
-pub(crate) fn prepare_update_fields(def: &ResourceDef, action: &ActionDef, existing: &FieldMap, fields: &mut FieldMap) {
+pub(crate) fn prepare_update_fields(
+    def: &ResourceDef,
+    action: &ActionDef,
+    existing: &FieldMap,
+    fields: &mut FieldMap,
+) {
     for version in action.optimistic_locks() {
-        fields.insert(version.to_string(), crate::engine::next_version(existing.get(version)));
+        fields.insert(
+            version.to_string(),
+            crate::engine::next_version(existing.get(version)),
+        );
     }
     if let Some((_created_at, updated_at)) = def.timestamps {
         fields.insert(

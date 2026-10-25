@@ -3,7 +3,7 @@ use ash_core::{
     DataLayer, FieldMap, Filter, RelationshipDef, ResourceDef, Sort, TransactionSupport, Value,
 };
 use ash_postgres::Postgres;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use uuid::Uuid;
 
 static USER_ATTRS: &[AttributeDef] = &[
@@ -12,9 +12,11 @@ static USER_ATTRS: &[AttributeDef] = &[
     AttributeDef::required("email", AttrType::String),
 ];
 
-static USER_RELS: &[RelationshipDef] = &[
-    RelationshipDef::has_many("tickets", || &TICKET_DEF, "user_id"),
-];
+static USER_RELS: &[RelationshipDef] = &[RelationshipDef::has_many(
+    "tickets",
+    || &TICKET_DEF,
+    "user_id",
+)];
 
 static USER_AGGS: &[AggregateDef] = &[
     AggregateDef::count("ticket_count", "tickets"),
@@ -26,7 +28,9 @@ static USER_AGGS: &[AggregateDef] = &[
 ];
 
 static USER_ACTIONS: &[ActionDef] = &[
-    ActionDef::create("create").accept(&["name", "email"]).primary(),
+    ActionDef::create("create")
+        .accept(&["name", "email"])
+        .primary(),
     ActionDef::read("read").primary(),
 ];
 
@@ -62,9 +66,8 @@ static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::optional("user_id", AttrType::Uuid),
 ];
 
-static TICKET_RELS: &[RelationshipDef] = &[
-    RelationshipDef::belongs_to("user", || &USER_DEF, "user_id"),
-];
+static TICKET_RELS: &[RelationshipDef] =
+    &[RelationshipDef::belongs_to("user", || &USER_DEF, "user_id")];
 
 static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open")
@@ -104,22 +107,32 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
 
     let pg = Postgres::connect(&database_url).await.ok()?;
 
-    let _ = pg.execute_sql("DROP TABLE IF EXISTS tickets CASCADE;").await;
+    let _ = pg
+        .execute_sql("DROP TABLE IF EXISTS tickets CASCADE;")
+        .await;
     let _ = pg.execute_sql("DROP TABLE IF EXISTS users CASCADE;").await;
 
-    pg.execute_sql("CREATE TABLE users (
+    pg.execute_sql(
+        "CREATE TABLE users (
             id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL
-        );").await.ok()?;
+        );",
+    )
+    .await
+    .ok()?;
 
-    pg.execute_sql("CREATE TABLE tickets (
+    pg.execute_sql(
+        "CREATE TABLE tickets (
             id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
             priority BIGINT NOT NULL DEFAULT 1,
             user_id UUID REFERENCES users(id)
-        );").await.ok()?;
+        );",
+    )
+    .await
+    .ok()?;
 
     // Seed 5 users
     let mut user_ids = Vec::new();
@@ -128,7 +141,10 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
         let mut u = FieldMap::new();
         u.insert("id".into(), Value::Uuid(u_id));
         u.insert("name".into(), Value::String(format!("Staff Engineer #{i}")));
-        u.insert("email".into(), Value::String(format!("staff{i}@company.com")));
+        u.insert(
+            "email".into(),
+            Value::String(format!("staff{i}@company.com")),
+        );
         let _ = pg.create(&USER_DEF, None, Value::from(u_id), u).await;
         user_ids.push(u_id);
     }
@@ -147,7 +163,10 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
 
         let mut t = FieldMap::new();
         t.insert("id".into(), Value::Uuid(t_id));
-        t.insert("title".into(), Value::String(format!("Incident #{i}: Database connection pool exhausted")));
+        t.insert(
+            "title".into(),
+            Value::String(format!("Incident #{i}: Database connection pool exhausted")),
+        );
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("user_id".into(), Value::Uuid(user_id));
@@ -172,11 +191,17 @@ fn bench_postgres_operations(c: &mut Criterion) {
             let t_id = Uuid::new_v4();
             let mut t = FieldMap::new();
             t.insert("id".into(), Value::Uuid(t_id));
-            t.insert("title".into(), Value::String("Benchmarked Critical Failure".into()));
+            t.insert(
+                "title".into(),
+                Value::String("Benchmarked Critical Failure".into()),
+            );
             t.insert("status".into(), Value::String("open".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("user_id".into(), Value::Uuid(user_id));
-            let res = pg.create(&TICKET_DEF, None, Value::from(t_id), t).await.unwrap();
+            let res = pg
+                .create(&TICKET_DEF, None, Value::from(t_id), t)
+                .await
+                .unwrap();
             black_box(res);
         });
     });
@@ -248,30 +273,31 @@ fn bench_postgres_operations(c: &mut Criterion) {
     // 6. Transactional Workflow
     group.bench_function("transaction_multi_step", |b| {
         b.to_async(&rt).iter(|| async {
-            let res = pg.transaction(|tx| {
-                let tx = tx.clone();
-                async move {
-                    let u_id = Uuid::new_v4();
-                    let mut u = FieldMap::new();
-                    u.insert("id".into(), Value::Uuid(u_id));
-                    u.insert("name".into(), Value::String("Tx User".into()));
-                    u.insert("email".into(), Value::String("tx@company.com".into()));
-                    tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
+            let res = pg
+                .transaction(|tx| {
+                    let tx = tx.clone();
+                    async move {
+                        let u_id = Uuid::new_v4();
+                        let mut u = FieldMap::new();
+                        u.insert("id".into(), Value::Uuid(u_id));
+                        u.insert("name".into(), Value::String("Tx User".into()));
+                        u.insert("email".into(), Value::String("tx@company.com".into()));
+                        tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
 
-                    let t_id = Uuid::new_v4();
-                    let mut t = FieldMap::new();
-                    t.insert("id".into(), Value::Uuid(t_id));
-                    t.insert("title".into(), Value::String("Tx Ticket".into()));
-                    t.insert("status".into(), Value::String("open".into()));
-                    t.insert("priority".into(), Value::Int(1));
-                    t.insert("user_id".into(), Value::Uuid(u_id));
-                    tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
+                        let t_id = Uuid::new_v4();
+                        let mut t = FieldMap::new();
+                        t.insert("id".into(), Value::Uuid(t_id));
+                        t.insert("title".into(), Value::String("Tx Ticket".into()));
+                        t.insert("status".into(), Value::String("open".into()));
+                        t.insert("priority".into(), Value::Int(1));
+                        t.insert("user_id".into(), Value::Uuid(u_id));
+                        tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
 
-                    Ok((u_id, t_id))
-                }
-            })
-            .await
-            .unwrap();
+                        Ok((u_id, t_id))
+                    }
+                })
+                .await
+                .unwrap();
             black_box(res);
         });
     });

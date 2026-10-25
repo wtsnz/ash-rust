@@ -20,7 +20,10 @@ use clap::{Args, Parser, Subcommand};
 use lagrange::{Lagrange, Planet};
 
 #[derive(Parser)]
-#[command(name = "lagrange", about = "Interplanetary freight and docking on ash-rust")]
+#[command(
+    name = "lagrange",
+    about = "Interplanetary freight and docking on ash-rust"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -37,7 +40,11 @@ enum Command {
         #[arg(long, default_value_t = 4000)]
         port: u16,
         /// Secret that signs session tokens.
-        #[arg(long, env = "LAGRANGE_JWT_SECRET", default_value = "lagrange-development-signing-key")]
+        #[arg(
+            long,
+            env = "LAGRANGE_JWT_SECRET",
+            default_value = "lagrange-development-signing-key"
+        )]
         jwt_secret: String,
     },
     /// Writes the TypeScript SDK and Zod schemas.
@@ -100,7 +107,9 @@ async fn telemetry(next_to: Option<&Path>) -> Result<Sqlite, Failure> {
         Some(fleet) => Sqlite::file(fleet.with_file_name("telemetry.db")).await?,
         None => Sqlite::memory().await?,
     };
-    lagrange::Telemetry::new(telemetry.clone()).install().await?;
+    lagrange::Telemetry::new(telemetry.clone())
+        .install()
+        .await?;
     Ok(telemetry)
 }
 
@@ -112,13 +121,16 @@ async fn with_database(database: Database, task: impl Task) -> Result<(), Failur
         }
         let fleet = Sqlite::file(&path).await?;
         fleet.migrate(lagrange::migrations_dir()).await?;
-        task.run(Lagrange::new(fleet, telemetry(Some(&path)).await?, mailer)).await
+        task.run(Lagrange::new(fleet, telemetry(Some(&path)).await?, mailer))
+            .await
     } else if let Some(url) = database.postgres {
         let fleet = Postgres::connect(&url).await?;
         fleet.migrate(lagrange::migrations_dir()).await?;
-        task.run(Lagrange::new(fleet, telemetry(None).await?, mailer)).await
+        task.run(Lagrange::new(fleet, telemetry(None).await?, mailer))
+            .await
     } else {
-        task.run(Lagrange::new(Memory::new(), telemetry(None).await?, mailer)).await
+        task.run(Lagrange::new(Memory::new(), telemetry(None).await?, mailer))
+            .await
     }
 }
 
@@ -147,7 +159,10 @@ impl Task for Serve {
     {
         if Planet::query(&app.anonymous()).count().await? == 0 {
             lagrange::seed::sol(&app).await?;
-            println!("seeded the Sol system; sign in as ada@helios-freight.example / {}", lagrange::seed::PASSWORD);
+            println!(
+                "seeded the Sol system; sign in as ada@helios-freight.example / {}",
+                lagrange::seed::PASSWORD
+            );
         }
         let jwt = Arc::new(ash_authentication::JwtService::new(self.jwt_secret));
         let router = lagrange::server::router(Arc::new(app), jwt)?;

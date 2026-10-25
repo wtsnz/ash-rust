@@ -1,9 +1,9 @@
-use std::time::{Duration, Instant};
 use ash_core::{
     ActionDef, AggregateDef, AggregateFilter, AttrType, AttributeDef, CompiledQuery, ConstValue,
     DataLayer, FieldMap, Filter, RelationshipDef, ResourceDef, Sort, TransactionSupport, Value,
 };
 use ash_postgres::Postgres;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 static USER_ATTRS: &[AttributeDef] = &[
@@ -12,9 +12,11 @@ static USER_ATTRS: &[AttributeDef] = &[
     AttributeDef::required("email", AttrType::String),
 ];
 
-static USER_RELS: &[RelationshipDef] = &[
-    RelationshipDef::has_many("tickets", || &TICKET_DEF, "user_id"),
-];
+static USER_RELS: &[RelationshipDef] = &[RelationshipDef::has_many(
+    "tickets",
+    || &TICKET_DEF,
+    "user_id",
+)];
 
 static USER_AGGS: &[AggregateDef] = &[
     AggregateDef::count("ticket_count", "tickets"),
@@ -26,7 +28,9 @@ static USER_AGGS: &[AggregateDef] = &[
 ];
 
 static USER_ACTIONS: &[ActionDef] = &[
-    ActionDef::create("create").accept(&["name", "email"]).primary(),
+    ActionDef::create("create")
+        .accept(&["name", "email"])
+        .primary(),
     ActionDef::read("read").primary(),
 ];
 
@@ -62,9 +66,8 @@ static TICKET_ATTRS: &[AttributeDef] = &[
     AttributeDef::optional("user_id", AttrType::Uuid),
 ];
 
-static TICKET_RELS: &[RelationshipDef] = &[
-    RelationshipDef::belongs_to("user", || &USER_DEF, "user_id"),
-];
+static TICKET_RELS: &[RelationshipDef] =
+    &[RelationshipDef::belongs_to("user", || &USER_DEF, "user_id")];
 
 static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open")
@@ -133,12 +136,27 @@ where
     println!("┌────────────────────────────────────────────────────────┐");
     println!("│ Benchmark: {:<43}│", name);
     println!("├────────────────────────────────────────────────────────┤");
-    println!("│   Iterations:   {:>12}                       │", latencies.len());
+    println!(
+        "│   Iterations:   {:>12}                       │",
+        latencies.len()
+    );
     println!("│   Throughput:   {:>12.2} ops/sec                 │", ips);
-    println!("│   Average:      {:>12.2} µs                      │", avg.as_nanos() as f64 / 1000.0);
-    println!("│   Median (p50): {:>12.2} µs                      │", median.as_nanos() as f64 / 1000.0);
-    println!("│   P95 Latency:  {:>12.2} µs                      │", p95.as_nanos() as f64 / 1000.0);
-    println!("│   P99 Latency:  {:>12.2} µs                      │", p99.as_nanos() as f64 / 1000.0);
+    println!(
+        "│   Average:      {:>12.2} µs                      │",
+        avg.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "│   Median (p50): {:>12.2} µs                      │",
+        median.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "│   P95 Latency:  {:>12.2} µs                      │",
+        p95.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "│   P99 Latency:  {:>12.2} µs                      │",
+        p99.as_nanos() as f64 / 1000.0
+    );
     println!("└────────────────────────────────────────────────────────┘\n");
 }
 
@@ -156,22 +174,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pg = Postgres::connect(&database_url).await?;
 
     // Initialize clean schema
-    pg.execute_sql("DROP TABLE IF EXISTS tickets CASCADE;").await?;
-    pg.execute_sql("DROP TABLE IF EXISTS users CASCADE;").await?;
+    pg.execute_sql("DROP TABLE IF EXISTS tickets CASCADE;")
+        .await?;
+    pg.execute_sql("DROP TABLE IF EXISTS users CASCADE;")
+        .await?;
 
-    pg.execute_sql("CREATE TABLE users (
+    pg.execute_sql(
+        "CREATE TABLE users (
             id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT NOT NULL
-        );").await?;
+        );",
+    )
+    .await?;
 
-    pg.execute_sql("CREATE TABLE tickets (
+    pg.execute_sql(
+        "CREATE TABLE tickets (
             id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
             priority BIGINT NOT NULL DEFAULT 1,
             user_id UUID REFERENCES users(id)
-        );").await?;
+        );",
+    )
+    .await?;
 
     // Seed 5 users
     let mut user_ids = Vec::new();
@@ -180,7 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut u = FieldMap::new();
         u.insert("id".into(), Value::Uuid(u_id));
         u.insert("name".into(), Value::String(format!("Staff Engineer #{i}")));
-        u.insert("email".into(), Value::String(format!("staff{i}@company.com")));
+        u.insert(
+            "email".into(),
+            Value::String(format!("staff{i}@company.com")),
+        );
         pg.create(&USER_DEF, None, Value::from(u_id), u).await?;
         user_ids.push(u_id);
     }
@@ -199,7 +228,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut t = FieldMap::new();
         t.insert("id".into(), Value::Uuid(t_id));
-        t.insert("title".into(), Value::String(format!("Incident #{i}: Database connection pool exhausted")));
+        t.insert(
+            "title".into(),
+            Value::String(format!("Incident #{i}: Database connection pool exhausted")),
+        );
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("user_id".into(), Value::Uuid(user_id));
@@ -218,11 +250,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let t_id = Uuid::new_v4();
             let mut t = FieldMap::new();
             t.insert("id".into(), Value::Uuid(t_id));
-            t.insert("title".into(), Value::String("Benchmarked Critical Failure".into()));
+            t.insert(
+                "title".into(),
+                Value::String("Benchmarked Critical Failure".into()),
+            );
             t.insert("status".into(), Value::String("open".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("user_id".into(), Value::Uuid(first_user_id));
-            let res = pg.create(&TICKET_DEF, None, Value::from(t_id), t).await.unwrap();
+            let res = pg
+                .create(&TICKET_DEF, None, Value::from(t_id), t)
+                .await
+                .unwrap();
             assert_eq!(res.get("id"), Some(&Value::Uuid(t_id)));
         },
     )
@@ -316,30 +354,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warmup,
         bench_dur,
         || async {
-            let res = pg.transaction(|tx| {
-                let tx = tx.clone();
-                async move {
-                    let u_id = Uuid::new_v4();
-                    let mut u = FieldMap::new();
-                    u.insert("id".into(), Value::Uuid(u_id));
-                    u.insert("name".into(), Value::String("Tx User".into()));
-                    u.insert("email".into(), Value::String("tx@company.com".into()));
-                    tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
+            let res = pg
+                .transaction(|tx| {
+                    let tx = tx.clone();
+                    async move {
+                        let u_id = Uuid::new_v4();
+                        let mut u = FieldMap::new();
+                        u.insert("id".into(), Value::Uuid(u_id));
+                        u.insert("name".into(), Value::String("Tx User".into()));
+                        u.insert("email".into(), Value::String("tx@company.com".into()));
+                        tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
 
-                    let t_id = Uuid::new_v4();
-                    let mut t = FieldMap::new();
-                    t.insert("id".into(), Value::Uuid(t_id));
-                    t.insert("title".into(), Value::String("Tx Ticket".into()));
-                    t.insert("status".into(), Value::String("open".into()));
-                    t.insert("priority".into(), Value::Int(1));
-                    t.insert("user_id".into(), Value::Uuid(u_id));
-                    tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
+                        let t_id = Uuid::new_v4();
+                        let mut t = FieldMap::new();
+                        t.insert("id".into(), Value::Uuid(t_id));
+                        t.insert("title".into(), Value::String("Tx Ticket".into()));
+                        t.insert("status".into(), Value::String("open".into()));
+                        t.insert("priority".into(), Value::Int(1));
+                        t.insert("user_id".into(), Value::Uuid(u_id));
+                        tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
 
-                    Ok((u_id, t_id))
-                }
-            })
-            .await
-            .unwrap();
+                        Ok((u_id, t_id))
+                    }
+                })
+                .await
+                .unwrap();
 
             assert_ne!(res.0, Uuid::nil());
             assert_ne!(res.1, Uuid::nil());
