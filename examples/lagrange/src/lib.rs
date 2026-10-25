@@ -76,3 +76,9 @@ domain! {
 pub fn migrations_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations")
 }
+
+/// Private token tables included in fleet migrations, excluded from API domains.
+pub static AUTH_STORAGE_DEF: ash_core::DomainDef = ash_core::DomainDef {
+    name: "AuthStorage",
+    resources: &[&<ash_authentication::AshToken as ash_core::Resource>::DEF],
+};

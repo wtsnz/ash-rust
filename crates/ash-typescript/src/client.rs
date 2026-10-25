@@ -192,6 +192,7 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let base_attrs = res
         .attributes
         .iter()
+        .filter(|attribute| !res.sensitive_attribute(attribute.name))
         .map(|a| format!("{}{}", to_camel_case(a.name), selection_of(&a.ty)))
         .collect::<Vec<_>>()
         .join(" ");

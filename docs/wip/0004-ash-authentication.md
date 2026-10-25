@@ -88,13 +88,15 @@ Passwords must be stored using modern memory-hard password hashing algorithms:
 
 ### 4.2 Token Management (`JwtService`)
 
-Stateless or stateful bearer token authentication:
+Bearer authentication uses persisted session and subject state:
 - **Algorithm**: `HS256` (HMAC-SHA256) signed by a configurable secret key.
 - **Standard Claims**:
   ```rust
   #[derive(Clone, Debug, Serialize, Deserialize)]
   pub struct Claims {
       pub sub: Uuid,           // Subject (User ID)
+      pub resource: String,    // Subject resource namespace
+      pub credential_version: i64,
       pub exp: usize,          // Expiration timestamp
       pub iat: usize,          // Issued-at timestamp
       pub jti: String,         // Unique JWT token identifier
@@ -103,9 +105,14 @@ Stateless or stateful bearer token authentication:
       pub extra: FieldMap,
   }
   ```
-- **Revocation Store (`TokenRevocationStore`)**:
-  - Trait for tracking revoked tokens by `jti` or subject ID.
-  - Built-in `MemoryRevocationStore` and support for database-backed revocation.
+- **Persisted authentication**: `JwtService::verify_token` checks cryptography and
+  expiry only. `AuthStrategy::authenticate` is async and checks the resolved tenant,
+  persisted session state, live subject and credential version in one required
+  backend transaction. Uncoordinated subject/token stores are rejected. It returns a
+  `BoundIdentity` carrying actor and tenant together.
+- **Existing tokens**: missing resource/version claims are rejected immediately.
+  There is no compatibility window or local acceptance cache. All newly issued
+  access, refresh and reset tokens need a persisted row.
 
 ### 4.3 Declarative Resource DSL (`#[authentication]`)
 
@@ -151,48 +158,74 @@ The transformer automatically:
 3. Injects field policies redacting `hashed_password` on public reads.
 4. Generates typed helpers `User::register_with_password` and `User::sign_in_with_password`.
 
-### 4.4 Database-Backed Token Resource (`AshToken`) & Refresh Token Rotation
+### 4.4 Database-backed session state
 
-To achieve feature parity with Elixir Ash's `AshAuthentication.TokenResource`, `ash-authentication` provides the canonical `AshToken` resource and `DatabaseTokenStore`:
-- **`AshToken` Schema**:
-  - `id: Uuid [pk]`
-  - `jti: String` — Unique token identifier
-  - `subject: Uuid` — User / account identifier
-  - `purpose: String` — `"access"`, `"refresh"`, `"revocation"`, `"password_reset"`
-  - `expires_at: i64` — Unix timestamp
-  - `revoked: bool` — Revocation flag
-  - `extra: Option<String>` — Optional serialized claims or metadata
-- **Refresh Token Rotation (RFC 6749 / RFC 6819)**:
-  1. On login, `JwtService::sign_token_pair` issues an `(access_token, refresh_token)` pair. The refresh token's `jti` is stored in `ash_tokens`.
-  2. On `POST /auth/refresh`, the client supplies `refresh_token`. The server validates the token in `ash_tokens` and **immediately invalidates it**.
-  3. A new `(access_token, refresh_token)` pair is returned, and the new refresh token is stored.
-  4. **Replay Detection**: If a compromised or previously rotated refresh token is presented again, rotation fails with `401 Unauthorized`.
-- **Background Pruning**:
-  - `store.prune_expired().await` removes expired token records across all supported data layers (`Memory`, `Sqlite`, `Postgres`).
+`AshToken` stores `id`, `resource`, `tenant_key`, `jti`, `subject`, `purpose`,
+`expires_at`, `revoked`, `consumed` and optional `extra`. A unique identity covers
+`(resource, tenant_key, subject, jti)`. The tenant key encodes `Option<&str>` as JSON,
+so absence never equals a tenant string. Resource names must be unique in a store.
 
-### 4.5 Password Lifecycle: Change & Reset
+All JWT sessions are persisted. Every authentication reads that authoritative
+state and the subject's credential version. A different Runtime or restarted
+instance sees revocation through the shared database. The synchronous in-memory
+revocation traits and JwtService revocation methods are removed.
 
-- **Change Password**:
-  - `POST /auth/change-password` requires `Bearer <token>` authentication.
-  - Verifies `current_password` in constant time, validates new password constraints and confirmation, updates `hashed_password`, and invalidates existing refresh tokens.
-- **Single-Use Password Reset**:
-  - `POST /auth/request-password-reset`: Looks up user and issues a short-lived reset token (`purpose: "password_reset"`).
-  - `POST /auth/reset-password`: Consumes the token, validates the new password, updates the hash, and revokes the reset token so it can never be used again.
+Refresh/reset consumption conditionally sets `consumed = true` only for a matching
+namespace, purpose, subject, unrevoked/unconsumed state and unexpired row. Exactly
+one returned row is success. Memory performs compare-and-set under its write lock
+and validates snapshot commits. SQLite uses its writer lock, and Postgres uses
+row locking in the conditional update. Refresh rotation consumes the old token
+and persists both successor tokens in the same required transaction.
+
+`DatabaseTokenStore::prune_expired` removes expired records in its resource/tenant
+namespace. Public revoke-input restrictions and bounded tombstone retention remain
+follow-up work.
+
+### 4.5 Password lifecycle
+
+The macro injects `credential_version: i64 = 0` and declares a resource-level
+credential version rule. A stored password-hash change increments the version in
+the same write on memory, SQLite and Postgres. The rule also applies to app/admin
+actions, bulk updates, direct hash writes and upserts. The version is sensitive
+storage state and cannot be assigned by action input. Authentication rejects old
+versions, and a deleted subject no longer authenticates.
+
+Change-password verifies the current hash and validates/hashes the replacement
+before its transaction. The update compares the stored hash, changes hash/version
+and revokes prior JWT sessions together. Reset validates/hashes first, then consumes
+the token, checks the live subject/version, updates hash/version and revokes prior
+sessions in one required transaction. Revocation errors propagate and roll back.
+
+API keys remain valid across password changes and resets by explicit policy.
+Clearing or replacing the API-key hash revokes them. No API-key expiry or separate
+key lifecycle is introduced here.
+
+The subject and token store must share one transactional backend. A split store or
+`StoreRegistry` without a consistency protocol is rejected with
+`AtomicityUnsupported`. Authentication may bind its resulting identity to a registry
+afterward. Reset requests commit their token before sending mail and reject an
+outer transaction that could later roll back. Sender errors occur after commit.
+
+Schema upgrades, the immediate rejection of older JWTs and the changed extractor,
+signer and token-store APIs are described in the
+[authentication migration guide](../../crates/ash-authentication/README.md#migrate-existing-installations).
 
 ### 4.6 Axum Web Integration
 
 With the `axum` feature enabled:
 ```rust
-let auth_routes = auth_router(User::auth_strategy(), jwt_service.clone(), ctx);
+let strategy = User::auth_strategy(&runtime).with_jwt_service((*jwt_service).clone());
+let auth_routes = auth_router(strategy.clone(), jwt_service.clone(), ctx.clone());
+let authenticator = ash_authentication::RequestAuthenticator::new(strategy, ctx);
 
 let app = Router::new()
     .nest("/auth", auth_routes)
     .route("/api/profile", get(profile_handler))
-    .with_state(app_state);
+    .with_state(authenticator);
 
-async fn profile_handler(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
-    // Actor is verified and loaded from Bearer token
-    Json(serde_json::json!({ "user_id": actor.id, "role": actor.role() }))
+async fn profile_handler(AuthUser(identity): AuthUser) -> Json<serde_json::Value> {
+    // Identity includes the live actor and resolved tenant.
+    Json(serde_json::json!({ "user_id": identity.actor().id, "role": identity.actor().role() }))
 }
 ```
 
@@ -217,3 +250,8 @@ async fn profile_handler(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
 - [x] **Field Policy Redaction**: Password hashes are shielded from API serializers by default.
 - [x] **Secret Key Hygiene**: Enforces non-empty, high-entropy signing secrets for JWT tokens.
 - [x] **Zero Memory-Unsafe Dependencies**: Pure Rust cryptography (`argon2`, `jsonwebtoken`).
+
+
+Active subscriptions retain their authenticated context until they end. New HTTP
+requests and subscription operations use async authentication, but automatic
+termination or revalidation of existing streams on revocation or expiry is deferred.

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
@@ -17,6 +15,10 @@ fn default_purpose() -> String {
 pub struct Claims {
     /// Subject identifier (the authenticated User ID).
     pub sub: Uuid,
+    /// Resource namespace. Required; pre-version tokens are rejected.
+    pub resource: String,
+    /// Subject's persisted credential version when issued.
+    pub credential_version: i64,
     /// Expiration time (seconds since Unix epoch).
     pub exp: u64,
     /// Issued-at time (seconds since Unix epoch).
@@ -47,48 +49,8 @@ pub struct TokenPair {
     pub token_type: String,
 }
 
-/// Token revocation storage trait for invalidating active tokens.
-pub trait TokenRevocationStore: Send + Sync {
-    /// Mark a token ID (`jti`) as revoked until its natural expiration.
-    fn revoke(&self, jti: &str, expires_at: u64) -> Result<()>;
-    /// Check whether a token ID (`jti`) has been revoked.
-    fn is_revoked(&self, jti: &str) -> Result<bool>;
-}
-
-/// In-memory token revocation store suitable for single-instance applications or testing.
-#[derive(Clone, Debug, Default)]
-pub struct MemoryRevocationStore {
-    revoked: Arc<RwLock<HashSet<String>>>,
-}
-
-impl MemoryRevocationStore {
-    pub fn new() -> Self {
-        Self {
-            revoked: Arc::new(RwLock::new(HashSet::new())),
-        }
-    }
-}
-
-impl TokenRevocationStore for MemoryRevocationStore {
-    fn revoke(&self, jti: &str, _expires_at: u64) -> Result<()> {
-        let mut set = self
-            .revoked
-            .write()
-            .map_err(|e| AuthError::Crypto(e.to_string()))?;
-        set.insert(jti.to_string());
-        Ok(())
-    }
-
-    fn is_revoked(&self, jti: &str) -> Result<bool> {
-        let set = self
-            .revoked
-            .read()
-            .map_err(|e| AuthError::Crypto(e.to_string()))?;
-        Ok(set.contains(jti))
-    }
-}
-
-/// JWT Token Service responsible for signing, verifying, rotating, and revoking tokens.
+/// JWT signing and cryptographic verification only. Use `AuthStrategy::authenticate`
+/// for the asynchronous persisted session and subject checks.
 #[derive(Clone)]
 pub struct JwtService {
     encoding_key: EncodingKey,
@@ -97,7 +59,6 @@ pub struct JwtService {
     refresh_token_lifetime: Duration,
     reset_token_lifetime: Duration,
     confirmation_token_lifetime: Duration,
-    revocation_store: Option<Arc<dyn TokenRevocationStore>>,
 }
 
 impl JwtService {
@@ -111,7 +72,6 @@ impl JwtService {
             refresh_token_lifetime: Duration::from_secs(86400 * 14), // Default 14 days
             reset_token_lifetime: Duration::from_secs(900), // Default 15 minutes
             confirmation_token_lifetime: Duration::from_secs(86400 * 3), // Default 3 days
-            revocation_store: Some(Arc::new(MemoryRevocationStore::new())),
         }
     }
 
@@ -159,25 +119,16 @@ impl JwtService {
         self.confirmation_token_lifetime
     }
 
-    /// Attach a custom token revocation store.
-    pub fn with_revocation_store(mut self, store: Arc<dyn TokenRevocationStore>) -> Self {
-        self.revocation_store = Some(store);
-        self
-    }
-
-    /// Get reference to revocation store if present.
-    pub fn revocation_store(&self) -> Option<&Arc<dyn TokenRevocationStore>> {
-        self.revocation_store.as_ref()
-    }
-
     /// Generate and sign a new JWT access token (alias for [`sign_access_token`]).
     pub fn sign_token(
         &self,
         user_id: Uuid,
         role: Option<String>,
         tenant: Option<String>,
+        resource: &str,
+        credential_version: i64,
     ) -> Result<String> {
-        self.sign_access_token(user_id, role, tenant)
+        self.sign_access_token(user_id, role, tenant, resource, credential_version)
     }
 
     /// Generate and sign a short-lived JWT access token (`purpose = "access"`).
@@ -186,8 +137,17 @@ impl JwtService {
         user_id: Uuid,
         role: Option<String>,
         tenant: Option<String>,
+        resource: &str,
+        credential_version: i64,
     ) -> Result<String> {
-        self.sign_custom_token(user_id, "access", self.token_lifetime, role, tenant)
+        self.sign_custom_token(
+            user_id,
+            "access",
+            self.token_lifetime,
+            role,
+            tenant,
+            (resource, credential_version),
+        )
     }
 
     /// Generate and sign a long-lived JWT refresh token (`purpose = "refresh"`).
@@ -196,6 +156,8 @@ impl JwtService {
         user_id: Uuid,
         role: Option<String>,
         tenant: Option<String>,
+        resource: &str,
+        credential_version: i64,
     ) -> Result<String> {
         self.sign_custom_token(
             user_id,
@@ -203,28 +165,43 @@ impl JwtService {
             self.refresh_token_lifetime,
             role,
             tenant,
+            (resource, credential_version),
         )
     }
 
     /// Generate and sign a short-lived password reset token (`purpose = "password_reset"`).
-    pub fn sign_reset_token(&self, user_id: Uuid, tenant: Option<String>) -> Result<String> {
+    pub fn sign_reset_token(
+        &self,
+        user_id: Uuid,
+        tenant: Option<String>,
+        resource: &str,
+        credential_version: i64,
+    ) -> Result<String> {
         self.sign_custom_token(
             user_id,
             "password_reset",
             self.reset_token_lifetime,
             None,
             tenant,
+            (resource, credential_version),
         )
     }
 
     /// Generate and sign an email confirmation token (`purpose = "email_confirmation"`).
-    pub fn sign_confirmation_token(&self, user_id: Uuid, tenant: Option<String>) -> Result<String> {
+    pub fn sign_confirmation_token(
+        &self,
+        user_id: Uuid,
+        tenant: Option<String>,
+        resource: &str,
+        credential_version: i64,
+    ) -> Result<String> {
         self.sign_custom_token(
             user_id,
             "email_confirmation",
             self.confirmation_token_lifetime,
             None,
             tenant,
+            (resource, credential_version),
         )
     }
 
@@ -234,9 +211,18 @@ impl JwtService {
         user_id: Uuid,
         role: Option<String>,
         tenant: Option<String>,
+        resource: &str,
+        credential_version: i64,
     ) -> Result<TokenPair> {
-        let access_token = self.sign_access_token(user_id, role.clone(), tenant.clone())?;
-        let refresh_token = self.sign_refresh_token(user_id, role, tenant)?;
+        let access_token = self.sign_access_token(
+            user_id,
+            role.clone(),
+            tenant.clone(),
+            resource,
+            credential_version,
+        )?;
+        let refresh_token =
+            self.sign_refresh_token(user_id, role, tenant, resource, credential_version)?;
 
         Ok(TokenPair {
             access_token,
@@ -253,6 +239,7 @@ impl JwtService {
         lifetime: Duration,
         role: Option<String>,
         tenant: Option<String>,
+        namespace: (&str, i64),
     ) -> Result<String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -264,6 +251,8 @@ impl JwtService {
 
         let claims = Claims {
             sub: user_id,
+            resource: namespace.0.into(),
+            credential_version: namespace.1,
             exp,
             iat: now,
             jti,
@@ -276,9 +265,13 @@ impl JwtService {
             .map_err(|e| AuthError::InvalidToken(e.to_string()))
     }
 
-    /// Verify and decode a JWT bearer token, checking signature, expiration, and revocation status.
+    /// Verify signature and expiry only. This does not authenticate a request, check
+    /// revocation, resolve tenancy, or load the live subject.
     pub fn verify_token(&self, token: &str) -> Result<Claims> {
-        let validation = Validation::default();
+        let validation = Validation {
+            leeway: 0,
+            ..Validation::default()
+        };
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation).map_err(|e| {
             if e.kind() == &jsonwebtoken::errors::ErrorKind::ExpiredSignature {
@@ -289,12 +282,6 @@ impl JwtService {
         })?;
 
         let claims = token_data.claims;
-
-        if let Some(store) = &self.revocation_store
-            && store.is_revoked(&claims.jti)?
-        {
-            return Err(AuthError::TokenRevoked);
-        }
 
         Ok(claims)
     }
@@ -310,32 +297,6 @@ impl JwtService {
         }
         Ok(claims)
     }
-
-    /// Revoke an active token.
-    pub fn revoke_token(&self, token: &str) -> Result<()> {
-        let claims = self.verify_token(token)?;
-        if let Some(store) = &self.revocation_store {
-            store.revoke(&claims.jti, claims.exp)?;
-        }
-        Ok(())
-    }
-
-    /// Revoke a token ID (`jti`) directly.
-    pub fn revoke_jti(&self, jti: &str, expires_at: u64) -> Result<()> {
-        if let Some(store) = &self.revocation_store {
-            store.revoke(jti, expires_at)?;
-        }
-        Ok(())
-    }
-
-    /// Check whether a `jti` has been revoked.
-    pub fn is_revoked(&self, jti: &str) -> Result<bool> {
-        if let Some(store) = &self.revocation_store {
-            store.is_revoked(jti)
-        } else {
-            Ok(false)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -348,7 +309,7 @@ mod tests {
         let user_id = Uuid::new_v4();
 
         let token = service
-            .sign_token(user_id, Some("admin".to_string()), None)
+            .sign_token(user_id, Some("admin".to_string()), None, "User", 0)
             .unwrap();
 
         let claims = service.verify_token(&token).unwrap();
@@ -364,7 +325,7 @@ mod tests {
         let user_id = Uuid::new_v4();
 
         let pair = service
-            .sign_token_pair(user_id, Some("member".to_string()), None)
+            .sign_token_pair(user_id, Some("member".to_string()), None, "User", 0)
             .unwrap();
 
         assert_eq!(pair.token_type, "Bearer");
@@ -386,20 +347,5 @@ mod tests {
                 .verify_token_with_purpose(&pair.refresh_token, "access")
                 .is_err()
         );
-    }
-
-    #[test]
-    fn test_jwt_revocation() {
-        let service = JwtService::new("my-super-secret-key-that-is-at-least-32-chars-long");
-        let user_id = Uuid::new_v4();
-
-        let token = service.sign_token(user_id, None, None).unwrap();
-        assert!(service.verify_token(&token).is_ok());
-
-        service.revoke_token(&token).unwrap();
-        assert!(matches!(
-            service.verify_token(&token),
-            Err(AuthError::TokenRevoked)
-        ));
     }
 }

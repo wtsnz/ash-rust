@@ -13,5 +13,6 @@ fn main() -> std::process::ExitCode {
         &lagrange::WORLD_DEF,
         &lagrange::FLEET_DEF,
         &lagrange::CARGO_DEF,
+        &lagrange::AUTH_STORAGE_DEF,
     ])
 }

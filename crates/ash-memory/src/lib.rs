@@ -206,7 +206,11 @@ impl DataLayer for Memory {
                 .ok_or(Error::NotFound)?
                 .clone();
 
-            current_row.extend(fields);
+            current_row = ash_core::CredentialVersionRule::update(resource, &fields).apply(
+                resource,
+                &current_row,
+                &|_, _| false,
+            )?;
             let before = table.get(&id).ok_or(Error::NotFound)?;
             check_identities(resource, table, &id, &current_row, Some(before))?;
             table.insert(id, current_row.clone());
@@ -255,7 +259,11 @@ impl DataLayer for Memory {
                     return Err(Error::NotFound);
                 }
                 let before = row.clone();
-                row.extend(plan.updates().clone());
+                row = ash_core::CredentialVersionRule::update(resource, plan.updates()).apply(
+                    resource,
+                    &row,
+                    &|_, _| false,
+                )?;
                 let table = tables.get_mut(&key).expect("conflict table exists");
                 check_identities(resource, table, &existing_id, &row, Some(&before))?;
                 table.insert(existing_id, row.clone());

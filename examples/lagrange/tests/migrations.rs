@@ -12,6 +12,7 @@ fn resources() -> Vec<&'static ash_core::ResourceDef> {
         &lagrange::WORLD_DEF,
         &lagrange::FLEET_DEF,
         &lagrange::CARGO_DEF,
+        &lagrange::AUTH_STORAGE_DEF,
     ]
     .into_iter()
     .flat_map(|domain| domain.resources.iter().copied())
@@ -76,7 +77,7 @@ async fn sqlite_history_renames_without_losing_rows() {
 
     assert_eq!(
         db.migrate(lagrange::migrations_dir()).await.unwrap().len(),
-        4
+        5
     );
     let code: String = sqlx::query_scalar("SELECT berth_code FROM berth_reservations")
         .fetch_one(db.pool().unwrap())
@@ -128,7 +129,7 @@ async fn postgres_history_renames_without_losing_rows() {
     sqlx::raw_sql(SEED_V1).execute(&raw).await.unwrap();
     assert_eq!(
         db.migrate(lagrange::migrations_dir()).await.unwrap().len(),
-        4
+        5
     );
     // Timestamps are `timestamptz`, so an offset is kept as the same instant.
     let commissioned: bool =

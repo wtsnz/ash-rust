@@ -128,6 +128,11 @@ pub trait ResourceExtension: Send + Sync + Debug + 'static {
         false
     }
 
+    /// Credential version changes that every write backend must apply atomically.
+    fn credential_version_rule(&self) -> Option<crate::CredentialVersionRule> {
+        None
+    }
+
     /// Downcasting helper to retrieve the concrete extension struct.
     fn as_any(&self) -> &dyn Any;
 }

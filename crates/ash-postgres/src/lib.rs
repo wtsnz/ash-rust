@@ -889,6 +889,13 @@ impl DataLayer for Postgres {
             .map(|row| (row.id().clone(), row.fields().clone()))
             .collect();
 
+        if ash_core::CredentialVersionRule::for_resource(resource).is_some() {
+            let mut results = Vec::with_capacity(plan.rows().len());
+            for row in plan.rows() {
+                results.push(self.update(row).await);
+            }
+            return Ok(results);
+        }
         let mut results: Vec<Option<Result<FieldMap>>> = (0..rows.len()).map(|_| None).collect();
         let pk = resource
             .primary_key()
@@ -1002,7 +1009,14 @@ impl TransactionSupport for Postgres {
                     Err(err) => {
                         let connection = conn.lock().await;
                         active.store(false, Ordering::Release);
-                        let _ = connection.batch_execute("ROLLBACK").await;
+                        connection
+                            .batch_execute("ROLLBACK")
+                            .await
+                            .map_err(|rollback| {
+                                Error::DataLayer(format!(
+                                    "transaction failed: {err}; rollback failed: {rollback}"
+                                ))
+                            })?;
                         Err(err)
                     }
                 }
@@ -1024,11 +1038,19 @@ impl TransactionSupport for Postgres {
                         Ok(val)
                     }
                     Err(err) => {
-                        let _ = conn
-                            .lock()
-                            .await
+                        let connection = conn.lock().await;
+                        connection
                             .batch_execute(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
-                            .await;
+                            .await
+                            .map_err(|rollback| {
+                                Error::DataLayer(format!(
+                                    "transaction failed: {err}; rollback failed: {rollback}"
+                                ))
+                            })?;
+                        connection
+                            .batch_execute(&format!("RELEASE SAVEPOINT {sp_name}"))
+                            .await
+                            .map_err(map_pg)?;
                         Err(err)
                     }
                 }

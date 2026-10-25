@@ -181,25 +181,28 @@ async fn test_axum_auth_router_and_auth_user_extractor() -> Result<()> {
     // App state holding JwtService for extractor
     #[derive(Clone)]
     struct AppState {
-        jwt: Arc<JwtService>,
+        auth: ash_authentication::RequestAuthenticator,
     }
 
-    impl axum::extract::FromRef<AppState> for Arc<JwtService> {
+    impl axum::extract::FromRef<AppState> for ash_authentication::RequestAuthenticator {
         fn from_ref(state: &AppState) -> Self {
-            state.jwt.clone()
+            state.auth.clone()
         }
     }
 
     let app_state = AppState {
-        jwt: jwt_service.clone(),
+        auth: ash_authentication::RequestAuthenticator::new(
+            User::auth_strategy(&ctx_runtime).with_jwt_service((*jwt_service).clone()),
+            ctx.clone(),
+        ),
     };
 
     // Protected route using AuthUser extractor
     async fn protected_handler(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
         Json(json!({
             "status": "ok",
-            "actor_id": actor.id.to_string(),
-            "role": actor.role(),
+            "actor_id": actor.actor().id.to_string(),
+            "role": actor.actor().role(),
         }))
     }
 
@@ -494,44 +497,40 @@ async fn test_password_reset_flow() -> Result<()> {
 async fn test_database_token_store_prune_expired() -> Result<()> {
     let ctx_runtime = ash_core::Runtime::new(Memory::new());
     let ctx = ctx_runtime.bootstrap();
-    let store = ash_authentication::DatabaseTokenStore::new(ctx.clone());
+    let strategy = User::auth_strategy(&ctx_runtime);
+    let store = strategy.token_store(&ctx);
 
     let user_id = Uuid::new_v4();
-    // Token that expired in the past
-    store
-        .store_token("expired-jti-1", user_id, "refresh", 100, None)
-        .await?;
-    // Token valid until year 2100
-    store
-        .store_token("valid-jti-1", user_id, "refresh", 4102444800, None)
-        .await?;
+    let expired = ash_authentication::Claims {
+        sub: user_id,
+        resource: User::DEF.name.into(),
+        credential_version: 0,
+        exp: 100,
+        iat: 0,
+        jti: "expired-jti-1".into(),
+        purpose: "refresh".into(),
+        role: None,
+        tenant: None,
+    };
+    let valid = ash_authentication::Claims {
+        exp: 4102444800,
+        jti: "valid-jti-1".into(),
+        ..expired.clone()
+    };
+    store.store_token(&expired).await?;
+    store.store_token(&valid).await?;
 
     // Expired token is not returned as valid
-    assert!(
-        store
-            .get_valid_token("expired-jti-1", "refresh")
-            .await?
-            .is_none()
-    );
+    assert!(store.get_valid_token(&expired).await?.is_none());
     // Valid token is returned
-    assert!(
-        store
-            .get_valid_token("valid-jti-1", "refresh")
-            .await?
-            .is_some()
-    );
+    assert!(store.get_valid_token(&valid).await?.is_some());
 
     // Prune expired
     let pruned = store.prune_expired().await?;
     assert_eq!(pruned, 1);
 
     // Valid token remains
-    assert!(
-        store
-            .get_valid_token("valid-jti-1", "refresh")
-            .await?
-            .is_some()
-    );
+    assert!(store.get_valid_token(&valid).await?.is_some());
 
     Ok(())
 }
@@ -603,17 +602,20 @@ async fn test_axum_full_auth_lifecycle() -> Result<()> {
 
     #[derive(Clone)]
     struct AppState {
-        jwt: Arc<JwtService>,
+        auth: ash_authentication::RequestAuthenticator,
     }
 
-    impl axum::extract::FromRef<AppState> for Arc<JwtService> {
+    impl axum::extract::FromRef<AppState> for ash_authentication::RequestAuthenticator {
         fn from_ref(state: &AppState) -> Self {
-            state.jwt.clone()
+            state.auth.clone()
         }
     }
 
     let app_state = AppState {
-        jwt: jwt_service.clone(),
+        auth: ash_authentication::RequestAuthenticator::new(
+            User::auth_strategy(&ctx_runtime).with_jwt_service((*jwt_service).clone()),
+            ctx.clone(),
+        ),
     };
 
     let auth_routes = auth_router(strategy, jwt_service.clone(), ctx.clone());

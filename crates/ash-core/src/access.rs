@@ -438,6 +438,53 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
             .map(crate::RawRecord::from)
     }
 
+    /// Conditionally mutate credential state in one statement. Zero returned rows means
+    /// the condition lost a race. Unsupported backends fail before writing.
+    pub async fn update_credentials_where(
+        &self,
+        permit: &CredentialWritePermit,
+        filter: Filter,
+        fields: FieldMap,
+    ) -> Result<Vec<crate::RawRecord>> {
+        if !std::sync::Arc::ptr_eq(&permit.authority, &self.ctx.scope.authority) {
+            return Err(Error::Forbidden);
+        }
+        if !self.ctx.raw_data().can_update_atomically(permit.resource) {
+            return Err(Error::AtomicityUnsupported);
+        }
+        for (name, value) in &fields {
+            let attr = permit.resource.attribute(name).ok_or(Error::Forbidden)?;
+            if !permit.fields.contains(&name.as_str())
+                || attr.primary_key
+                || matches!(permit.resource.multitenancy.map(|mt| mt.strategy), Some(crate::MultitenancyStrategy::Attribute(tenant)) if tenant == name)
+            {
+                return Err(Error::Forbidden);
+            }
+            crate::pipeline::check_type(attr, value)?;
+        }
+        let (filter, tenant) = crate::pipeline::apply_tenant_scope(
+            permit.resource,
+            Some(filter),
+            self.ctx.tenant().map(str::to_owned),
+        )?;
+        let query = CompiledQuery {
+            filter,
+            tenant,
+            ..Default::default()
+        };
+        let update = crate::CredentialVersionRule::update(permit.resource, &fields);
+        self.ctx
+            .raw_data()
+            .update_atomic(&crate::AtomicUpdatePlan::new(
+                self.ctx,
+                permit.resource,
+                &query,
+                &update,
+            ))
+            .await
+            .map(|rows| rows.into_iter().map(crate::RawRecord::from).collect())
+    }
+
     /// Look up credentials using an explicit resource-bound server permit. There is
     /// no caller-supplied `CompiledQuery` that could forget the attribute tenant
     /// predicate or replace the schema tenant.

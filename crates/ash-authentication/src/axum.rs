@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use ash_core::{Actor, Context, DataLayer, Resource};
+use crate::BoundIdentity;
+use ash_core::{Context, DataLayer, Resource};
 use axum::extract::{FromRequestParts, State};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
@@ -14,48 +15,58 @@ use crate::error::AuthError;
 use crate::strategy::AuthStrategy;
 use crate::token::JwtService;
 
-/// Axum extractor providing the authenticated `Actor` from an `Authorization: Bearer <token>` header.
-///
-/// The signed tenant is preserved in the actor's `tenant` attribute. Adapters must
-/// compare it with their selected tenant before executing tenant-scoped operations.
+/// Async request authentication configured with a strategy and server-resolved tenant.
+/// Expose this type through Axum's `FromRef` instead of exposing a bare JwtService.
+#[derive(Clone)]
+pub struct RequestAuthenticator {
+    authenticate: Arc<
+        dyn Fn(String) -> crate::sender::BoxFuture<'static, crate::Result<BoundIdentity>>
+            + Send
+            + Sync,
+    >,
+}
+
+impl RequestAuthenticator {
+    pub fn new<R: Resource, D: DataLayer + 'static>(
+        strategy: AuthStrategy<R>,
+        context: Context<D>,
+    ) -> Self {
+        Self {
+            authenticate: Arc::new(move |token| {
+                let strategy = strategy.clone();
+                let context = context.clone();
+                Box::pin(async move { strategy.authenticate(&context, &token).await })
+            }),
+        }
+    }
+}
+
+/// A live persisted session, carrying its actor and resolved tenant together.
 #[derive(Clone, Debug)]
-pub struct AuthUser(pub Actor);
+pub struct AuthUser(pub BoundIdentity);
 
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
-    Arc<JwtService>: axum::extract::FromRef<S>,
+    RequestAuthenticator: axum::extract::FromRef<S>,
 {
     type Rejection = AuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         use axum::extract::FromRef;
-        let jwt = Arc::<JwtService>::from_ref(state);
-
-        let auth_header = parts
+        let authenticator = RequestAuthenticator::from_ref(state);
+        let header = parts
             .headers
             .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
+            .and_then(|value| value.to_str().ok())
             .ok_or(AuthRejection::MissingHeader)?;
-
-        let token = auth_header
+        let token = header
             .strip_prefix("Bearer ")
             .ok_or(AuthRejection::InvalidHeader)?;
-
-        let claims = jwt
-            .verify_token_with_purpose(token, "access")
-            .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
-
-        let mut actor = Actor::new(claims.sub);
-        if let Some(role) = claims.role {
-            actor = actor.with_role(role);
-        }
-        // Preserve the signed tenant until AuthUser carries a scope-bound principal.
-        if let Some(tenant) = claims.tenant {
-            actor = actor.with("tenant", tenant);
-        }
-
-        Ok(AuthUser(actor))
+        (authenticator.authenticate)(token.to_owned())
+            .await
+            .map(AuthUser)
+            .map_err(AuthRejection::AuthError)
     }
 }
 
@@ -155,7 +166,6 @@ pub struct AuthTokenResponse {
 /// State container for the authentication router.
 pub struct AuthRouterState<R: Resource, D: DataLayer> {
     pub strategy: AuthStrategy<R>,
-    pub jwt_service: Arc<JwtService>,
     pub context: Context<D>,
 }
 
@@ -177,7 +187,6 @@ where
 {
     let state = Arc::new(AuthRouterState {
         strategy: strategy.with_jwt_service((*jwt_service).clone()),
-        jwt_service,
         context,
     });
 
@@ -276,22 +285,17 @@ async fn change_password_handler<R: Resource, D: DataLayer>(
         .strip_prefix("Bearer ")
         .ok_or(AuthRejection::InvalidHeader)?;
 
-    let claims = state
-        .jwt_service
-        .verify_token_with_purpose(token, "access")
-        .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
-
-    state
-        .context
-        .access()
-        .require_tenant_match(claims.tenant.as_deref())
-        .map_err(|e| AuthRejection::AuthError(e.into()))?;
+    let identity = state
+        .strategy
+        .authenticate(&state.context, token)
+        .await
+        .map_err(AuthRejection::AuthError)?;
 
     let updated_user = state
         .strategy
         .change_password(
             &state.context,
-            claims.sub,
+            identity.actor().id,
             &payload.current_password,
             &payload.new_password,
             &payload.password_confirmation,
@@ -354,20 +358,14 @@ async fn me_handler<R: Resource, D: DataLayer>(
         .strip_prefix("Bearer ")
         .ok_or(AuthRejection::InvalidHeader)?;
 
-    let claims = state
-        .jwt_service
-        .verify_token_with_purpose(token, "access")
-        .map_err(|e| AuthRejection::InvalidToken(e.to_string()))?;
-
-    state
-        .context
-        .access()
-        .require_tenant_match(claims.tenant.as_deref())
-        .map_err(|e| AuthRejection::AuthError(e.into()))?;
-
+    let identity = state
+        .strategy
+        .authenticate(&state.context, token)
+        .await
+        .map_err(AuthRejection::AuthError)?;
     Ok(Json(serde_json::json!({
-        "user_id": claims.sub,
-        "role": claims.role,
-        "tenant": claims.tenant,
+        "user_id": identity.actor().id,
+        "role": identity.actor().role(),
+        "tenant": identity.tenant(),
     })))
 }

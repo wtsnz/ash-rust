@@ -77,7 +77,24 @@ async fn sqlite_registration_notifications_hide_passwords_and_hashes() {
 #[tokio::test]
 async fn postgres_registration_notifications_hide_passwords_and_hashes() {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL for Postgres tests");
-    let runtime = Runtime::new(ash_postgres::Postgres::connect(&url).await.unwrap());
+    let admin = ash_postgres::Postgres::connect(&url).await.unwrap();
+    let schema = format!("auth_notification_{}", Uuid::new_v4().simple());
+    admin
+        .execute_sql(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .unwrap();
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let runtime = Runtime::new(
+        ash_postgres::Postgres::connect(&format!(
+            "{url}{separator}options=-c%20search_path%3D{schema}%2Cpublic"
+        ))
+        .await
+        .unwrap(),
+    );
     runtime.install(&[&User::DEF]).await.unwrap();
     registration_privacy(runtime).await;
+    admin
+        .execute_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
 }

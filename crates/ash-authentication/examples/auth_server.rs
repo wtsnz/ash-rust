@@ -45,20 +45,20 @@ actions {
 
 #[derive(Clone)]
 struct AppState {
-    jwt: Arc<JwtService>,
+    auth: ash_authentication::RequestAuthenticator,
 }
 
-impl axum::extract::FromRef<AppState> for Arc<JwtService> {
+impl axum::extract::FromRef<AppState> for ash_authentication::RequestAuthenticator {
     fn from_ref(state: &AppState) -> Self {
-        state.jwt.clone()
+        state.auth.clone()
     }
 }
 
 async fn protected_profile(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
     Json(json!({
         "status": "authenticated",
-        "actor_id": actor.id.to_string(),
-        "role": actor.role(),
+        "actor_id": actor.actor().id.to_string(),
+        "role": actor.actor().role(),
     }))
 }
 
@@ -83,14 +83,17 @@ async fn main() -> Result<()> {
     let auth_routes = auth_router(
         Account::auth_strategy(&ctx_runtime),
         jwt_service.clone(),
-        ctx,
+        ctx.clone(),
     );
 
     let app = Router::new()
         .nest("/auth", auth_routes)
         .route("/api/profile", get(protected_profile))
         .with_state(AppState {
-            jwt: jwt_service.clone(),
+            auth: ash_authentication::RequestAuthenticator::new(
+                Account::auth_strategy(&ctx_runtime).with_jwt_service((*jwt_service).clone()),
+                ctx,
+            ),
         });
 
     println!("Ash Authentication Server running on http://127.0.0.1:3000");

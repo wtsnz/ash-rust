@@ -401,16 +401,18 @@ async fn serve(
                         .await;
                     break;
                 }
-                bound_headers =
-                    match request_data.connection_init(&headers, message.payload.as_ref()) {
-                        Ok(headers) => headers,
-                        Err(_) => {
-                            let _ = out
-                                .send(close(4403, "Connection credentials rejected"))
-                                .await;
-                            break;
-                        }
-                    };
+                bound_headers = match request_data
+                    .connection_init_async(&headers, message.payload.as_ref())
+                    .await
+                {
+                    Ok(headers) => headers,
+                    Err(_) => {
+                        let _ = out
+                            .send(close(4403, "Connection credentials rejected"))
+                            .await;
+                        break;
+                    }
+                };
                 acknowledged = true;
                 let ack = Message::Text(r#"{"type":"connection_ack"}"#.into());
                 if out.send(ack).await.is_err() {
@@ -441,7 +443,9 @@ async fn serve(
                 if let Some(previous) = subscriptions.remove(&id) {
                     previous.abort();
                 }
-                let bound = request_data.apply(&bound_headers, payload.request());
+                let bound = request_data
+                    .apply_async(&bound_headers, payload.request())
+                    .await;
                 // Queries and mutations always use their member's binding. Both
                 // subscription protocols resolve explicit groups as the generic actor.
                 let (request, scope) = if is_subscription(&payload) {
