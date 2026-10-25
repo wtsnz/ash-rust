@@ -86,7 +86,27 @@ impl BoundRequest {
 /// Bind actor and tenant in trusted server code. App-defined strings cannot authorize
 /// result sharing. Both WebSocket protocols use this binder.
 pub trait RequestData: Send + Sync + 'static {
-    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest;
+    fn apply(&self, _headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
+        BoundRequest::unbound(request)
+    }
+
+    /// Authenticate against durable storage before binding each network operation.
+    fn apply_async<'a>(
+        &'a self,
+        headers: &'a HeaderMap,
+        request: async_graphql::Request,
+    ) -> std::pin::Pin<Box<dyn Future<Output = BoundRequest> + Send + 'a>> {
+        Box::pin(async move { self.apply(headers, request) })
+    }
+
+    /// Async counterpart of connection_init for durable authentication.
+    fn connection_init_async<'a>(
+        &'a self,
+        headers: &'a HeaderMap,
+        params: Option<&'a serde_json::Value>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ash_core::Result<HeaderMap>> + Send + 'a>> {
+        Box::pin(async move { self.connection_init(headers, params) })
+    }
 
     /// Validate connection-init credentials and return the headers used for this
     /// connection's binding. Applications define credential precedence here. The
@@ -146,7 +166,8 @@ async fn graphql_handler_with(
 ) -> GraphQLResponse {
     let request = served
         .request_data
-        .apply(&headers, req.into_inner())
+        .apply_async(&headers, req.into_inner())
+        .await
         .into_request();
     served
         .schema

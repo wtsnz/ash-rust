@@ -91,6 +91,10 @@ impl<'a> UpsertPlan<'a> {
             })?;
             updates.insert(name.clone(), value.clone());
         }
+        if let Some(rule) = crate::CredentialVersionRule::for_resource(resource) {
+            updates.remove(rule.version_field);
+        }
+        crate::CredentialVersionRule::initialize(resource, &mut fields);
         let id = crate::pipeline::new_pk(resource, &fields)?;
         Ok(Self {
             scope: crate::PlanScope::new(ctx),

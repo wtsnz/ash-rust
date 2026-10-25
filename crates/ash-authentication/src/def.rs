@@ -38,7 +38,7 @@ impl Default for PasswordStrategyDef {
 pub struct TokenStrategyDef {
     /// Lifetime of issued tokens in seconds.
     pub token_lifetime_secs: u64,
-    /// Whether token revocation is enabled.
+    /// Legacy configuration flag. Durable authentication always checks revocation.
     pub track_revocations: bool,
 }
 
@@ -105,13 +105,24 @@ impl ResourceExtension for AuthenticationDef {
     }
 
     fn sensitive_attribute(&self, field: &str) -> bool {
-        self.password
-            .as_ref()
-            .is_some_and(|password| password.hashed_password_field == field)
+        ((self.password.is_some() || self.tokens.is_some()) && field == "credential_version")
+            || self
+                .password
+                .as_ref()
+                .is_some_and(|password| password.hashed_password_field == field)
             || self
                 .api_key
                 .as_ref()
                 .is_some_and(|key| key.api_key_field == field)
+    }
+
+    fn credential_version_rule(&self) -> Option<ash_core::CredentialVersionRule> {
+        self.password
+            .as_ref()
+            .map(|password| ash_core::CredentialVersionRule {
+                hash_field: password.hashed_password_field,
+                version_field: "credential_version",
+            })
     }
 
     fn as_any(&self) -> &dyn Any {

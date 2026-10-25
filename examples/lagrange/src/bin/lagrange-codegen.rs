@@ -9,5 +9,10 @@
 //! has no migrations.
 
 fn main() -> std::process::ExitCode {
-    cargo_ash::codegen::main(&[&lagrange::WORLD_DEF, &lagrange::FLEET_DEF, &lagrange::CARGO_DEF])
+    cargo_ash::codegen::main(&[
+        &lagrange::WORLD_DEF,
+        &lagrange::FLEET_DEF,
+        &lagrange::CARGO_DEF,
+        &lagrange::AUTH_STORAGE_DEF,
+    ])
 }

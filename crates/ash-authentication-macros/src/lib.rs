@@ -279,6 +279,12 @@ fn expand_authentication_transformer(mut resource: ResourceTokens) -> Result<Tok
         }
     }
 
+    if (auth.password.is_some() || auth.tokens.is_some())
+        && !resource.declares_attribute(&format_ident!("credential_version"))
+    {
+        resource.append_to_section("attributes", quote! { credential_version: i64 = 0; });
+    }
+
     // 2. Injected actions into `actions`
     let mut injected_actions = quote! {};
     if let Some(pass) = &auth.password {

@@ -1633,12 +1633,12 @@ export function buildShippingLineSelectionSet(include?: ShippingLineInclude): st
 }
 
 export function buildCrewMemberSelectionSet(include?: CrewMemberInclude): string {
-  let fields = "id line email name role hashedPassword createdAt updatedAt";
+  let fields = "id line email name role createdAt updatedAt";
   return fields;
 }
 
 export function buildTransponderSelectionSet(include?: TransponderInclude): string {
-  let fields = "id line shipId label kind apiKeyHash createdAt updatedAt";
+  let fields = "id line shipId label kind createdAt updatedAt";
   if (include?.ship) {
     const subInclude = typeof include.ship === "object" ? include.ship : undefined;
     fields += ` ship { ${buildShipSelectionSet(subInclude)} }`;

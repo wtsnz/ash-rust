@@ -1,0 +1,98 @@
+{
+  "format_version": 1,
+  "table": "ash_tokens",
+  "schema": null,
+  "columns": [
+    {
+      "name": "id",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": true
+    },
+    {
+      "name": "resource",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "tenant_key",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "jti",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "subject",
+      "sql_type": "UUID",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "purpose",
+      "sql_type": "TEXT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "expires_at",
+      "sql_type": "BIGINT",
+      "nullable": false,
+      "default": null,
+      "is_primary_key": false
+    },
+    {
+      "name": "revoked",
+      "sql_type": "BOOLEAN",
+      "nullable": false,
+      "default": "FALSE",
+      "is_primary_key": false
+    },
+    {
+      "name": "consumed",
+      "sql_type": "BOOLEAN",
+      "nullable": false,
+      "default": "FALSE",
+      "is_primary_key": false
+    },
+    {
+      "name": "extra",
+      "sql_type": "TEXT",
+      "nullable": true,
+      "default": null,
+      "is_primary_key": false
+    }
+  ],
+  "primary_key": [
+    "id"
+  ],
+  "identities": [
+    {
+      "name": "idx_ash_tokens_token_namespace",
+      "columns": [
+        "resource",
+        "tenant_key",
+        "subject",
+        "jti"
+      ],
+      "unique": true,
+      "predicate": null,
+      "nils_distinct": true
+    }
+  ],
+  "indexes": [],
+  "checks": [],
+  "statements": [],
+  "references": []
+}

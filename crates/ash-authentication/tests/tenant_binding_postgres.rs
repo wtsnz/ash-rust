@@ -37,17 +37,28 @@ ash_core::resource! {
     }
 }
 
-async fn db() -> Postgres {
+async fn db() -> (Postgres, String) {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/ashrust_audit_auth".into());
-    let db = Postgres::connect(&url).await.expect("local postgres");
+    let admin = Postgres::connect(&url).await.expect("local postgres");
+    let schema = format!("auth_schema_{}", Uuid::new_v4().simple());
+    admin
+        .execute_sql(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .unwrap();
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let db = Postgres::connect(&format!(
+        "{url}{separator}options=-c%20search_path%3D{schema}%2Cpublic"
+    ))
+    .await
+    .unwrap();
     db.install(&[&User::DEF, &AshToken::DEF]).await.unwrap();
-    db
+    (db, schema)
 }
 
 #[tokio::test]
 async fn credential_lookups_use_the_tenant_schema() {
-    let db = db().await;
+    let (db, storage_schema) = db().await;
     let tenant = format!("audit_t_{}", Uuid::new_v4().simple());
     let other_tenant = format!("audit_t_{}", Uuid::new_v4().simple());
     db.install_tenant(&tenant, &[&User::DEF]).await.unwrap();
@@ -127,7 +138,7 @@ async fn credential_lookups_use_the_tenant_schema() {
             .is_ok()
     );
     db.execute_sql(&format!(
-        "DROP SCHEMA {tenant} CASCADE; DROP SCHEMA {other_tenant} CASCADE"
+        "DROP SCHEMA {tenant} CASCADE; DROP SCHEMA {other_tenant} CASCADE; DROP SCHEMA {storage_schema} CASCADE"
     ))
     .await
     .unwrap();

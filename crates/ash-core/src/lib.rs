@@ -12,6 +12,8 @@ mod atomic;
 mod bulk;
 mod changeset;
 mod context;
+pub mod credential_version;
+pub use credential_version::CredentialVersionRule;
 mod cursor;
 mod data_layer;
 #[doc(hidden)]

@@ -677,7 +677,14 @@ impl TransactionSupport for Sqlite {
                     }
                     Err(err) => {
                         let mut guard = conn.lock().await;
-                        let _ = sqlx::query("ROLLBACK").execute(&mut **guard).await;
+                        sqlx::query("ROLLBACK")
+                            .execute(&mut **guard)
+                            .await
+                            .map_err(|rollback| {
+                                Error::DataLayer(format!(
+                                    "transaction failed: {err}; rollback failed: {rollback}"
+                                ))
+                            })?;
                         Err(err)
                     }
                 }
@@ -702,9 +709,18 @@ impl TransactionSupport for Sqlite {
                     }
                     Err(err) => {
                         let mut guard = conn.lock().await;
-                        let _ = sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
+                        sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
                             .execute(&mut **guard)
-                            .await;
+                            .await
+                            .map_err(|rollback| {
+                                Error::DataLayer(format!(
+                                    "transaction failed: {err}; rollback failed: {rollback}"
+                                ))
+                            })?;
+                        sqlx::query(&format!("RELEASE SAVEPOINT {sp_name}"))
+                            .execute(&mut **guard)
+                            .await
+                            .map_err(map_sqlx)?;
                         Err(err)
                     }
                 }

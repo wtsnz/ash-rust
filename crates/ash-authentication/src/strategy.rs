@@ -11,7 +11,8 @@ use crate::def::{AuthenticationDef, PasswordStrategyDef};
 use crate::error::{AuthError, Result};
 use crate::password::PasswordService;
 use crate::sender::{AuthSender, NoopSender};
-use crate::token::{JwtService, TokenPair};
+use crate::token::{Claims, JwtService, TokenPair};
+use crate::token_store::AshToken;
 use crate::token_store::DatabaseTokenStore;
 
 /// High-level authentication strategy coordinator.
@@ -23,6 +24,7 @@ pub struct AuthStrategy<R: Resource> {
     resource_def: &'static ResourceDef,
     credential_read: CredentialReadPermit,
     credential_write: ash_core::CredentialWritePermit,
+    token_write: ash_core::CredentialWritePermit,
     password_service: PasswordService,
     api_key_service: ApiKeyService,
     jwt_service: Option<JwtService>,
@@ -46,6 +48,7 @@ impl<R: Resource> AuthStrategy<R> {
             resource_def,
             credential_read,
             credential_write,
+            token_write: runtime.credential_writes::<AshToken>(["revoked", "consumed"]),
             password_service: PasswordService::new(),
             api_key_service: ApiKeyService::default(),
             jwt_service: None,
@@ -117,6 +120,126 @@ impl<R: Resource> AuthStrategy<R> {
         R::from_fields(&record_fields).map_err(AuthError::Core)
     }
 
+    fn password_config(&self) -> Result<&PasswordStrategyDef> {
+        let invalid = || {
+            AuthError::Core(ash_core::Error::Invalid(
+            "password authentication requires AuthenticationDef and its credential version rule".into()
+        ))
+        };
+        let password = self
+            .config()
+            .and_then(|auth| auth.password.as_ref())
+            .ok_or_else(invalid)?;
+        let rule =
+            ash_core::CredentialVersionRule::for_resource(self.resource_def).ok_or_else(invalid)?;
+        if rule.hash_field != password.hashed_password_field
+            || rule.version_field != "credential_version"
+            || !self
+                .resource_def
+                .attribute(rule.version_field)
+                .is_some_and(|attribute| {
+                    attribute.ty == ash_core::AttrType::Integer && !attribute.primary_key
+                })
+        {
+            return Err(invalid());
+        }
+        Ok(password)
+    }
+
+    fn jwt(&self) -> Result<&JwtService> {
+        self.jwt_service
+            .as_ref()
+            .ok_or_else(|| AuthError::Crypto("JwtService not configured on AuthStrategy".into()))
+    }
+
+    pub fn token_store<D: DataLayer>(&self, ctx: &Context<D>) -> DatabaseTokenStore<D> {
+        DatabaseTokenStore::new(
+            ctx.clone(),
+            self.resource_def.name,
+            self.token_write.clone(),
+        )
+    }
+
+    fn version(&self, user: &R) -> Result<i64> {
+        let config = self.config().ok_or_else(|| {
+            AuthError::Core(ash_core::Error::Invalid(
+                "JWT authentication requires AuthenticationDef".into(),
+            ))
+        })?;
+        if config.password.is_some() {
+            self.password_config()?;
+        }
+        match user.to_fields().get("credential_version") {
+            Some(Value::Int(version)) if *version >= 0 => Ok(*version),
+            _ => Err(AuthError::InvalidToken(
+                "subject has no credential version".into(),
+            )),
+        }
+    }
+
+    fn signed_pair<D>(&self, ctx: &Context<D>, user: &R) -> Result<TokenPair> {
+        let fields = user.to_fields();
+        let role = fields
+            .get("role")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.jwt()?.sign_token_pair(
+            user.id(),
+            role,
+            ctx.tenant().map(str::to_owned),
+            self.resource_def.name,
+            self.version(user)?,
+        )
+    }
+
+    async fn persist_pair<D: DataLayer>(&self, ctx: &Context<D>, pair: &TokenPair) -> Result<()> {
+        let store = self.token_store(ctx);
+        for token in [&pair.access_token, &pair.refresh_token] {
+            store.store_token(&self.jwt()?.verify_token(token)?).await?;
+        }
+        Ok(())
+    }
+
+    async fn live_subject<D: DataLayer>(&self, ctx: &Context<D>, claims: &Claims) -> Result<R> {
+        ctx.access()
+            .require_tenant_match(claims.tenant.as_deref())?;
+        if claims.resource != self.resource_def.name {
+            return Err(AuthError::InvalidToken("wrong resource".into()));
+        }
+        let user = self.get_user_by_id(ctx, claims.sub).await?;
+        if claims.credential_version != self.version(&user)? {
+            return Err(AuthError::TokenRevoked);
+        }
+        Ok(user)
+    }
+
+    /// Authenticate a request against persisted session state and a live subject.
+    /// The caller resolves the tenant before this call. No accepted-session cache is used.
+    pub async fn authenticate<D: DataLayer>(
+        &self,
+        ctx: &Context<D>,
+        token: &str,
+    ) -> Result<crate::BoundIdentity> {
+        let claims = self.jwt()?.verify_token_with_purpose(token, "access")?;
+        ctx.required_transaction(|tx| async move {
+            let user = self.live_subject(&tx, &claims).await?;
+            if self
+                .token_store(&tx)
+                .get_valid_token(&claims)
+                .await?
+                .is_none()
+            {
+                return Err(AuthError::TokenRevoked.into());
+            }
+            Ok(crate::BoundIdentity::new(
+                self.to_actor(&user),
+                claims.tenant,
+            ))
+        })
+        .await
+        .map_err(AuthError::Core)
+    }
+
     /// Authenticate a user by identity (email/username) and plaintext password.
     ///
     /// Performs constant-time verification and returns the authenticated record `R`.
@@ -126,10 +249,8 @@ impl<R: Resource> AuthStrategy<R> {
         identity_val: impl Into<Value>,
         password: &str,
     ) -> Result<R> {
-        let auth_def = self.config().cloned().unwrap_or_default();
-        let pass_cfg = auth_def
-            .password
-            .unwrap_or_else(PasswordStrategyDef::default);
+        let pass_cfg = self.password_config()?;
+        let auth_def = self.config().expect("validated authentication config");
 
         let identity = identity_val.into();
 
@@ -182,161 +303,97 @@ impl<R: Resource> AuthStrategy<R> {
         Ok(record)
     }
 
-    /// Authenticate a user by identity and password, and automatically generate a signed JWT bearer token.
+    /// Authenticate credentials and persist a new access session.
     pub async fn sign_in_with_password_and_token<D: DataLayer>(
         &self,
         ctx: &Context<D>,
         identity_val: impl Into<Value>,
         password: &str,
     ) -> Result<(R, String)> {
-        let record = self
+        let user = self
             .sign_in_with_password(ctx, identity_val, password)
             .await?;
-        let user_id = record.id();
-
-        let jwt = self.jwt_service.as_ref().ok_or_else(|| {
-            AuthError::Crypto("JwtService not configured on AuthStrategy".to_string())
-        })?;
-
-        // Extract role if record has a "role" field
-        let fields = record.to_fields();
-        let role = match fields.get("role") {
-            Some(Value::String(r)) => Some(r.clone()),
-            _ => None,
-        };
-
-        let token = jwt.sign_token(user_id, role, ctx.tenant().map(str::to_owned))?;
-        Ok((record, token))
+        let fields = user.to_fields();
+        let role = fields
+            .get("role")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let token = self.jwt()?.sign_access_token(
+            user.id(),
+            role,
+            ctx.tenant().map(str::to_owned),
+            self.resource_def.name,
+            self.version(&user)?,
+        )?;
+        let claims = self.jwt()?.verify_token_with_purpose(&token, "access")?;
+        ctx.required_transaction(|tx| async move {
+            self.token_store(&tx).store_token(&claims).await?;
+            Ok(())
+        })
+        .await?;
+        Ok((user, token))
     }
 
-    /// Authenticate a user by identity and password, issuing an `(access_token, refresh_token)` pair,
-    /// and persisting the refresh token in the database token store.
+    /// Issue and persist an access/refresh pair in one required transaction.
     pub async fn sign_in_with_password_and_token_pair<D: DataLayer>(
         &self,
         ctx: &Context<D>,
         identity_val: impl Into<Value>,
         password: &str,
     ) -> Result<(R, TokenPair)> {
-        let record = self
+        let user = self
             .sign_in_with_password(ctx, identity_val, password)
             .await?;
-        let user_id = record.id();
-
-        let jwt = self.jwt_service.as_ref().ok_or_else(|| {
-            AuthError::Crypto("JwtService not configured on AuthStrategy".to_string())
-        })?;
-
-        let fields = record.to_fields();
-        let role = match fields.get("role") {
-            Some(Value::String(r)) => Some(r.clone()),
-            _ => None,
-        };
-
-        let pair = jwt.sign_token_pair(user_id, role, ctx.tenant().map(str::to_owned))?;
-
-        // Persist refresh token in database
-        let refresh_claims = jwt.verify_token_with_purpose(&pair.refresh_token, "refresh")?;
-        let token_store = DatabaseTokenStore::new(ctx.clone());
-        token_store
-            .store_token(
-                &refresh_claims.jti,
-                user_id,
-                "refresh",
-                refresh_claims.exp as i64,
-                None,
-            )
-            .await?;
-
-        Ok((record, pair))
-    }
-
-    /// Rotate an active refresh token, issuing a new token pair and revoking the old refresh token.
-    pub async fn rotate_refresh_token<D: DataLayer>(
-        &self,
-        ctx: &Context<D>,
-        refresh_token: &str,
-    ) -> Result<(R, TokenPair)> {
-        let jwt = self.jwt_service.as_ref().ok_or_else(|| {
-            AuthError::Crypto("JwtService not configured on AuthStrategy".to_string())
-        })?;
-
-        let claims = jwt.verify_token_with_purpose(refresh_token, "refresh")?;
-        ctx.access()
-            .require_tenant_match(claims.tenant.as_deref())?;
-        let token_store = DatabaseTokenStore::new(ctx.clone());
-
-        // Verify token exists and is not revoked
-        let valid_token = token_store
-            .get_valid_token(&claims.jti, "refresh")
-            .await?
-            .ok_or_else(|| {
-                AuthError::InvalidToken(
-                    "refresh token does not exist or has already been used".to_string(),
-                )
-            })?;
-
-        // Invalidate old refresh token (Token Rotation!)
-        valid_token.revoke_on(ctx).await.map_err(AuthError::Core)?;
-
-        // Fetch user
-        let user = self.get_user_by_id(ctx, claims.sub).await?;
-
-        let fields = user.to_fields();
-        let role = match fields.get("role") {
-            Some(Value::String(r)) => Some(r.clone()),
-            _ => None,
-        };
-
-        // Issue new token pair
-        let pair = jwt.sign_token_pair(user.id(), role, ctx.tenant().map(str::to_owned))?;
-
-        // Store new refresh token
-        let new_refresh_claims = jwt.verify_token_with_purpose(&pair.refresh_token, "refresh")?;
-        token_store
-            .store_token(
-                &new_refresh_claims.jti,
-                user.id(),
-                "refresh",
-                new_refresh_claims.exp as i64,
-                None,
-            )
-            .await?;
-
+        let pair = self.signed_pair(ctx, &user)?;
+        let pair_to_store = &pair;
+        ctx.required_transaction(|tx| async move {
+            self.persist_pair(&tx, pair_to_store)
+                .await
+                .map_err(ash_core::Error::from)
+        })
+        .await?;
         Ok((user, pair))
     }
 
-    /// Revoke a token (by either JWT string or raw identifier).
+    /// Consume a refresh token exactly once and persist its successor in the same transaction.
+    pub async fn rotate_refresh_token<D: DataLayer>(
+        &self,
+        ctx: &Context<D>,
+        token: &str,
+    ) -> Result<(R, TokenPair)> {
+        let claims = self.jwt()?.verify_token_with_purpose(token, "refresh")?;
+        ctx.access()
+            .require_tenant_match(claims.tenant.as_deref())?;
+        ctx.required_transaction(|tx| async move {
+            self.token_store(&tx).consume(&claims).await?;
+            let user = self.live_subject(&tx, &claims).await?;
+            let pair = self.signed_pair(&tx, &user)?;
+            self.persist_pair(&tx, &pair).await?;
+            Ok((user, pair))
+        })
+        .await
+        .map_err(AuthError::Core)
+    }
+
+    /// Revoke a JWT or a server-provided JTI in the resolved resource/tenant namespace.
+    /// Public revoke input restrictions and tombstone retention are configured separately.
     pub async fn revoke_token<D: DataLayer>(
         &self,
         ctx: &Context<D>,
         token_or_jti: &str,
     ) -> Result<()> {
-        let jwt = self.jwt_service.as_ref();
-        let token_store = DatabaseTokenStore::new(ctx.clone());
-
-        // Check if input is a valid JWT or a raw JTI
-        if let Some(jwt) = jwt
+        let store = self.token_store(ctx);
+        if let Some(jwt) = self.jwt_service.as_ref()
             && let Ok(claims) = jwt.verify_token(token_or_jti)
         {
-            token_store
-                .revoke_token(&claims.jti, Some(claims.sub), claims.exp as i64)
-                .await?;
-            let _ = jwt.revoke_jti(&claims.jti, claims.exp);
+            store.revoke_token(&claims).await
         } else {
-            token_store
-                .revoke_token(token_or_jti, None, i64::MAX)
-                .await?;
-            if let Some(jwt) = jwt {
-                let _ = jwt.revoke_jti(token_or_jti, u64::MAX);
-            }
+            store.revoke_jti(token_or_jti).await
         }
-
-        Ok(())
     }
 
-    /// Change a user's password with current password verification.
-    ///
-    /// Revokes all active refresh tokens for the user to ensure any compromised sessions are terminated.
+    /// Validate/hash before the write transaction. The stored hash comparison prevents
+    /// another password change from authorizing this write with a stale password.
     pub async fn change_password<D: DataLayer>(
         &self,
         ctx: &Context<D>,
@@ -345,178 +402,148 @@ impl<R: Resource> AuthStrategy<R> {
         new_password: &str,
         new_password_confirmation: &str,
     ) -> Result<R> {
-        let auth_def = self.config().cloned().unwrap_or_default();
-        let pass_cfg = auth_def
-            .password
-            .unwrap_or_else(PasswordStrategyDef::default);
-
-        // 1. Load user
+        let pass_cfg = self.password_config()?;
         let user = self.get_user_by_id(ctx, user_id).await?;
-
-        // 2. Verify current password
         let fields = user.to_fields();
-        let hashed_password = match fields.get(pass_cfg.hashed_password_field) {
-            Some(Value::String(s)) => s.as_str(),
-            _ => return Err(AuthError::InvalidCredentials),
-        };
-
+        let old_hash = fields
+            .get(pass_cfg.hashed_password_field)
+            .and_then(Value::as_str)
+            .ok_or(AuthError::InvalidCredentials)?;
         if !self
             .password_service
-            .verify_password(current_password, hashed_password)?
+            .verify_password(current_password, old_hash)?
         {
             return Err(AuthError::InvalidCredentials);
         }
-
-        // 3. Verify confirmation
-        if new_password != new_password_confirmation {
-            return Err(AuthError::PasswordConfirmationMismatch);
-        }
-
-        // 4. Hash new password
-        let new_hash = self
-            .password_service
-            .clone()
-            .with_min_length(pass_cfg.min_password_length)
-            .hash_password(new_password)?;
-
-        // 5. Update user
-        let mut update_fields = FieldMap::new();
-        update_fields.insert(
-            pass_cfg.hashed_password_field.to_string(),
-            Value::String(new_hash),
-        );
-
-        let updated_raw = ctx
-            .access()
-            .update_credentials(&self.credential_write, user_id.into(), update_fields)
-            .await
-            .map_err(AuthError::Core)?;
-
-        let updated_user = R::from_fields(updated_raw.fields()).map_err(AuthError::Core)?;
-
-        // 6. Revoke active refresh tokens for this subject
-        let token_store = DatabaseTokenStore::new(ctx.clone());
-        let _ = token_store.revoke_all_for_subject(user_id).await;
-
-        Ok(updated_user)
+        let new_hash = self.hash_new_password(new_password, new_password_confirmation)?;
+        ctx.required_transaction(|tx| async move {
+            let pk = self
+                .resource_def
+                .primary_key()
+                .ok_or(ash_core::Error::NoPrimaryKey(self.resource_def.name))?
+                .name;
+            let filter =
+                Filter::eq(pk, user_id) & Filter::eq(pass_cfg.hashed_password_field, old_hash);
+            let changes = FieldMap::from([(
+                pass_cfg.hashed_password_field.into(),
+                Value::String(new_hash),
+            )]);
+            let mut rows = tx
+                .access()
+                .update_credentials_where(&self.credential_write, filter, changes)
+                .await?;
+            if rows.len() != 1 {
+                return Err(AuthError::InvalidCredentials.into());
+            }
+            let user = R::from_fields(rows.pop().expect("one updated subject").fields())?;
+            self.token_store(&tx)
+                .revoke_all_for_subject(user_id)
+                .await?;
+            Ok(user)
+        })
+        .await
+        .map_err(AuthError::Core)
     }
 
-    /// Initiate a password reset flow, generating a single-use reset token.
+    fn hash_new_password(&self, password: &str, confirmation: &str) -> Result<String> {
+        if password != confirmation {
+            return Err(AuthError::PasswordConfirmationMismatch);
+        }
+        let min = self.password_config()?.min_password_length;
+        self.password_service
+            .clone()
+            .with_min_length(min)
+            .hash_password(password)
+    }
+
+    /// Persist a reset token, commit, then dispatch external mail. This entry point
+    /// owns commit and rejects an outer transaction which could still roll back mail.
     pub async fn request_password_reset<D: DataLayer>(
         &self,
         ctx: &Context<D>,
         email: &str,
     ) -> Result<(R, String)> {
-        let auth_def = self.config().cloned().unwrap_or_default();
-        let pass_cfg = auth_def
-            .password
-            .unwrap_or_else(PasswordStrategyDef::default);
-
-        let jwt = self.jwt_service.as_ref().ok_or_else(|| {
-            AuthError::Crypto("JwtService not configured on AuthStrategy".to_string())
-        })?;
-
-        // 1. Look up user by identity (email)
-        let filter = Filter::eq(pass_cfg.identity_field, Value::String(email.to_string()));
-        let records = ctx
+        if ctx.has_transaction_boundary() {
+            return Err(AuthError::Core(ash_core::Error::Invalid(
+                "password reset mail requires an outermost commit boundary".into(),
+            )));
+        }
+        let pass_cfg = self.password_config()?;
+        let user_raw = ctx
             .access()
-            .credentials(&self.credential_read, filter, 1)
-            .await
-            .map_err(AuthError::Core)?;
-
-        let user_raw = records.into_iter().next().ok_or(AuthError::UserNotFound)?;
-        let user = R::from_fields(&user_raw).map_err(AuthError::Core)?;
-
-        // 2. Generate reset token
-        let reset_token = jwt.sign_reset_token(user.id(), ctx.tenant().map(str::to_owned))?;
-
-        // 3. Store reset token in DatabaseTokenStore
-        let claims = jwt.verify_token_with_purpose(&reset_token, "password_reset")?;
-        let token_store = DatabaseTokenStore::new(ctx.clone());
-        token_store
-            .store_token(
-                &claims.jti,
-                user.id(),
-                "password_reset",
-                claims.exp as i64,
-                None,
+            .credentials(
+                &self.credential_read,
+                Filter::eq(pass_cfg.identity_field, email),
+                1,
             )
-            .await?;
-
-        // 4. Dispatch reset token via configured AuthSender
-        let user_fields = user.to_fields();
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(AuthError::UserNotFound)?;
+        let user = R::from_fields(&user_raw)?;
+        let token = self.jwt()?.sign_reset_token(
+            user.id(),
+            ctx.tenant().map(str::to_owned),
+            self.resource_def.name,
+            self.version(&user)?,
+        )?;
+        let claims = self
+            .jwt()?
+            .verify_token_with_purpose(&token, "password_reset")?;
+        ctx.required_transaction(|tx| async move {
+            self.token_store(&tx).store_token(&claims).await?;
+            Ok(())
+        })
+        .await?;
         self.sender
-            .send_password_reset(&user_fields, &reset_token)
+            .send_password_reset(&user.to_fields(), &token)
             .await?;
-
-        Ok((user, reset_token))
+        Ok((user, token))
     }
 
-    /// Complete a password reset flow using a single-use reset token.
+    /// Hash/validate first; atomically consume, update hash/version and revoke all
+    /// prior JWT sessions. Failure rolls back consumption along with subject state.
     pub async fn reset_password_with_token<D: DataLayer>(
         &self,
         ctx: &Context<D>,
-        reset_token: &str,
-        new_password: &str,
-        new_password_confirmation: &str,
+        token: &str,
+        password: &str,
+        confirmation: &str,
     ) -> Result<R> {
-        let auth_def = self.config().cloned().unwrap_or_default();
-        let pass_cfg = auth_def
-            .password
-            .unwrap_or_else(PasswordStrategyDef::default);
-
-        let jwt = self.jwt_service.as_ref().ok_or_else(|| {
-            AuthError::Crypto("JwtService not configured on AuthStrategy".to_string())
-        })?;
-
-        // 1. Verify reset token
-        let claims = jwt.verify_token_with_purpose(reset_token, "password_reset")?;
+        let claims = self
+            .jwt()?
+            .verify_token_with_purpose(token, "password_reset")?;
         ctx.access()
             .require_tenant_match(claims.tenant.as_deref())?;
-        let token_store = DatabaseTokenStore::new(ctx.clone());
-
-        // 2. Ensure reset token is active and not already consumed
-        let valid_token = token_store
-            .get_valid_token(&claims.jti, "password_reset")
-            .await?
-            .ok_or_else(|| {
-                AuthError::InvalidToken("reset token not found or already consumed".to_string())
-            })?;
-
-        // 3. Validate confirmation
-        if new_password != new_password_confirmation {
-            return Err(AuthError::PasswordConfirmationMismatch);
-        }
-
-        // 4. Hash new password
-        let new_hash = self
-            .password_service
-            .clone()
-            .with_min_length(pass_cfg.min_password_length)
-            .hash_password(new_password)?;
-
-        // 5. Update user
-        let mut update_fields = FieldMap::new();
-        update_fields.insert(
-            pass_cfg.hashed_password_field.to_string(),
-            Value::String(new_hash),
-        );
-
-        let updated_raw = ctx
-            .access()
-            .update_credentials(&self.credential_write, claims.sub.into(), update_fields)
-            .await
-            .map_err(AuthError::Core)?;
-
-        let updated_user = R::from_fields(updated_raw.fields()).map_err(AuthError::Core)?;
-
-        // 6. Invalidate the single-use reset token
-        valid_token.revoke_on(ctx).await.map_err(AuthError::Core)?;
-
-        // 7. Revoke active refresh tokens for security
-        let _ = token_store.revoke_all_for_subject(claims.sub).await;
-
-        Ok(updated_user)
+        let hash = self.hash_new_password(password, confirmation)?;
+        let pass_cfg = self.password_config()?;
+        ctx.required_transaction(|tx| async move {
+            self.token_store(&tx).consume(&claims).await?;
+            self.live_subject(&tx, &claims).await?;
+            let changes =
+                FieldMap::from([(pass_cfg.hashed_password_field.into(), Value::String(hash))]);
+            let pk = self
+                .resource_def
+                .primary_key()
+                .ok_or(ash_core::Error::NoPrimaryKey(self.resource_def.name))?
+                .name;
+            let filter = Filter::eq(pk, claims.sub)
+                & Filter::eq("credential_version", claims.credential_version);
+            let mut rows = tx
+                .access()
+                .update_credentials_where(&self.credential_write, filter, changes)
+                .await?;
+            if rows.len() != 1 {
+                return Err(AuthError::TokenRevoked.into());
+            }
+            let user = R::from_fields(rows.pop().expect("one updated subject").fields())?;
+            self.token_store(&tx)
+                .revoke_all_for_subject(claims.sub)
+                .await?;
+            Ok(user)
+        })
+        .await
+        .map_err(AuthError::Core)
     }
 
     /// Authenticate a user by an API key.
@@ -554,7 +581,10 @@ impl<R: Resource> AuthStrategy<R> {
         let mut actor = Actor::new(record.id());
         for (k, v) in record.to_fields() {
             // Do not copy password hashes into the actor metadata
-            if !k.contains("password") && !k.contains("hash") {
+            if !self.resource_def.sensitive_attribute(&k)
+                && !k.contains("password")
+                && !k.contains("hash")
+            {
                 actor = actor.with(k, v);
             }
         }

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use ash_authentication::JwtService;
-use ash_core::{Actor, Context, Resource, StoreRegistry};
+use ash_core::{Context, StoreRegistry};
 use ash_graphql::axum::{BoundRequest, RequestData, SubscriptionHub};
 use async_graphql::dynamic::Schema;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
@@ -54,38 +54,48 @@ struct ApiState<D> {
 
 struct SocketBinding<D>(Arc<ApiState<D>>);
 impl<D: ash_core::DataLayer + Clone + Send + Sync + 'static> RequestData for SocketBinding<D> {
-    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
-        match request_context(&self.0, headers) {
-            Ok(context) => BoundRequest::new(request, context),
-            Err(_) => BoundRequest::unbound(request),
-        }
-    }
-    fn connection_init(
-        &self,
-        headers: &HeaderMap,
-        params: Option<&serde_json::Value>,
-    ) -> ash_core::Result<HeaderMap> {
-        let mut headers = headers.clone();
-        if let Some(params) = params.filter(|value| !value.is_null()) {
-            for (name, value) in params.as_object().ok_or(ash_core::Error::Forbidden)? {
-                if !name.eq_ignore_ascii_case("authorization") {
-                    return Err(ash_core::Error::Forbidden);
-                }
-                let value = value.as_str().ok_or(ash_core::Error::Forbidden)?;
-                if headers
-                    .get("authorization")
-                    .is_some_and(|header| header != value)
-                {
-                    return Err(ash_core::Error::Forbidden);
-                }
-                headers.insert(
-                    "authorization",
-                    value.parse().map_err(|_| ash_core::Error::Forbidden)?,
-                );
+    fn apply_async<'a>(
+        &'a self,
+        headers: &'a HeaderMap,
+        request: async_graphql::Request,
+    ) -> std::pin::Pin<Box<dyn Future<Output = BoundRequest> + Send + 'a>> {
+        Box::pin(async move {
+            match request_context(&self.0, headers).await {
+                Ok(context) => BoundRequest::new(request, context),
+                Err(_) => BoundRequest::unbound(request),
             }
-        }
-        request_context(&self.0, &headers).map_err(|_| ash_core::Error::Forbidden)?;
-        Ok(headers)
+        })
+    }
+    fn connection_init_async<'a>(
+        &'a self,
+        headers: &'a HeaderMap,
+        params: Option<&'a serde_json::Value>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ash_core::Result<HeaderMap>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut headers = headers.clone();
+            if let Some(params) = params.filter(|value| !value.is_null()) {
+                for (name, value) in params.as_object().ok_or(ash_core::Error::Forbidden)? {
+                    if !name.eq_ignore_ascii_case("authorization") {
+                        return Err(ash_core::Error::Forbidden);
+                    }
+                    let value = value.as_str().ok_or(ash_core::Error::Forbidden)?;
+                    if headers
+                        .get("authorization")
+                        .is_some_and(|header| header != value)
+                    {
+                        return Err(ash_core::Error::Forbidden);
+                    }
+                    headers.insert(
+                        "authorization",
+                        value.parse().map_err(|_| ash_core::Error::Forbidden)?,
+                    );
+                }
+            }
+            request_context(&self.0, &headers)
+                .await
+                .map_err(|_| ash_core::Error::Forbidden)?;
+            Ok(headers)
+        })
     }
 }
 
@@ -133,19 +143,17 @@ async fn sign_in<D>(
 where
     D: ash_core::DataLayer + Clone + Send + Sync + 'static,
 {
-    let crew = state
-        .app
-        .authenticate(&request.line, &request.email, &request.password)
+    let strategy = crate::CrewMember::auth_strategy(state.app.runtime())
+        .with_jwt_service((*state.jwt).clone());
+    let context = state.app.runtime().bind(None, Some(request.line));
+    let (crew, token) = strategy
+        .sign_in_with_password_and_token(&context, request.email.as_str(), &request.password)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let role = match ash_core::AshType::to_value(&crew.role) {
         ash_core::Value::String(role) => role,
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
-    let token = state
-        .jwt
-        .sign_access_token(crew.id(), Some(role.clone()), Some(crew.line.clone()))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(Session {
         token,
         line: crew.line,
@@ -154,7 +162,7 @@ where
 }
 
 /// The request's context: the token's crew member in their line, or nobody.
-fn request_context<D>(
+async fn request_context<D>(
     state: &ApiState<D>,
     headers: &HeaderMap,
 ) -> Result<Context<StoreRegistry>, StatusCode>
@@ -174,14 +182,16 @@ where
         .jwt
         .verify_token_with_purpose(token, "access")
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let mut actor = Actor::new(claims.sub);
-    if let Some(role) = claims.role {
-        actor = actor.with_role(role);
-    }
-    Ok(state
-        .app
-        .registry_runtime()
-        .bind(Some(actor), claims.tenant))
+    let strategy = crate::CrewMember::auth_strategy(state.app.runtime())
+        .with_jwt_service((*state.jwt).clone());
+    // The signed line selects a namespace; the async decision still checks exact
+    // tenancy, persisted state, subject membership and credential version there.
+    let context = state.app.runtime().bind(None, claims.tenant);
+    let identity = strategy
+        .authenticate(&context, token)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok(identity.bind(&state.app.registry_runtime()))
 }
 
 async fn graphql<D>(
@@ -192,7 +202,7 @@ async fn graphql<D>(
 where
     D: ash_core::DataLayer + Clone + Send + Sync + 'static,
 {
-    let ctx = request_context(&state, &headers)?;
+    let ctx = request_context(&state, &headers).await?;
     Ok(state
         .schema
         .execute(request.into_inner().data(ctx))

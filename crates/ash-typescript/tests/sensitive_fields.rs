@@ -28,3 +28,44 @@ fn sensitive_storage_fields_are_absent_from_typescript_interfaces_and_zod_schema
         }
     }
 }
+
+#[tokio::test]
+async fn generated_client_selections_query_the_public_graphql_schema() {
+    let builder = ash_typescript::client::generate_selection_set_builder(&Member::DEF);
+    let selection = builder
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("let fields = \""))
+        .and_then(|rest| rest.strip_suffix("\";"))
+        .unwrap();
+    let context = ash_core::Runtime::new(ash_memory::Memory::new()).bootstrap();
+    Member::create(&context)
+        .label("member")
+        .password_digest(Some("stored-password-hash".into()))
+        .api_digest(Some("stored-api-key-hash".into()))
+        .await
+        .unwrap();
+    let schema = ash_graphql::AshGraphQL::from_resources(&[&Member::DEF])
+        .finish::<ash_memory::Memory>()
+        .unwrap();
+    let response = schema
+        .execute(
+            async_graphql::Request::new(format!("{{ listMembers {{ {selection} }} }}"))
+                .data(context),
+        )
+        .await;
+    assert!(
+        response.errors.is_empty(),
+        "{selection}: {:?}",
+        response.errors
+    );
+    let data = response.data.into_json().unwrap();
+    assert_eq!(data["listMembers"][0]["label"], "member");
+    for name in ["passwordDigest", "apiDigest"] {
+        assert!(
+            !data["listMembers"][0]
+                .as_object()
+                .unwrap()
+                .contains_key(name)
+        );
+    }
+}

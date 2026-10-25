@@ -199,8 +199,9 @@ impl<'a> CreatePlan<'a> {
         ctx: &Context<D>,
         resource: &'a ResourceDef,
         id: Value,
-        fields: FieldMap,
+        mut fields: FieldMap,
     ) -> Self {
+        crate::CredentialVersionRule::initialize(resource, &mut fields);
         Self {
             scope: PlanScope::new(ctx),
             resource,
@@ -437,7 +438,7 @@ impl<'a> BulkDestroyPlan<'a> {
 /// ```
 pub struct AtomicUpdatePlan<'a> {
     read: QueryPlan<'a>,
-    update: &'a AtomicUpdate,
+    update: AtomicUpdate,
 }
 impl<'a> AtomicUpdatePlan<'a> {
     pub(crate) fn new<D>(
@@ -446,6 +447,8 @@ impl<'a> AtomicUpdatePlan<'a> {
         query: &'a CompiledQuery,
         update: &'a AtomicUpdate,
     ) -> Self {
+        let mut update = update.clone();
+        crate::CredentialVersionRule::apply(resource, &mut update);
         Self {
             read: QueryPlan::new(ctx, resource, query),
             update,
@@ -461,7 +464,7 @@ impl<'a> AtomicUpdatePlan<'a> {
         self.read.query()
     }
     pub fn update(&self) -> &AtomicUpdate {
-        self.update
+        &self.update
     }
 }
 

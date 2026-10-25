@@ -1,7 +1,7 @@
 //! Isomorphic TypeScript client SDK generator for Ash resources.
 
-use ash_core::{ActionDef, ActionKind, AttrType, DomainDef, ResourceDef};
 use crate::types::{input_fields, sort_fields, to_camel_case, to_pascal_case, to_upper_snake};
+use ash_core::{ActionDef, ActionKind, AttrType, DomainDef, ResourceDef};
 
 /// Returns plural suffix helper matching ash-graphql list and connection conventions.
 pub fn plural_suffix(name: &str) -> &'static str {
@@ -159,14 +159,24 @@ pub(crate) fn selection_of(ty: &AttrType) -> String {
     match ty {
         AttrType::Array { of } => selection_of(of),
         AttrType::Embedded(_) | AttrType::TypedMap { .. } => {
-            let fields: Vec<String> =
-                ty.fields().unwrap_or_default().iter().map(|field| format!("{}{}", to_camel_case(field.name), selection_of(&field.ty))).collect();
+            let fields: Vec<String> = ty
+                .fields()
+                .unwrap_or_default()
+                .iter()
+                .map(|field| format!("{}{}", to_camel_case(field.name), selection_of(&field.ty)))
+                .collect();
             format!(" {{ {} }}", fields.join(" "))
         }
         AttrType::Union { name, members } => {
             let members: Vec<String> = members
                 .iter()
-                .map(|member| format!("... on {name}{} {{ value{} }}", crate::types::to_pascal_case(member.name), selection_of(&member.ty)))
+                .map(|member| {
+                    format!(
+                        "... on {name}{} {{ value{} }}",
+                        crate::types::to_pascal_case(member.name),
+                        selection_of(&member.ty)
+                    )
+                })
                 .collect();
             format!(" {{ __typename {} }}", members.join(" "))
         }
@@ -182,11 +192,14 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
     let base_attrs = res
         .attributes
         .iter()
+        .filter(|attribute| !res.sensitive_attribute(attribute.name))
         .map(|a| format!("{}{}", to_camel_case(a.name), selection_of(&a.ty)))
         .collect::<Vec<_>>()
         .join(" ");
 
-    out.push_str(&format!("export function build{name}SelectionSet(include?: {name}Include): string {{\n"));
+    out.push_str(&format!(
+        "export function build{name}SelectionSet(include?: {name}Include): string {{\n"
+    ));
     out.push_str(&format!("  let fields = \"{base_attrs}\";\n"));
 
     for rel in res.relationships {
@@ -194,7 +207,9 @@ pub fn generate_selection_set_builder(res: &ResourceDef) -> String {
         let dest_name = (rel.destination)().name;
         out.push_str(&format!("  if (include?.{rel_name}) {{\n"));
         out.push_str(&format!("    const subInclude = typeof include.{rel_name} === \"object\" ? include.{rel_name} : undefined;\n"));
-        out.push_str(&format!("    fields += ` {rel_name} {{ ${{build{dest_name}SelectionSet(subInclude)}} }}`;\n"));
+        out.push_str(&format!(
+            "    fields += ` {rel_name} {{ ${{build{dest_name}SelectionSet(subInclude)}} }}`;\n"
+        ));
         out.push_str("  }\n");
     }
 
@@ -243,7 +258,13 @@ pub fn generate_resource_query_builder(res: &ResourceDef, live: bool) -> String 
     } else {
         String::new()
     };
-    query_builder_class(res.name, &sort_field_names(res), constructor_params, &live_method, Paging::of(res))
+    query_builder_class(
+        res.name,
+        &sort_field_names(res),
+        constructor_params,
+        &live_method,
+        Paging::of(res),
+    )
 }
 
 /// The reads of a query builder over a keyset-paged `list<Resource>s`.
@@ -549,7 +570,10 @@ pub fn generate_resource_client(res: &ResourceDef, live: bool) -> String {
     ));
 
     for action in res.actions {
-        if matches!(action.kind, ActionKind::Create | ActionKind::Update | ActionKind::Destroy) {
+        if matches!(
+            action.kind,
+            ActionKind::Create | ActionKind::Update | ActionKind::Destroy
+        ) {
             out.push_str(&generate_action_method(res, action));
         }
     }
@@ -596,7 +620,10 @@ fn generate_action_method(res: &ResourceDef, action: &ActionDef) -> String {
         format!("input: {input_type} = {{}}")
     });
     if !fields.is_empty() {
-        variables.push(format!("$input: {input_type}{}", if required { "!" } else { "" }));
+        variables.push(format!(
+            "$input: {input_type}{}",
+            if required { "!" } else { "" }
+        ));
         arguments.push("input: $input".to_string());
         values.push("input".to_string());
     }
@@ -692,7 +719,10 @@ pub fn generate_domain_client(domain: &DomainDef, live: bool) -> String {
     }
 
     let (params, args) = if live {
-        ("transport: AshTransport, subscriptions: AshSubscriptionClient", "transport, subscriptions")
+        (
+            "transport: AshTransport, subscriptions: AshSubscriptionClient",
+            "transport, subscriptions",
+        )
     } else {
         ("transport: AshTransport", "transport")
     };
@@ -700,7 +730,9 @@ pub fn generate_domain_client(domain: &DomainDef, live: bool) -> String {
     for res in domain.resources {
         let res_prop = to_camel_case(res.name);
         let res_client = format!("{}Client", res.name);
-        out.push_str(&format!("    this.{res_prop} = new {res_client}({args});\n"));
+        out.push_str(&format!(
+            "    this.{res_prop} = new {res_client}({args});\n"
+        ));
     }
     out.push_str("  }\n}\n\n");
 
@@ -715,7 +747,11 @@ pub fn generate_root_client(
     live: bool,
 ) -> String {
     let mut out = String::new();
-    let args = if live { "this.transport, this.subscriptions" } else { "this.transport" };
+    let args = if live {
+        "this.transport, this.subscriptions"
+    } else {
+        "this.transport"
+    };
 
     out.push_str(&format!("export class {client_name} {{\n"));
     out.push_str("  public readonly transport: AshTransport;\n");

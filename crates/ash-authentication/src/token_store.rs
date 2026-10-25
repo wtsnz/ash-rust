@@ -1,204 +1,190 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ash_core::{Context, DataLayer, Filter, Value};
+use ash_core::{Context, CredentialWritePermit, DataLayer, FieldMap, Filter, Value};
 use uuid::Uuid;
 
 use crate::error::{AuthError, Result};
+use crate::token::Claims;
 
 ash_core::resource! {
-AshToken {
-    table "ash_tokens";
-
-attributes {
-    id: Uuid [pk];
-    jti: String;
-    subject: Uuid;
-    purpose: String;
-    expires_at: i64;
-    revoked: bool = false;
-    extra: Option<String>;
-}
-
-actions {
-    create store {
-        primary;
-        accept [jti, subject, purpose, expires_at, revoked, extra];
-    }
-
-    read read {
-        primary;
-    }
-
-    update revoke {
-        primary;
-        change set(revoked, true);
-    }
-
-    destroy destroy {
-        primary;
+    AshToken {
+        table "ash_tokens";
+        attributes {
+            id: Uuid [pk];
+            resource: String;
+            tenant_key: String;
+            jti: String;
+            subject: Uuid;
+            purpose: String;
+            expires_at: i64;
+            revoked: bool = false;
+            consumed: bool = false;
+            extra: Option<String>;
+        }
+        identities { identity token_namespace [resource, tenant_key, subject, jti]; }
+        actions {
+            create store {
+                primary;
+                accept [resource, tenant_key, jti, subject, purpose, expires_at, revoked, consumed, extra];
+            }
+            read read { primary; }
+            update revoke { primary; change set(revoked, true); }
+            destroy destroy { primary; }
+        }
     }
 }
-}}
 
-/// Persistent token store backed by an Ash `DataLayer` (e.g. SQLite, PostgreSQL, Memory).
+/// Persisted session state. Construct with a Runtime-issued write grant for AshToken.
+/// All operations retain the subject resource and exact optional tenant namespace.
 #[derive(Clone)]
 pub struct DatabaseTokenStore<D: DataLayer> {
     context: Context<D>,
+    resource: &'static str,
+    write: CredentialWritePermit,
 }
 
 impl<D: DataLayer> DatabaseTokenStore<D> {
-    /// Create a new `DatabaseTokenStore` for a given context.
-    pub fn new(context: Context<D>) -> Self {
-        Self { context }
+    pub fn new(context: Context<D>, resource: &'static str, write: CredentialWritePermit) -> Self {
+        Self {
+            context,
+            resource,
+            write,
+        }
     }
 
-    /// Access underlying context.
     pub fn context(&self) -> &Context<D> {
         &self.context
     }
 
-    /// Current timestamp in seconds since Unix epoch.
     fn now_secs() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
+            .expect("clock before Unix epoch")
+            .as_secs() as i64
     }
 
-    /// Store a new token in the database.
-    pub async fn store_token(
-        &self,
-        jti: impl Into<String>,
-        subject: Uuid,
-        purpose: impl Into<String>,
-        expires_at: i64,
-        extra: Option<String>,
-    ) -> Result<AshToken> {
-        let jti_str = jti.into();
-        let purpose_str = purpose.into();
+    fn tenant_key(&self) -> String {
+        // JSON encodes None as null, distinct from every tenant string, including "null".
+        serde_json::to_string(&self.context.tenant()).expect("optional string serialization")
+    }
 
+    fn namespace(&self) -> Filter {
+        Filter::eq("resource", self.resource) & Filter::eq("tenant_key", self.tenant_key())
+    }
+
+    fn token_filter(&self, claims: &Claims) -> Result<Filter> {
+        self.context
+            .access()
+            .require_tenant_match(claims.tenant.as_deref())?;
+        if claims.resource != self.resource {
+            return Err(AuthError::InvalidToken("wrong resource".into()));
+        }
+        Ok(self.namespace()
+            & Filter::eq("subject", claims.sub)
+            & Filter::eq("jti", claims.jti.clone())
+            & Filter::eq("purpose", claims.purpose.clone()))
+    }
+
+    pub async fn store_token(&self, claims: &Claims) -> Result<AshToken> {
+        self.token_filter(claims)?;
         AshToken::store(&self.context)
-            .jti(jti_str)
-            .subject(subject)
-            .purpose(purpose_str)
-            .expires_at(expires_at)
+            .resource(self.resource)
+            .tenant_key(self.tenant_key())
+            .jti(claims.jti.clone())
+            .subject(claims.sub)
+            .purpose(claims.purpose.clone())
+            .expires_at(claims.exp as i64)
             .revoked(false)
-            .extra(extra)
+            .consumed(false)
+            .extra(None)
             .await
             .map_err(AuthError::Core)
     }
 
-    /// Find an active token by `jti` and `purpose`.
-    ///
-    /// Returns `None` if token does not exist or has expired.
-    pub async fn get_valid_token(&self, jti: &str, purpose: &str) -> Result<Option<AshToken>> {
-        let now = Self::now_secs();
-        let filter = Filter::eq("jti", Value::String(jti.to_string()))
-            & Filter::eq("purpose", Value::String(purpose.to_string()))
-            & Filter::eq("revoked", Value::Bool(false))
-            & Filter::gt("expires_at", Value::Int(now));
-
-        let tokens = AshToken::query(&self.context)
+    /// Missing state fails closed, including tokens signed outside the strategy.
+    pub async fn get_valid_token(&self, claims: &Claims) -> Result<Option<AshToken>> {
+        let filter = self.token_filter(claims)?
+            & Filter::eq("revoked", false)
+            & Filter::eq("consumed", false)
+            & Filter::gt("expires_at", Self::now_secs());
+        Ok(AshToken::query(&self.context)
             .filter(filter)
             .limit(1)
             .all()
-            .await
-            .map_err(AuthError::Core)?;
-
-        Ok(tokens.into_iter().next())
+            .await?
+            .into_iter()
+            .next())
     }
 
-    /// Check whether a `jti` has been marked as revoked in the database.
-    pub async fn is_revoked(&self, jti: &str) -> Result<bool> {
-        let filter = Filter::eq("jti", Value::String(jti.to_string()))
-            & (Filter::eq("revoked", Value::Bool(true))
-                | Filter::eq("purpose", Value::String("revocation".to_string())));
-
-        let tokens = AshToken::query(&self.context)
-            .filter(filter)
-            .limit(1)
-            .all()
-            .await
-            .map_err(AuthError::Core)?;
-
-        Ok(!tokens.is_empty())
-    }
-
-    /// Mark an existing token as revoked, or insert a revocation tombstone record.
-    pub async fn revoke_token(
-        &self,
-        jti: &str,
-        subject: Option<Uuid>,
-        expires_at: i64,
-    ) -> Result<()> {
-        // 1. Look for existing token with this jti
-        let filter = Filter::eq("jti", Value::String(jti.to_string()));
-        let existing = AshToken::query(&self.context)
-            .filter(filter)
-            .all()
-            .await
-            .map_err(AuthError::Core)?;
-
-        if existing.is_empty() {
-            // Insert a revocation record
-            let sub = subject.unwrap_or_else(Uuid::nil);
-            self.store_token(jti, sub, "revocation", expires_at, None)
-                .await?;
-        } else {
-            for token in existing {
-                if !token.revoked {
-                    token
-                        .revoke_on(&self.context)
-                        .await
-                        .map_err(AuthError::Core)?;
-                }
-            }
+    /// Atomic compare-and-set. Exactly one row is success; there is no read-before-write.
+    pub async fn consume(&self, claims: &Claims) -> Result<()> {
+        let filter = self.token_filter(claims)?
+            & Filter::eq("revoked", false)
+            & Filter::eq("consumed", false)
+            & Filter::gt("expires_at", Self::now_secs());
+        let fields = FieldMap::from([("consumed".into(), Value::Bool(true))]);
+        let rows = self
+            .context
+            .access()
+            .update_credentials_where(&self.write, filter, fields)
+            .await?;
+        if rows.len() != 1 {
+            return Err(AuthError::TokenRevoked);
         }
-
         Ok(())
     }
 
-    /// Revoke all active refresh tokens for a given subject (user ID).
-    pub async fn revoke_all_for_subject(&self, subject: Uuid) -> Result<usize> {
-        let filter =
-            Filter::eq("subject", Value::Uuid(subject)) & Filter::eq("revoked", Value::Bool(false));
-
-        let tokens = AshToken::query(&self.context)
-            .filter(filter)
-            .all()
-            .await
-            .map_err(AuthError::Core)?;
-
-        let count = tokens.len();
-        for token in tokens {
-            token
-                .revoke_on(&self.context)
-                .await
-                .map_err(AuthError::Core)?;
-        }
-
-        Ok(count)
+    pub async fn revoke_token(&self, claims: &Claims) -> Result<()> {
+        self.revoke_filter(self.token_filter(claims)?).await?;
+        Ok(())
     }
 
-    /// Prune all expired tokens from the database.
+    /// Server-side JTI revocation within this resource and tenant. Public input policy
+    /// and retention are separate from durable storage.
+    pub async fn revoke_jti(&self, jti: &str) -> Result<()> {
+        let filter = self.namespace() & Filter::eq("jti", jti);
+        if self.revoke_filter(filter).await? == 0 {
+            AshToken::store(&self.context)
+                .resource(self.resource)
+                .tenant_key(self.tenant_key())
+                .jti(jti)
+                .subject(Uuid::nil())
+                .purpose("revocation")
+                .expires_at(i64::MAX)
+                .revoked(true)
+                .consumed(false)
+                .extra(None)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn revoke_filter(&self, filter: Filter) -> Result<usize> {
+        let fields = FieldMap::from([("revoked".into(), Value::Bool(true))]);
+        Ok(self
+            .context
+            .access()
+            .update_credentials_where(&self.write, filter, fields)
+            .await?
+            .len())
+    }
+
+    pub async fn revoke_all_for_subject(&self, subject: Uuid) -> Result<usize> {
+        self.revoke_filter(
+            self.namespace() & Filter::eq("subject", subject) & Filter::eq("revoked", false),
+        )
+        .await
+    }
+
     pub async fn prune_expired(&self) -> Result<usize> {
-        let now = Self::now_secs();
-        let filter = Filter::lt("expires_at", Value::Int(now));
-
         let expired = AshToken::query(&self.context)
-            .filter(filter)
+            .filter(self.namespace() & Filter::lt("expires_at", Self::now_secs()))
             .all()
-            .await
-            .map_err(AuthError::Core)?;
-
+            .await?;
         let count = expired.len();
         for token in expired {
-            token
-                .destroy_on(&self.context)
-                .await
-                .map_err(AuthError::Core)?;
+            token.destroy_on(&self.context).await?;
         }
-
         Ok(count)
     }
 }

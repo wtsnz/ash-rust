@@ -200,8 +200,12 @@ Authentication receives separate bootstrap-issued, resource-bound read and write
 grants. `Runtime::credential_writes::<R>(fields)` names the only credential
 attributes it may mutate. `update_credentials` rejects primary-key and tenant
 changes, checks attribute types and retains the bound tenant. These grants belong
-in trusted authentication configuration, never request input. Durable session
-consumption and credential versioning remain separate work.
+in trusted authentication configuration, never request input.
+`update_credentials_where` performs a conditional update with the same grant,
+type checks and tenant binding. Returned rows determine compare-and-set success.
+`Context::required_transaction` rejects a backend without real transactions before
+its closure executes. Authentication uses these operations for token consumption
+and credential mutation.
 
 Credential grants are bound to the Runtime that issued them. Use that Runtime, its clones or
 explicitly derived `with_backend` runtimes to bind authentication contexts; Runtime
@@ -391,8 +395,13 @@ fails instead of searching across tenants.
 `None`. Refresh and password-reset operations check it before consuming a token or
 writing a password. The standard auth router also checks access-token tenancy before
 `/me` and `/change-password`. Its supplied context selects the tenant for every route.
-`AuthUser` preserves the signed tenant in the actor's `tenant` attribute. Custom
-adapters must still bind or compare it with their selected tenant.
+`AuthStrategy::authenticate(&context, token).await` checks the resolved tenant,
+persisted session, live subject and credential version in one required backend
+transaction. Uncoordinated subject/token stores reject authentication with
+`AtomicityUnsupported`. It returns `BoundIdentity`;
+`identity.bind(&runtime)` keeps the actor and tenant together. `AuthUser` now contains
+that identity and requires `RequestAuthenticator` in Axum state. A bare JwtService
+performs cryptographic verification only and cannot authenticate a request.
 
 Lagrange demonstrates adapter migration: `/auth/sign-in` requires a `line` alongside
 email and password. Its app-level password and API-key methods also take a line and
@@ -546,9 +555,19 @@ actor. Keyset cursors are sealed by Runtime in step 3. Backend-specific trusted
 plan expressions are implemented. See [Trusted data-layer nodes](trusted-data-layer-nodes.md). Scope has no public constructor or layout,
 so those additions do not require changing the binding API.
 
-This change does not fix token namespace isolation, durable access revocation,
-deleted-user validation, session invalidation or atomic reset/refresh consumption.
-Live credential revocation and subscription termination on revocation remain follow-up work. The design and the full migration sequence are in
+Step 10 adds namespaced persisted JWT state, live-subject authentication,
+credential-version invalidation and atomic reset/refresh transactions. The unique
+token key includes resource, exact optional tenant, subject and JTI. Password hash
+changes bump a sensitive subject version within the write on every supported
+backend, including app/admin, bulk and upsert writes. API keys deliberately keep
+their independent lifecycle. Missing version/resource claims are rejected
+immediately; existing sessions must sign in again. Token and subject state require
+one transactional backend. Reset mail follows commit. See the
+[authentication migration guide](../crates/ash-authentication/README.md#migrate-existing-installations)
+for schema and API changes. GraphQL adapters can await `RequestData::apply_async`
+and `connection_init_async`; Lagrange uses these hooks. Active subscriptions retain
+their captured identity until they end. Automatic termination or revalidation on
+revocation, credential changes, subject deletion or expiry remains deferred. The design and the full migration sequence are in
 [RFC 0005: Scoped execution](wip/0005-scoped-execution.md).
 
 ## Verification
@@ -645,3 +664,18 @@ The planner retains tenancy and row policies; `View` retains field policies and
 calculation dependency visibility. Unsupported backends return a typed planning
 error before reading data. Read locks require a real transaction. These operations
 remain available through executable plans after raw execution is removed.
+
+## Credential write backend contract
+
+`ResourceExtension::credential_version_rule` declares the password hash and version
+columns. DataLayer implementations must evaluate `CredentialVersionRule::update`
+against the stored row in their write statement or under their write lock for
+ordinary and bulk updates. Core initializes new subjects and protects atomic plan
+assignments. Upsert conflicts must apply the same version rule to the conflict row.
+The built-in memory and SQL adapters implement this contract. Native SQL outside
+Ash's executable plans must maintain the same version rule separately.
+
+Password strategies require AuthenticationDef password metadata, its matching
+credential version rule and an integer credential_version attribute. Manually
+constructing AuthStrategy for a bare resource does not enable password operations.
+A version column without the write rule is rejected before credential admission.

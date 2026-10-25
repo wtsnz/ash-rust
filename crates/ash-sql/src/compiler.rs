@@ -2160,15 +2160,16 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             .ok_or(Error::NoPrimaryKey(resource.name))?;
         let table = self.table(resource)?;
 
+        let protected = ash_core::CredentialVersionRule::update(resource, fields);
         let mut set_clauses = Vec::new();
         for attr in resource.attributes {
             if attr.primary_key {
                 continue;
             }
-            if let Some(val) = fields.get(attr.name) {
+            if let Some((_, expr)) = protected.set.iter().find(|(name, _)| name == attr.name) {
                 let col = ident(self.dialect, attr.name)?;
-                let p = self.bind_typed(attr.ty, val.clone());
-                set_clauses.push(format!("{col} = {p}"));
+                let value = self.compile_atomic_expr(resource, expr, Some(attr.ty))?;
+                set_clauses.push(format!("{col} = {value}"));
             }
         }
 
@@ -2343,6 +2344,13 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 };
                 assignments.push(format!("{col} = {value}"));
             }
+        }
+        if let Some(rule) = ash_core::CredentialVersionRule::for_resource(resource)
+            && updates.contains_key(rule.hash_field)
+        {
+            let version = ident(self.dialect, rule.version_field)?;
+            let hash = ident(self.dialect, rule.hash_field)?;
+            assignments.push(format!("{version} = CASE WHEN {table}.{hash} IS DISTINCT FROM EXCLUDED.{hash} THEN {table}.{version} + 1 ELSE {table}.{version} END"));
         }
         if assignments.is_empty() {
             let pk = resource

@@ -1,9 +1,7 @@
 //! Authentication with attribute tenancy: credential lookups and signed tenant claims.
 //! Each scenario runs on memory, SQLite and Postgres with a same-tenant control.
 
-use ash_authentication::{
-    ApiKeyService, AshToken, AuthStrategy, DatabaseTokenStore, JwtService, authentication,
-};
+use ash_authentication::{ApiKeyService, AshToken, AuthStrategy, JwtService, authentication};
 use ash_core::{Context, DataLayer, Resource};
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
@@ -302,21 +300,16 @@ async fn inconsistent_or_tenantless_claims_cannot_reset_a_password<D: DataLayer>
     // Seed credentials directly: the fixed lookup cannot issue these inconsistent
     // tokens. Cover the subject-in-A, claim-in-B case too.
     for tenant in [Some("b".to_string()), None] {
-        let token = jwt.sign_reset_token(f.alice.id, tenant).unwrap();
+        let token = jwt
+            .sign_reset_token(f.alice.id, tenant.clone(), User::DEF.name, 0)
+            .unwrap();
         let claims = jwt
             .verify_token_with_purpose(&token, "password_reset")
             .unwrap();
-        let store = DatabaseTokenStore::new(f.a.clone());
-        store
-            .store_token(
-                &claims.jti,
-                f.alice.id,
-                "password_reset",
-                claims.exp as i64,
-                None,
-            )
-            .await
-            .unwrap();
+        let store = f
+            .strategy
+            .token_store(if tenant.is_some() { &f.b } else { &f.root });
+        store.store_token(&claims).await.unwrap();
         assert!(
             f.strategy
                 .reset_password_with_token(&f.b, &token, NEW_PASSWORD, NEW_PASSWORD)
@@ -329,13 +322,7 @@ async fn inconsistent_or_tenantless_claims_cannot_reset_a_password<D: DataLayer>
                 .await
                 .is_err()
         );
-        assert!(
-            store
-                .get_valid_token(&claims.jti, "password_reset")
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(store.get_valid_token(&claims).await.unwrap().is_some());
     }
     assert!(
         f.strategy
@@ -389,22 +376,23 @@ on_backends!(credential_lookups_require_a_tenant);
 async fn auth_user_extractor_preserves_signed_tenant() {
     use ash_authentication::AuthUser;
     use axum::{Json, Router, routing::get};
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     async fn whoami(AuthUser(actor): AuthUser) -> Json<serde_json::Value> {
-        Json(
-            serde_json::json!({ "tenant": actor.attr("tenant").map(ash_core::Value::to_plain_json) }),
-        )
+        Json(serde_json::json!({ "tenant": actor.tenant() }))
     }
-    let jwt = Arc::new(JwtService::new(SECRET));
-    let app: Router = Router::new()
-        .route("/whoami", get(whoami))
-        .with_state(jwt.clone());
     for tenant in [Some("a".to_string()), None] {
-        let token = jwt
-            .sign_access_token(Uuid::new_v4(), None, tenant.clone())
+        let f = fixture(Memory::new()).await;
+        let (_, token) = f
+            .strategy
+            .sign_in_with_password_and_token(&f.a, EMAIL, PASSWORD)
+            .await
             .unwrap();
+        let auth = ash_authentication::RequestAuthenticator::new(
+            f.strategy.clone(),
+            if tenant.is_some() { f.a } else { f.root },
+        );
+        let app: Router = Router::new().route("/whoami", get(whoami)).with_state(auth);
         let req = axum::http::Request::builder()
             .uri("/whoami")
             .header("Authorization", format!("Bearer {token}"))
@@ -412,6 +400,10 @@ async fn auth_user_extractor_preserves_signed_tenant() {
             .body(axum::body::Body::empty())
             .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
+        if tenant.is_none() {
+            assert_eq!(res.status(), 401);
+            continue;
+        }
         assert_eq!(res.status(), 200);
         let body = http_body_util::BodyExt::collect(res.into_body())
             .await
@@ -438,7 +430,9 @@ async fn auth_router_checks_access_token_tenant_before_me_or_password_change() {
     let jwt = Arc::new(JwtService::new(SECRET));
     let app: Router = ash_authentication::auth_router(f.strategy.clone(), jwt.clone(), f.a.clone());
     for tenant in [Some("b".to_string()), None] {
-        let token = jwt.sign_access_token(f.alice.id, None, tenant).unwrap();
+        let token = jwt
+            .sign_access_token(f.alice.id, None, tenant, User::DEF.name, 0)
+            .unwrap();
         for (method, path, body) in [
             ("GET", "/me", json!(null)),
             (
@@ -466,8 +460,10 @@ async fn auth_router_checks_access_token_tenant_before_me_or_password_change() {
             .await
             .is_ok()
     );
-    let token = jwt
-        .sign_access_token(f.alice.id, None, Some("a".into()))
+    let (_, token) = f
+        .strategy
+        .sign_in_with_password_and_token(&f.a, EMAIL, PASSWORD)
+        .await
         .unwrap();
     let request = Request::builder()
         .uri("/me")

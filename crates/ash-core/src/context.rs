@@ -382,6 +382,20 @@ impl<D: SchemaSupport> Runtime<D> {
 
 impl<D: DataLayer> Context<D> {
     /// Multi-record actions require a real transaction, including inside notification buffers.
+    pub async fn required_transaction<F, Fut, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(Context<D>) -> Fut + Send,
+        Fut: Future<Output = Result<T>> + Send,
+        T: Send,
+    {
+        self.atomically(f).await
+    }
+
+    /// Whether an outer transaction owns commit and notification delivery.
+    pub fn has_transaction_boundary(&self) -> bool {
+        self.notification_queue.is_some()
+    }
+
     pub(crate) async fn atomically<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(Context<D>) -> Fut + Send,
