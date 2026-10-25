@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ash_core::{Resource, resource};
 use ash_graphql::AshGraphQL;
-use ash_graphql::axum::{RequestData, SubscriptionHub};
+use ash_graphql::axum::{BoundRequest, RequestData, SubscriptionHub};
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
 use axum::http::HeaderMap;
@@ -43,17 +43,13 @@ resource! {
 struct ByOrg(ash_core::Runtime<Memory>);
 
 impl RequestData for ByOrg {
-    fn apply(
-        &self,
-        headers: &HeaderMap,
-        request: async_graphql::Request,
-    ) -> (async_graphql::Request, String) {
+    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
         let org = headers
             .get("x-org")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        (request.data(self.0.bind(None, Some(org.clone()))), org)
+        BoundRequest::new(request, self.0.bind(None, Some(org)))
     }
 }
 

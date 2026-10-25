@@ -32,7 +32,9 @@ pub fn generate_attr_zod(attr_ty: &AttrType, allow_nil: bool) -> String {
         }
         AttrType::Map => "z.record(z.string(), z.unknown())".to_string(),
         AttrType::Array { of } => format!("z.array({})", generate_attr_zod(of, false)),
-        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => composite_zod(attr_ty),
+        AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => {
+            composite_zod(attr_ty)
+        }
     };
 
     if allow_nil {
@@ -49,7 +51,13 @@ fn composite_zod(ty: &AttrType) -> String {
         AttrType::Union { members, .. } => {
             let members: Vec<String> = members
                 .iter()
-                .map(|member| format!("z.object({{ {}: {} }})", to_camel_case(member.name), generate_attr_zod(&member.ty, false)))
+                .map(|member| {
+                    format!(
+                        "z.object({{ {}: {} }})",
+                        to_camel_case(member.name),
+                        generate_attr_zod(&member.ty, false)
+                    )
+                })
                 .collect();
             format!("z.union([{}])", members.join(", "))
         }
@@ -58,7 +66,13 @@ fn composite_zod(ty: &AttrType) -> String {
                 .fields()
                 .unwrap_or_default()
                 .iter()
-                .map(|field| format!("{}: {}", to_camel_case(field.name), generate_attr_zod(&field.ty, field.allow_nil)))
+                .map(|field| {
+                    format!(
+                        "{}: {}",
+                        to_camel_case(field.name),
+                        generate_attr_zod(&field.ty, field.allow_nil)
+                    )
+                })
                 .collect();
             format!("z.object({{ {} }})", fields.join(", "))
         }
@@ -93,7 +107,12 @@ pub fn generate_action_zod_schema(res: &ResourceDef, action: &ActionDef) -> Opti
 }
 
 /// Build a Zod chain for a field taking action-level validations into account.
-fn build_field_zod_schema(action: &ActionDef, field_name: &str, ty: &AttrType, required: bool) -> String {
+fn build_field_zod_schema(
+    action: &ActionDef,
+    field_name: &str,
+    ty: &AttrType,
+    required: bool,
+) -> String {
     // Check if field has a OneOf validation
     let mut one_of_allowed: Option<&[&str]> = None;
     let mut string_length: Option<(Option<usize>, Option<usize>)> = None;
@@ -140,9 +159,7 @@ fn build_field_zod_schema(action: &ActionDef, field_name: &str, ty: &AttrType, r
             | AttrType::Binary
             | AttrType::UtcDatetime { .. }
             | AttrType::Inet
-            | AttrType::Decimal => {
-                "z.string()".to_string()
-            }
+            | AttrType::Decimal => "z.string()".to_string(),
             AttrType::Float => "z.number()".to_string(),
             AttrType::Vector { dimensions } => {
                 format!("z.array(z.number()).length({dimensions})")
@@ -163,7 +180,9 @@ fn build_field_zod_schema(action: &ActionDef, field_name: &str, ty: &AttrType, r
             }
             AttrType::Map => "z.record(z.string(), z.unknown())".to_string(),
             AttrType::Array { of } => format!("z.array({})", generate_attr_zod(of, false)),
-            AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => composite_zod(ty),
+            AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => {
+                composite_zod(ty)
+            }
         }
     };
 
@@ -202,8 +221,15 @@ pub fn generate_resource_zod_schema(res: &ResourceDef) -> String {
     out.push_str(&format!("export const {schema_name} = z.object({{\n"));
 
     for attr in res.attributes {
+        if res.sensitive_attribute(attr.name) {
+            continue;
+        }
         let field_schema = generate_attr_zod(&attr.ty, attr.allow_nil);
-        out.push_str(&format!("  {}: {},\n", to_camel_case(attr.name), field_schema));
+        out.push_str(&format!(
+            "  {}: {},\n",
+            to_camel_case(attr.name),
+            field_schema
+        ));
     }
 
     out.push_str("});\n\n");

@@ -283,6 +283,12 @@ pub struct ResourceDef {
 }
 
 impl ResourceDef {
+    pub fn sensitive_attribute(&self, field: &str) -> bool {
+        self.extensions
+            .iter()
+            .any(|extension| extension.sensitive_attribute(field))
+    }
+
     pub fn table_name(&self) -> &'static str {
         if self.table.is_empty() {
             self.name

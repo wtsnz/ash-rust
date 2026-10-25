@@ -20,6 +20,7 @@ pub mod default_value;
 pub mod derived;
 mod engine;
 mod error;
+mod event;
 mod execution_plan;
 mod expr;
 mod extension;
@@ -86,6 +87,7 @@ pub use engine::{
     update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
+pub use event::{CommittedEvent, EventReader, NotifierGrant, ScopedNotifier, SubscriptionScope};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
 pub use extension::ResourceExtension;
 pub use filter::{Filter, all_of, any_of, in_list, like_matches, text_matches};

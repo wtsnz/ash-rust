@@ -14,45 +14,110 @@ use std::sync::Arc;
 
 pub use crate::ws::{Hub as SubscriptionHub, SHARED_BUFFER};
 
-/// Who a request runs as, from its headers: a query or mutation over HTTP, or each
-/// subscription on a WebSocket, from its upgrade request's headers. As AshGraphql takes
-/// the actor and tenant from the connection (Absinthe's context per request and per
-/// socket), an app attaches them here: typically a `Context` with the request's actor and
-/// tenant, which every resolver reads as the request's.
-pub trait RequestData: Send + Sync + 'static {
-    /// Attach a Runtime-bound context resolved from `headers`. Return a sharing key
-    /// that distinguishes every authorization scope. Until groups own a bound Scope,
-    /// executions sharing a key use the first member's context.
-    fn apply(
-        &self,
-        headers: &HeaderMap,
-        request: async_graphql::Request,
-    ) -> (async_graphql::Request, String);
+/// A server-bound request and its subscription execution scope. HTTP operations
+/// retain the member context. An explicitly supplied group replaces it only for
+/// subscriptions, so shared results always resolve as the group's actor.
+pub struct BoundRequest {
+    request: async_graphql::Request,
+    group: Option<SubscriptionGroup>,
 }
 
-/// Bind an explicit context for every request, for bootstrap and single-scope servers.
-/// Production applications should resolve identity in their own `RequestData`.
-impl<D: Send + Sync + 'static> RequestData for ash_core::Context<D> {
-    fn apply(
-        &self,
-        _headers: &HeaderMap,
+#[derive(Clone)]
+struct SubscriptionGroup {
+    scope: ash_core::SubscriptionScope,
+    bind: Arc<dyn Fn(async_graphql::Request) -> async_graphql::Request + Send + Sync>,
+}
+impl BoundRequest {
+    pub fn new<D: Send + Sync + 'static>(
         request: async_graphql::Request,
-    ) -> (async_graphql::Request, String) {
-        (request.data(self.clone()), String::new())
+        ctx: ash_core::Context<D>,
+    ) -> Self {
+        let scope = ctx.subscription_scope();
+        let group_ctx = ctx.clone();
+        Self {
+            request: request.data(ctx),
+            group: Some(SubscriptionGroup {
+                scope,
+                bind: Arc::new(move |request| request.data(group_ctx.clone())),
+            }),
+        }
+    }
+    /// Declare the generic actor and tenant used by every member of this group.
+    /// Keep and clone this bound context; binding a new authenticated context creates
+    /// another group, even when its actor has the same ID. Both contexts must use
+    /// the same backend type, so the group always replaces the resolver's identity.
+    ///
+    /// ```compile_fail
+    /// use ash_graphql::axum::BoundRequest;
+    /// let member = ash_core::Runtime::new(()).bootstrap();
+    /// BoundRequest::for_subscription_group(async_graphql::Request::new("subscription { event }"), member, "staff");
+    /// ```
+    pub fn for_subscription_group<D: Send + Sync + 'static>(
+        request: async_graphql::Request,
+        member: ash_core::Context<D>,
+        ctx: ash_core::Context<D>,
+    ) -> Self {
+        let mut bound = Self::new(request, member);
+        bound.group = Some(SubscriptionGroup {
+            scope: ctx.subscription_scope(),
+            bind: Arc::new(move |request| request.data(ctx.clone())),
+        });
+        bound
+    }
+    pub fn unbound(request: async_graphql::Request) -> Self {
+        Self {
+            request,
+            group: None,
+        }
+    }
+    pub fn into_request(self) -> async_graphql::Request {
+        self.request
+    }
+    pub(crate) fn subscription(
+        self,
+    ) -> (async_graphql::Request, Option<ash_core::SubscriptionScope>) {
+        match self.group {
+            Some(group) => ((group.bind)(self.request), Some(group.scope)),
+            None => (self.request, None),
+        }
     }
 }
 
-/// No binding is supplied. Network requests fail instead of using a schema default.
+/// Bind actor and tenant in trusted server code. App-defined strings cannot authorize
+/// result sharing. Both WebSocket protocols use this binder.
+pub trait RequestData: Send + Sync + 'static {
+    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest;
+
+    /// Validate connection-init credentials and return the headers used for this
+    /// connection's binding. Applications define credential precedence here. The
+    /// default rejects nonempty parameters instead of silently ignoring credentials.
+    fn connection_init(
+        &self,
+        headers: &HeaderMap,
+        params: Option<&serde_json::Value>,
+    ) -> ash_core::Result<HeaderMap> {
+        if params.is_some_and(|params| {
+            !params.is_null() && params.as_object().is_none_or(|map| !map.is_empty())
+        }) {
+            return Err(ash_core::Error::Invalid(
+                "connection-init credentials are not supported by this binder".into(),
+            ));
+        }
+        Ok(headers.clone())
+    }
+}
+impl<D: Send + Sync + 'static> RequestData for ash_core::Context<D> {
+    fn apply(&self, _headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
+        BoundRequest::new(request, self.clone())
+    }
+}
+
+/// Network execution without a binding fails instead of using the schema default.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SchemaContext;
-
 impl RequestData for SchemaContext {
-    fn apply(
-        &self,
-        _headers: &HeaderMap,
-        request: async_graphql::Request,
-    ) -> (async_graphql::Request, String) {
-        (request, String::new())
+    fn apply(&self, _headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
+        BoundRequest::unbound(request)
     }
 }
 
@@ -79,7 +144,10 @@ async fn graphql_handler_with(
     headers: HeaderMap,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    let (request, _) = served.request_data.apply(&headers, req.into_inner());
+    let request = served
+        .request_data
+        .apply(&headers, req.into_inner())
+        .into_request();
     served
         .schema
         .execute(request.data(crate::request::RequireBoundContext))
@@ -136,6 +204,21 @@ pub fn graphql_router_with(
         schema: Arc::new(schema.clone()),
         request_data: Arc::clone(&request_data),
     };
+    Router::new()
+        .route("/graphql", post(graphql_handler_with))
+        .route("/graphql", get(graphiql_handler))
+        .route("/graphiql", get(graphiql_handler))
+        .with_state(served)
+        .merge(graphql_subscription_router_with(schema, hub, request_data))
+}
+
+/// Only the bound `/graphql/ws` endpoint, for applications with custom HTTP handlers.
+/// Merge this Router after supplying the custom handlers' state.
+pub fn graphql_subscription_router_with(
+    schema: Schema,
+    hub: Arc<SubscriptionHub>,
+    request_data: Arc<dyn RequestData>,
+) -> Router {
     let subscriptions =
         move |protocol: GraphQLProtocol, headers: HeaderMap, upgrade: WebSocketUpgrade| {
             let (schema, hub, request_data) =
@@ -143,10 +226,5 @@ pub fn graphql_router_with(
             async move { crate::ws::upgrade(protocol, headers, upgrade, schema, hub, request_data) }
         };
 
-    Router::new()
-        .route("/graphql/ws", get(subscriptions))
-        .route("/graphql", post(graphql_handler_with))
-        .route("/graphql", get(graphiql_handler))
-        .route("/graphiql", get(graphiql_handler))
-        .with_state(served)
+    Router::new().route("/graphql/ws", get(subscriptions))
 }

@@ -1005,25 +1005,20 @@ impl DynamicChangeset {
         }
         let stored = raw.into_fields();
 
-        // The notification carries the record as committed, as Ash's does: each
-        // subscriber reads it through its own field policies. Only what the writer gets
-        // back is redacted for the writer.
         if notify {
             let mut metadata = ctx.metadata().clone();
             metadata.extend(self.metadata.clone());
-            metadata.extend(self.arguments.clone());
-            let notification = crate::notifier::Notification::new(
-                self.resource.name,
+            let event = crate::CommittedEvent::new(
+                ctx,
+                self.resource,
                 self.action.name,
                 self.action.kind,
                 id,
                 stored.clone(),
                 self.existing.clone(),
-                ctx.actor().cloned(),
                 metadata,
-            )
-            .with_tenant(ctx.tenant().map(str::to_owned));
-            crate::notifier::dispatch_notification(ctx, self.resource, notification).await?;
+            );
+            crate::notifier::dispatch_notification(ctx, self.resource, event).await?;
         }
         ctx.present(self.resource, RawRecord::from(stored), None)
     }

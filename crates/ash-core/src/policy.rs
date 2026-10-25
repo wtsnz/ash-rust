@@ -339,7 +339,12 @@ pub fn hidden_fields(
     if actor.is_some_and(Actor::is_system) {
         return Ok(Vec::new());
     }
-    let mut hidden = Vec::new();
+    let mut hidden: Vec<_> = resource
+        .attributes
+        .iter()
+        .filter(|attr| resource.sensitive_attribute(attr.name))
+        .map(|attr| attr.name)
+        .collect();
     for fp in resource.field_policies {
         if !eval_policy_effects(fp.checks, actor, Some(record))? {
             hidden.push(fp.field);
@@ -383,6 +388,10 @@ pub fn field_read_condition(
     field: &str,
     actor: Option<&Actor>,
 ) -> Result<Option<Filter>> {
+    if resource.sensitive_attribute(field) && !actor.is_some_and(Actor::is_system) {
+        return Ok(Some(Filter::False));
+    }
+
     if actor.is_some_and(Actor::is_system) {
         return Ok(None);
     }
@@ -398,6 +407,9 @@ fn field_condition_inner(
     actor: Option<&Actor>,
     visiting: &mut Vec<String>,
 ) -> Result<Option<Filter>> {
+    if resource.sensitive_attribute(field) && !actor.is_some_and(Actor::is_system) {
+        return Ok(Some(Filter::False));
+    }
     if visiting.iter().any(|name| name == field) || visiting.len() >= 64 {
         return Err(Error::Invalid(format!(
             "cyclic calculation dependencies at `{field}`"

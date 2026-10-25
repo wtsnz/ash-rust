@@ -246,6 +246,7 @@ fn fields(resource: &ResourceDef) -> Vec<Field> {
     let mut fields: Vec<Field> = resource
         .attributes
         .iter()
+        .filter(|attr| !resource.sensitive_attribute(attr.name))
         .map(|attr| Field {
             name: attr.name,
             ty: attr.ty,

@@ -3,12 +3,11 @@
 //! Absinthe, which serves AshGraphql's subscriptions, deduplicates them: subscribers to the
 //! same document in the same context share one execution, so each event is resolved once
 //! and the result pushed to all of them. This does the same for `graphql-transport-ws`.
-//! Subscribers to the same document with the same operation name and variables, running as
-//! the same actor in the same tenant, share one stream: each event is resolved and
-//! serialized once, and every subscriber receives the same text. Who a connection runs as
-//! comes from its upgrade request's headers, through the router's
-//! [`RequestData`](crate::axum::RequestData), as Absinthe gives each socket its own
-//! context.
+//! Authenticated subscribers use their own bound scopes. An explicit group runs
+//! the subscription as its retained generic context. The key contains the complete
+//! bound scope and backend identity; an app string cannot authorize sharing.
+//! Anonymous readers share within their Runtime and tenant. Both protocols validate
+//! connection-init parameters through the server binder before acknowledging.
 //!
 //! Queries and mutations sent over the socket run for their sender alone. Every frame
 //! matches async-graphql's own handler: `next` for each response, errors included, then
@@ -98,7 +97,7 @@ impl SubscribePayload {
     }
 
     /// The stream this subscription can share, if it's a subscription.
-    fn key(&self, scope: &str) -> Option<Key> {
+    fn key(&self, scope: ash_core::SubscriptionScope) -> Option<Key> {
         let document = async_graphql::parser::parse_query(&self.query).ok()?;
         let operation = match (&document.operations, &self.operation_name) {
             (DocumentOperations::Single(operation), _) => operation,
@@ -108,7 +107,7 @@ impl SubscribePayload {
             (DocumentOperations::Multiple(_), None) => return None,
         };
         (operation.node.ty == OperationType::Subscription).then(|| Key {
-            scope: scope.to_string(),
+            scope,
             query: self.query.clone(),
             operation_name: self.operation_name.clone(),
             variables: self
@@ -120,12 +119,24 @@ impl SubscribePayload {
     }
 }
 
+fn is_subscription(payload: &SubscribePayload) -> bool {
+    let Ok(document) = async_graphql::parser::parse_query(&payload.query) else {
+        return false;
+    };
+    let operation = match (&document.operations, &payload.operation_name) {
+        (DocumentOperations::Single(operation), _) => Some(operation),
+        (DocumentOperations::Multiple(operations), Some(name)) => operations.get(name.as_str()),
+        _ => None,
+    };
+    operation.is_some_and(|operation| operation.node.ty == OperationType::Subscription)
+}
+
 /// What makes two subscriptions the same, so they can share a stream.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
     /// Who the subscription runs as (see [`RequestData`](crate::axum::RequestData)):
     /// subscribers in different scopes never share a stream.
-    scope: String,
+    scope: ash_core::SubscriptionScope,
     query: String,
     operation_name: Option<String>,
     variables: String,
@@ -289,7 +300,9 @@ fn missed(count: u64) -> String {
 }
 
 enum SubscriptionProtocol {
-    Transport { scope: String },
+    Transport {
+        scope: Option<ash_core::SubscriptionScope>,
+    },
     Legacy,
 }
 
@@ -304,7 +317,9 @@ async fn subscribe(
     out: mpsc::Sender<Message>,
 ) {
     let (next_kind, key) = match protocol {
-        SubscriptionProtocol::Transport { scope } => ("next", payload.key(&scope)),
+        SubscriptionProtocol::Transport { scope } => {
+            ("next", scope.and_then(|scope| payload.key(scope)))
+        }
         SubscriptionProtocol::Legacy => ("data", None),
     };
     match key {
@@ -367,6 +382,7 @@ async fn serve(
 
     let mut subscriptions: HashMap<String, JoinHandle<()>> = HashMap::new();
     let mut acknowledged = false;
+    let mut bound_headers = headers.clone();
     while let Some(Ok(message)) = incoming.next().await {
         let text = match message {
             Message::Text(text) => text,
@@ -385,6 +401,16 @@ async fn serve(
                         .await;
                     break;
                 }
+                bound_headers =
+                    match request_data.connection_init(&headers, message.payload.as_ref()) {
+                        Ok(headers) => headers,
+                        Err(_) => {
+                            let _ = out
+                                .send(close(4403, "Connection credentials rejected"))
+                                .await;
+                            break;
+                        }
+                    };
                 acknowledged = true;
                 let ack = Message::Text(r#"{"type":"connection_ack"}"#.into());
                 if out.send(ack).await.is_err() {
@@ -415,7 +441,14 @@ async fn serve(
                 if let Some(previous) = subscriptions.remove(&id) {
                     previous.abort();
                 }
-                let (request, scope) = request_data.apply(&headers, payload.request());
+                let bound = request_data.apply(&bound_headers, payload.request());
+                // Queries and mutations always use their member's binding. Both
+                // subscription protocols resolve explicit groups as the generic actor.
+                let (request, scope) = if is_subscription(&payload) {
+                    bound.subscription()
+                } else {
+                    (bound.into_request(), None)
+                };
                 let request = request.data(crate::request::RequireBoundContext);
                 let task = tokio::spawn(subscribe(
                     id.clone(),

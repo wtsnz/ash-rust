@@ -4,15 +4,15 @@ use std::sync::{Arc, Mutex};
 use crate::actor::Actor;
 use crate::data_layer::{DataLayer, SchemaSupport, TransactionSupport};
 use crate::error::Result;
-use crate::notifier::{Notification, Notifier};
+use crate::notifier::Notifier;
 use crate::resource::ResourceDef;
 use crate::value::{FieldMap, Value};
 
 /// Notification queued during an atomic transaction buffer.
 #[derive(Clone, Debug)]
 pub struct QueuedNotification {
-    pub notification: Notification,
-    pub resource_notifiers: &'static [&'static dyn Notifier],
+    pub(crate) event: crate::CommittedEvent,
+    pub(crate) resource_notifiers: &'static [&'static dyn Notifier],
 }
 
 /// Server-owned authority for binding request identity and issuing bootstrap grants.
@@ -53,6 +53,20 @@ impl<D> Runtime<D> {
             cursor_key: Arc::new(crate::cursor::CursorKey::random()),
             notifiers: Vec::new(),
             notification_queue: None,
+        }
+    }
+
+    /// Derive startup authority for another backend, such as a StoreRegistry over
+    /// this Runtime's stores. Grants and event admission retain their issuer; bound
+    /// Contexts cannot replace their backend through this API.
+    pub fn with_backend<E>(&self, data: E) -> Runtime<E> {
+        Runtime {
+            data: Arc::new(data),
+            authority: Arc::clone(&self.authority),
+            system: self.system,
+            cursor_key: Arc::clone(&self.cursor_key),
+            notifiers: self.notifiers.clone(),
+            notification_queue: self.notification_queue.clone(),
         }
     }
 
@@ -145,6 +159,27 @@ enum Authorization {
 }
 
 impl Scope {
+    pub(crate) fn system(&self) -> Arc<Self> {
+        Arc::new(Self {
+            authority: Arc::clone(&self.authority),
+            actor: self.actor.clone(),
+            tenant: self.tenant.clone(),
+            authorization: Authorization::System(crate::Actor::system()),
+            cursor_key: Arc::clone(&self.cursor_key),
+        })
+    }
+    pub(crate) fn anonymous(&self) -> Arc<Self> {
+        Arc::new(Self {
+            authority: Arc::clone(&self.authority),
+            actor: None,
+            tenant: self.tenant.clone(),
+            authorization: Authorization::Enforce,
+            cursor_key: Arc::clone(&self.cursor_key),
+        })
+    }
+    pub(crate) fn ordinary_anonymous(&self) -> bool {
+        self.actor.is_none() && matches!(self.authorization, Authorization::Enforce)
+    }
     pub(crate) fn actor(&self) -> Option<&Actor> {
         self.actor.as_ref()
     }
@@ -224,6 +259,22 @@ impl<D> Context<D> {
 
     pub fn notifiers(&self) -> &[Arc<dyn Notifier>] {
         &self.notifiers
+    }
+
+    pub(crate) fn identity_context(&self) -> Context<()> {
+        Context {
+            scope: Arc::clone(&self.scope),
+            metadata: FieldMap::new(),
+            data: Arc::new(()),
+            notifiers: Vec::new(),
+            notification_queue: None,
+        }
+    }
+
+    /// An opaque key retaining the complete bound scope and backend identity.
+    /// Anonymous ordinary contexts on one Runtime and tenant share by default.
+    pub fn subscription_scope(&self) -> crate::SubscriptionScope {
+        crate::SubscriptionScope::new(self, Arc::as_ptr(&self.data) as usize)
     }
 
     /// Whether a request loader can serve this exact scope and backend handle.

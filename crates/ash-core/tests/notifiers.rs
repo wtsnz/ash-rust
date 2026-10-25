@@ -85,7 +85,7 @@ async fn test_standalone_crud_notifications() {
         assert_eq!(n.id, ash_core::Value::from(order.id));
         assert_eq!(n.get("status").and_then(|v| v.as_str()), Some("pending"));
         assert_eq!(n.get("amount").and_then(|v| v.as_int()), Some(120));
-        assert!(n.previous_fields.is_none());
+        assert!(n.previous.is_none());
     }
 
     // 2. Update action

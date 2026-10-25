@@ -331,7 +331,7 @@ resource! {
 In the Ash architecture, **Notifiers** run side-effects (e.g. broadcasting events, sending emails, notifying webhooks) **after an action has successfully committed**. They are strictly decoupled from the primary database transaction and never block or invalidate persistence.
 
 ### Core Primitives:
-- `Notification`: Comprehensive event payload containing `resource`, `action`, `action_kind` (`Create`, `Update`, `Destroy`), `id`, `record_fields`, `previous_fields`, `actor`, and `metadata`.
+- `Notification`: Comprehensive event payload containing `resource`, `action`, `action_kind` (`Create`, `Update`, `Destroy`), `id`, `record: View`, `previous: Option<View>`, tenant and explicitly allowlisted metadata. Action arguments and actor attributes are not exported. See [Events and subscriptions](scoped-access.md#events-and-subscriptions).
 - `Notifier`: Asynchronous event consumer trait:
   ```rust
   pub trait Notifier: Send + Sync + Debug + 'static {
@@ -350,7 +350,7 @@ In the Ash architecture, **Notifiers** run side-effects (e.g. broadcasting event
 
 ```rust
 use std::sync::Arc;
-use ash_core::{Runtime, resource};
+use ash_core::{Resource, Runtime, resource};
 use ash_memory::Memory;
 use ash_pubsub::{PubSub, PubSubNotifier};
 
@@ -362,8 +362,8 @@ let notifier = Arc::new(PubSubNotifier::new(Arc::clone(&pubsub)));
 let ctx = Runtime::new(Memory::new()).bootstrap().with_notifier(notifier);
 
 // 3. Subscribe to topic patterns
-let mut sub_all_orders = pubsub.subscribe("order:*");
-let mut sub_order_creates = pubsub.subscribe("order:create");
+let mut sub_all_orders = pubsub.subscribe(&ctx, &Order::DEF, "order:*")?;
+let mut sub_order_creates = pubsub.subscribe(&ctx, &Order::DEF, "order:create")?;
 
 // 4. Execute an action
 let order = Order::create(&ctx)
@@ -448,9 +448,9 @@ use ash_pubsub::{ContextPubSubExt, PubSub, PubSubResourceExt};
 let ctx = Runtime::new(Memory::new()).bootstrap().with_pubsub(Arc::clone(&pubsub));
 
 // 2. Typed subscription streams:
-let mut sub_all = Article::subscribe_all(&pubsub);              // "article:*"
-let mut sub_publish = Article::subscribe_action(&pubsub, "publish"); // "article:publish"
-let mut sub_record = article.subscribe(&pubsub, Some("archive")); // "article:<id>:archive"
+let mut sub_all = Article::subscribe_all(&pubsub, &ctx)?;              // "article:*"
+let mut sub_publish = Article::subscribe_action(&pubsub, &ctx, "publish")?; // "article:publish"
+let mut sub_record = article.subscribe(&pubsub, &ctx, Some("archive"))?; // "article:<id>:archive"
 ```
 
 ### 4. Record Lifecycle Helpers
@@ -1216,7 +1216,7 @@ credential grants, transport binding and cross-scope transaction behavior.
   - `ValidationContext` and `ChangeContext` expose `ctx.tenant: Option<&str>` and `ctx.metadata: &FieldMap`.
   - Custom validations and changes can enforce tenant isolation or automatically populate tenant foreign keys.
 - **Notification & Generic Action Propagation**:
-  - Committed `Notification` payloads include `.tenant: Option<String>` and merge request metadata.
+  - Committed `Notification` payloads include `.tenant: Option<String>` and expose only explicitly allowlisted metadata.
   - Generic action input structs expose `input.tenant()` and `input.metadata()`.
 - **Resource-level `multitenancy`**: `multitenancy { strategy: attribute; attribute: tenant_id; }` stamps the tenant attribute on create and scopes reads. `strategy: context` keeps each tenant's rows apart in the data layer (a Postgres schema per tenant, a memory table per tenant; SQLite refuses) without writing a column. Create without a tenant is `Error::TenantRequired` unless `global: true`.
 

@@ -104,6 +104,16 @@ impl ResourceExtension for AuthenticationDef {
         "ash_authentication"
     }
 
+    fn sensitive_attribute(&self, field: &str) -> bool {
+        self.password
+            .as_ref()
+            .is_some_and(|password| password.hashed_password_field == field)
+            || self
+                .api_key
+                .as_ref()
+                .is_some_and(|key| key.api_key_field == field)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

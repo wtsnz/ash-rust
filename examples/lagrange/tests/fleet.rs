@@ -46,10 +46,19 @@ async fn crew_sign_in<D: FleetDb>(h: Harness<D>) {
         .await
         .unwrap();
     assert_eq!(hired.line, HELIOS);
+    assert!(hired.hashed_password.is_none());
+    let credentials = ada
+        .access()
+        .credentials(
+            &h.app.runtime().credential_reads::<CrewMember>(),
+            ash_core::Filter::Eq("id".into(), hired.id.into()),
+            1,
+        )
+        .await
+        .unwrap();
     assert!(
-        hired
-            .hashed_password
-            .as_deref()
+        credentials[0]["hashed_password"]
+            .as_str()
             .unwrap()
             .starts_with("$argon2")
     );

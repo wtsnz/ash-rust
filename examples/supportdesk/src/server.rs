@@ -8,7 +8,7 @@ use ash_core::{
     Resource, TransactionSupport, Value,
 };
 use ash_graphql::AshGraphQL;
-use ash_graphql::axum::{RequestData, SubscriptionHub};
+use ash_graphql::axum::{BoundRequest, RequestData, SubscriptionHub};
 use ash_pubsub::PubSub;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -40,20 +40,9 @@ pub fn request_context<D>(base: &ash_core::Runtime<D>, headers: &HeaderMap) -> C
 struct Headers<D>(ash_core::Runtime<D>);
 
 impl<D: Send + Sync + 'static> RequestData for Headers<D> {
-    fn apply(
-        &self,
-        headers: &HeaderMap,
-        request: async_graphql::Request,
-    ) -> (async_graphql::Request, String) {
+    fn apply(&self, headers: &HeaderMap, request: async_graphql::Request) -> BoundRequest {
         let ctx = request_context(&self.0, headers);
-        let scope = format!(
-            "{}|{}",
-            ctx.tenant().unwrap_or_default(),
-            ctx.actor()
-                .map(|a| format!("{}:{}", a.id, a.role().unwrap_or_default()))
-                .unwrap_or_default()
-        );
-        (request.data(ctx), scope)
+        BoundRequest::new(request, ctx)
     }
 }
 

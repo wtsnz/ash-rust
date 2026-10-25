@@ -155,7 +155,8 @@ async fn state_machine_then_archival() {
 
 #[tokio::test]
 async fn authentication_extends_a_register_action_it_finds() {
-    let ctx = ash_core::Runtime::new(Memory::new()).bootstrap();
+    let runtime = ash_core::Runtime::new(Memory::new());
+    let ctx = runtime.bootstrap();
     let member = Member::register_with_password(&ctx)
         .email("ada@example.com")
         .name("Ada")
@@ -164,6 +165,21 @@ async fn authentication_extends_a_register_action_it_finds() {
         .await
         .unwrap();
     assert_eq!(member.name.as_deref(), Some("Ada"));
-    assert!(member.hashed_password.unwrap().starts_with("$argon2id$"));
+    assert!(member.hashed_password.is_none());
+    let credentials = ctx
+        .access()
+        .credentials(
+            &runtime.credential_reads::<Member>(),
+            ash_core::Filter::Eq("id".into(), member.id.into()),
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(
+        credentials[0]["hashed_password"]
+            .as_str()
+            .unwrap()
+            .starts_with("$argon2id$")
+    );
     assert!(archive_def::<Member>().is_some());
 }

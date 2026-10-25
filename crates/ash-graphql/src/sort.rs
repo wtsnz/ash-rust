@@ -40,6 +40,7 @@ fn sort_fields(resource: &ResourceDef) -> impl Iterator<Item = &'static str> + '
     resource
         .attributes
         .iter()
+        .filter(|attr| !resource.sensitive_attribute(attr.name))
         .map(|attr| attr.name)
         .chain(resource.aggregates.iter().map(|agg| agg.name))
         .chain(

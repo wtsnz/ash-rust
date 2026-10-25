@@ -54,6 +54,9 @@ fn input_fields(action: &ActionDef, resource: &ResourceDef) -> Vec<(&'static str
     let mut fields = Vec::new();
     if matches!(action.kind, ActionKind::Create | ActionKind::Update) {
         for attr in resource.attributes {
+            if resource.sensitive_attribute(attr.name) {
+                continue;
+            }
             if action.accept.contains(&attr.name) {
                 let required = action.kind == ActionKind::Create
                     && !attr.allow_nil

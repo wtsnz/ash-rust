@@ -123,3 +123,12 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/ash_test cargo test -p 
 ```
 
 The SDK type check runs when `tsc` is installed.
+
+The log sink declares resource-bound Runtime grants for actor IDs and `client_ip`.
+Delivery email declares only `shipper_email` and `external_ref`. PubSub readers use
+bound scopes and receive projected Views. The registry Runtime is derived from the fleet Runtime with `with_backend`,
+retaining its application authority and declared grants. See [Events and subscriptions](../../docs/scoped-access.md#events-and-subscriptions).
+
+Both WebSocket protocols use the HTTP JWT binder. Browser clients can send
+`{ "authorization": "Bearer <token>" }` in connection-init parameters. A different
+Authorization upgrade header or unsupported parameter is rejected before acknowledgment.

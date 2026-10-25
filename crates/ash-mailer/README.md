@@ -33,7 +33,7 @@ Send an order receipt automatically whenever an `Order::complete` action commits
 ```rust
 use std::sync::Arc;
 use ash_core::{resource};
-use ash_mailer::{ContextMailerExt, Email, EmailNotifier, MemoryMailer};
+use ash_mailer::{Email, EmailNotifier, MemoryMailer};
 use ash_memory::Memory;
 
 let mailer = MemoryMailer::new();
@@ -51,7 +51,9 @@ let notifier = EmailNotifier::new(mailer.clone())
             .html(format!("<h1>Receipt</h1><p>Total: <strong>${amount}</strong></p>"))
     });
 
-let ctx = ash_core::Runtime::new(Memory::new()).bootstrap().with_email_notifier(notifier);
+let runtime = ash_core::Runtime::new(Memory::new());
+let grant = runtime.notifier_grant::<Order>(&["customer_email", "amount"])?;
+let ctx = runtime.with_notifier(grant.attach(Arc::new(notifier))).bootstrap();
 
 // Executing the action automatically delivers the email:
 order.complete_on(&ctx).await?;
@@ -94,3 +96,12 @@ assert!(mailer.has_delivered_to("david@example.com"));
 let email = mailer.last_delivered().unwrap();
 assert_eq!(email.subject.as_deref(), Some("Password Reset Instructions"));
 ```
+
+## Notification compatibility
+
+Email rules now receive projected Views. An ordinary `with_email_notifier` attachment
+reads as anonymous and receives no arguments, actor attributes or automatic metadata.
+Use a Runtime-issued `notifier_grant` for fields needed by a privileged mail rule,
+as in the receipt example above. A grant applies only to its resource and issuing
+Runtime. Password reset/confirmation tokens remain on `AuthMailerSender`'s explicit
+sender path. See the [breaking event changes](../../docs/scoped-access.md#events-and-subscriptions).

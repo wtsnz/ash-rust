@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 use ash_core::{
-    ChangeContext, CustomChange, CustomValidation, Error, Notification, Result, SyncFnNotifier,
-    ValidationContext, Value, resource,
+    AttrType, ChangeContext, CustomChange, CustomValidation, Error, MetadataDef, Notification,
+    Resource, Result, ScopedNotifier, SyncFnNotifier, ValidationContext, Value, resource,
 };
 use ash_memory::Memory;
 
@@ -172,7 +172,7 @@ async fn test_action_builder_uses_bound_tenant() {
 }
 
 #[tokio::test]
-async fn test_notification_carries_tenant_and_metadata() {
+async fn notifications_carry_only_allowlisted_metadata_in_the_bound_tenant() {
     let mem = Memory::new();
     let notified = Arc::new(AtomicBool::new(false));
     let notified_clone = Arc::clone(&notified);
@@ -187,6 +187,7 @@ async fn test_notification_carries_tenant_and_metadata() {
             notif.metadata.get("request_id"),
             Some(&Value::String("req_abc".into()))
         );
+        assert_eq!(notif.metadata.len(), 2);
         notified_clone.store(true, Ordering::SeqCst);
         Ok(())
     });
@@ -196,7 +197,15 @@ async fn test_notification_carries_tenant_and_metadata() {
         .bind(None, Some(("tenant_notif").into()))
         .with_metadata("client_ip", "127.0.0.1")
         .with_metadata("request_id", "req_abc")
-        .with_notifier(Arc::new(notifier));
+        .with_metadata("internal_context", "private");
+    let reader = ctx
+        .event_reader(&Document::DEF, None)
+        .unwrap()
+        .with_metadata(&[
+            MetadataDef::new("client_ip", AttrType::String),
+            MetadataDef::new("request_id", AttrType::String),
+        ]);
+    let ctx = ctx.with_notifier(Arc::new(ScopedNotifier::new(reader, Arc::new(notifier))));
 
     let doc = Document::create(&ctx)
         .title("Notification Test")
@@ -238,7 +247,7 @@ async fn test_generic_action_tenant_and_metadata() {
 }
 
 #[tokio::test]
-async fn test_multi_pipeline_preserves_tenant_and_metadata() {
+async fn multi_pipeline_preserves_tenant_and_allowlisted_event_metadata() {
     let mem = Memory::new();
     let multi_notified = Arc::new(AtomicBool::new(false));
     let notif_flag = Arc::clone(&multi_notified);
@@ -258,8 +267,12 @@ async fn test_multi_pipeline_preserves_tenant_and_metadata() {
     let ctx_runtime = ash_core::Runtime::new(mem);
     let ctx = ctx_runtime
         .bind(None, Some(("tenant_multi").into()))
-        .with_metadata("batch_id", "batch_01")
-        .with_notifier(Arc::new(notifier));
+        .with_metadata("batch_id", "batch_01");
+    let reader = ctx
+        .event_reader(&Document::DEF, None)
+        .unwrap()
+        .with_metadata(&[MetadataDef::new("batch_id", AttrType::String)]);
+    let ctx = ctx.with_notifier(Arc::new(ScopedNotifier::new(reader, Arc::new(notifier))));
 
     let multi_result = ctx
         .multi()

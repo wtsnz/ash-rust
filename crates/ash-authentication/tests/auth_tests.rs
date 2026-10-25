@@ -66,9 +66,21 @@ async fn test_declarative_authentication_registration_and_sign_in() -> Result<()
         .expect("registration should succeed");
 
     assert_eq!(user.email, "alice@example.com");
-    assert!(user.hashed_password.is_some());
-    let hash = user.hashed_password.as_ref().unwrap();
-    assert!(hash.starts_with("$argon2id$"));
+    assert!(user.hashed_password.is_none());
+    let credentials = ctx
+        .access()
+        .credentials(
+            &ctx_runtime.credential_reads::<User>(),
+            ash_core::Filter::Eq("id".into(), user.id.into()),
+            1,
+        )
+        .await?;
+    assert!(
+        credentials[0]["hashed_password"]
+            .as_str()
+            .unwrap()
+            .starts_with("$argon2id$")
+    );
 
     // 2. Test successful sign in with password strategy
     let strategy = User::auth_strategy(&ctx_runtime);
@@ -125,7 +137,7 @@ async fn test_api_key_authentication() -> Result<()> {
     fields.insert("api_key_hash".to_string(), Value::String(key_hash));
     let updated: User = ash_core::update::<User, _>(&ctx, "update", user.id, fields).await?;
 
-    assert!(updated.api_key_hash.is_some());
+    assert!(updated.api_key_hash.is_none());
 
     // Verify authentication by raw api key
     let verified = strategy

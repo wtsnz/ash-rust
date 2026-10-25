@@ -169,13 +169,15 @@ async fn system_scopes_bypass_authorization_and_keep_required_tenancy() {
 async fn runtime_transactions_keep_scopes_separate<D: TransactionSupport>(runtime: Runtime<D>) {
     let sent = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&sent);
-    let runtime = runtime.with_notifier(Arc::new(ash_core::SyncFnNotifier::new(
+    let notifier = Arc::new(ash_core::SyncFnNotifier::new(
         "scope-transactions",
-        move |_| {
+        move |_: &ash_core::Notification| {
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(())
         },
-    )));
+    ));
+    let grant = runtime.notifier_grant::<Entry>(&[]).unwrap();
+    let runtime = runtime.with_notifier(grant.attach(notifier));
     let buffered = Arc::clone(&sent);
     let result: ash_core::Result<()> = runtime
         .transaction(move |tx| async move {

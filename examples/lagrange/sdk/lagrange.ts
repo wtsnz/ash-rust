@@ -354,7 +354,6 @@ export interface CrewMember {
   email: string;
   name: string;
   role: "DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY";
-  hashedPassword?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -380,7 +379,6 @@ export interface CrewMemberFilterInput {
   email?: AshTextFilter;
   name?: AshTextFilter;
   role?: AshFilter<"DISPATCHER" | "CAPTAIN" | "CUSTOMS" | "SHIPPER" | "PORT_AUTHORITY">;
-  hashedPassword?: AshTextFilter;
   createdAt?: AshFilter<string>;
   updatedAt?: AshFilter<string>;
   and?: CrewMemberFilterInput[];
@@ -388,7 +386,7 @@ export interface CrewMemberFilterInput {
   not?: CrewMemberFilterInput[];
 }
 
-export type CrewMemberSortField = "id" | "line" | "email" | "name" | "role" | "hashedPassword" | "createdAt" | "updatedAt";
+export type CrewMemberSortField = "id" | "line" | "email" | "name" | "role" | "createdAt" | "updatedAt";
 
 export interface CrewMemberSortInput {
   field: CrewMemberSortField;
@@ -405,7 +403,6 @@ export interface Transponder {
   shipId: string;
   label: string;
   kind: string;
-  apiKeyHash?: string | null;
   createdAt: string;
   updatedAt: string;
   ship?: Ship | null;
@@ -414,7 +411,6 @@ export interface Transponder {
 export interface InstallTransponderInput {
   shipId: string;
   label: string;
-  apiKeyHash?: string | null;
 }
 
 export type TransponderInstallInput = InstallTransponderInput;
@@ -425,7 +421,6 @@ export interface TransponderFilterInput {
   shipId?: AshFilter<string>;
   label?: AshTextFilter;
   kind?: AshTextFilter;
-  apiKeyHash?: AshTextFilter;
   createdAt?: AshFilter<string>;
   updatedAt?: AshFilter<string>;
   ship?: ShipFilterInput;
@@ -434,7 +429,7 @@ export interface TransponderFilterInput {
   not?: TransponderFilterInput[];
 }
 
-export type TransponderSortField = "id" | "line" | "shipId" | "label" | "kind" | "apiKeyHash" | "createdAt" | "updatedAt";
+export type TransponderSortField = "id" | "line" | "shipId" | "label" | "kind" | "createdAt" | "updatedAt";
 
 export interface TransponderSortInput {
   field: TransponderSortField;
@@ -1150,7 +1145,6 @@ export const CrewMemberSchema = z.object({
   email: z.string(),
   name: z.string(),
   role: z.enum(["DISPATCHER", "CAPTAIN", "CUSTOMS", "SHIPPER", "PORT_AUTHORITY"]),
-  hashedPassword: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1177,7 +1171,6 @@ export const TransponderSchema = z.object({
   shipId: z.string().uuid(),
   label: z.string(),
   kind: z.string(),
-  apiKeyHash: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1185,7 +1178,6 @@ export const TransponderSchema = z.object({
 export const InstallTransponderInputSchema = z.object({
   shipId: z.string().uuid(),
   label: z.string(),
-  apiKeyHash: z.string().nullable().optional(),
 });
 
 export const TransponderInstallInputSchema = InstallTransponderInputSchema;
@@ -2159,7 +2151,7 @@ export class ShippingLineQueryBuilder {
   }
 }
 
-const CrewMemberSortFieldNames: Record<CrewMemberSortField, string> = { id: "ID", line: "LINE", email: "EMAIL", name: "NAME", role: "ROLE", hashedPassword: "HASHED_PASSWORD", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
+const CrewMemberSortFieldNames: Record<CrewMemberSortField, string> = { id: "ID", line: "LINE", email: "EMAIL", name: "NAME", role: "ROLE", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class CrewMemberQueryBuilder {
   private _filter?: CrewMemberFilterInput;
@@ -2241,7 +2233,7 @@ export class CrewMemberQueryBuilder {
   }
 }
 
-const TransponderSortFieldNames: Record<TransponderSortField, string> = { id: "ID", line: "LINE", shipId: "SHIP_ID", label: "LABEL", kind: "KIND", apiKeyHash: "API_KEY_HASH", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
+const TransponderSortFieldNames: Record<TransponderSortField, string> = { id: "ID", line: "LINE", shipId: "SHIP_ID", label: "LABEL", kind: "KIND", createdAt: "CREATED_AT", updatedAt: "UPDATED_AT" };
 
 export class TransponderQueryBuilder {
   private _filter?: TransponderFilterInput;

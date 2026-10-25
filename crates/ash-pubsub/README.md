@@ -14,7 +14,7 @@ It decouples side-effects and event distribution from resource business logic, e
 
 - **`PubSub` Broker**: High-performance, in-memory event distributor backed by `tokio::sync::broadcast` channels with configurable capacity.
 - **Topic Pattern Matching & Wildcards**:
-  - Global wildcards: `"*"` (receives all events)
+  - Resource wildcards: `"*"` (receives admitted events for the registered resource)
   - Namespace wildcards: `"order:*"` (receives all order actions)
   - Segment wildcards: `"order:*:archived"`
   - Exact topics: `"order:create"`
@@ -23,9 +23,9 @@ It decouples side-effects and event distribution from resource business logic, e
 - **Fluent Ergonomics**:
   - `ContextPubSubExt`: Seamlessly attach PubSub to any execution context via `ctx.with_pubsub(pubsub)`.
   - `PubSubResourceExt`: Typed subscription helpers eliminating string formatting errors:
-    - `Order::subscribe_all(&pubsub)` (`"order:*"`)
-    - `Order::subscribe_action(&pubsub, "cancel")` (`"order:cancel"`)
-    - `order.subscribe(&pubsub, None)` (`"order:<id>:*"`)
+    - `Order::subscribe_all(&pubsub, &ctx)?` (`"order:*"`)
+    - `Order::subscribe_action(&pubsub, &ctx, "cancel")?` (`"order:cancel"`)
+    - `order.subscribe(&pubsub, &ctx, None)?` (`"order:<id>:*"`)
 - **Transactional Atomicity with `Multi`**:
   - Notifications emitted inside `Multi` transactions are buffered in memory.
   - If a transaction rolls back, all queued events are immediately discarded.
@@ -75,8 +75,8 @@ async fn main() -> ash_core::Result<()> {
     let ctx = ash_core::Runtime::new(Memory::new()).bootstrap().with_pubsub(Arc::clone(&pubsub));
 
     // 3. Subscribe to typed event streams
-    let mut sub_all = Order::subscribe_all(&pubsub);
-    let mut sub_creates = Order::subscribe_action(&pubsub, "create");
+    let mut sub_all = Order::subscribe_all(&pubsub, &ctx)?;
+    let mut sub_creates = Order::subscribe_action(&pubsub, &ctx, "create")?;
 
     // 4. Execute an action
     let order = Order::create(&ctx)
@@ -100,3 +100,16 @@ async fn main() -> ash_core::Result<()> {
 ## License
 
 Licensed under the [MIT License](../../LICENSE).
+
+## Scoped event compatibility
+
+Registration now requires a bound context and resource. The general form is
+`pubsub.subscribe(&ctx, &Order::DEF, "order:*")?`. Topics include a separate tenant
+key, and wildcards match only within that tenant and Runtime. Each queue receives
+its reader's View, including field masks, rather than a shared raw record. Metadata
+is empty unless the EventReader declares it. Password arguments and actor attributes
+are never broadcast. Custom topic functions also receive projected notifications.
+Publish methods require a core-created opaque event and return `Result<usize>`.
+
+These are breaking changes. See the [event migration guide](../../docs/scoped-access.md#events-and-subscriptions)
+for reader registration, unsupported snapshot filters and explicit mail/logging grants.
