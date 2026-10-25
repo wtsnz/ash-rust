@@ -518,18 +518,31 @@ async fn renaming_a_table_and_its_columns_keeps_rows_and_constraints(db: TestDb)
     db.migrate(&project.migrations()).await.unwrap();
 
     assert_eq!(
-        db.text(&format!("SELECT title FROM issues WHERE id = '{TICKET_ID}'"))
-            .await,
+        db.text(&format!(
+            "SELECT title FROM issues WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
         "Printer on fire",
         "the renamed column keeps its data"
     );
     let schema = db.schema().await;
     let issues = schema.table("issues");
-    assert_eq!(issues.columns["status"].default.as_deref(), Some("'closed'"));
+    assert_eq!(
+        issues.columns["status"].default.as_deref(),
+        Some("'closed'")
+    );
     assert_eq!(issues.foreign_keys.len(), 1, "{:?}", issues.foreign_keys);
     assert_eq!(issues.foreign_keys[0].on_delete, "RESTRICT");
-    assert!(issues.unique_indexes.contains_key("idx_issues_unique_title"));
-    assert!(!issues.unique_indexes.contains_key("idx_issues_unique_subject"));
+    assert!(
+        issues
+            .unique_indexes
+            .contains_key("idx_issues_unique_title")
+    );
+    assert!(
+        !issues
+            .unique_indexes
+            .contains_key("idx_issues_unique_subject")
+    );
     // The old identity is gone, so duplicate subjects are no longer rejected by a stale index.
     assert!(
         db.exec(&format!(
@@ -545,10 +558,16 @@ async fn renaming_a_table_and_its_columns_keeps_rows_and_constraints(db: TestDb)
     let tickets = schema.table("tickets");
     assert_eq!(tickets.foreign_keys.len(), 1, "{:?}", tickets.foreign_keys);
     assert_eq!(tickets.foreign_keys[0].on_delete, "CASCADE");
-    assert!(tickets.unique_indexes.contains_key("idx_tickets_unique_subject"));
+    assert!(
+        tickets
+            .unique_indexes
+            .contains_key("idx_tickets_unique_subject")
+    );
     assert_eq!(
-        db.text(&format!("SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"))
-            .await,
+        db.text(&format!(
+            "SELECT subject FROM tickets WHERE id = '{TICKET_ID}'"
+        ))
+        .await,
         "Printer on fire"
     );
 }
@@ -1723,14 +1742,24 @@ async fn codegen_creates_timestamptz_and_numeric_columns(db: TestDb) {
     match &db.db {
         crate::support::Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::invoice::Invoice::DEF, None, Value::from(written_id), fields)
+                .create(
+                    &fixtures::invoice::Invoice::DEF,
+                    None,
+                    Value::from(written_id),
+                    fields,
+                )
                 .await
                 .unwrap();
         }
         crate::support::Db::Postgres(pg) => {
-            pg.create(&fixtures::invoice::Invoice::DEF, None, Value::from(written_id), fields)
-                .await
-                .unwrap();
+            pg.create(
+                &fixtures::invoice::Invoice::DEF,
+                None,
+                Value::from(written_id),
+                fields,
+            )
+            .await
+            .unwrap();
         }
     }
     assert_eq!(opened_at_text(&db, WRITTEN_INVOICE_ID).await, OPENED_AT);
@@ -2452,14 +2481,24 @@ async fn codegen_creates_a_date_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::deadline::Deadline::DEF, None, Value::from(id), fields)
+                .create(
+                    &fixtures::deadline::Deadline::DEF,
+                    None,
+                    Value::from(id),
+                    fields,
+                )
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::deadline::Deadline::DEF, None, Value::from(id), fields)
-                .await
-                .unwrap();
+            pg.create(
+                &fixtures::deadline::Deadline::DEF,
+                None,
+                Value::from(id),
+                fields,
+            )
+            .await
+            .unwrap();
         }
     }
     let rows = match &db.db {
@@ -2504,7 +2543,10 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
     if dialect == "postgres" {
         assert!(up.contains("\"address\" INET"), "{up}");
         assert!(up.contains("\"embedding\" VECTOR(3)"), "{up}");
-        assert!(up.contains("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;"), "{up}");
+        assert!(
+            up.contains("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;"),
+            "{up}"
+        );
     } else {
         assert!(up.contains("\"address\" TEXT"), "{up}");
         assert!(up.contains("\"embedding\" TEXT"), "{up}");
@@ -2521,8 +2563,16 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
     assert_eq!(schema.column("devices", "embedding").ty, vector_type);
 
     let rows_in = [
-        ("00000000-0000-0000-0000-0000000000e1", "10.0.0.1", Some("[1,2.5,-3]")),
-        ("00000000-0000-0000-0000-0000000000e2", "2001:DB8::1/64", None),
+        (
+            "00000000-0000-0000-0000-0000000000e1",
+            "10.0.0.1",
+            Some("[1,2.5,-3]"),
+        ),
+        (
+            "00000000-0000-0000-0000-0000000000e2",
+            "2001:DB8::1/64",
+            None,
+        ),
     ];
     for (id, address, embedding) in rows_in {
         let id = uuid::Uuid::parse_str(id).unwrap();
@@ -2538,10 +2588,25 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
         );
         match &db.db {
             Db::Sqlite(sqlite) => {
-                sqlite.create(&fixtures::device::Device::DEF, None, Value::from(id), fields).await.unwrap();
+                sqlite
+                    .create(
+                        &fixtures::device::Device::DEF,
+                        None,
+                        Value::from(id),
+                        fields,
+                    )
+                    .await
+                    .unwrap();
             }
             Db::Postgres(pg) => {
-                pg.create(&fixtures::device::Device::DEF, None, Value::from(id), fields).await.unwrap();
+                pg.create(
+                    &fixtures::device::Device::DEF,
+                    None,
+                    Value::from(id),
+                    fields,
+                )
+                .await
+                .unwrap();
             }
         }
     }
@@ -2571,7 +2636,10 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
         }
     };
     let rows = read(None).await;
-    assert_eq!(rows[0].get("address"), Some(&Value::String("10.0.0.1".into())));
+    assert_eq!(
+        rows[0].get("address"),
+        Some(&Value::String("10.0.0.1".into()))
+    );
     assert_eq!(
         rows[0].get("embedding"),
         Some(&Value::String("[1,2.5,-3]".into()))
@@ -2630,14 +2698,24 @@ async fn codegen_creates_a_binary_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::file_blob::FileBlob::DEF, None, Value::from(id), fields)
+                .create(
+                    &fixtures::file_blob::FileBlob::DEF,
+                    None,
+                    Value::from(id),
+                    fields,
+                )
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::file_blob::FileBlob::DEF, None, Value::from(id), fields)
-                .await
-                .unwrap();
+            pg.create(
+                &fixtures::file_blob::FileBlob::DEF,
+                None,
+                Value::from(id),
+                fields,
+            )
+            .await
+            .unwrap();
         }
     }
     let rows = match &db.db {
@@ -2685,7 +2763,10 @@ async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
     let table = up.find("CREATE TABLE IF NOT EXISTS \"markers\"").unwrap();
     let sidecar = up.find("CREATE TABLE marker_sidecar").unwrap();
     let by_id = up.find("CREATE INDEX IF NOT EXISTS markers_by_id").unwrap();
-    assert!(table < sidecar && sidecar < by_id, "statements run after the table:\n{up}");
+    assert!(
+        table < sidecar && sidecar < by_id,
+        "statements run after the table:\n{up}"
+    );
     let drop_index = down.find("DROP INDEX IF EXISTS markers_by_id;").unwrap();
     let drop_side = down.find("DROP TABLE IF EXISTS marker_sidecar;").unwrap();
     let drop_table = down.find("DROP TABLE IF EXISTS \"markers\"").unwrap();
@@ -2703,7 +2784,10 @@ async fn codegen_runs_custom_statements_around_the_table(db: TestDb) {
     let schema = db.schema().await;
     assert!(schema.tables.contains_key("marker_sidecar"));
     assert!(
-        schema.table("markers").indexes.contains_key("markers_by_id"),
+        schema
+            .table("markers")
+            .indexes
+            .contains_key("markers_by_id"),
         "the statement's index must exist"
     );
     if dialect == "postgres" {
@@ -2773,7 +2857,12 @@ async fn install_runs_each_statement_once(db: TestDb) {
     db.install(&[&fixtures::marker::Marker::DEF]).await.unwrap();
     let schema = db.schema().await;
     assert!(schema.tables.contains_key("marker_sidecar"));
-    assert!(schema.table("markers").indexes.contains_key("markers_by_id"));
+    assert!(
+        schema
+            .table("markers")
+            .indexes
+            .contains_key("markers_by_id")
+    );
 }
 on_every_backend!(install_runs_each_statement_once);
 
@@ -2835,7 +2924,11 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     }
 
     db.migrate(&project.migrations()).await.unwrap();
-    let expected = if dialect == "postgres" { "citext" } else { "TEXT" };
+    let expected = if dialect == "postgres" {
+        "citext"
+    } else {
+        "TEXT"
+    };
     assert_eq!(db.schema().await.column("contacts", "email").ty, expected);
 
     let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000c1").unwrap();
@@ -2845,14 +2938,24 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::contact::Contact::DEF, None, Value::from(id), fields)
+                .create(
+                    &fixtures::contact::Contact::DEF,
+                    None,
+                    Value::from(id),
+                    fields,
+                )
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::contact::Contact::DEF, None, Value::from(id), fields)
-                .await
-                .unwrap();
+            pg.create(
+                &fixtures::contact::Contact::DEF,
+                None,
+                Value::from(id),
+                fields,
+            )
+            .await
+            .unwrap();
         }
     }
     let rows = match &db.db {
@@ -2941,30 +3044,58 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
 
     db.install(&[&TypedValue::DEF]).await.unwrap();
     let rows = [
-        ("00000000-0000-0000-0000-0000000000a1", "9.5", "2024-01-02", "aGVsbG8=", "Ada@Example.com", "10.50"),
-        ("00000000-0000-0000-0000-0000000000a2", "10", "2024-03-04", "d29ybGQ=", "grace@example.com", "9.99"),
-        ("00000000-0000-0000-0000-0000000000a3", "100.25", "2025-12-31", "AAEC", "linus@example.org", "-3"),
+        (
+            "00000000-0000-0000-0000-0000000000a1",
+            "9.5",
+            "2024-01-02",
+            "aGVsbG8=",
+            "Ada@Example.com",
+            "10.50",
+        ),
+        (
+            "00000000-0000-0000-0000-0000000000a2",
+            "10",
+            "2024-03-04",
+            "d29ybGQ=",
+            "grace@example.com",
+            "9.99",
+        ),
+        (
+            "00000000-0000-0000-0000-0000000000a3",
+            "100.25",
+            "2025-12-31",
+            "AAEC",
+            "linus@example.org",
+            "-3",
+        ),
     ];
-    let insert = |id: &str, weight: &str, due_on: &str, payload: &str, email: &str, amount: &str| {
-        let mut fields = FieldMap::new();
-        fields.insert("id".into(), Value::Uuid(uuid::Uuid::parse_str(id).unwrap()));
-        for (name, value) in [
-            ("weight", weight),
-            ("due_on", due_on),
-            ("payload", payload),
-            ("email", email),
-            ("amount", amount),
-        ] {
-            fields.insert(name.into(), Value::String(value.into()));
-        }
-        fields
-    };
+    let insert =
+        |id: &str, weight: &str, due_on: &str, payload: &str, email: &str, amount: &str| {
+            let mut fields = FieldMap::new();
+            fields.insert("id".into(), Value::Uuid(uuid::Uuid::parse_str(id).unwrap()));
+            for (name, value) in [
+                ("weight", weight),
+                ("due_on", due_on),
+                ("payload", payload),
+                ("email", email),
+                ("amount", amount),
+            ] {
+                fields.insert(name.into(), Value::String(value.into()));
+            }
+            fields
+        };
     for (id, weight, due_on, payload, email, amount) in rows {
         let fields = insert(id, weight, due_on, payload, email, amount);
         let id = uuid::Uuid::parse_str(id).unwrap();
         match &db.db {
-            Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, None, Value::from(id), fields).await.unwrap(),
-            Db::Postgres(pg) => pg.create(&TypedValue::DEF, None, Value::from(id), fields).await.unwrap(),
+            Db::Sqlite(sqlite) => sqlite
+                .create(&TypedValue::DEF, None, Value::from(id), fields)
+                .await
+                .unwrap(),
+            Db::Postgres(pg) => pg
+                .create(&TypedValue::DEF, None, Value::from(id), fields)
+                .await
+                .unwrap(),
         };
     }
 
@@ -2990,23 +3121,50 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
         v
     };
     let strings = |values: &[&str]| -> Vec<Value> {
-        values.iter().map(|v| Value::String(v.to_string())).collect()
+        values
+            .iter()
+            .map(|v| Value::String(v.to_string()))
+            .collect()
     };
 
     assert_eq!(
-        sorted(ids(&db, Some(Filter::in_list("weight", strings(&["9.5", "100.25"]))), vec![]).await),
+        sorted(
+            ids(
+                &db,
+                Some(Filter::in_list("weight", strings(&["9.5", "100.25"]))),
+                vec![]
+            )
+            .await
+        ),
         ["a1", "a3"]
     );
     assert_eq!(
-        ids(&db, Some(Filter::in_list("due_on", strings(&["2024-03-04"]))), vec![]).await,
+        ids(
+            &db,
+            Some(Filter::in_list("due_on", strings(&["2024-03-04"]))),
+            vec![]
+        )
+        .await,
         ["a2"]
     );
     assert_eq!(
-        sorted(ids(&db, Some(Filter::in_list("payload", strings(&["aGVsbG8=", "AAEC"]))), vec![]).await),
+        sorted(
+            ids(
+                &db,
+                Some(Filter::in_list("payload", strings(&["aGVsbG8=", "AAEC"]))),
+                vec![]
+            )
+            .await
+        ),
         ["a1", "a3"]
     );
     assert_eq!(
-        ids(&db, Some(Filter::in_list("email", strings(&["ada@example.com"]))), vec![]).await,
+        ids(
+            &db,
+            Some(Filter::in_list("email", strings(&["ada@example.com"]))),
+            vec![]
+        )
+        .await,
         ["a1"],
         "CiString `in` ignores case"
     );
@@ -3052,8 +3210,15 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
     );
     let id = uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000a4").unwrap();
     let result = match &db.db {
-        Db::Sqlite(sqlite) => sqlite.create(&TypedValue::DEF, None, Value::from(id), duplicate).await,
-        Db::Postgres(pg) => pg.create(&TypedValue::DEF, None, Value::from(id), duplicate).await,
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .create(&TypedValue::DEF, None, Value::from(id), duplicate)
+                .await
+        }
+        Db::Postgres(pg) => {
+            pg.create(&TypedValue::DEF, None, Value::from(id), duplicate)
+                .await
+        }
     };
     assert!(
         matches!(result, Err(Error::IdentityConflict { .. })),
@@ -3292,9 +3457,11 @@ async fn codegen_cascades_foreign_key_updates(db: TestDb) {
     let fk = &schema.table("files").foreign_keys[0];
     assert_eq!(fk.on_delete, "RESTRICT");
     assert_eq!(fk.on_update, "CASCADE");
-    db.exec("INSERT INTO folders (id, name) VALUES ('00000000-0000-0000-0000-0000000000c1', 'inbox')")
-        .await
-        .unwrap();
+    db.exec(
+        "INSERT INTO folders (id, name) VALUES ('00000000-0000-0000-0000-0000000000c1', 'inbox')",
+    )
+    .await
+    .unwrap();
     db.exec(
         "INSERT INTO files (id, name, folder_id) VALUES ('00000000-0000-0000-0000-0000000000c2', 'note', '00000000-0000-0000-0000-0000000000c1')",
     )
@@ -3415,8 +3582,29 @@ async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
         let fields = row(n, deleted_at);
         let id = uuid::Uuid::from_u128(n);
         let result = match &db.db {
-            Db::Sqlite(sqlite) => sqlite.upsert(&LiveAccount::DEF, None, Value::from(id), fields, identity, &[]).await,
-            Db::Postgres(pg) => pg.upsert(&LiveAccount::DEF, None, Value::from(id), fields, identity, &[]).await,
+            Db::Sqlite(sqlite) => {
+                sqlite
+                    .upsert(
+                        &LiveAccount::DEF,
+                        None,
+                        Value::from(id),
+                        fields,
+                        identity,
+                        &[],
+                    )
+                    .await
+            }
+            Db::Postgres(pg) => {
+                pg.upsert(
+                    &LiveAccount::DEF,
+                    None,
+                    Value::from(id),
+                    fields,
+                    identity,
+                    &[],
+                )
+                .await
+            }
         };
         let record = result.unwrap_or_else(|err| panic!("upsert {n} failed: {err}"));
         assert_eq!(
@@ -3483,8 +3671,14 @@ async fn json_columns_hold_plain_json(db: TestDb) {
     fields.insert("id".into(), Value::Uuid(written));
     fields.insert("address".into(), address("221B Baker Street", "London"));
     match &db.db {
-        Db::Sqlite(sqlite) => sqlite.create(&Profile::DEF, None, Value::from(written), fields).await.unwrap(),
-        Db::Postgres(pg) => pg.create(&Profile::DEF, None, Value::from(written), fields).await.unwrap(),
+        Db::Sqlite(sqlite) => sqlite
+            .create(&Profile::DEF, None, Value::from(written), fields)
+            .await
+            .unwrap(),
+        Db::Postgres(pg) => pg
+            .create(&Profile::DEF, None, Value::from(written), fields)
+            .await
+            .unwrap(),
     };
 
     // The database's own JSON functions see the fields, not a tagged encoding.
@@ -3493,8 +3687,10 @@ async fn json_columns_hold_plain_json(db: TestDb) {
         Db::Postgres(_) => "address->>'city'",
     };
     assert_eq!(
-        db.text(&format!("SELECT {city} FROM json_profiles WHERE id = '{written}'"))
-            .await,
+        db.text(&format!(
+            "SELECT {city} FROM json_profiles WHERE id = '{written}'"
+        ))
+        .await,
         "London"
     );
 
@@ -3507,7 +3703,11 @@ async fn json_columns_hold_plain_json(db: TestDb) {
     .unwrap();
 
     let rows = match &db.db {
-        Db::Sqlite(sqlite) => sqlite.run_query(&Profile::DEF, &CompiledQuery::default()).await,
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .run_query(&Profile::DEF, &CompiledQuery::default())
+                .await
+        }
         Db::Postgres(pg) => pg.run_query(&Profile::DEF, &CompiledQuery::default()).await,
     }
     .unwrap();
@@ -3517,7 +3717,13 @@ async fn json_columns_hold_plain_json(db: TestDb) {
             .and_then(|row| row.get("address"))
             .cloned()
     };
-    assert_eq!(address_of(written), Some(address("221B Baker Street", "London")));
-    assert_eq!(address_of(external), Some(address("1 Rue de Rivoli", "Paris")));
+    assert_eq!(
+        address_of(written),
+        Some(address("221B Baker Street", "London"))
+    );
+    assert_eq!(
+        address_of(external),
+        Some(address("1 Rue de Rivoli", "Paris"))
+    );
 }
 on_every_backend!(json_columns_hold_plain_json);

@@ -62,7 +62,11 @@ pub trait DynDataLayer: Send + Sync {
 
     fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool;
 
-    fn can_run_query_per_key_dyn(&self, resource: &ResourceDef, by: &crate::data_layer::PerKey<'_>) -> bool;
+    fn can_run_query_per_key_dyn(
+        &self,
+        resource: &ResourceDef,
+        by: &crate::data_layer::PerKey<'_>,
+    ) -> bool;
 
     fn run_query_per_key_dyn<'a>(
         &'a self,
@@ -178,7 +182,11 @@ impl<T: DataLayer> DynDataLayer for T {
         self.can_destroy_atomically(resource)
     }
 
-    fn can_run_query_per_key_dyn(&self, resource: &ResourceDef, by: &crate::data_layer::PerKey<'_>) -> bool {
+    fn can_run_query_per_key_dyn(
+        &self,
+        resource: &ResourceDef,
+        by: &crate::data_layer::PerKey<'_>,
+    ) -> bool {
         self.can_run_query_per_key(resource, by)
     }
 
@@ -313,7 +321,8 @@ impl StoreRegistry {
         resource_name: impl Into<String>,
         data: D,
     ) -> Self {
-        self.by_resource.insert(resource_name.into(), Arc::new(data));
+        self.by_resource
+            .insert(resource_name.into(), Arc::new(data));
         self
     }
 
@@ -420,11 +429,13 @@ impl DataLayer for StoreRegistry {
     }
 
     fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
-        self.get_layer(resource).is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
+        self.get_layer(resource)
+            .is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
     }
 
     fn can_raise_atomically(&self, resource: &ResourceDef) -> bool {
-        self.get_layer(resource).is_ok_and(|layer| layer.can_raise_atomically_dyn(resource))
+        self.get_layer(resource)
+            .is_ok_and(|layer| layer.can_raise_atomically_dyn(resource))
     }
 
     async fn update_atomic(
@@ -438,15 +449,23 @@ impl DataLayer for StoreRegistry {
     }
 
     fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
-        self.get_layer(resource).is_ok_and(|layer| layer.can_destroy_atomically_dyn(resource))
+        self.get_layer(resource)
+            .is_ok_and(|layer| layer.can_destroy_atomically_dyn(resource))
     }
 
     /// A join resource in another store can't join in the same statement.
-    fn can_run_query_per_key(&self, resource: &ResourceDef, by: &crate::data_layer::PerKey<'_>) -> bool {
+    fn can_run_query_per_key(
+        &self,
+        resource: &ResourceDef,
+        by: &crate::data_layer::PerKey<'_>,
+    ) -> bool {
         let Ok(layer) = self.get_layer(resource) else {
             return false;
         };
-        if let crate::data_layer::PerKey::Through { resource: through, .. } = by {
+        if let crate::data_layer::PerKey::Through {
+            resource: through, ..
+        } = by
+        {
             match self.get_layer(through) {
                 Ok(other) if std::ptr::addr_eq(layer, other) => {}
                 _ => return false,
@@ -501,7 +520,12 @@ impl DataLayer for StoreRegistry {
         layer.bulk_create_dyn(resource, tenant, rows).await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
+    async fn bulk_destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        ids: &[Value],
+    ) -> Result<()> {
         let layer = self.get_layer(resource)?;
         layer.bulk_destroy_dyn(resource, tenant, ids).await
     }
