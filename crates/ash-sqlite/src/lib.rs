@@ -598,49 +598,11 @@ impl DataLayer for Sqlite {
         Ok(count as usize)
     }
 
-    async fn upsert(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        _id: Value,
-        fields: FieldMap,
-        identity: &ash_core::IdentityDef,
-        update_fields: &[String],
-    ) -> Result<FieldMap> {
-        refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::upsert_query(resource, &fields, identity, update_fields)?;
-        self.execute_query_resource(&qb, resource).await?;
-
-        let mut where_parts = Vec::new();
-        let mut params = Vec::new();
-        for key in identity.columns(resource.multitenancy) {
-            if let Some(val) = fields.get(key) {
-                where_parts.push(format!("\"{}\" = ?", key));
-                params.push(SqlParam::new(val.clone()));
-            } else {
-                where_parts.push(format!("\"{}\" IS NULL", key));
-            }
-        }
-        // Rows outside a partial identity never conflict, so the result is either the
-        // row we just inserted or the one inside the predicate that absorbed the write.
-        let mut order = String::new();
-        if let Some(predicate) = identity.predicate {
-            let pk = resource
-                .primary_key()
-                .ok_or(Error::NoPrimaryKey(resource.name))?;
-            let pk_value = fields.get(pk.name).cloned().unwrap_or(Value::Null);
-            where_parts.push(format!("(\"{}\" = ? OR ({predicate}))", pk.name));
-            params.push(SqlParam::new(pk_value.clone()));
-            order = format!(" ORDER BY \"{}\" = ? DESC LIMIT 1", pk.name);
-            params.push(SqlParam::new(pk_value));
-        }
-        let fetch_sql = format!(
-            "SELECT * FROM \"{}\" WHERE {}{order}",
-            resource.table_name(),
-            where_parts.join(" AND ")
-        );
-        let fetch_compiled = CompiledSql::new(fetch_sql, params);
-        let rows = self.fetch_all(&fetch_compiled).await?;
+    async fn upsert(&self, plan: &ash_core::UpsertPlan<'_>) -> Result<FieldMap> {
+        let resource = plan.resource();
+        refuse_tenant_schema(resource, plan.tenant())?;
+        let qb = sql::upsert_query(plan)?;
+        let rows = self.fetch_all_resource(&qb, resource).await?;
         let row = rows.first().ok_or(Error::NotFound)?;
         sql::row_to_fields(row, resource, &[], &[])
     }

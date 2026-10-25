@@ -69,6 +69,7 @@ async fn build_makes_a_record_but_cannot_persist_it() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn every_operation_reports_the_missing_data_layer() {
     let data = NoDataLayer;
     let def = &Customer::DEF;
@@ -92,7 +93,7 @@ async fn every_operation_reports_the_missing_data_layer() {
     );
     assert_no_data_layer(data.run_query(def, &Default::default()).await.unwrap_err());
     assert_no_data_layer(
-        data.upsert(
+        data.upsert_raw(
             def,
             None,
             ash_core::Value::from(id),

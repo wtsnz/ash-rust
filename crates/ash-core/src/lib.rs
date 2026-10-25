@@ -41,6 +41,9 @@ mod snapshot;
 pub mod store;
 mod types;
 mod value;
+mod write_plan;
+
+pub use write_plan::UpsertPlan;
 
 pub use access::{CredentialReadPermit, ReadRequest, ScopedAccess};
 pub use action::{

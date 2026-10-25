@@ -3,6 +3,7 @@ read_when:
   - Working on authentication tenant scoping or RPC request context
   - Migrating direct Context.data reads into the core engine
   - Changing record presentation, field policies, hooks or response adapters
+  - Implementing a data layer or changing upsert conflict behavior
 ---
 
 # Scoped access
@@ -90,6 +91,57 @@ masks. `view.fields()` and `view.into_fields()` expose projected values only.
 field visibility and resolves relationship scopes. Generated preparations return
 `TrustedExpr`. See [Client read plans](client-read-plans.md) for parser APIs, Runtime
 cursor-key configuration and supported subscription predicates.
+
+## Guarded upsert conflicts
+
+Single creates with `upsert_on` and bulk creates with `BulkCreateOptions::upsert`
+use the same core-owned `UpsertPlan`. Core builds it after action preparation from
+the bound scope, action, identity and supplied update columns. Its private fields
+bind the resource, insert values, tenant namespace, conflict predicate and exact
+changed values. Data layers receive a borrowed plan with read-only accessors.
+
+An `all_tenants` identity keeps uniqueness global. It does not grant permission to
+update or return a row in another tenant. The conflict branch checks attribute
+tenancy, the create action's write policy against the stored row, and expected
+optimistic-lock versions when that action declares them. The prospective insert
+must also pass normal create authorization. A rejected conflict returns
+`Error::NotFound`, displayed as `not found`, for tenant, policy and version failures
+alike. It contains no record, identity values, tenant or conflicting primary key.
+Bulk operations use the same error per failed row under their existing transaction
+and stop-on-error options. This outcome does not hide the existence of a global
+uniqueness collision; it prevents that collision from exposing the row's contents.
+
+System scopes bypass the action policy but retain tenant and version guards. A
+system context bound to tenant A cannot update or receive tenant B's row through an
+`all_tenants` conflict. Bind a separate context to B for that work. Resources that
+explicitly declare `global: true` retain their documented tenantless behavior.
+
+An empty update list changes no columns. It returns the existing authorized row,
+with its original ID and tenant. Nonempty lists change only the named values.
+Unknown fields, absent update values, primary-key columns and tenant columns are
+rejected before the upsert runs. On a locked create action, nonempty conflicts also
+advance each version after checking its supplied value. Empty conflicts check the
+versions without advancing them. The initial insert retains the prepared versions.
+
+Postgres and SQLite compile the predicate inside
+`ON CONFLICT (...) DO UPDATE SET ... WHERE ... RETURNING *`. A no-change conflict
+assigns the stored primary key to itself, rather than copying an incoming identity
+value. Both dialects return only the affected row. SQLite uses `RETURNING` for
+upserts and has no identity reselect fallback; an empty result ends immediately as
+`NotFound`. Partial identity predicates remain part of the conflict target, and
+null handling remains the backend's existing identity contract.
+
+Memory finds the conflict, checks the predicate, validates resulting identities and
+writes the selected values under one store write lock. Empty updates preserve the
+stored record and its table key. Memory still rejects partial-identity upserts
+because their predicates are SQL.
+
+Data-layer implementors must migrate `DataLayer::upsert` and
+`DynDataLayer::upsert_dyn` to accept `&UpsertPlan`. The SQL compiler and SQLite SQL
+helper accept the same plan. Until step 8, `DataLayer::upsert_raw` and
+`QueryCompiler::compile_upsert_raw` are deprecated compatibility entry points for
+raw backend integrations. They do not provide action authorization. Ordinary
+framework writes always use the guarded plan, including through `StoreRegistry`.
 
 ## Reader-specific results
 

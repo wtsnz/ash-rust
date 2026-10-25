@@ -199,16 +199,13 @@ impl DataLayer for Memory {
 
     fn upsert(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-        identity: &ash_core::IdentityDef,
-        update_fields: &[String],
+        plan: &ash_core::UpsertPlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         ready((|| {
-            // Which rows a partial identity covers is decided by its SQL predicate, so
-            // upserting on one here could overwrite a row the database would leave alone.
+            let resource = plan.resource();
+            let identity = plan.identity();
+            let tenant = plan.tenant();
+            let fields = plan.fields();
             if identity.predicate.is_some() {
                 return Err(Error::Invalid(format!(
                     "the memory data layer cannot upsert on partial identity `{}` of {}",
@@ -216,43 +213,40 @@ impl DataLayer for Memory {
                 )));
             }
             let mut tables = self.write()?;
-            let table = tables.entry(table_key(resource, tenant)).or_default();
+            let key = table_key(resource, tenant);
             let columns = identity.columns(resource.multitenancy);
-            let existing_entry = table
-                .iter()
-                .find(|(_, row)| {
-                    columns.iter().all(|k| {
-                        let new_val = fields.get(*k).filter(|v| !v.is_null());
-                        let existing_val = row.get(*k).filter(|v| !v.is_null());
-                        match (new_val, existing_val) {
-                            (Some(a), Some(b)) => same_value(field_type(resource, k), a, b),
-                            (None, None) => !identity.nils_distinct,
-                            _ => false,
-                        }
+            let existing_entry = tables
+                .get(&key)
+                .and_then(|table| {
+                    table.iter().find(|(_, row)| {
+                        columns.iter().all(|k| {
+                            let new_val = fields.get(*k).filter(|v| !v.is_null());
+                            let existing_val = row.get(*k).filter(|v| !v.is_null());
+                            match (new_val, existing_val) {
+                                (Some(a), Some(b)) => same_value(field_type(resource, k), a, b),
+                                (None, None) => !identity.nils_distinct,
+                                _ => false,
+                            }
+                        })
                     })
                 })
-                .map(|(existing_id, row)| (existing_id.clone(), row.clone()));
+                .map(|(id, row)| (id.clone(), row.clone()));
 
-            if let Some((existing_id, mut existing_row)) = existing_entry {
-                let to_update: Vec<(String, Value)> = if update_fields.is_empty() {
-                    fields
-                        .into_iter()
-                        .filter(|(k, _)| !identity.keys.contains(&k.as_str()))
-                        .collect()
-                } else {
-                    update_fields
-                        .iter()
-                        .filter_map(|k| fields.get(k).map(|v| (k.clone(), v.clone())))
-                        .collect()
-                };
-                for (k, v) in to_update {
-                    existing_row.insert(k, v);
+            if let Some((existing_id, mut row)) = existing_entry {
+                // Check and mutation share this write lock, including related predicates.
+                if !row_matches_filter(&tables, tenant, resource, plan.conflict_filter(), &row) {
+                    return Err(Error::NotFound);
                 }
-                table.insert(existing_id, existing_row.clone());
-                Ok(existing_row)
+                let before = row.clone();
+                row.extend(plan.updates().clone());
+                let table = tables.get_mut(&key).expect("conflict table exists");
+                check_identities(resource, table, &existing_id, &row, Some(&before))?;
+                table.insert(existing_id, row.clone());
+                Ok(row)
             } else {
-                let mut fields = fields;
-                let id = assign_key(resource, table, id, &mut fields)?;
+                let table = tables.entry(key).or_default();
+                let mut fields = fields.clone();
+                let id = assign_key(resource, table, plan.id().clone(), &mut fields)?;
                 check_identities(resource, table, &id, &fields, None)?;
                 table.insert(id, fields.clone());
                 Ok(fields)

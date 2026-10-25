@@ -534,6 +534,7 @@ fn indexes_lead_with_the_tenant_attribute() {
 /// Ash's identities are, unless it spans every tenant: its unique index and an upsert's
 /// conflict target lead with the tenant attribute.
 #[test]
+#[allow(deprecated)]
 fn identities_are_unique_within_the_tenant() {
     static ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
@@ -565,7 +566,7 @@ fn identities_are_unique_within_the_tenant() {
         ("username".to_string(), ash_core::Value::from("ada")),
     ]);
     let upsert = ash_sql::QueryCompiler::new(&PostgresDialect)
-        .compile_upsert(&resource, &fields, &IDENTITIES[0], &[])
+        .compile_upsert_raw(&resource, &fields, &IDENTITIES[0], &[])
         .unwrap();
     assert!(
         upsert.sql().contains(r#"ON CONFLICT ("org", "username")"#),

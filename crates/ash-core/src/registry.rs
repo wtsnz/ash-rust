@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::data_layer::{CompiledQuery, DataLayer, SchemaSupport, TransactionSupport};
 use crate::error::{Error, Result};
-use crate::resource::{DataLayerKind, IdentityDef, Resource, ResourceDef};
+use crate::resource::{DataLayerKind, Resource, ResourceDef};
 use crate::store::{HasStore, StoreTag};
 use crate::value::{FieldMap, Value};
 
@@ -83,15 +83,8 @@ pub trait DynDataLayer: Send + Sync {
         conditions: &'a [crate::atomic::AtomicCondition],
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
 
-    fn upsert_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-        fields: FieldMap,
-        identity: &'a IdentityDef,
-        update_fields: &'a [String],
-    ) -> BoxFuture<'a, Result<FieldMap>>;
+    fn upsert_dyn<'a>(&'a self, plan: &'a crate::UpsertPlan<'a>)
+    -> BoxFuture<'a, Result<FieldMap>>;
 
     fn bulk_create_dyn<'a>(
         &'a self,
@@ -211,14 +204,9 @@ impl<T: DataLayer> DynDataLayer for T {
 
     fn upsert_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-        fields: FieldMap,
-        identity: &'a IdentityDef,
-        update_fields: &'a [String],
+        plan: &'a crate::UpsertPlan<'a>,
     ) -> BoxFuture<'a, Result<FieldMap>> {
-        Box::pin(self.upsert(resource, tenant, id, fields, identity, update_fields))
+        Box::pin(self.upsert(plan))
     }
 
     fn bulk_create_dyn<'a>(
@@ -495,19 +483,9 @@ impl DataLayer for StoreRegistry {
         layer.destroy_atomic_dyn(resource, query, conditions).await
     }
 
-    async fn upsert(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-        identity: &IdentityDef,
-        update_fields: &[String],
-    ) -> Result<FieldMap> {
-        let layer = self.get_layer(resource)?;
-        layer
-            .upsert_dyn(resource, tenant, id, fields, identity, update_fields)
-            .await
+    async fn upsert(&self, plan: &crate::UpsertPlan<'_>) -> Result<FieldMap> {
+        let layer = self.get_layer(plan.resource())?;
+        layer.upsert_dyn(plan).await
     }
 
     async fn bulk_create(

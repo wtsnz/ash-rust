@@ -3558,6 +3558,7 @@ async fn codegen_checks_enum_variants(db: TestDb) {
 }
 on_every_backend!(codegen_checks_enum_variants);
 
+#[allow(deprecated)]
 async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
     use fixtures::live_accounts::LiveAccount;
 
@@ -3584,7 +3585,7 @@ async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
         let result = match &db.db {
             Db::Sqlite(sqlite) => {
                 sqlite
-                    .upsert(
+                    .upsert_raw(
                         &LiveAccount::DEF,
                         None,
                         Value::from(id),
@@ -3595,7 +3596,7 @@ async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
                     .await
             }
             Db::Postgres(pg) => {
-                pg.upsert(
+                pg.upsert_raw(
                     &LiveAccount::DEF,
                     None,
                     Value::from(id),
