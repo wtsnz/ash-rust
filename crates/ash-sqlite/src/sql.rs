@@ -1,5 +1,5 @@
 use ash_core::{
-    AggregateDef, AttrType, CompiledQuery, Error, FieldMap, IdentityDef, ResourceDef, Result, Value,
+    AggregateDef, AttrType, CompiledQuery, Error, FieldMap, ResourceDef, Result, Value,
 };
 use ash_sql::{
     CompiledSql, QueryCompiler, SqliteDialect, column as sql_column, ident as sql_ident,
@@ -67,14 +67,8 @@ pub fn bulk_delete_query(
     compiler.compile_bulk_delete(resource, ids)
 }
 
-pub fn upsert_query(
-    resource: &ResourceDef,
-    fields: &FieldMap,
-    identity: &IdentityDef,
-    update_fields: &[String],
-) -> Result<CompiledSql> {
-    let mut compiler = QueryCompiler::new(&SqliteDialect);
-    compiler.compile_upsert(resource, fields, identity, update_fields)
+pub fn upsert_query(plan: &ash_core::UpsertPlan<'_>) -> Result<CompiledSql> {
+    QueryCompiler::new(&SqliteDialect).compile_upsert(plan)
 }
 
 pub fn row_to_fields(

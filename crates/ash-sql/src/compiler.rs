@@ -2259,32 +2259,85 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
-    pub fn compile_upsert(
+    /// Compile only the authority selected by core. The compiler's prior tenant is
+    /// replaced by the plan's namespace, and the conflict predicate tests the stored row.
+    pub fn compile_upsert(&mut self, plan: &ash_core::UpsertPlan<'_>) -> Result<CompiledSql> {
+        self.tenant = plan.tenant().map(str::to_owned);
+        self.compile_upsert_parts(
+            plan.resource(),
+            plan.fields(),
+            plan.identity(),
+            plan.updates(),
+            Some(plan.conflict_filter()),
+        )
+    }
+
+    /// Legacy SQL construction without action authorization. Removed in step 8.
+    #[deprecated(note = "compile a core UpsertPlan instead")]
+    pub fn compile_upsert_raw(
         &mut self,
         resource: &ResourceDef,
         fields: &FieldMap,
         identity: &IdentityDef,
         update_fields: &[String],
     ) -> Result<CompiledSql> {
+        let updates = update_fields
+            .iter()
+            .filter_map(|name| fields.get(name).map(|value| (name.clone(), value.clone())))
+            .collect();
+        let scope = resource.tenant_filter(self.tenant.as_deref());
+        self.compile_upsert_parts(resource, fields, identity, &updates, scope.as_ref())
+    }
+
+    fn compile_upsert_parts(
+        &mut self,
+        resource: &ResourceDef,
+        fields: &FieldMap,
+        identity: &IdentityDef,
+        updates: &FieldMap,
+        guard: Option<&Filter>,
+    ) -> Result<CompiledSql> {
         let mut compiled = self.compile_insert(resource, fields)?;
-        let has_returning = compiled.sql.ends_with(" RETURNING *");
-        if has_returning {
+        if compiled.sql.ends_with(" RETURNING *") {
             compiled
                 .sql
                 .truncate(compiled.sql.len() - " RETURNING *".len());
         }
-
+        let table = ident(self.dialect, resource.table_name())?;
+        let mut assignments = Vec::new();
+        // Resource order keeps SQL and bind order stable.
+        for attr in resource.attributes {
+            if let Some(value) = updates.get(attr.name) {
+                let col = ident(self.dialect, attr.name)?;
+                let value = if fields.get(attr.name) == Some(value) {
+                    format!("EXCLUDED.{col}")
+                } else {
+                    self.bind_typed(attr.ty, value.clone())
+                };
+                assignments.push(format!("{col} = {value}"));
+            }
+        }
+        if assignments.is_empty() {
+            let pk = resource
+                .primary_key()
+                .ok_or(Error::NoPrimaryKey(resource.name))?;
+            let col = ident(self.dialect, pk.name)?;
+            assignments.push(format!("{col} = {table}.{col}"));
+        }
         compiled.sql.push(' ');
         compiled.sql.push_str(&self.dialect.upsert_clause(
             identity,
             &identity.columns(resource.multitenancy),
-            update_fields,
+            &assignments.join(", "),
         ));
-
-        if self.dialect.supports_returning() {
-            compiled.sql.push_str(" RETURNING *");
+        if let Some(guard) = guard {
+            let predicate = self.compile_filter_scoped(resource, guard, Some(&table))?;
+            compiled.sql.push_str(&format!(" WHERE {predicate}"));
         }
-
+        // Both supported dialects return the affected row. An empty result is final;
+        // there is no identity reselect that could expose a rejected conflict.
+        compiled.sql.push_str(" RETURNING *");
+        compiled.params = self.params.clone();
         Ok(compiled)
     }
 

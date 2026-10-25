@@ -122,6 +122,7 @@ fn test_postgres_query_compilation() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_postgres_insert_update_upsert_returning() {
     let dialect = PostgresDialect;
 
@@ -155,7 +156,7 @@ fn test_postgres_insert_update_upsert_returning() {
     // 3. Upsert
     let mut compiler3 = QueryCompiler::new(&dialect);
     let compiled_upsert = compiler3
-        .compile_upsert(
+        .compile_upsert_raw(
             &TICKET_DEF,
             &fields,
             &TICKET_IDENTS[0],

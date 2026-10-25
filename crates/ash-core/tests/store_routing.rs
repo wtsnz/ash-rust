@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    CompiledQuery, DataLayer, Error, FieldMap, HasStore, IdentityDef, Resource, ResourceDef,
-    SchemaSupport, StoreRegistry, StoreTag, resource,
+    CompiledQuery, DataLayer, Error, FieldMap, HasStore, Resource, ResourceDef, SchemaSupport,
+    StoreRegistry, StoreTag, resource,
 };
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
@@ -339,16 +339,14 @@ impl DataLayer for MockKeyValueLayer {
         Ok(map.values().cloned().collect())
     }
 
-    async fn upsert(
-        &self,
-        res: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-        _id_def: &IdentityDef,
-        _update_fields: &[String],
-    ) -> ash_core::Result<FieldMap> {
-        self.create(res, tenant, id, fields).await
+    async fn upsert(&self, plan: &ash_core::UpsertPlan<'_>) -> ash_core::Result<FieldMap> {
+        self.create(
+            plan.resource(),
+            plan.tenant(),
+            plan.id().clone(),
+            plan.fields().clone(),
+        )
+        .await
     }
 }
 

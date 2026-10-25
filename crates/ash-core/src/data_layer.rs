@@ -284,17 +284,39 @@ pub trait DataLayer: Send + Sync {
 
     fn upsert(
         &self,
-        resource: &ResourceDef,
-        _tenant: Option<&str>,
-        _id: Value,
-        _fields: FieldMap,
-        _identity: &IdentityDef,
-        _update_fields: &[String],
+        plan: &crate::UpsertPlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
         std::future::ready(Err(Error::Invalid(format!(
             "upsert is not supported for resource `{}` by this data layer",
-            resource.name
+            plan.resource().name
         ))))
+    }
+
+    /// Legacy raw execution without action authorization. Removed in step 8.
+    #[deprecated(note = "use a scoped create action with upsert_on instead")]
+    fn upsert_raw(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        _id: Value,
+        mut fields: FieldMap,
+        identity: &IdentityDef,
+        update_fields: &[String],
+    ) -> impl Future<Output = Result<FieldMap>> + Send {
+        async move {
+            if let Some(pk) = resource.primary_key() {
+                fields.entry(pk.name.to_string()).or_insert(_id);
+            }
+            let plan = crate::UpsertPlan::scoped(
+                resource,
+                tenant,
+                fields,
+                identity,
+                update_fields,
+                Filter::True,
+            )?;
+            self.upsert(&plan).await
+        }
     }
 
     fn bulk_create(
@@ -400,14 +422,9 @@ impl DataLayer for NoDataLayer {
 
     fn upsert(
         &self,
-        resource: &ResourceDef,
-        _tenant: Option<&str>,
-        _id: Value,
-        _fields: FieldMap,
-        _identity: &IdentityDef,
-        _update_fields: &[String],
+        plan: &crate::UpsertPlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
-        no_data_layer(resource)
+        no_data_layer(plan.resource())
     }
 }
 

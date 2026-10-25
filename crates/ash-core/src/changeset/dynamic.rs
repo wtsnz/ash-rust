@@ -919,16 +919,15 @@ impl DynamicChangeset {
             ActionKind::Create => match &self.upsert {
                 Some((identity_name, update_fields)) => {
                     let identity = upsert_identity(self.resource, identity_name)?;
-                    ctx.raw_data()
-                        .upsert(
-                            self.resource,
-                            ctx.tenant(),
-                            id,
-                            fields,
-                            identity,
-                            update_fields,
-                        )
-                        .await
+                    let plan = crate::UpsertPlan::build(
+                        ctx,
+                        self.resource,
+                        self.action,
+                        identity,
+                        fields,
+                        update_fields,
+                    )?;
+                    ctx.raw_data().upsert(&plan).await
                 }
                 None => {
                     ctx.raw_data()

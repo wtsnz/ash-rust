@@ -802,22 +802,14 @@ impl DataLayer for Postgres {
         rows_to_fields(&rows, resource)
     }
 
-    async fn upsert(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        _id: Value,
-        fields: FieldMap,
-        identity: &ash_core::IdentityDef,
-        update_fields: &[String],
-    ) -> Result<FieldMap> {
+    async fn upsert(&self, plan: &ash_core::UpsertPlan<'_>) -> Result<FieldMap> {
         let dialect = PostgresDialect;
-        let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
-        let compiled = compiler.compile_upsert(resource, &fields, identity, update_fields)?;
-
-        // Single-roundtrip write with RETURNING *
-        let row = self.fetch_one_resource(&compiled, resource).await?;
-        row_to_fields(&row, resource)
+        let compiled = QueryCompiler::new(&dialect).compile_upsert(plan)?;
+        let row = self
+            .fetch_optional_resource(&compiled, plan.resource())
+            .await?
+            .ok_or(Error::NotFound)?;
+        row_to_fields(&row, plan.resource())
     }
 
     async fn bulk_create(

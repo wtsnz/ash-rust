@@ -11,7 +11,8 @@ use ash_core::{
     TransactionSupport, Value,
 };
 use ash_sql::{
-    CompiledSql, MigrationExecutor, Migrator, QueryCompiler, SqlParam, SqliteDialect, persistable_resources,
+    CompiledSql, MigrationExecutor, Migrator, QueryCompiler, SqlParam, SqliteDialect,
+    persistable_resources,
 };
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteQueryResult,
@@ -119,16 +120,26 @@ impl Sqlite {
     }
 
     /// [`Self::fetch_all`], a constraint violation reported against `resource`.
-    async fn fetch_all_resource(&self, compiled: &CompiledSql, resource: &ResourceDef) -> Result<Vec<SqliteRow>> {
+    async fn fetch_all_resource(
+        &self,
+        compiled: &CompiledSql,
+        resource: &ResourceDef,
+    ) -> Result<Vec<SqliteRow>> {
         match &self.source {
             SqliteSource::Pool(pool) => {
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(pool).await.map_err(|e| map_sqlx_resource(e, resource))
+                query
+                    .fetch_all(pool)
+                    .await
+                    .map_err(|e| map_sqlx_resource(e, resource))
             }
             SqliteSource::Tx(conn) => {
                 let mut guard = conn.lock().await;
                 let query = bind_compiled(sqlx::query(&compiled.sql), &compiled.params);
-                query.fetch_all(&mut **guard).await.map_err(|e| map_sqlx_resource(e, resource))
+                query
+                    .fetch_all(&mut **guard)
+                    .await
+                    .map_err(|e| map_sqlx_resource(e, resource))
             }
         }
     }
@@ -175,7 +186,8 @@ impl Sqlite {
                 .any(|s| s.dialects.is_empty() || s.dialects.contains(&"sqlite"))
         });
         if has_statements {
-            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE).await?;
+            self.execute_raw(ash_sql::install::CREATE_STATEMENTS_TABLE)
+                .await?;
         }
         for resource in &resources {
             for statement in resource.statements {
@@ -524,14 +536,25 @@ impl DataLayer for Sqlite {
         true
     }
 
-    async fn destroy_atomic(&self, resource: &ResourceDef, query: &CompiledQuery, conditions: &[ash_core::AtomicCondition]) -> Result<Vec<FieldMap>> {
+    async fn destroy_atomic(
+        &self,
+        resource: &ResourceDef,
+        query: &CompiledQuery,
+        conditions: &[ash_core::AtomicCondition],
+    ) -> Result<Vec<FieldMap>> {
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         if !conditions.is_empty() {
-            return Err(Error::Invalid(format!("SQLite can't check a destroy of {}'s conditions in its statement", resource.name)));
+            return Err(Error::Invalid(format!(
+                "SQLite can't check a destroy of {}'s conditions in its statement",
+                resource.name
+            )));
         }
-        let compiled = QueryCompiler::new(&SqliteDialect).compile_atomic_destroy(resource, query, conditions)?;
+        let compiled = QueryCompiler::new(&SqliteDialect)
+            .compile_atomic_destroy(resource, query, conditions)?;
         let rows = self.fetch_all_resource(&compiled, resource).await?;
-        rows.iter().map(|row| sql::row_to_fields(row, resource, &[], &[])).collect()
+        rows.iter()
+            .map(|row| sql::row_to_fields(row, resource, &[], &[]))
+            .collect()
     }
 
     /// SQLite can't raise an error from within a statement, as AshSqlite can't
@@ -550,12 +573,17 @@ impl DataLayer for Sqlite {
     ) -> Result<Vec<FieldMap>> {
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         if !update.conditions.is_empty() {
-            return Err(Error::Invalid(format!("SQLite can't check an update of {}'s conditions in its statement", resource.name)));
+            return Err(Error::Invalid(format!(
+                "SQLite can't check an update of {}'s conditions in its statement",
+                resource.name
+            )));
         }
         let mut compiler = QueryCompiler::new(&SqliteDialect);
         let compiled = compiler.compile_atomic_update(resource, query, update)?;
         let rows = self.fetch_all_resource(&compiled, resource).await?;
-        rows.iter().map(|row| sql::row_to_fields(row, resource, &[], &[])).collect()
+        rows.iter()
+            .map(|row| sql::row_to_fields(row, resource, &[], &[]))
+            .collect()
     }
 
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
@@ -570,49 +598,11 @@ impl DataLayer for Sqlite {
         Ok(count as usize)
     }
 
-    async fn upsert(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        _id: Value,
-        fields: FieldMap,
-        identity: &ash_core::IdentityDef,
-        update_fields: &[String],
-    ) -> Result<FieldMap> {
-        refuse_tenant_schema(resource, tenant)?;
-        let qb = sql::upsert_query(resource, &fields, identity, update_fields)?;
-        self.execute_query_resource(&qb, resource).await?;
-
-        let mut where_parts = Vec::new();
-        let mut params = Vec::new();
-        for key in identity.columns(resource.multitenancy) {
-            if let Some(val) = fields.get(key) {
-                where_parts.push(format!("\"{}\" = ?", key));
-                params.push(SqlParam::new(val.clone()));
-            } else {
-                where_parts.push(format!("\"{}\" IS NULL", key));
-            }
-        }
-        // Rows outside a partial identity never conflict, so the result is either the
-        // row we just inserted or the one inside the predicate that absorbed the write.
-        let mut order = String::new();
-        if let Some(predicate) = identity.predicate {
-            let pk = resource
-                .primary_key()
-                .ok_or(Error::NoPrimaryKey(resource.name))?;
-            let pk_value = fields.get(pk.name).cloned().unwrap_or(Value::Null);
-            where_parts.push(format!("(\"{}\" = ? OR ({predicate}))", pk.name));
-            params.push(SqlParam::new(pk_value.clone()));
-            order = format!(" ORDER BY \"{}\" = ? DESC LIMIT 1", pk.name);
-            params.push(SqlParam::new(pk_value));
-        }
-        let fetch_sql = format!(
-            "SELECT * FROM \"{}\" WHERE {}{order}",
-            resource.table_name(),
-            where_parts.join(" AND ")
-        );
-        let fetch_compiled = CompiledSql::new(fetch_sql, params);
-        let rows = self.fetch_all(&fetch_compiled).await?;
+    async fn upsert(&self, plan: &ash_core::UpsertPlan<'_>) -> Result<FieldMap> {
+        let resource = plan.resource();
+        refuse_tenant_schema(resource, plan.tenant())?;
+        let qb = sql::upsert_query(plan)?;
+        let rows = self.fetch_all_resource(&qb, resource).await?;
         let row = rows.first().ok_or(Error::NotFound)?;
         sql::row_to_fields(row, resource, &[], &[])
     }
@@ -639,7 +629,12 @@ impl DataLayer for Sqlite {
         .await
     }
 
-    async fn bulk_destroy(&self, resource: &ResourceDef, tenant: Option<&str>, ids: &[Value]) -> Result<()> {
+    async fn bulk_destroy(
+        &self,
+        resource: &ResourceDef,
+        tenant: Option<&str>,
+        ids: &[Value],
+    ) -> Result<()> {
         refuse_tenant_schema(resource, tenant)?;
         if ids.is_empty() {
             return Ok(());

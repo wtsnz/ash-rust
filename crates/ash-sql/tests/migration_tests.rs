@@ -206,12 +206,11 @@ fn composite_foreign_key_lists_every_column() {
         AttributeDef::required("tenant_id", AttrType::Uuid),
         AttributeDef::required("code", AttrType::String),
     ];
-    static CHILD_RELS: &[RelationshipDef] = &[RelationshipDef::belongs_to(
-        "account",
-        || &PARENT,
-        "tenant_id",
-    )
-    .with_keys(&["tenant_id", "code"], &["tenant_id", "code"])];
+    static CHILD_RELS: &[RelationshipDef] =
+        &[
+            RelationshipDef::belongs_to("account", || &PARENT, "tenant_id")
+                .with_keys(&["tenant_id", "code"], &["tenant_id", "code"]),
+        ];
     static CHILD: ResourceDef = ResourceDef {
         name: "Membership",
         table: "memberships",
@@ -263,7 +262,13 @@ fn sample_meta() -> ash_core::Value {
 fn map_and_array_defaults_are_sql_literals() {
     static ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
-        AttributeDef::with_default("tags", AttrType::Array { of: &AttrType::String }, sample_tags),
+        AttributeDef::with_default(
+            "tags",
+            AttrType::Array {
+                of: &AttrType::String,
+            },
+            sample_tags,
+        ),
         AttributeDef::with_default("meta", AttrType::Map, sample_meta),
     ];
     let mut resource = RES_V1;
@@ -281,7 +286,10 @@ fn map_and_array_defaults_are_sql_literals() {
         .find(|col| col.name == "meta")
         .unwrap();
     assert_eq!(tags.default.as_deref(), Some("'[\"red\"]'::jsonb"));
-    assert_eq!(meta.default.as_deref(), Some("'{\"role\":\"owner\"}'::jsonb"));
+    assert_eq!(
+        meta.default.as_deref(),
+        Some("'{\"role\":\"owner\"}'::jsonb")
+    );
     let sqlite = TableSnapshot::from_resource(&resource, &SqliteDialect);
     let tags = sqlite
         .columns
@@ -427,7 +435,10 @@ fn index_include_is_emitted_for_postgres_only() {
         Some(&TableSnapshot::from_resource(&without, &PostgresDialect)),
         Some(&TableSnapshot::from_resource(&resource, &PostgresDialect)),
     );
-    assert!(!changes.is_empty(), "adding INCLUDE columns must change the index");
+    assert!(
+        !changes.is_empty(),
+        "adding INCLUDE columns must change the index"
+    );
 }
 
 /// Two new tables that refer to each other: on Postgres, the key to the table not yet
@@ -462,8 +473,15 @@ fn tables_that_refer_to_each_other_are_created_before_their_keys() {
     assert!(alter > created_drivers, "{up}");
     assert_eq!(up.matches("fk_cars_drivers").count(), 1, "{up}");
     // The key back to cars, which exists by then, stays inline.
-    assert!(up[created_drivers..alter].contains("fk_drivers_cars"), "{up}");
-    assert!(postgres.down_sql.contains(r#"DROP CONSTRAINT IF EXISTS "fk_cars_drivers""#));
+    assert!(
+        up[created_drivers..alter].contains("fk_drivers_cars"),
+        "{up}"
+    );
+    assert!(
+        postgres
+            .down_sql
+            .contains(r#"DROP CONSTRAINT IF EXISTS "fk_cars_drivers""#)
+    );
 
     let sqlite = generate_migration_with_version(&SqliteDialect, "1", "cycle", &operations);
     assert!(!sqlite.up_sql.contains("ALTER TABLE"), "{}", sqlite.up_sql);
@@ -490,11 +508,24 @@ fn indexes_lead_with_the_tenant_attribute() {
     resource.indexes = INDEXES;
     resource.multitenancy = Some(ash_core::MultitenancyDef::attribute("org"));
     let snapshot = TableSnapshot::from_resource(&resource, &PostgresDialect);
-    let columns: Vec<Vec<&str>> =
-        snapshot.indexes.iter().map(|index| index.columns.iter().map(String::as_str).collect()).collect();
-    assert_eq!(columns, [vec!["org", "username"], vec!["username"], vec!["org", "username"], vec!["org", "username"]]);
+    let columns: Vec<Vec<&str>> = snapshot
+        .indexes
+        .iter()
+        .map(|index| index.columns.iter().map(String::as_str).collect())
+        .collect();
+    assert_eq!(
+        columns,
+        [
+            vec!["org", "username"],
+            vec!["username"],
+            vec!["org", "username"],
+            vec!["org", "username"]
+        ]
+    );
     // Installing without migrations creates them alike.
-    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect).compile_create_indexes(&resource).unwrap();
+    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect)
+        .compile_create_indexes(&resource)
+        .unwrap();
     assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");
     assert!(ddl[1].contains(r#"("username")"#), "{ddl:?}");
 }
@@ -503,6 +534,7 @@ fn indexes_lead_with_the_tenant_attribute() {
 /// Ash's identities are, unless it spans every tenant: its unique index and an upsert's
 /// conflict target lead with the tenant attribute.
 #[test]
+#[allow(deprecated)]
 fn identities_are_unique_within_the_tenant() {
     static ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
@@ -518,16 +550,27 @@ fn identities_are_unique_within_the_tenant() {
     resource.identities = IDENTITIES;
     resource.multitenancy = Some(ash_core::MultitenancyDef::attribute("org"));
     let snapshot = TableSnapshot::from_resource(&resource, &PostgresDialect);
-    let columns: Vec<Vec<&str>> =
-        snapshot.identities.iter().map(|identity| identity.columns.iter().map(String::as_str).collect()).collect();
+    let columns: Vec<Vec<&str>> = snapshot
+        .identities
+        .iter()
+        .map(|identity| identity.columns.iter().map(String::as_str).collect())
+        .collect();
     assert_eq!(columns, [vec!["org", "username"], vec!["username"]]);
 
-    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect).compile_create_indexes(&resource).unwrap();
+    let ddl = ash_sql::QueryCompiler::new(&PostgresDialect)
+        .compile_create_indexes(&resource)
+        .unwrap();
     assert!(ddl[0].contains(r#"("org", "username")"#), "{ddl:?}");
     let fields = ash_core::FieldMap::from([
         ("org".to_string(), ash_core::Value::from("a")),
         ("username".to_string(), ash_core::Value::from("ada")),
     ]);
-    let upsert = ash_sql::QueryCompiler::new(&PostgresDialect).compile_upsert(&resource, &fields, &IDENTITIES[0], &[]).unwrap();
-    assert!(upsert.sql().contains(r#"ON CONFLICT ("org", "username")"#), "{}", upsert.sql());
+    let upsert = ash_sql::QueryCompiler::new(&PostgresDialect)
+        .compile_upsert_raw(&resource, &fields, &IDENTITIES[0], &[])
+        .unwrap();
+    assert!(
+        upsert.sql().contains(r#"ON CONFLICT ("org", "username")"#),
+        "{}",
+        upsert.sql()
+    );
 }

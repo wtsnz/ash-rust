@@ -126,7 +126,7 @@ pub trait SqlDialect: Send + Sync + 'static {
     /// Emits `ON CONFLICT (...) DO UPDATE` clause.
     /// `ON CONFLICT` on `identity`, whose unique index covers `columns`
     /// ([`IdentityDef::columns`]).
-    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String;
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], assignments: &str) -> String;
 
     /// Whether the dialect supports `RETURNING *` on INSERT/UPDATE.
     fn supports_returning(&self) -> bool;
@@ -144,11 +144,7 @@ pub trait SqlDialect: Send + Sync + 'static {
 
     /// Render boolean literal for SQL statements.
     fn boolean_literal(&self, val: bool) -> &'static str {
-        if val {
-            "1"
-        } else {
-            "0"
-        }
+        if val { "1" } else { "0" }
     }
 
     /// Whether table creation uses IF NOT EXISTS.
@@ -270,7 +266,11 @@ impl SqlDialect for SqliteDialect {
 
     // SQLite sorts nulls first ascending.
     fn null_order(&self, descending: bool) -> &'static str {
-        if descending { " NULLS FIRST" } else { " NULLS LAST" }
+        if descending {
+            " NULLS FIRST"
+        } else {
+            " NULLS LAST"
+        }
     }
 
     fn name(&self) -> &'static str {
@@ -308,27 +308,17 @@ impl SqlDialect for SqliteDialect {
         }
     }
 
-    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String {
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], assignments: &str) -> String {
         let key_cols = columns
             .iter()
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        // A partial unique index only matches a conflict target that repeats its predicate.
         let target = match identity.predicate {
             Some(predicate) => format!("({key_cols}) WHERE {predicate}"),
             None => format!("({key_cols})"),
         };
-        if update_fields.is_empty() {
-            format!("ON CONFLICT {target} DO NOTHING")
-        } else {
-            let set_clauses = update_fields
-                .iter()
-                .map(|f| format!("{} = excluded.{}", self.quote_identifier(f), self.quote_identifier(f)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("ON CONFLICT {target} DO UPDATE SET {set_clauses}")
-        }
+        format!("ON CONFLICT {target} DO UPDATE SET {assignments}")
     }
 
     fn supports_returning(&self) -> bool {
@@ -347,11 +337,7 @@ impl SqlDialect for SqliteDialect {
     }
 
     fn boolean_literal(&self, val: bool) -> &'static str {
-        if val {
-            "1"
-        } else {
-            "0"
-        }
+        if val { "1" } else { "0" }
     }
 
     fn render_in_list(&self, op: &str, param: &str) -> String {
@@ -432,38 +418,25 @@ impl SqlDialect for PostgresDialect {
             AttrType::Binary => "BYTEA".to_string(),
             AttrType::Inet => "INET".to_string(),
             AttrType::Vector { dimensions } => format!("VECTOR({dimensions})"),
-            AttrType::Map | AttrType::Array { .. } | AttrType::Embedded(_) | AttrType::TypedMap { .. } | AttrType::Union { .. } => "JSONB".to_string(),
+            AttrType::Map
+            | AttrType::Array { .. }
+            | AttrType::Embedded(_)
+            | AttrType::TypedMap { .. }
+            | AttrType::Union { .. } => "JSONB".to_string(),
         }
     }
 
-    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], update_fields: &[String]) -> String {
+    fn upsert_clause(&self, identity: &IdentityDef, columns: &[&str], assignments: &str) -> String {
         let key_cols = columns
             .iter()
             .map(|k| self.quote_identifier(k))
             .collect::<Vec<_>>()
             .join(", ");
-        // A partial unique index only matches a conflict target that repeats its predicate.
         let target = match identity.predicate {
             Some(predicate) => format!("({key_cols}) WHERE {predicate}"),
             None => format!("({key_cols})"),
         };
-        // `DO NOTHING` returns no row for an existing record, so with nothing to update
-        // we rewrite a key column to itself and `RETURNING *` still yields the record.
-        let fields: Vec<&str> = if update_fields.is_empty() {
-            columns.iter().take(1).copied().collect()
-        } else {
-            update_fields.iter().map(String::as_str).collect()
-        };
-        if fields.is_empty() {
-            format!("ON CONFLICT {target} DO NOTHING")
-        } else {
-            let set_clauses = fields
-                .iter()
-                .map(|f| format!("{} = EXCLUDED.{}", self.quote_identifier(f), self.quote_identifier(f)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("ON CONFLICT {target} DO UPDATE SET {set_clauses}")
-        }
+        format!("ON CONFLICT {target} DO UPDATE SET {assignments}")
     }
 
     fn supports_returning(&self) -> bool {
@@ -475,11 +448,7 @@ impl SqlDialect for PostgresDialect {
     }
 
     fn boolean_literal(&self, val: bool) -> &'static str {
-        if val {
-            "TRUE"
-        } else {
-            "FALSE"
-        }
+        if val { "TRUE" } else { "FALSE" }
     }
 
     fn render_in_list(&self, op: &str, param: &str) -> String {

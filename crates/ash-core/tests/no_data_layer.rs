@@ -69,19 +69,39 @@ async fn build_makes_a_record_but_cannot_persist_it() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn every_operation_reports_the_missing_data_layer() {
     let data = NoDataLayer;
     let def = &Customer::DEF;
     let identity = def.identity("unique_name").unwrap();
     let id = Uuid::new_v4();
 
-    assert_no_data_layer(data.create(def, None, ash_core::Value::from(id), FieldMap::new()).await.unwrap_err());
-    assert_no_data_layer(data.update(def, None, ash_core::Value::from(id), FieldMap::new()).await.unwrap_err());
-    assert_no_data_layer(data.destroy(def, None, ash_core::Value::from(id)).await.unwrap_err());
-    assert_no_data_layer(data.run_query(def, &Default::default()).await.unwrap_err());
     assert_no_data_layer(
-        data.upsert(def, None, ash_core::Value::from(id), FieldMap::new(), identity, &[])
+        data.create(def, None, ash_core::Value::from(id), FieldMap::new())
             .await
             .unwrap_err(),
+    );
+    assert_no_data_layer(
+        data.update(def, None, ash_core::Value::from(id), FieldMap::new())
+            .await
+            .unwrap_err(),
+    );
+    assert_no_data_layer(
+        data.destroy(def, None, ash_core::Value::from(id))
+            .await
+            .unwrap_err(),
+    );
+    assert_no_data_layer(data.run_query(def, &Default::default()).await.unwrap_err());
+    assert_no_data_layer(
+        data.upsert_raw(
+            def,
+            None,
+            ash_core::Value::from(id),
+            FieldMap::new(),
+            identity,
+            &[],
+        )
+        .await
+        .unwrap_err(),
     );
 }

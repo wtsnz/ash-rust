@@ -55,6 +55,7 @@ async fn get_test_postgres() -> Option<Postgres> {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_postgres_crud_and_returning_and_upsert() {
     let Some(pg) = get_test_postgres().await else {
         eprintln!("PostgreSQL not reachable; skipping test");
@@ -120,7 +121,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     upsert_fields.insert("score".into(), Value::Int(300));
 
     let upserted = pg
-        .upsert(
+        .upsert_raw(
             &CUSTOMER_DEF,
             None,
             Value::from(id),
