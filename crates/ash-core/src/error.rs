@@ -97,8 +97,16 @@ pub fn interpolate(template: &str, vars: &[(String, crate::value::Value)]) -> St
 
 impl Error {
     /// A validation's error: `message` a template, its `%{var}`s filled from `vars`.
-    pub fn validation(field: impl Into<String>, message: impl Into<String>, vars: Vec<(String, crate::value::Value)>) -> Self {
-        Self::Validation { field: field.into(), message: message.into(), vars }
+    pub fn validation(
+        field: impl Into<String>,
+        message: impl Into<String>,
+        vars: Vec<(String, crate::value::Value)>,
+    ) -> Self {
+        Self::Validation {
+            field: field.into(),
+            message: message.into(),
+            vars,
+        }
     }
 
     /// `errors` as one error: none at all, one as itself, more as [`Error::Multiple`].
@@ -176,8 +184,16 @@ impl fmt::Display for Error {
             Self::Constraint { field, message } => {
                 write!(f, "attribute `{field}` {message}")
             }
-            Self::Validation { field, message, vars } => {
-                write!(f, "validation failed on `{field}`: {}", interpolate(message, vars))
+            Self::Validation {
+                field,
+                message,
+                vars,
+            } => {
+                write!(
+                    f,
+                    "validation failed on `{field}`: {}",
+                    interpolate(message, vars)
+                )
             }
             Self::NoPrimaryKey(resource) => write!(f, "resource {resource} has no primary key"),
             Self::NoPrimaryRead(resource) => {
@@ -192,7 +208,11 @@ impl fmt::Display for Error {
             Self::DataLayer(message) => write!(f, "{message}"),
             Self::Invalid(message) => write!(f, "{message}"),
             Self::Extension(err) => write!(f, "{err}"),
-            Self::MustBeAtomic { resource, action, reason } => write!(
+            Self::MustBeAtomic {
+                resource,
+                action,
+                reason,
+            } => write!(
                 f,
                 "{resource}.{action} must be performed atomically, but it could not be: {reason}; \
                  set `require_atomic` to false on the action to read the record first instead"
