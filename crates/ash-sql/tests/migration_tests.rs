@@ -1,3 +1,6 @@
+#[path = "support/upsert.rs"]
+mod planned_upsert;
+
 use ash_core::{
     ActionDef, AttrType, AttributeDef, IdentityDef, IndexDef, RelationshipDef, ResourceDef,
 };
@@ -533,9 +536,8 @@ fn indexes_lead_with_the_tenant_attribute() {
 /// An identity on a resource with attribute multitenancy is unique within the tenant, as
 /// Ash's identities are, unless it spans every tenant: its unique index and an upsert's
 /// conflict target lead with the tenant attribute.
-#[test]
-#[allow(deprecated)]
-fn identities_are_unique_within_the_tenant() {
+#[tokio::test]
+async fn identities_are_unique_within_the_tenant() {
     static ATTRS: &[AttributeDef] = &[
         AttributeDef::uuid_pk("id"),
         AttributeDef::required("org", AttrType::String),
@@ -565,9 +567,8 @@ fn identities_are_unique_within_the_tenant() {
         ("org".to_string(), ash_core::Value::from("a")),
         ("username".to_string(), ash_core::Value::from("ada")),
     ]);
-    let upsert = ash_sql::QueryCompiler::new(&PostgresDialect)
-        .compile_upsert_raw(&resource, &fields, &IDENTITIES[0], &[])
-        .unwrap();
+    let upsert =
+        planned_upsert::compile(&resource, Some("a"), &fields, IDENTITIES[0].name, &[]).await;
     assert!(
         upsert.sql().contains(r#"ON CONFLICT ("org", "username")"#),
         "{}",

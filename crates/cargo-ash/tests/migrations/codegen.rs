@@ -1,4 +1,6 @@
-use ash_core::{DataLayer, FieldMap, Resource, Value};
+use crate::scoped_fixtures::Fixtures;
+
+use ash_core::{FieldMap, Resource, Value};
 use cargo_ash::codegen::{
     CodegenError, CodegenOptions, CodegenOutcome, Mode, NonInteractive, RenameQuestion, Resolution,
 };
@@ -1644,11 +1646,11 @@ async fn invoice_rows(db: &TestDb) -> Vec<FieldMap> {
     let query = ash_core::CompiledQuery::default();
     match &db.db {
         crate::support::Db::Sqlite(sqlite) => sqlite
-            .run_query(&fixtures::invoice::Invoice::DEF, &query)
+            .fixture_run_query(&fixtures::invoice::Invoice::DEF, &query)
             .await
             .unwrap(),
         crate::support::Db::Postgres(pg) => pg
-            .run_query(&fixtures::invoice::Invoice::DEF, &query)
+            .fixture_run_query(&fixtures::invoice::Invoice::DEF, &query)
             .await
             .unwrap(),
     }
@@ -1742,7 +1744,7 @@ async fn codegen_creates_timestamptz_and_numeric_columns(db: TestDb) {
     match &db.db {
         crate::support::Db::Sqlite(sqlite) => {
             sqlite
-                .create(
+                .fixture_create(
                     &fixtures::invoice::Invoice::DEF,
                     None,
                     Value::from(written_id),
@@ -1752,7 +1754,7 @@ async fn codegen_creates_timestamptz_and_numeric_columns(db: TestDb) {
                 .unwrap();
         }
         crate::support::Db::Postgres(pg) => {
-            pg.create(
+            pg.fixture_create(
                 &fixtures::invoice::Invoice::DEF,
                 None,
                 Value::from(written_id),
@@ -2415,26 +2417,26 @@ async fn codegen_creates_a_float_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&fixtures::gauge::Gauge::DEF, None, Value::from(id), fields)
+                .fixture_create(&fixtures::gauge::Gauge::DEF, None, Value::from(id), fields)
                 .await
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(&fixtures::gauge::Gauge::DEF, None, Value::from(id), fields)
+            pg.fixture_create(&fixtures::gauge::Gauge::DEF, None, Value::from(id), fields)
                 .await
                 .unwrap();
         }
     }
     let rows = match &db.db {
         Db::Sqlite(sqlite) => sqlite
-            .run_query(
+            .fixture_run_query(
                 &fixtures::gauge::Gauge::DEF,
                 &ash_core::CompiledQuery::default(),
             )
             .await
             .unwrap(),
         Db::Postgres(pg) => pg
-            .run_query(
+            .fixture_run_query(
                 &fixtures::gauge::Gauge::DEF,
                 &ash_core::CompiledQuery::default(),
             )
@@ -2481,7 +2483,7 @@ async fn codegen_creates_a_date_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(
+                .fixture_create(
                     &fixtures::deadline::Deadline::DEF,
                     None,
                     Value::from(id),
@@ -2491,7 +2493,7 @@ async fn codegen_creates_a_date_column(db: TestDb) {
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(
+            pg.fixture_create(
                 &fixtures::deadline::Deadline::DEF,
                 None,
                 Value::from(id),
@@ -2503,14 +2505,14 @@ async fn codegen_creates_a_date_column(db: TestDb) {
     }
     let rows = match &db.db {
         Db::Sqlite(sqlite) => sqlite
-            .run_query(
+            .fixture_run_query(
                 &fixtures::deadline::Deadline::DEF,
                 &ash_core::CompiledQuery::default(),
             )
             .await
             .unwrap(),
         Db::Postgres(pg) => pg
-            .run_query(
+            .fixture_run_query(
                 &fixtures::deadline::Deadline::DEF,
                 &ash_core::CompiledQuery::default(),
             )
@@ -2589,7 +2591,7 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
         match &db.db {
             Db::Sqlite(sqlite) => {
                 sqlite
-                    .create(
+                    .fixture_create(
                         &fixtures::device::Device::DEF,
                         None,
                         Value::from(id),
@@ -2599,7 +2601,7 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
                     .unwrap();
             }
             Db::Postgres(pg) => {
-                pg.create(
+                pg.fixture_create(
                     &fixtures::device::Device::DEF,
                     None,
                     Value::from(id),
@@ -2625,11 +2627,11 @@ async fn codegen_creates_inet_and_vector_columns(db: TestDb) {
             };
             match &db.db {
                 Db::Sqlite(sqlite) => sqlite
-                    .run_query(&fixtures::device::Device::DEF, &query)
+                    .fixture_run_query(&fixtures::device::Device::DEF, &query)
                     .await
                     .unwrap(),
                 Db::Postgres(pg) => pg
-                    .run_query(&fixtures::device::Device::DEF, &query)
+                    .fixture_run_query(&fixtures::device::Device::DEF, &query)
                     .await
                     .unwrap(),
             }
@@ -2698,7 +2700,7 @@ async fn codegen_creates_a_binary_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(
+                .fixture_create(
                     &fixtures::file_blob::FileBlob::DEF,
                     None,
                     Value::from(id),
@@ -2708,7 +2710,7 @@ async fn codegen_creates_a_binary_column(db: TestDb) {
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(
+            pg.fixture_create(
                 &fixtures::file_blob::FileBlob::DEF,
                 None,
                 Value::from(id),
@@ -2720,14 +2722,14 @@ async fn codegen_creates_a_binary_column(db: TestDb) {
     }
     let rows = match &db.db {
         Db::Sqlite(sqlite) => sqlite
-            .run_query(
+            .fixture_run_query(
                 &fixtures::file_blob::FileBlob::DEF,
                 &ash_core::CompiledQuery::default(),
             )
             .await
             .unwrap(),
         Db::Postgres(pg) => pg
-            .run_query(
+            .fixture_run_query(
                 &fixtures::file_blob::FileBlob::DEF,
                 &ash_core::CompiledQuery::default(),
             )
@@ -2938,7 +2940,7 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(
+                .fixture_create(
                     &fixtures::contact::Contact::DEF,
                     None,
                     Value::from(id),
@@ -2948,7 +2950,7 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
                 .unwrap();
         }
         Db::Postgres(pg) => {
-            pg.create(
+            pg.fixture_create(
                 &fixtures::contact::Contact::DEF,
                 None,
                 Value::from(id),
@@ -2960,14 +2962,14 @@ async fn codegen_creates_a_citext_column(db: TestDb) {
     }
     let rows = match &db.db {
         Db::Sqlite(sqlite) => sqlite
-            .run_query(
+            .fixture_run_query(
                 &fixtures::contact::Contact::DEF,
                 &ash_core::CompiledQuery::default(),
             )
             .await
             .unwrap(),
         Db::Postgres(pg) => pg
-            .run_query(
+            .fixture_run_query(
                 &fixtures::contact::Contact::DEF,
                 &ash_core::CompiledQuery::default(),
             )
@@ -3089,11 +3091,11 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
         let id = uuid::Uuid::parse_str(id).unwrap();
         match &db.db {
             Db::Sqlite(sqlite) => sqlite
-                .create(&TypedValue::DEF, None, Value::from(id), fields)
+                .fixture_create(&TypedValue::DEF, None, Value::from(id), fields)
                 .await
                 .unwrap(),
             Db::Postgres(pg) => pg
-                .create(&TypedValue::DEF, None, Value::from(id), fields)
+                .fixture_create(&TypedValue::DEF, None, Value::from(id), fields)
                 .await
                 .unwrap(),
         };
@@ -3106,8 +3108,14 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
             ..Default::default()
         };
         let rows = match &db.db {
-            Db::Sqlite(sqlite) => sqlite.run_query(&TypedValue::DEF, &query).await.unwrap(),
-            Db::Postgres(pg) => pg.run_query(&TypedValue::DEF, &query).await.unwrap(),
+            Db::Sqlite(sqlite) => sqlite
+                .fixture_run_query(&TypedValue::DEF, &query)
+                .await
+                .unwrap(),
+            Db::Postgres(pg) => pg
+                .fixture_run_query(&TypedValue::DEF, &query)
+                .await
+                .unwrap(),
         };
         rows.iter()
             .map(|row| match row.get("id") {
@@ -3195,8 +3203,8 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
         ..Default::default()
     };
     let bad = match &db.db {
-        Db::Sqlite(sqlite) => sqlite.run_query(&TypedValue::DEF, &query).await,
-        Db::Postgres(pg) => pg.run_query(&TypedValue::DEF, &query).await,
+        Db::Sqlite(sqlite) => sqlite.fixture_run_query(&TypedValue::DEF, &query).await,
+        Db::Postgres(pg) => pg.fixture_run_query(&TypedValue::DEF, &query).await,
     };
     assert!(bad.is_err(), "invalid base64 must be an error, got {bad:?}");
 
@@ -3212,11 +3220,11 @@ async fn typed_columns_filter_sort_and_stay_unique(db: TestDb) {
     let result = match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .create(&TypedValue::DEF, None, Value::from(id), duplicate)
+                .fixture_create(&TypedValue::DEF, None, Value::from(id), duplicate)
                 .await
         }
         Db::Postgres(pg) => {
-            pg.create(&TypedValue::DEF, None, Value::from(id), duplicate)
+            pg.fixture_create(&TypedValue::DEF, None, Value::from(id), duplicate)
                 .await
         }
     };
@@ -3558,7 +3566,6 @@ async fn codegen_checks_enum_variants(db: TestDb) {
 }
 on_every_backend!(codegen_checks_enum_variants);
 
-#[allow(deprecated)]
 async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
     use fixtures::live_accounts::LiveAccount;
 
@@ -3585,7 +3592,7 @@ async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
         let result = match &db.db {
             Db::Sqlite(sqlite) => {
                 sqlite
-                    .upsert_raw(
+                    .fixture_upsert(
                         &LiveAccount::DEF,
                         None,
                         Value::from(id),
@@ -3596,7 +3603,7 @@ async fn partial_identities_upsert_against_their_predicate(db: TestDb) {
                     .await
             }
             Db::Postgres(pg) => {
-                pg.upsert_raw(
+                pg.fixture_upsert(
                     &LiveAccount::DEF,
                     None,
                     Value::from(id),
@@ -3673,11 +3680,11 @@ async fn json_columns_hold_plain_json(db: TestDb) {
     fields.insert("address".into(), address("221B Baker Street", "London"));
     match &db.db {
         Db::Sqlite(sqlite) => sqlite
-            .create(&Profile::DEF, None, Value::from(written), fields)
+            .fixture_create(&Profile::DEF, None, Value::from(written), fields)
             .await
             .unwrap(),
         Db::Postgres(pg) => pg
-            .create(&Profile::DEF, None, Value::from(written), fields)
+            .fixture_create(&Profile::DEF, None, Value::from(written), fields)
             .await
             .unwrap(),
     };
@@ -3706,10 +3713,13 @@ async fn json_columns_hold_plain_json(db: TestDb) {
     let rows = match &db.db {
         Db::Sqlite(sqlite) => {
             sqlite
-                .run_query(&Profile::DEF, &CompiledQuery::default())
+                .fixture_run_query(&Profile::DEF, &CompiledQuery::default())
                 .await
         }
-        Db::Postgres(pg) => pg.run_query(&Profile::DEF, &CompiledQuery::default()).await,
+        Db::Postgres(pg) => {
+            pg.fixture_run_query(&Profile::DEF, &CompiledQuery::default())
+                .await
+        }
     }
     .unwrap();
     let address_of = |id: uuid::Uuid| {

@@ -1,9 +1,4 @@
-// Raw engine queries migrate to executable plans in the next step.
-#![allow(deprecated)]
-
-use ash_core::{
-    ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef, scope_read,
-};
+use ash_core::{ActionDef, CompiledQuery, Context, DataLayer, FieldMap, Filter, ResourceDef};
 use async_graphql::dynamic::*;
 
 use crate::names::{camel, plural};
@@ -22,27 +17,10 @@ pub(crate) async fn run_read<D: DataLayer>(
     arguments: &FieldMap,
     query: CompiledQuery,
 ) -> async_graphql::Result<Vec<ash_core::View>> {
-    let query = scope_read(
-        resource,
-        action,
-        ctx.authorization_actor(),
-        arguments,
-        query,
-    )
-    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-    let mut records = ctx
-        .data
-        .run_query(resource, &query)
+    ctx.access()
+        .read(resource, action.name, arguments, read_request(query))
         .await
-        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-    crate::pagination::after_read(action, arguments, &mut records)?;
-    records
-        .into_iter()
-        .map(|row| {
-            ctx.present(resource, row.into(), None)
-                .map_err(|e| async_graphql::Error::new(e.to_string()))
-        })
-        .collect()
+        .map_err(|e| async_graphql::Error::new(e.to_string()))
 }
 
 /// `Ticket` → `listTickets`.
@@ -90,7 +68,7 @@ pub fn build_resource_queries<D: DataLayer + Clone + 'static>(
                 let query = Load::of(resource, &fields, []).onto(CompiledQuery {
                     filter: Some(ash_core::ClientExpr::new(Filter::eq(pk_name, id)).into_filter()),
                     limit: Some(1),
-                    tenant: ash.tenant().map(str::to_owned),
+
                     ..CompiledQuery::default()
                 });
                 let records =
@@ -146,27 +124,19 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
     let field = Field::new(name, TypeRef::named_nn_list_nn(resource.name), move |ctx| {
         FieldFuture::new(async move {
             let ash = request_context::<D>(&ctx)?;
-            let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
+            let (_arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
             let fields = selected(ctx.ctx.field(), None);
             let load = Load::of(
                 resource,
                 &fields,
-                scoped.sort.iter().map(|s| s.field.as_str()),
+                scoped.query().sort.iter().map(|s| s.field.as_str()),
             );
-            let query = load.onto(scoped);
+            let query = load.onto(scoped.query().clone());
             let mut records = ash
-                .data
-                .run_query(resource, &query)
+                .access()
+                .read_prepared(&scoped, read_request(query))
                 .await
                 .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-            crate::pagination::after_read(action, &arguments, &mut records)?;
-            let mut records = records
-                .into_iter()
-                .map(|row| {
-                    ash.present(resource, row.into(), None)
-                        .map_err(|e| async_graphql::Error::new(e.to_string()))
-                })
-                .collect::<async_graphql::Result<Vec<_>>>()?;
             preload(&ash, resource, fields, &mut records).await?;
             Ok(Some(FieldValue::list(
                 records.into_iter().map(FieldValue::owned_any),
@@ -174,4 +144,21 @@ fn build_unpaged_query<D: DataLayer + Clone + 'static>(
         })
     });
     read_field_arguments(field, resource, action)
+}
+
+/// Discard compiler identity fields; core supplies identity and plans execution.
+pub(crate) fn read_request(query: CompiledQuery) -> ash_core::ReadRequest {
+    ash_core::ReadRequest {
+        lock: query.lock,
+        distinct_on: query.distinct_on,
+        select: query.select,
+        calculations: query.calculations,
+        calculation_args: query.calculation_args,
+        aggregates: query.aggregates,
+        filter: query.filter,
+        sort: query.sort,
+        limit: query.limit,
+        offset: query.offset,
+        keyset: None,
+    }
 }

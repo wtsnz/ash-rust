@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use crate::filter::Filter;
-use crate::resource::{IdentityDef, ResourceDef};
-use crate::value::{FieldMap, Value};
+use crate::resource::ResourceDef;
+use crate::value::FieldMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct Sort {
@@ -35,6 +35,8 @@ impl Sort {
     }
 }
 
+/// Inert compiler input, also available to migration tooling. It cannot execute on
+/// a data layer without an opaque core-built plan.
 #[derive(Clone, Debug, Default)]
 pub struct CompiledQuery {
     pub lock: Option<crate::ReadLock>,
@@ -135,37 +137,31 @@ impl CompiledQuery {
     label = "not a DataLayer",
     note = "use Memory, Sqlite, Postgres, or implement DataLayer"
 )]
+/// Backend execution requires core-built plans, even when the app owns the backend.
+///
+/// ```compile_fail,E0308
+/// async fn raw<D: ash_core::DataLayer>(data: &D, query: &ash_core::CompiledQuery) {
+///     data.run_query(query).await;
+/// }
+/// ```
+///
+/// ```compile_fail,E0432
+/// use ash_core::insert;
+/// ```
 pub trait DataLayer: Send + Sync {
-    /// Writes a new record. `tenant` is the context's: a data layer that keeps
-    /// context-tenant resources apart (a Postgres schema, a memory table per tenant) writes
-    /// it there, as Ash's data layers do with a changeset's tenant.
-    fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> impl Future<Output = Result<FieldMap>> + Send;
+    /// Write the prepared fields in the plan's bound tenant. Context tenancy selects
+    /// the tenant namespace; attribute tenancy has already stamped the fields.
+    fn create(&self, plan: &crate::CreatePlan<'_>)
+    -> impl Future<Output = Result<FieldMap>> + Send;
 
-    fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> impl Future<Output = Result<FieldMap>> + Send;
+    fn update(&self, plan: &crate::UpdatePlan<'_>)
+    -> impl Future<Output = Result<FieldMap>> + Send;
 
-    fn destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-    ) -> impl Future<Output = Result<()>> + Send;
+    fn destroy(&self, plan: &crate::DestroyPlan<'_>) -> impl Future<Output = Result<()>> + Send;
 
     fn run_query(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
+        plan: &crate::QueryPlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send;
 
     /// Whether this data layer runs updates as one statement, checking conditions and
@@ -202,13 +198,11 @@ pub trait DataLayer: Send + Sync {
     /// it was. Returns the updated records.
     fn update_atomic(
         &self,
-        resource: &ResourceDef,
-        _query: &CompiledQuery,
-        _update: &crate::atomic::AtomicUpdate,
+        plan: &crate::AtomicUpdatePlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         std::future::ready(Err(Error::Invalid(format!(
             "this data layer can't update {} atomically",
-            resource.name
+            plan.resource().name
         ))))
     }
 
@@ -224,13 +218,11 @@ pub trait DataLayer: Send + Sync {
     /// Returns the deleted records.
     fn destroy_atomic(
         &self,
-        resource: &ResourceDef,
-        _query: &CompiledQuery,
-        _conditions: &[crate::atomic::AtomicCondition],
+        plan: &crate::AtomicDestroyPlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         std::future::ready(Err(Error::Invalid(format!(
             "this data layer can't destroy {} atomically",
-            resource.name
+            plan.resource().name
         ))))
     }
 
@@ -249,26 +241,19 @@ pub trait DataLayer: Send + Sync {
     /// rows, in the order of `keys`, a key given twice getting its rows twice.
     fn run_query_per_key(
         &self,
-        resource: &ResourceDef,
-        _query: &CompiledQuery,
-        _by: &PerKey<'_>,
-        _keys: &[crate::value::Value],
+        plan: &crate::PerKeyPlan<'_>,
     ) -> impl Future<Output = Result<Vec<Vec<FieldMap>>>> + Send {
         std::future::ready(Err(Error::Invalid(format!(
             "this data layer can't read {} once per key",
-            resource.name
+            plan.resource().name
         ))))
     }
 
     /// How many records `query` would return, as Ash's data layers count with an
     /// aggregate query. A data layer that can count without reading the records (a SQL
     /// `COUNT(*)`) should; by default it reads them.
-    fn count(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> impl Future<Output = Result<usize>> + Send {
-        async move { Ok(self.run_query(resource, query).await?.len()) }
+    fn count(&self, plan: &crate::CountPlan<'_>) -> impl Future<Output = Result<usize>> + Send {
+        async move { Ok(self.run_query(plan.read()).await?.len()) }
     }
 
     /// A page of records, `page`, and how many records `count` matches, read at once, as
@@ -277,11 +262,9 @@ pub trait DataLayer: Send + Sync {
     /// should.
     fn run_query_with_count(
         &self,
-        resource: &ResourceDef,
-        page: &CompiledQuery,
-        count: &CompiledQuery,
+        plan: &crate::QueryWithCountPlan<'_>,
     ) -> impl Future<Output = Result<(Vec<FieldMap>, usize)>> + Send {
-        futures_util::future::try_join(self.run_query(resource, page), self.count(resource, count))
+        futures_util::future::try_join(self.run_query(plan.page()), self.count(plan.count()))
     }
 
     fn upsert(
@@ -294,43 +277,14 @@ pub trait DataLayer: Send + Sync {
         ))))
     }
 
-    /// Legacy raw execution without action authorization. Removed in step 8.
-    #[deprecated(note = "use a scoped create action with upsert_on instead")]
-    fn upsert_raw(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        _id: Value,
-        mut fields: FieldMap,
-        identity: &IdentityDef,
-        update_fields: &[String],
-    ) -> impl Future<Output = Result<FieldMap>> + Send {
-        async move {
-            if let Some(pk) = resource.primary_key() {
-                fields.entry(pk.name.to_string()).or_insert(_id);
-            }
-            let plan = crate::UpsertPlan::scoped(
-                resource,
-                tenant,
-                fields,
-                identity,
-                update_fields,
-                Filter::True,
-            )?;
-            self.upsert(&plan).await
-        }
-    }
-
     fn bulk_create(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
+        plan: &crate::BulkCreatePlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
         async move {
-            let mut results = Vec::with_capacity(rows.len());
-            for (id, fields) in rows {
-                results.push(self.create(resource, tenant, id, fields).await?);
+            let mut results = Vec::with_capacity(plan.rows().len());
+            for row in plan.rows() {
+                results.push(self.create(row).await?);
             }
             Ok(results)
         }
@@ -338,13 +292,11 @@ pub trait DataLayer: Send + Sync {
 
     fn bulk_destroy(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        ids: &[Value],
+        plan: &crate::BulkDestroyPlan<'_>,
     ) -> impl Future<Output = Result<()>> + Send {
         async move {
-            for id in ids {
-                self.destroy(resource, tenant, id.clone()).await?;
+            for row in plan.rows() {
+                self.destroy(row).await?;
             }
             Ok(())
         }
@@ -356,14 +308,12 @@ pub trait DataLayer: Send + Sync {
     /// layer that can write the batch at once (one statement, one round trip) should.
     fn bulk_update(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
+        plan: &crate::BulkUpdatePlan<'_>,
     ) -> impl Future<Output = Result<Vec<Result<FieldMap>>>> + Send {
         async move {
-            let mut results = Vec::with_capacity(rows.len());
-            for (id, fields) in rows {
-                results.push(self.update(resource, tenant, id, fields).await);
+            let mut results = Vec::with_capacity(plan.rows().len());
+            for row in plan.rows() {
+                results.push(self.update(row).await);
             }
             Ok(results)
         }
@@ -387,39 +337,27 @@ fn no_data_layer<T>(resource: &ResourceDef) -> std::future::Ready<Result<T>> {
 impl DataLayer for NoDataLayer {
     fn create(
         &self,
-        resource: &ResourceDef,
-        _tenant: Option<&str>,
-        _id: Value,
-        _fields: FieldMap,
+        plan: &crate::CreatePlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
-        no_data_layer(resource)
+        no_data_layer(plan.resource())
     }
 
     fn update(
         &self,
-        resource: &ResourceDef,
-        _tenant: Option<&str>,
-        _id: Value,
-        _fields: FieldMap,
+        plan: &crate::UpdatePlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
-        no_data_layer(resource)
+        no_data_layer(plan.resource())
     }
 
-    fn destroy(
-        &self,
-        resource: &ResourceDef,
-        _tenant: Option<&str>,
-        _id: Value,
-    ) -> impl Future<Output = Result<()>> + Send {
-        no_data_layer(resource)
+    fn destroy(&self, plan: &crate::DestroyPlan<'_>) -> impl Future<Output = Result<()>> + Send {
+        no_data_layer(plan.resource())
     }
 
     fn run_query(
         &self,
-        resource: &ResourceDef,
-        _query: &CompiledQuery,
+        plan: &crate::QueryPlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
-        no_data_layer(resource)
+        no_data_layer(plan.resource())
     }
 
     fn upsert(

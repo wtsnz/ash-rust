@@ -2,12 +2,16 @@
 //! selected relationship, whatever the number of records, nested selections included,
 //! and only through what the requester may see.
 
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    ActionDef, Actor, AggregateDef, AttrType, AttributeDef, CalculationDef, Check, CompiledQuery,
-    DataLayer, Expr, FieldMap, FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind,
-    RelationshipDef, ResourceDef, Result, Value,
+    ActionDef, Actor, AggregateDef, AttrType, AttributeDef, CalculationDef, Check, DataLayer, Expr,
+    FieldMap, FieldPolicyDef, OnDelete, OnUpdate, PolicyEffect, RelKind, RelationshipDef,
+    ResourceDef, Result, Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -47,42 +51,25 @@ impl Counting {
 }
 
 impl DataLayer for Counting {
-    async fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        self.inner.create(resource, tenant, id, fields).await
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> Result<FieldMap> {
+        self.inner.create(plan).await
     }
 
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        self.inner.update(resource, tenant, id, fields).await
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> Result<FieldMap> {
+        self.inner.update(plan).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
-        self.inner.destroy(resource, tenant, id).await
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> Result<()> {
+        self.inner.destroy(plan).await
     }
 
     fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
         self.inner.can_update_atomically(resource)
     }
 
-    async fn update_atomic(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        update: &ash_core::AtomicUpdate,
-    ) -> Result<Vec<FieldMap>> {
+    async fn update_atomic(&self, plan: &ash_core::AtomicUpdatePlan<'_>) -> Result<Vec<FieldMap>> {
         self.reads.lock().unwrap().push("atomic update");
-        self.inner.update_atomic(resource, query, update).await
+        self.inner.update_atomic(plan).await
     }
 
     fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
@@ -91,19 +78,15 @@ impl DataLayer for Counting {
 
     async fn destroy_atomic(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        conditions: &[ash_core::AtomicCondition],
+        plan: &ash_core::AtomicDestroyPlan<'_>,
     ) -> Result<Vec<FieldMap>> {
         self.reads.lock().unwrap().push("atomic destroy");
-        self.inner.destroy_atomic(resource, query, conditions).await
+        self.inner.destroy_atomic(plan).await
     }
 
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> Result<Vec<FieldMap>> {
+    async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
         let name = [&AUTHOR_DEF, &POST_DEF, &COMMENT_DEF]
             .into_iter()
             .find(|def| def.name == resource.name)
@@ -114,7 +97,7 @@ impl DataLayer for Counting {
             .lock()
             .unwrap()
             .push((name, query.select.clone()));
-        self.inner.run_query(resource, query).await
+        self.inner.run_query(plan).await
     }
 }
 
@@ -285,7 +268,9 @@ async fn insert(data: &Counting, def: &ResourceDef, fields: &[(&str, Value)]) ->
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(def, None, Value::from(id), map).await.unwrap();
+    data.fixture_create(def, None, Value::from(id), map)
+        .await
+        .unwrap();
     id
 }
 
@@ -849,7 +834,7 @@ async fn an_aggregate_counts_only_what_the_actor_may_read() {
 #[tokio::test]
 async fn a_mutation_result_checks_field_policies_against_the_record_as_stored() {
     let (data, post) = seeded().await;
-    data.update(
+    data.fixture_update(
         &POST_DEF,
         None,
         Value::from(post),

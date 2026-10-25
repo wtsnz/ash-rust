@@ -207,7 +207,10 @@ async fn test_generic_action_in_sqlite_context() {
     let sqlite = Sqlite::memory().await.unwrap();
     let ctx_runtime = ash_core::Runtime::new(sqlite);
     let ctx = ctx_runtime.bootstrap();
-    ctx.install(&[&CommunicationService::DEF]).await.unwrap();
+    ctx_runtime
+        .install(&[&CommunicationService::DEF])
+        .await
+        .unwrap();
 
     let total = CommunicationService::calculate_total(&ctx)
         .quantity(10)

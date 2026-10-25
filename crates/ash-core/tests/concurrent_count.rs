@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ash_core::{CompiledQuery, DataLayer, FieldMap, ResourceDef, Result, resource};
+use ash_core::{DataLayer, FieldMap, Result, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -45,45 +45,24 @@ impl Slow {
 }
 
 impl DataLayer for Slow {
-    async fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        self.inner.create(resource, tenant, id, fields).await
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> Result<FieldMap> {
+        self.inner.create(plan).await
     }
 
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        self.inner.update(resource, tenant, id, fields).await
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> Result<FieldMap> {
+        self.inner.update(plan).await
     }
 
-    async fn destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-    ) -> Result<()> {
-        self.inner.destroy(resource, tenant, id).await
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> Result<()> {
+        self.inner.destroy(plan).await
     }
 
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> Result<Vec<FieldMap>> {
-        self.read(self.inner.run_query(resource, query)).await
+    async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> Result<Vec<FieldMap>> {
+        self.read(self.inner.run_query(plan)).await
     }
 
-    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
-        self.read(self.inner.count(resource, query)).await
+    async fn count(&self, plan: &ash_core::CountPlan<'_>) -> Result<usize> {
+        self.read(self.inner.count(plan)).await
     }
 }
 

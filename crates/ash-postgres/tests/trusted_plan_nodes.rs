@@ -188,7 +188,7 @@ async fn postgres_locks_require_transactions_and_skip_rows_locked_by_another_tra
         .enabled(true)
         .await
         .unwrap();
-    let cleanup = data.clone();
+    let cleanup_pool = data.pool().unwrap().clone();
     let result = ctx
         .transaction(|locked| async move {
             let rows = Document::query(&locked)
@@ -224,7 +224,14 @@ async fn postgres_locks_require_transactions_and_skip_rows_locked_by_another_tra
         })
         .await;
     // Clean up only the committed concurrency fixture.
-    ash_core::DataLayer::destroy(&cleanup, &Document::DEF, Some("locking"), Value::Uuid(id))
+    cleanup_pool
+        .get()
+        .await
+        .unwrap()
+        .execute(
+            "DELETE FROM trusted_node_documents WHERE id = $1 AND tenant = $2",
+            &[&id, &"locking"],
+        )
         .await
         .unwrap();
     result.unwrap();

@@ -45,10 +45,9 @@ field policies. They still run action changes, validations and hooks, and enforc
 tenancy, including required tenants. System authority is separate from the actor:
 `bind(None, tenant)` retains an absent actor, and binding a supplied actor preserves
 its identity for changes, validations, hooks and notifications. Scope stores the
-private authorization mode. The existing policy compilers receive a sealed identity
-through the read-only `authorization_actor()` bridge until executable plans replace
-that interface. Ordinary binding strips that compiler marker; actor IDs, roles and
-attributes cannot create system authority. Keep Runtime
+private authorization mode. The policy planners and executable reads use the sealed
+identity from the read-only `authorization_actor()` bridge. Ordinary binding strips
+that compiler marker; actor IDs, roles and attributes cannot create system authority. Keep Runtime
 and system contexts in trusted application code. Hooks receive no system capability
 unless application wiring explicitly supplies one. Declared hook capabilities are
 follow-up work.
@@ -136,12 +135,100 @@ writes the selected values under one store write lock. Empty updates preserve th
 stored record and its table key. Memory still rejects partial-identity upserts
 because their predicates are SQL.
 
-Data-layer implementors must migrate `DataLayer::upsert` and
-`DynDataLayer::upsert_dyn` to accept `&UpsertPlan`. The SQL compiler and SQLite SQL
-helper accept the same plan. Until step 8, `DataLayer::upsert_raw` and
-`QueryCompiler::compile_upsert_raw` are deprecated compatibility entry points for
-raw backend integrations. They do not provide action authorization. Ordinary
-framework writes always use the guarded plan, including through `StoreRegistry`.
+Data layers and SQL upsert helpers accept the opaque plan. The former
+`upsert_raw` and `compile_upsert_raw` entry points have been removed.
+
+## Implementing a data layer
+
+This is a breaking change to the DataLayer extension interface. Execution methods
+accept borrowed, immutable plans built only by core:
+
+- `create`, `update`, `destroy`: `CreatePlan`, `UpdatePlan`, `DestroyPlan`.
+- `run_query`, `count`, `run_query_with_count`: `QueryPlan`, `CountPlan`,
+  `QueryWithCountPlan`.
+- `run_query_per_key`: `PerKeyPlan`, including scoped destination and join predicates.
+- `update_atomic`, `destroy_atomic`: `AtomicUpdatePlan`, `AtomicDestroyPlan`.
+- `bulk_create`, `bulk_update`, `bulk_destroy`: the corresponding `Bulk*Plan`.
+- `upsert`: `UpsertPlan`, now also retaining the complete bound scope.
+
+Every plan exposes `scope()` and `resource()`. Scope provides read-only `actor()`
+and `tenant()` accessors. Write plans expose their prepared key and fields. Read
+and atomic plans expose the compiled query, including policy predicates, the
+policy compiler's authorization identity and the resolved tenant namespace.
+For attribute tenancy, the namespace can be absent while the scope still retains
+the tenant and the query contains its tenant predicate. Never replace either.
+`CompiledQuery` is still public for compile-only tooling; it grants no execution.
+
+```rust,ignore
+async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> ash_core::Result<Vec<ash_core::FieldMap>> {
+    let sql = compiler.compile_select(plan.resource(), plan.query())?;
+    // Execute on this adapter's private connection and return rows to core.
+    self.fetch_rows(sql).await
+}
+```
+
+Custom adapters must honor every planned predicate, conflict guard, tenant and
+atomic condition. They remain trusted implementations. Rust prevents callers from
+constructing execution plans; it cannot prove an adapter's SQL correct. Default
+batch implementations forward the immutable single-row child plans. Override a
+batch only when its optimized statement preserves those same decisions.
+`DynDataLayer` uses the same plans, and `StoreRegistry` forwards them intact,
+including the combined page/count operation. Capability checks, schema installation
+and transaction callbacks retain their existing signatures.
+
+Migrate implementations by replacing their raw argument lists with the matching
+plan and reading its accessors. Remove `upsert_raw` implementations. SQL compiler
+methods other than the removed raw upsert helper remain compile-only building
+blocks for adapters and `cargo-ash`; they cannot execute against a Context.
+
+Application code must replace `ctx.data` and `ash_core::insert` with resource
+actions or `ctx.access().read`. Bind a system scope at startup for seeds and jobs;
+keep tenant binding explicit. `ReadRequest` also supports selections, calculations,
+arguments and aggregates. Counts and counted reads use `access().count` and
+`access().read_with_count`. Core runs the named read's preparations, scopes the
+query, runs after-read hooks and returns Views. Cursor sort values are sealed
+before hooks and field projection when the request supplies a keyset ordering.
+For pagination, `prepare_read` returns an opaque `PreparedRead` retaining the exact
+scope, action arguments and mandatory candidate predicate. Its `query()` is read-only.
+`read_prepared`, `count_prepared` and `read_prepared_with_count` accept identity-free
+page shapes, intersect their filters with that predicate and reject another bound
+scope. They run preparations once, including for combined page/count reads. A
+transaction retaining the same scope can execute the prepared read.
+
+Authentication receives separate bootstrap-issued, resource-bound read and write
+grants. `Runtime::credential_writes::<R>(fields)` names the only credential
+attributes it may mutate. `update_credentials` rejects primary-key and tenant
+changes, checks attribute types and retains the bound tenant. These grants belong
+in trusted authentication configuration, never request input. Durable session
+consumption and credential versioning remain separate work.
+
+Credential grants are bound to the Runtime that issued them. Use that Runtime or
+its clones to bind authentication contexts; Runtime transactions retain the same
+authority. A grant from another Runtime returns `Forbidden`, even if both runtimes
+wrap the same backend. Constructing an unrelated Runtime cannot grant credential
+access to an existing Context.
+
+Schema installation also requires startup authority. Use
+`runtime.install(resources)` or the generated associated function
+`MyDomain::install(&runtime)`. `Context::install` and the old zero-argument domain
+installer are removed. Resource statements may contain arbitrary migration SQL;
+a request Context cannot execute them. Installation and migration APIs on a backend
+retained by startup code remain available.
+
+## Outside the guarantees
+
+Keep an application-owned database pool or connection for reporting and migrations.
+For example, clone the pool before moving a backend into `Runtime`. SQL compiled
+and executed through that pool does not run framework tenancy, policies, action
+changes, hooks or View projection. The application owns those decisions. A Context
+has no backend or connection accessor, and cannot recover Runtime authority.
+Backend installation and migration tools remain startup responsibilities.
+
+Trusted server code holding Runtime can deliberately create system scopes or bind
+another actor and tenant. Trusted SQL fragments can contain developer-written
+subqueries. Resource metadata and adapter implementations are also trusted code.
+These capabilities remain explicit; the plan interface protects code handed only a
+bound Context from omitting the core planner during framework execution.
 
 ## Managed relationships and cascades
 
@@ -337,22 +424,19 @@ remains follow-up work. Legacy subscriptions keep their existing unshared behavi
 
 ## Limits
 
-Steps 2 through 5 bind execution scope, normalize client reads, centralize result
-presentation and protect derived values.
-`Context::data` and raw `insert` remain
-public but deprecated until engine reads and writes use executable plans. Core uses a
-private backend accessor for those paths. Existing adapter code and raw-backend tests
-carry documented deprecation allowances. New caller code still receives warnings.
-Upsert conflicts use an opaque executable plan; other backend transports remain raw until step 8. DataLayer transports still use raw maps;
-core wraps hook and presentation records in RawRecord. Credential issuance
-is restricted to Runtime, while credential results remain raw maps.
+Steps 2 through 8 bind execution scope, normalize client reads, present results,
+protect derived values and require core-built plans for backend execution.
+`Context::data`, the raw insert function and raw upsert compatibility methods have
+been removed. Backend transport uses maps only between adapters and core. Hooks
+use RawRecord; ordinary extension reads return View. Credential issuance is
+restricted to Runtime, while credential lookup results remain privileged maps.
 
 Cross-tenant lookup grants still need a resource/action declaration and a backend
 contract for discovering tenant namespaces. Lagrange therefore still requires a line
 at login. Subscription deduplication still trusts the application's string key and resolves
 with the first member's context. That stays the case until groups bind
 their own complete Scope and resolve as the group actor. Keyset cursors are sealed by Runtime in step 3. Backend-specific trusted
-plan expressions remain planned; `TrustedExpr` reserves that extension point. Scope has no public constructor or layout,
+plan expressions are implemented. See [Trusted data-layer nodes](trusted-data-layer-nodes.md). Scope has no public constructor or layout,
 so those additions do not require changing the binding API.
 
 This change does not fix token namespace isolation, durable access revocation,
@@ -452,5 +536,5 @@ Scoped reads accept developer-owned SQL fragments, Postgres row locks and
 `distinct_on` through [trusted data-layer nodes](trusted-data-layer-nodes.md).
 The planner retains tenancy and row policies; `View` retains field policies and
 calculation dependency visibility. Unsupported backends return a typed planning
-error before reading data. Read locks require a real transaction. Step 8 can remove
-raw execution without removing these scoped SQL operations.
+error before reading data. Read locks require a real transaction. These operations
+remain available through executable plans after raw execution is removed.

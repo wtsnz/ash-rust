@@ -1,3 +1,6 @@
+#[path = "support/upsert.rs"]
+mod planned_upsert;
+
 use ash_core::{
     ActionDef, AttrType, AttributeDef, CalculationDef, CompiledQuery, Expr, Filter, IdentityDef,
     ResourceDef, Sort, Value,
@@ -121,9 +124,8 @@ fn test_postgres_query_compilation() {
     assert_eq!(params.len(), 3);
 }
 
-#[test]
-#[allow(deprecated)]
-fn test_postgres_insert_update_upsert_returning() {
+#[tokio::test]
+async fn test_postgres_insert_update_upsert_returning() {
     let dialect = PostgresDialect;
 
     // 1. Insert
@@ -154,17 +156,16 @@ fn test_postgres_insert_update_upsert_returning() {
     );
 
     // 3. Upsert
-    let mut compiler3 = QueryCompiler::new(&dialect);
-    let compiled_upsert = compiler3
-        .compile_upsert_raw(
-            &TICKET_DEF,
-            &fields,
-            &TICKET_IDENTS[0],
-            &["status".to_string()],
-        )
-        .unwrap();
+    let compiled_upsert = planned_upsert::compile(
+        &TICKET_DEF,
+        None,
+        &fields,
+        TICKET_IDENTS[0].name,
+        &["status"],
+    )
+    .await;
     assert!(compiled_upsert.sql.contains(
-        "ON CONFLICT (\"subject\") DO UPDATE SET \"status\" = EXCLUDED.\"status\" RETURNING *"
+        "ON CONFLICT (\"subject\") DO UPDATE SET \"status\" = EXCLUDED.\"status\" WHERE 1=1 RETURNING *"
     ));
 }
 

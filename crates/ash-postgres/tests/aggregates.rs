@@ -2,6 +2,10 @@
 //! aggregates, SQLite groups them, as ash_sql's `:lateral` and `:grouped` strategies do,
 //! and memory computes them as Ash's ETS layer does. One scenario, the same answers.
 
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use ash_core::{
     ActionDef, ActionKind, Actor, AggregateDef, AggregateFilter, AttrType, AttributeDef, Check,
     CompiledQuery, ConstValue, DataLayer, FieldMap, Filter, PolicyDef, PolicyEffect, PolicyWhen,
@@ -130,20 +134,24 @@ const ALL: [&str; 6] = [
     "reader_count",
 ];
 
-async fn insert<D: DataLayer>(data: &D, resource: &ResourceDef, fields: &[(&str, Value)]) -> Uuid {
+async fn insert<D: DataLayer + Clone>(
+    data: &D,
+    resource: &ResourceDef,
+    fields: &[(&str, Value)],
+) -> Uuid {
     let id = Uuid::new_v4();
     let mut map: FieldMap = fields
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(resource, None, Value::from(id), map)
+    data.fixture_create(resource, None, Value::from(id), map)
         .await
         .unwrap();
     id
 }
 
-async fn scenario<D: DataLayer>(data: D) {
+async fn scenario<D: DataLayer + Clone>(data: D) {
     // Names unique to this run, so a shared database's other rows don't count.
     let run = Uuid::new_v4().simple().to_string();
     let name = |n: &str| format!("{run}-{n}");
@@ -189,7 +197,7 @@ async fn scenario<D: DataLayer>(data: D) {
     }];
     let read = |query: CompiledQuery| {
         let data = &data;
-        async move { data.run_query(&LIBRARY, &query).await.unwrap() }
+        async move { data.fixture_run_query(&LIBRARY, &query).await.unwrap() }
     };
     let values = |rows: &[FieldMap], field: &str| -> Vec<Value> {
         rows.iter()

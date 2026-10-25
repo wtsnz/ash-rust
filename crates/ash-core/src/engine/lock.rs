@@ -91,7 +91,8 @@ async fn stale_or_missing<D: DataLayer>(
     }) {
         Ok((filter, tenant)) => {
             ctx.raw_data()
-                .run_query(
+                .run_query(&crate::QueryPlan::new(
+                    ctx,
                     resource,
                     &CompiledQuery {
                         filter,
@@ -99,7 +100,7 @@ async fn stale_or_missing<D: DataLayer>(
                         limit: Some(1),
                         ..CompiledQuery::default()
                     },
-                )
+                ))
                 .await
         }
         Err(err) => return err,
@@ -129,7 +130,12 @@ pub(crate) async fn check_lock<D: DataLayer>(
         &id,
         lock.guard.clone(),
     )?;
-    if ctx.raw_data().run_query(resource, &query).await?.is_empty() {
+    if ctx
+        .raw_data()
+        .run_query(&crate::QueryPlan::new(ctx, resource, &query))
+        .await?
+        .is_empty()
+    {
         return Err(stale_or_missing(ctx, resource, id).await);
     }
     Ok(())
@@ -148,7 +154,7 @@ pub(crate) async fn update_guarded<D: DataLayer>(
     let Some(lock) = lock else {
         return ctx
             .raw_data()
-            .update(resource, ctx.tenant(), id, fields)
+            .update(&crate::UpdatePlan::new(ctx, resource, id, fields))
             .await;
     };
     fields.extend(lock.next);
@@ -160,7 +166,9 @@ pub(crate) async fn update_guarded<D: DataLayer>(
         }
         return match ctx
             .raw_data()
-            .update_atomic(resource, &query, &update)
+            .update_atomic(&crate::AtomicUpdatePlan::new(
+                ctx, resource, &query, &update,
+            ))
             .await?
             .pop()
         {
@@ -168,11 +176,16 @@ pub(crate) async fn update_guarded<D: DataLayer>(
             None => Err(stale_or_missing(ctx, resource, id).await),
         };
     }
-    if ctx.raw_data().run_query(resource, &query).await?.is_empty() {
+    if ctx
+        .raw_data()
+        .run_query(&crate::QueryPlan::new(ctx, resource, &query))
+        .await?
+        .is_empty()
+    {
         return Err(stale_or_missing(ctx, resource, id).await);
     }
     ctx.raw_data()
-        .update(resource, ctx.tenant(), id, fields)
+        .update(&crate::UpdatePlan::new(ctx, resource, id, fields))
         .await
 }
 
@@ -185,7 +198,10 @@ pub(crate) async fn destroy_guarded<D: DataLayer>(
     lock: Option<&Lock>,
 ) -> Result<()> {
     let Some(lock) = lock else {
-        return ctx.raw_data().destroy(resource, ctx.tenant(), id).await;
+        return ctx
+            .raw_data()
+            .destroy(&crate::DestroyPlan::new(ctx, resource, id))
+            .await;
     };
     let query = guarded_query(
         ctx.tenant().map(str::to_owned),
@@ -196,7 +212,7 @@ pub(crate) async fn destroy_guarded<D: DataLayer>(
     if ctx.raw_data().can_destroy_atomically(resource) {
         return match ctx
             .raw_data()
-            .destroy_atomic(resource, &query, &[])
+            .destroy_atomic(&crate::AtomicDestroyPlan::new(ctx, resource, &query, &[]))
             .await?
             .is_empty()
         {
@@ -204,8 +220,15 @@ pub(crate) async fn destroy_guarded<D: DataLayer>(
             true => Err(stale_or_missing(ctx, resource, id).await),
         };
     }
-    if ctx.raw_data().run_query(resource, &query).await?.is_empty() {
+    if ctx
+        .raw_data()
+        .run_query(&crate::QueryPlan::new(ctx, resource, &query))
+        .await?
+        .is_empty()
+    {
         return Err(stale_or_missing(ctx, resource, id).await);
     }
-    ctx.raw_data().destroy(resource, ctx.tenant(), id).await
+    ctx.raw_data()
+        .destroy(&crate::DestroyPlan::new(ctx, resource, id))
+        .await
 }

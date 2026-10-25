@@ -151,10 +151,7 @@ async fn test_multi_memory_rollback_on_custom_step_error() {
 async fn test_multi_sqlite_success_and_domain_run_multi() {
     let db = Sqlite::memory().await.unwrap();
     let desk_runtime = ash_core::Runtime::new(db);
-    Helpdesk::from_context(desk_runtime.bootstrap())
-        .install()
-        .await
-        .unwrap();
+    Helpdesk::install(&desk_runtime).await.unwrap();
 
     let customer_id = Uuid::new_v4();
     let as_customer =
@@ -195,10 +192,7 @@ async fn test_multi_sqlite_success_and_domain_run_multi() {
 async fn test_multi_sqlite_rollback_on_failure() {
     let db = Sqlite::memory().await.unwrap();
     let desk_runtime = ash_core::Runtime::new(db);
-    Helpdesk::from_context(desk_runtime.bootstrap())
-        .install()
-        .await
-        .unwrap();
+    Helpdesk::install(&desk_runtime).await.unwrap();
 
     let customer_id = Uuid::new_v4();
     let as_customer =
@@ -232,10 +226,7 @@ async fn test_multi_sqlite_rollback_on_failure() {
 async fn test_domain_transaction_and_nested_savepoints_in_sqlite() {
     let db = Sqlite::memory().await.unwrap();
     let desk_runtime = ash_core::Runtime::new(db);
-    Helpdesk::from_context(desk_runtime.bootstrap())
-        .install()
-        .await
-        .unwrap();
+    Helpdesk::install(&desk_runtime).await.unwrap();
 
     let customer_id = Uuid::new_v4();
     let as_customer =
@@ -292,10 +283,7 @@ async fn test_domain_transaction_and_nested_savepoints_in_sqlite() {
 async fn test_domain_transaction_rollback_when_closure_returns_err() {
     let db = Sqlite::memory().await.unwrap();
     let desk_runtime = ash_core::Runtime::new(db);
-    Helpdesk::from_context(desk_runtime.bootstrap())
-        .install()
-        .await
-        .unwrap();
+    Helpdesk::install(&desk_runtime).await.unwrap();
 
     let customer_id = Uuid::new_v4();
     let as_customer =

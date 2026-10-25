@@ -79,7 +79,7 @@ pub mod budget {
     }
 }
 
-// Core consumes the attribute-named read argument as a client comparison.
+// Core consumes this read argument as a client comparison; the DSL lint cannot see that use.
 #[allow(deprecated)]
 pub mod payroll {
     use super::*;

@@ -1,3 +1,6 @@
+#[path = "support/fixtures.rs"]
+mod scoped_fixtures;
+
 use ash_core::{
     BulkDestroyOptions, CompiledQuery, Context, DataLayer, Filter, Resource, ResourceExt,
     TransactionSupport, Value, bulk_destroy, destroy_existing, resource,
@@ -91,25 +94,22 @@ pub mod note_mod {
 use folder_mod::Folder;
 use note_mod::Note;
 
-/// Every stored note, archived or not, straight from the data layer.
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
+/// Every stored note, archived or not, through the fixture read action.
 async fn stored_notes<D: DataLayer>(ctx: &Context<D>) -> Vec<(String, Option<String>)> {
-    let mut rows: Vec<(String, Option<String>)> = ctx
-        .data
-        .run_query(&Note::DEF, &CompiledQuery::default())
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|row| {
-            let body = row.get("body").and_then(Value::as_str).unwrap().to_string();
-            let archived = row
-                .get("archived_at")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            (body, archived)
-        })
-        .collect();
+    let mut rows: Vec<(String, Option<String>)> =
+        scoped_fixtures::stored(ctx, &Note::DEF, &CompiledQuery::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let body = row.get("body").and_then(Value::as_str).unwrap().to_string();
+                let archived = row
+                    .get("archived_at")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                (body, archived)
+            })
+            .collect();
     rows.sort();
     rows
 }

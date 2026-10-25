@@ -1,3 +1,7 @@
+#[path = "support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 #[path = "support/derived_values.rs"]
 mod support;
 
@@ -511,22 +515,22 @@ async fn custom_calculations_require_declared_dependencies() {
     };
     let data = ash_memory::Memory::new();
     assert!(
-        data.run_query(&resource, &query)
+        data.fixture_run_query(&resource, &query)
             .await
             .unwrap_err()
             .to_string()
             .contains("must declare dependencies")
     );
-    data.create(
+    data.fixture_create(
         &resource,
         None,
         Value::Uuid(uuid::Uuid::nil()),
-        ash_core::fields! {"id" => uuid::Uuid::nil()},
+        ash_core::fields! {"id" => uuid::Uuid::nil(), "name" => "fixture", "department_id" => uuid::Uuid::nil(), "public" => true, "enabled" => true},
     )
     .await
     .unwrap();
     assert!(
-        data.run_query(&resource, &query)
+        data.fixture_run_query(&resource, &query)
             .await
             .unwrap_err()
             .to_string()
@@ -553,12 +557,12 @@ async fn handwritten_calculations_require_stored_dependencies() {
     let sqlite = ash_sqlite::Sqlite::memory().await.unwrap();
     for message in [
         memory
-            .run_query(&resource, &query)
+            .fixture_run_query(&resource, &query)
             .await
             .unwrap_err()
             .to_string(),
         sqlite
-            .run_query(&resource, &query)
+            .fixture_run_query(&resource, &query)
             .await
             .unwrap_err()
             .to_string(),

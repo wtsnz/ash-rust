@@ -12,11 +12,10 @@ async fn test_sqlite_two_domains_and_transactions() {
     let workspaces_runtime = ash_core::Runtime::new(db.clone());
     let workspaces = Workspaces::from_context(workspaces_runtime.bootstrap());
     let kanban_runtime = ash_core::Runtime::new(db);
-    let kanban = Kanban::from_context(kanban_runtime.bootstrap());
 
     // Install schemas for both domains into SQLite
-    workspaces.install().await.unwrap();
-    kanban.install().await.unwrap();
+    Workspaces::install(&workspaces_runtime).await.unwrap();
+    Kanban::install(&kanban_runtime).await.unwrap();
 
     // 1. Create user and workspace in Workspaces domain
     let alice = workspaces

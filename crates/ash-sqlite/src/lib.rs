@@ -7,8 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ash_core::{
-    CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
-    TransactionSupport, Value,
+    DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport, TransactionSupport, Value,
 };
 use ash_sql::{
     CompiledSql, MigrationExecutor, Migrator, QueryCompiler, SqlParam, SqliteDialect,
@@ -451,13 +450,12 @@ impl DataLayer for Sqlite {
         TransactionSupport::transaction(self, move |tx| work(Some(tx.clone()))).await
     }
 
-    async fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        mut fields: FieldMap,
-    ) -> Result<FieldMap> {
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> Result<FieldMap> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+        let mut fields = plan.fields().clone();
+
         refuse_tenant_schema(resource, tenant)?;
         let qb = sql::insert_query(resource, &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
@@ -472,13 +470,12 @@ impl DataLayer for Sqlite {
         Ok(fields)
     }
 
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> Result<FieldMap> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+        let fields = plan.fields().clone();
+
         refuse_tenant_schema(resource, tenant)?;
         let qb = sql::update_query(resource, tenant, id.clone(), &fields)?;
         let result = self.execute_query_resource(&qb, resource).await?;
@@ -503,7 +500,11 @@ impl DataLayer for Sqlite {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> Result<()> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+
         refuse_tenant_schema(resource, tenant)?;
         let qb = sql::delete_query(resource, tenant, id)?;
         let result = self.execute_query(&qb).await?;
@@ -513,11 +514,10 @@ impl DataLayer for Sqlite {
         Ok(())
     }
 
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> Result<Vec<FieldMap>> {
+    async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
+
         query.validate_lock(matches!(self.source, SqliteSource::Tx(_)))?;
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         let qb = sql::select_query(resource, query)?;
@@ -539,10 +539,12 @@ impl DataLayer for Sqlite {
 
     async fn destroy_atomic(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        conditions: &[ash_core::AtomicCondition],
+        plan: &ash_core::AtomicDestroyPlan<'_>,
     ) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
+        let conditions = plan.conditions();
+
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         if !conditions.is_empty() {
             return Err(Error::Invalid(format!(
@@ -566,12 +568,11 @@ impl DataLayer for Sqlite {
 
     /// The update as one statement (see [`ash_sql::QueryCompiler::compile_atomic_update`]),
     /// which SQLite runs under its single writer, so concurrent updates lose nothing.
-    async fn update_atomic(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        update: &ash_core::AtomicUpdate,
-    ) -> Result<Vec<FieldMap>> {
+    async fn update_atomic(&self, plan: &ash_core::AtomicUpdatePlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
+        let update = plan.update();
+
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
         if !update.conditions.is_empty() {
             return Err(Error::Invalid(format!(
@@ -587,7 +588,10 @@ impl DataLayer for Sqlite {
             .collect()
     }
 
-    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+    async fn count(&self, plan: &ash_core::CountPlan<'_>) -> Result<usize> {
+        let resource = plan.resource();
+        let query = plan.query();
+
         query.validate_lock(matches!(self.source, SqliteSource::Tx(_)))?;
         use sqlx::Row;
         refuse_tenant_schema(resource, query.tenant.as_deref())?;
@@ -609,21 +613,16 @@ impl DataLayer for Sqlite {
         sql::row_to_fields(row, resource, &[], &[])
     }
 
-    async fn bulk_create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
-    ) -> Result<Vec<FieldMap>> {
-        if rows.is_empty() {
+    async fn bulk_create(&self, plan: &ash_core::BulkCreatePlan<'_>) -> Result<Vec<FieldMap>> {
+        if plan.rows().is_empty() {
             return Ok(Vec::new());
         }
         self.transaction(|tx| {
             let tx = tx.clone();
             async move {
-                let mut results = Vec::with_capacity(rows.len());
-                for (id, fields) in rows {
-                    results.push(tx.create(resource, tenant, id, fields).await?);
+                let mut results = Vec::with_capacity(plan.rows().len());
+                for row in plan.rows() {
+                    results.push(tx.create(row).await?);
                 }
                 Ok(results)
             }
@@ -631,17 +630,16 @@ impl DataLayer for Sqlite {
         .await
     }
 
-    async fn bulk_destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        ids: &[Value],
-    ) -> Result<()> {
+    async fn bulk_destroy(&self, plan: &ash_core::BulkDestroyPlan<'_>) -> Result<()> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let ids: Vec<_> = plan.rows().iter().map(|row| row.id().clone()).collect();
+
         refuse_tenant_schema(resource, tenant)?;
         if ids.is_empty() {
             return Ok(());
         }
-        let qb = sql::bulk_delete_query(resource, tenant, ids)?;
+        let qb = sql::bulk_delete_query(resource, tenant, &ids)?;
         self.execute_query_resource(&qb, resource).await?;
         Ok(())
     }

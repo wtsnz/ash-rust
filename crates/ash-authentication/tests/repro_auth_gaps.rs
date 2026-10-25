@@ -1,5 +1,8 @@
 //! Auth tests that encode the behavior we want. They fail on the current crate.
 
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+
 use ash_authentication::{AuthError, authentication};
 use ash_core::Result;
 use ash_memory::Memory;
@@ -67,7 +70,7 @@ mod http {
     use std::sync::Arc;
 
     use ash_authentication::{JwtService, auth_router};
-    use ash_core::{DataLayer, Resource, Result, Value};
+    use ash_core::{Resource, Result, Value};
     use ash_memory::Memory;
     use axum::Router;
     use axum::http::StatusCode;
@@ -87,8 +90,6 @@ mod http {
         }
     }
 
-    // This regression deliberately inspects or mutates raw backend state.
-    #[allow(deprecated)]
     async fn app() -> (Router, ash_core::Runtime<Memory>, Arc<JwtService>) {
         let ctx_runtime = ash_core::Runtime::new(Memory::new());
         let ctx = ctx_runtime.bootstrap();
@@ -106,8 +107,7 @@ mod http {
             "confirmed_at".into(),
             Value::String("2026-01-01T00:00:00Z".into()),
         );
-        ctx.data
-            .update(&User::DEF, None, ash_core::Value::from(user.id), fields)
+        crate::scoped_fixtures::update(&ctx, &User::DEF, ash_core::Value::from(user.id), fields)
             .await
             .expect("mark fixture user confirmed so HTTP tests can sign in");
 

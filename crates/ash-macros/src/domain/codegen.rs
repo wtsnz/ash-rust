@@ -285,8 +285,8 @@ pub fn expand_domain(def: DomainDefinition) -> Result<TokenStream> {
         #probe_tokens
 
         impl<D: ::ash_core::SchemaSupport> #domain_name<D> {
-            pub async fn install(&self) -> ::ash_core::Result<()> {
-                self.ctx.install(Self::DEF.resources).await
+            pub async fn install(runtime: &::ash_core::Runtime<D>) -> ::ash_core::Result<()> {
+                runtime.install(Self::DEF.resources).await
             }
         }
 

@@ -3,11 +3,15 @@
 //! destroy leaves it out, before anything runs for it. Its related records stay, and the
 //! other records go as they would.
 
+#[path = "support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    AtomicCondition, AtomicUpdate, BulkDestroyOptions, BulkTransaction, CompiledQuery, DataLayer,
-    FieldMap, ResourceDef, Result, TransactionSupport, Value, resource,
+    BulkDestroyOptions, BulkTransaction, DataLayer, FieldMap, ResourceDef, Result,
+    TransactionSupport, Value, resource,
 };
 use ash_memory::Memory;
 use uuid::Uuid;
@@ -37,36 +41,21 @@ impl Racing {
 }
 
 impl DataLayer for Racing {
-    async fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        self.inner.create(resource, tenant, id, fields).await
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> Result<FieldMap> {
+        self.inner.create(plan).await
     }
 
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        self.inner.update(resource, tenant, id, fields).await
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> Result<FieldMap> {
+        self.inner.update(plan).await
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
-        self.inner.destroy(resource, tenant, id).await
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> Result<()> {
+        self.inner.destroy(plan).await
     }
 
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> Result<Vec<FieldMap>> {
-        let rows = self.inner.run_query(resource, query).await?;
+    async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let rows = self.inner.run_query(plan).await?;
         let race = {
             let mut race = self.race.lock().unwrap();
             if race
@@ -79,7 +68,9 @@ impl DataLayer for Racing {
             }
         };
         if let Some((_, id, fields)) = race {
-            self.inner.update(resource, None, id, fields).await?;
+            self.inner
+                .fixture_update(resource, None, id, fields)
+                .await?;
         }
         Ok(rows)
     }
@@ -88,13 +79,8 @@ impl DataLayer for Racing {
         self.inner.can_update_atomically(resource)
     }
 
-    async fn update_atomic(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        update: &AtomicUpdate,
-    ) -> Result<Vec<FieldMap>> {
-        self.inner.update_atomic(resource, query, update).await
+    async fn update_atomic(&self, plan: &ash_core::AtomicUpdatePlan<'_>) -> Result<Vec<FieldMap>> {
+        self.inner.update_atomic(plan).await
     }
 
     fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
@@ -103,15 +89,13 @@ impl DataLayer for Racing {
 
     async fn destroy_atomic(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        conditions: &[AtomicCondition],
+        plan: &ash_core::AtomicDestroyPlan<'_>,
     ) -> Result<Vec<FieldMap>> {
-        self.inner.destroy_atomic(resource, query, conditions).await
+        self.inner.destroy_atomic(plan).await
     }
 
-    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
-        self.inner.count(resource, query).await
+    async fn count(&self, plan: &ash_core::CountPlan<'_>) -> Result<usize> {
+        self.inner.count(plan).await
     }
 }
 

@@ -509,8 +509,10 @@ async fn test_many_to_many_cascades_join_rows() -> Result<()> {
 #[tokio::test]
 async fn test_cascading_delete_in_sqlite() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
-    ctx.install(&[&Author::DEF, &Post::DEF, &Comment::DEF])
+    let schema_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = schema_runtime.bootstrap();
+    schema_runtime
+        .install(&[&Author::DEF, &Post::DEF, &Comment::DEF])
         .await?;
 
     let author = Author::create(&ctx).name("George R.R. Martin").await?;

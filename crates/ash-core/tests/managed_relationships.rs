@@ -584,8 +584,11 @@ async fn test_action_dsl_change_manage_relationship() -> Result<()> {
 #[tokio::test]
 async fn test_managed_relationship_atomic_rollback_on_child_error() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
-    ctx.install(&[&Order::DEF, &LineItem::DEF]).await?;
+    let schema_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = schema_runtime.bootstrap();
+    schema_runtime
+        .install(&[&Order::DEF, &LineItem::DEF])
+        .await?;
 
     // Attempt to create Order with one valid item and one item that fails validation (price = -10)
     let res = Order::create(&ctx)

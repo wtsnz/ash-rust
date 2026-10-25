@@ -1,6 +1,3 @@
-// Context owns the deprecated compatibility field until executable plans replace raw data access.
-#![allow(deprecated)]
-
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +20,7 @@ pub struct QueuedNotification {
 #[derive(Debug)]
 pub struct Runtime<D> {
     data: Arc<D>,
+    authority: Arc<RuntimeAuthority>,
     system: bool,
     cursor_key: Arc<crate::cursor::CursorKey>,
     notifiers: Vec<Arc<dyn Notifier>>,
@@ -33,6 +31,7 @@ impl<D> Clone for Runtime<D> {
     fn clone(&self) -> Self {
         Self {
             data: Arc::clone(&self.data),
+            authority: Arc::clone(&self.authority),
             system: self.system,
             cursor_key: Arc::clone(&self.cursor_key),
             notifiers: self.notifiers.clone(),
@@ -49,6 +48,7 @@ impl<D> Runtime<D> {
     pub fn from_arc(data: Arc<D>) -> Self {
         Self {
             data,
+            authority: Arc::new(RuntimeAuthority),
             system: false,
             cursor_key: Arc::new(crate::cursor::CursorKey::random()),
             notifiers: Vec::new(),
@@ -78,6 +78,7 @@ impl<D> Runtime<D> {
         };
         Context {
             scope: Arc::new(Scope {
+                authority: Arc::clone(&self.authority),
                 actor,
                 tenant,
                 authorization,
@@ -104,14 +105,33 @@ impl<D> Runtime<D> {
         self.bind(None, None)
     }
 
+    /// Grant mutation of explicit credential attributes on one resource.
+    pub fn credential_writes<R: crate::Resource>(
+        &self,
+        fields: impl IntoIterator<Item = &'static str>,
+    ) -> crate::CredentialWritePermit {
+        crate::CredentialWritePermit {
+            resource: &R::DEF,
+            fields: fields.into_iter().collect(),
+            authority: Arc::clone(&self.authority),
+        }
+    }
+
     /// Grant credential reads of one resource. The grant never bypasses tenancy.
     pub fn credential_reads<R: crate::Resource>(&self) -> crate::CredentialReadPermit {
-        crate::CredentialReadPermit::new(&R::DEF)
+        crate::CredentialReadPermit {
+            resource: &R::DEF,
+            authority: Arc::clone(&self.authority),
+        }
     }
 }
 
 #[derive(Debug)]
+pub(crate) struct RuntimeAuthority;
+
+#[derive(Debug)]
 pub(crate) struct Scope {
+    pub(crate) authority: Arc<RuntimeAuthority>,
     actor: Option<Actor>,
     tenant: Option<String>,
     authorization: Authorization,
@@ -125,12 +145,23 @@ enum Authorization {
 }
 
 impl Scope {
+    pub(crate) fn actor(&self) -> Option<&Actor> {
+        self.actor.as_ref()
+    }
     pub(crate) fn tenant(&self) -> Option<&str> {
         self.tenant.as_deref()
     }
 }
 
 /// An execution handle with immutable actor and tenant identity.
+///
+/// Schema installation requires startup Runtime authority, not a request Context.
+///
+/// ```compile_fail,E0599
+/// async fn install<D: ash_core::SchemaSupport>(ctx: &ash_core::Context<D>) {
+///     ctx.install(&[]).await;
+/// }
+/// ```
 ///
 /// ```compile_fail
 /// let runtime = ash_core::Runtime::new(());
@@ -142,14 +173,16 @@ impl Scope {
 /// let ctx = ash_core::Runtime::new(()).bootstrap();
 /// ctx.with_tenant("another-tenant");
 /// ```
+///
+/// ```compile_fail
+/// let ctx = ash_core::Runtime::new(()).bootstrap();
+/// let backend = &ctx.data;
+/// ```
 #[derive(Debug)]
 pub struct Context<D> {
     pub(crate) scope: Arc<Scope>,
     metadata: FieldMap,
-    #[deprecated(
-        note = "raw data access bypasses scoped execution; use Context::access and action builders"
-    )]
-    pub data: Arc<D>,
+    data: Arc<D>,
     notifiers: Vec<Arc<dyn Notifier>>,
     pub(crate) notification_queue: Option<Arc<Mutex<Vec<QueuedNotification>>>>,
 }
@@ -175,9 +208,9 @@ impl<D> Context<D> {
         self.scope.actor.as_ref()
     }
 
-    /// Policy-adapter bridge until executable plans own authorization. This carries
-    /// sealed system authority for policy compilation only. Changes, validations,
-    /// hooks and notifications must use `actor()` for execution identity.
+    /// Policy-compilation identity carried by executable read plans. System scopes
+    /// retain sealed authorization here. Changes, validations, hooks and notifications
+    /// use `actor()` for execution identity.
     pub fn authorization_actor(&self) -> Option<&Actor> {
         match &self.scope.authorization {
             Authorization::Enforce => self.actor(),
@@ -289,7 +322,8 @@ impl<D: crate::data_layer::DataLayer + 'static> Context<D> {
     }
 }
 
-impl<D: SchemaSupport> Context<D> {
+impl<D: SchemaSupport> Runtime<D> {
+    /// Install startup schemas and resource SQL statements with server-owned authority.
     pub async fn install(&self, resources: &[&ResourceDef]) -> Result<()> {
         self.data.install_resources(resources).await
     }
@@ -396,6 +430,7 @@ impl<D: TransactionSupport> Runtime<D> {
     {
         let notifiers = self.notifiers.clone();
         let system = self.system;
+        let authority = Arc::clone(&self.authority);
         let cursor_key = Arc::clone(&self.cursor_key);
         let created_queue = self.notification_queue.is_none();
         let queue = self.notification_queue.clone().unwrap_or_default();
@@ -405,6 +440,7 @@ impl<D: TransactionSupport> Runtime<D> {
             .transaction(move |data| {
                 f(Runtime {
                     data: Arc::new(data.clone()),
+                    authority,
                     system,
                     cursor_key,
                     notifiers,

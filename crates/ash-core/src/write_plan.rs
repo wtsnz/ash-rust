@@ -7,11 +7,15 @@ use crate::{ActionDef, Context, Error, FieldMap, Filter, IdentityDef, ResourceDe
 /// the plan but cannot replace its resource, tenant, conflict guard or changed columns.
 /// A conflict that fails `conflict_filter` must return [`Error::NotFound`] without a row.
 ///
-/// ```compile_fail
-/// use ash_core::UpsertPlan;
-/// let plan = UpsertPlan { conflict_filter: ash_core::Filter::True };
+/// ```compile_fail,E0624
+/// fn forge(ctx: &ash_core::Context<()>, resource: &ash_core::ResourceDef,
+///          action: &ash_core::ActionDef, identity: &ash_core::IdentityDef) {
+///     let _ = ash_core::UpsertPlan::build(ctx, resource, action, identity,
+///         ash_core::FieldMap::new(), &[]);
+/// }
 /// ```
 pub struct UpsertPlan<'a> {
+    scope: crate::PlanScope,
     resource: &'a ResourceDef,
     identity: &'a IdentityDef,
     tenant: Option<String>,
@@ -37,6 +41,7 @@ impl<'a> UpsertPlan<'a> {
             None => policy,
         };
         let mut plan = Self::scoped(
+            ctx,
             resource,
             ctx.tenant(),
             fields,
@@ -53,7 +58,8 @@ impl<'a> UpsertPlan<'a> {
         Ok(plan)
     }
 
-    pub(crate) fn scoped(
+    fn scoped<D>(
+        ctx: &Context<D>,
         resource: &'a ResourceDef,
         tenant: Option<&str>,
         mut fields: FieldMap,
@@ -87,6 +93,7 @@ impl<'a> UpsertPlan<'a> {
         }
         let id = crate::pipeline::new_pk(resource, &fields)?;
         Ok(Self {
+            scope: crate::PlanScope::new(ctx),
             resource,
             identity,
             tenant,
@@ -97,6 +104,9 @@ impl<'a> UpsertPlan<'a> {
         })
     }
 
+    pub fn scope(&self) -> &crate::PlanScope {
+        &self.scope
+    }
     pub fn resource(&self) -> &ResourceDef {
         self.resource
     }

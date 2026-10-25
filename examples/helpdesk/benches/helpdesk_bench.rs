@@ -37,7 +37,7 @@ fn bench_actions(c: &mut Criterion) {
             let db = Sqlite::memory().await.unwrap();
             let d_runtime = ash_core::Runtime::new(db);
             let d = Helpdesk::from_context(d_runtime.bootstrap());
-            d.install().await.unwrap();
+            Helpdesk::install(&d_runtime).await.unwrap();
             (d_runtime, d)
         });
         let customer =
@@ -83,7 +83,7 @@ fn bench_queries(c: &mut Criterion) {
         let db = Sqlite::memory().await.unwrap();
         let d_runtime = ash_core::Runtime::new(db);
         let d = Helpdesk::from_context(d_runtime.bootstrap());
-        d.install().await.unwrap();
+        Helpdesk::install(&d_runtime).await.unwrap();
         let cust =
             Helpdesk::from_context(d_runtime.bind(Some(actor_customer(Uuid::new_v4())), None));
         for i in 1..=100 {
@@ -151,7 +151,7 @@ fn bench_aggregates(c: &mut Criterion) {
         let db = Sqlite::memory().await.unwrap();
         let d_runtime = ash_core::Runtime::new(db);
         let d = Helpdesk::from_context(d_runtime.bootstrap());
-        d.install().await.unwrap();
+        Helpdesk::install(&d_runtime).await.unwrap();
         (d_runtime, d)
     });
     let rep_id_sql = Uuid::new_v4();

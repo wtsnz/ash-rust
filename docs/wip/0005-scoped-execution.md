@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1 through 7 in review; step 7b implemented, pending review; the rest planned. See §5.
+- **Status**: Proposed. Steps 1 through 7b in review; step 8 implemented, pending review; the rest planned. See §5.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -86,13 +86,13 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | Cross-tenant lookup grant | — | Planned. Until it lands, apps that log in by email across tenants (such as the Lagrange example) ask for the tenant first |
 | System capabilities declared by action hooks | — | Planned |
 | `ClientExpr`/`TrustedExpr`, destination and join traversal scopes, Runtime-sealed cursors, snapshot filter registration checks | 3 | In review (#89). See [Client read plans](../client-read-plans.md) |
-| Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | In review (#88). Typed APIs return projected resource structs; raw data-layer transport remains until step 8 |
+| Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | In review (#88). Typed APIs return projected resource structs; backend records remain adapter-to-core transport |
 | Derived-value visibility and `declassify` | 5 | In review (#90). Calculation dependencies and explicit policies; projected first/sum operands and client comparisons; declared custom inputs. See [Derived values](../scoped-access.md#derived-values) |
 | Core-owned upsert plans; tenant, write-policy and version guards on single/bulk conflicts; scoped returns; memory no-change semantics | 6 | In review (#91). See [Guarded upsert conflicts](../scoped-access.md#guarded-upsert-conflicts) |
-| Data-layer-specific trusted plan nodes | 7b | Implemented, pending review. Typed SQL fragments, transactional Postgres row locks and distinct reads. See [Trusted data-layer nodes](../trusted-data-layer-nodes.md) |
+| Data-layer-specific trusted plan nodes | 7b | In review (#93). Typed SQL fragments, transactional Postgres row locks and distinct reads. See [Trusted data-layer nodes](../trusted-data-layer-nodes.md) |
 | Managed relationships through scoped destination and join actions; scoped cascade discovery; required transactions and memory snapshot commits | 7 | In review (#92). See [Managed relationships and cascades](../scoped-access.md#managed-relationships-and-cascades) |
-| Delete raw data-layer access (bypasses become compile errors) | 8 | Planned |
+| Delete raw data-layer access; opaque scope-bound plans for every execution operation; Runtime-owned schema installation | 8 | Implemented, pending review |
 | Private events; scoped subscriptions, with deduplicated groups keyed on a bound `Scope` | 9 | Planned |
 | Durable, atomic session state | 10 | Planned |
 
-Until step 8, raw data-layer access (`Context::data` and `ash_core::insert`) still exists, deprecated, so the guarantees are conventions that migrated code follows. Step 8 removes it.
+Step 8 makes `Context` backend storage private and removes `ash_core::insert`, raw upserts and their compiler compatibility method. Every data-layer execution operation now requires an opaque core-built plan carrying its bound scope. Schema installation requires Runtime authority; request contexts cannot execute resource SQL statements. Extensions submit identity-free read requests and receive Views. Applications can keep their own database pool for reporting and migrations, outside these guarantees. Events/subscriptions and session durability remain steps 9 and 10.

@@ -361,8 +361,9 @@ mod test_sqlite_hooks {
     #[tokio::test]
     async fn test_sqlite_action_hooks() {
         let sqlite = Sqlite::memory().await.unwrap();
-        let ctx = ash_core::Runtime::new(sqlite).bootstrap();
-        ctx.install(&[&SqliteEntity::DEF]).await.unwrap();
+        let schema_runtime = ash_core::Runtime::new(sqlite);
+        let ctx = schema_runtime.bootstrap();
+        schema_runtime.install(&[&SqliteEntity::DEF]).await.unwrap();
 
         let entity = SqliteEntity::create(&ctx).name("widget").await.unwrap();
 

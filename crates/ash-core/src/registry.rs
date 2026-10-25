@@ -4,236 +4,152 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::data_layer::{CompiledQuery, DataLayer, SchemaSupport, TransactionSupport};
+use crate::data_layer::{DataLayer, SchemaSupport, TransactionSupport};
 use crate::error::{Error, Result};
 use crate::resource::{DataLayerKind, Resource, ResourceDef};
 use crate::store::{HasStore, StoreTag};
-use crate::value::{FieldMap, Value};
+use crate::value::FieldMap;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Type-erased object-safe interface for any [`DataLayer`].
+///
+/// ```compile_fail
+/// async fn raw(layer: &dyn ash_core::DynDataLayer, resource: &ash_core::ResourceDef) {
+///     layer.run_query_dyn(resource, &ash_core::CompiledQuery::default()).await;
+/// }
+/// ```
 pub trait DynDataLayer: Send + Sync {
-    fn create_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> BoxFuture<'a, Result<FieldMap>>;
-
-    fn update_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> BoxFuture<'a, Result<FieldMap>>;
-
-    fn destroy_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-    ) -> BoxFuture<'a, Result<()>>;
-
+    fn create_dyn<'a>(&'a self, plan: &'a crate::CreatePlan<'a>)
+    -> BoxFuture<'a, Result<FieldMap>>;
+    fn update_dyn<'a>(&'a self, plan: &'a crate::UpdatePlan<'a>)
+    -> BoxFuture<'a, Result<FieldMap>>;
+    fn destroy_dyn<'a>(&'a self, plan: &'a crate::DestroyPlan<'a>) -> BoxFuture<'a, Result<()>>;
     fn run_query_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
+        plan: &'a crate::QueryPlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
-
-    fn count_dyn<'a>(
+    fn count_dyn<'a>(&'a self, plan: &'a crate::CountPlan<'a>) -> BoxFuture<'a, Result<usize>>;
+    fn run_query_with_count_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-    ) -> BoxFuture<'a, Result<usize>>;
-
-    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool;
-
-    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool;
-
-    fn update_atomic_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-        update: &'a crate::atomic::AtomicUpdate,
-    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
-
-    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool;
-
-    fn can_run_query_per_key_dyn(
-        &self,
-        resource: &ResourceDef,
-        by: &crate::data_layer::PerKey<'_>,
-    ) -> bool;
-
+        plan: &'a crate::QueryWithCountPlan<'a>,
+    ) -> BoxFuture<'a, Result<(Vec<FieldMap>, usize)>>;
     fn run_query_per_key_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-        by: &'a crate::data_layer::PerKey<'a>,
-        keys: &'a [Value],
+        plan: &'a crate::PerKeyPlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<Vec<FieldMap>>>>;
-
+    fn update_atomic_dyn<'a>(
+        &'a self,
+        plan: &'a crate::AtomicUpdatePlan<'a>,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
     fn destroy_atomic_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-        conditions: &'a [crate::atomic::AtomicCondition],
+        plan: &'a crate::AtomicDestroyPlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
-
-    fn upsert_dyn<'a>(&'a self, plan: &'a crate::UpsertPlan<'a>)
-    -> BoxFuture<'a, Result<FieldMap>>;
-
     fn bulk_create_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        rows: Vec<(Value, FieldMap)>,
+        plan: &'a crate::BulkCreatePlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>>;
-
-    fn bulk_destroy_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        ids: &'a [Value],
-    ) -> BoxFuture<'a, Result<()>>;
-
     fn bulk_update_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        rows: Vec<(Value, FieldMap)>,
+        plan: &'a crate::BulkUpdatePlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>>;
+    fn bulk_destroy_dyn<'a>(
+        &'a self,
+        plan: &'a crate::BulkDestroyPlan<'a>,
+    ) -> BoxFuture<'a, Result<()>>;
+    fn upsert_dyn<'a>(&'a self, plan: &'a crate::UpsertPlan<'a>)
+    -> BoxFuture<'a, Result<FieldMap>>;
+    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool;
+    fn can_run_query_per_key_dyn(&self, resource: &ResourceDef, by: &crate::PerKey<'_>) -> bool;
 }
 
 impl<T: DataLayer> DynDataLayer for T {
     fn create_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-        fields: FieldMap,
+        plan: &'a crate::CreatePlan<'a>,
     ) -> BoxFuture<'a, Result<FieldMap>> {
-        Box::pin(self.create(resource, tenant, id, fields))
+        Box::pin(self.create(plan))
     }
-
     fn update_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-        fields: FieldMap,
+        plan: &'a crate::UpdatePlan<'a>,
     ) -> BoxFuture<'a, Result<FieldMap>> {
-        Box::pin(self.update(resource, tenant, id, fields))
+        Box::pin(self.update(plan))
     }
-
-    fn destroy_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        id: Value,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.destroy(resource, tenant, id))
+    fn destroy_dyn<'a>(&'a self, plan: &'a crate::DestroyPlan<'a>) -> BoxFuture<'a, Result<()>> {
+        Box::pin(self.destroy(plan))
     }
-
     fn run_query_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
+        plan: &'a crate::QueryPlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
-        Box::pin(self.run_query(resource, query))
+        Box::pin(self.run_query(plan))
     }
-
-    fn count_dyn<'a>(
+    fn count_dyn<'a>(&'a self, plan: &'a crate::CountPlan<'a>) -> BoxFuture<'a, Result<usize>> {
+        Box::pin(self.count(plan))
+    }
+    fn run_query_with_count_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-    ) -> BoxFuture<'a, Result<usize>> {
-        Box::pin(self.count(resource, query))
+        plan: &'a crate::QueryWithCountPlan<'a>,
+    ) -> BoxFuture<'a, Result<(Vec<FieldMap>, usize)>> {
+        Box::pin(self.run_query_with_count(plan))
     }
-
-    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool {
-        self.can_update_atomically(resource)
-    }
-
-    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool {
-        self.can_raise_atomically(resource)
-    }
-
-    fn update_atomic_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-        update: &'a crate::atomic::AtomicUpdate,
-    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
-        Box::pin(self.update_atomic(resource, query, update))
-    }
-
-    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool {
-        self.can_destroy_atomically(resource)
-    }
-
-    fn can_run_query_per_key_dyn(
-        &self,
-        resource: &ResourceDef,
-        by: &crate::data_layer::PerKey<'_>,
-    ) -> bool {
-        self.can_run_query_per_key(resource, by)
-    }
-
     fn run_query_per_key_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-        by: &'a crate::data_layer::PerKey<'a>,
-        keys: &'a [Value],
+        plan: &'a crate::PerKeyPlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<Vec<FieldMap>>>> {
-        Box::pin(self.run_query_per_key(resource, query, by, keys))
+        Box::pin(self.run_query_per_key(plan))
     }
-
+    fn update_atomic_dyn<'a>(
+        &'a self,
+        plan: &'a crate::AtomicUpdatePlan<'a>,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.update_atomic(plan))
+    }
     fn destroy_atomic_dyn<'a>(
         &'a self,
-        resource: &'a ResourceDef,
-        query: &'a CompiledQuery,
-        conditions: &'a [crate::atomic::AtomicCondition],
+        plan: &'a crate::AtomicDestroyPlan<'a>,
     ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
-        Box::pin(self.destroy_atomic(resource, query, conditions))
+        Box::pin(self.destroy_atomic(plan))
     }
-
+    fn bulk_create_dyn<'a>(
+        &'a self,
+        plan: &'a crate::BulkCreatePlan<'a>,
+    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
+        Box::pin(self.bulk_create(plan))
+    }
+    fn bulk_update_dyn<'a>(
+        &'a self,
+        plan: &'a crate::BulkUpdatePlan<'a>,
+    ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>> {
+        Box::pin(self.bulk_update(plan))
+    }
+    fn bulk_destroy_dyn<'a>(
+        &'a self,
+        plan: &'a crate::BulkDestroyPlan<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(self.bulk_destroy(plan))
+    }
     fn upsert_dyn<'a>(
         &'a self,
         plan: &'a crate::UpsertPlan<'a>,
     ) -> BoxFuture<'a, Result<FieldMap>> {
         Box::pin(self.upsert(plan))
     }
-
-    fn bulk_create_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        rows: Vec<(Value, FieldMap)>,
-    ) -> BoxFuture<'a, Result<Vec<FieldMap>>> {
-        Box::pin(self.bulk_create(resource, tenant, rows))
+    fn can_update_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_update_atomically(resource)
     }
-
-    fn bulk_destroy_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        ids: &'a [Value],
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.bulk_destroy(resource, tenant, ids))
+    fn can_raise_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_raise_atomically(resource)
     }
-
-    fn bulk_update_dyn<'a>(
-        &'a self,
-        resource: &'a ResourceDef,
-        tenant: Option<&'a str>,
-        rows: Vec<(Value, FieldMap)>,
-    ) -> BoxFuture<'a, Result<Vec<Result<FieldMap>>>> {
-        Box::pin(self.bulk_update(resource, tenant, rows))
+    fn can_destroy_atomically_dyn(&self, resource: &ResourceDef) -> bool {
+        self.can_destroy_atomically(resource)
+    }
+    fn can_run_query_per_key_dyn(&self, resource: &ResourceDef, by: &crate::PerKey<'_>) -> bool {
+        self.can_run_query_per_key(resource, by)
     }
 }
 
@@ -375,72 +291,70 @@ impl std::fmt::Debug for StoreRegistry {
 }
 
 impl DataLayer for StoreRegistry {
-    async fn create(
+    async fn create(&self, plan: &crate::CreatePlan<'_>) -> Result<FieldMap> {
+        self.get_layer(plan.resource())?.create_dyn(plan).await
+    }
+    async fn update(&self, plan: &crate::UpdatePlan<'_>) -> Result<FieldMap> {
+        self.get_layer(plan.resource())?.update_dyn(plan).await
+    }
+    async fn destroy(&self, plan: &crate::DestroyPlan<'_>) -> Result<()> {
+        self.get_layer(plan.resource())?.destroy_dyn(plan).await
+    }
+    async fn run_query(&self, plan: &crate::QueryPlan<'_>) -> Result<Vec<FieldMap>> {
+        self.get_layer(plan.resource())?.run_query_dyn(plan).await
+    }
+    async fn count(&self, plan: &crate::CountPlan<'_>) -> Result<usize> {
+        self.get_layer(plan.resource())?.count_dyn(plan).await
+    }
+    async fn run_query_with_count(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        let layer = self.get_layer(resource)?;
-        layer.create_dyn(resource, tenant, id, fields).await
+        plan: &crate::QueryWithCountPlan<'_>,
+    ) -> Result<(Vec<FieldMap>, usize)> {
+        self.get_layer(plan.resource())?
+            .run_query_with_count_dyn(plan)
+            .await
     }
-
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
-        let layer = self.get_layer(resource)?;
-        layer.update_dyn(resource, tenant, id, fields).await
+    async fn run_query_per_key(&self, plan: &crate::PerKeyPlan<'_>) -> Result<Vec<Vec<FieldMap>>> {
+        self.get_layer(plan.resource())?
+            .run_query_per_key_dyn(plan)
+            .await
     }
-
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
-        let layer = self.get_layer(resource)?;
-        layer.destroy_dyn(resource, tenant, id).await
+    async fn update_atomic(&self, plan: &crate::AtomicUpdatePlan<'_>) -> Result<Vec<FieldMap>> {
+        self.get_layer(plan.resource())?
+            .update_atomic_dyn(plan)
+            .await
     }
-
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> Result<Vec<FieldMap>> {
-        let layer = self.get_layer(resource)?;
-        layer.run_query_dyn(resource, query).await
+    async fn destroy_atomic(&self, plan: &crate::AtomicDestroyPlan<'_>) -> Result<Vec<FieldMap>> {
+        self.get_layer(plan.resource())?
+            .destroy_atomic_dyn(plan)
+            .await
     }
-
-    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
-        let layer = self.get_layer(resource)?;
-        layer.count_dyn(resource, query).await
+    async fn bulk_create(&self, plan: &crate::BulkCreatePlan<'_>) -> Result<Vec<FieldMap>> {
+        self.get_layer(plan.resource())?.bulk_create_dyn(plan).await
     }
-
+    async fn bulk_update(&self, plan: &crate::BulkUpdatePlan<'_>) -> Result<Vec<Result<FieldMap>>> {
+        self.get_layer(plan.resource())?.bulk_update_dyn(plan).await
+    }
+    async fn bulk_destroy(&self, plan: &crate::BulkDestroyPlan<'_>) -> Result<()> {
+        self.get_layer(plan.resource())?
+            .bulk_destroy_dyn(plan)
+            .await
+    }
+    async fn upsert(&self, plan: &crate::UpsertPlan<'_>) -> Result<FieldMap> {
+        self.get_layer(plan.resource())?.upsert_dyn(plan).await
+    }
     fn can_update_atomically(&self, resource: &ResourceDef) -> bool {
         self.get_layer(resource)
             .is_ok_and(|layer| layer.can_update_atomically_dyn(resource))
     }
-
     fn can_raise_atomically(&self, resource: &ResourceDef) -> bool {
         self.get_layer(resource)
             .is_ok_and(|layer| layer.can_raise_atomically_dyn(resource))
     }
-
-    async fn update_atomic(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        update: &crate::atomic::AtomicUpdate,
-    ) -> Result<Vec<FieldMap>> {
-        let layer = self.get_layer(resource)?;
-        layer.update_atomic_dyn(resource, query, update).await
-    }
-
     fn can_destroy_atomically(&self, resource: &ResourceDef) -> bool {
         self.get_layer(resource)
             .is_ok_and(|layer| layer.can_destroy_atomically_dyn(resource))
     }
-
     /// A join resource in another store can't join in the same statement.
     fn can_run_query_per_key(
         &self,
@@ -460,62 +374,6 @@ impl DataLayer for StoreRegistry {
             }
         }
         layer.can_run_query_per_key_dyn(resource, by)
-    }
-
-    async fn run_query_per_key(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        by: &crate::data_layer::PerKey<'_>,
-        keys: &[Value],
-    ) -> Result<Vec<Vec<FieldMap>>> {
-        let layer = self.get_layer(resource)?;
-        layer.run_query_per_key_dyn(resource, query, by, keys).await
-    }
-
-    async fn destroy_atomic(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        conditions: &[crate::atomic::AtomicCondition],
-    ) -> Result<Vec<FieldMap>> {
-        let layer = self.get_layer(resource)?;
-        layer.destroy_atomic_dyn(resource, query, conditions).await
-    }
-
-    async fn upsert(&self, plan: &crate::UpsertPlan<'_>) -> Result<FieldMap> {
-        let layer = self.get_layer(plan.resource())?;
-        layer.upsert_dyn(plan).await
-    }
-
-    async fn bulk_create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
-    ) -> Result<Vec<FieldMap>> {
-        let layer = self.get_layer(resource)?;
-        layer.bulk_create_dyn(resource, tenant, rows).await
-    }
-
-    async fn bulk_destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        ids: &[Value],
-    ) -> Result<()> {
-        let layer = self.get_layer(resource)?;
-        layer.bulk_destroy_dyn(resource, tenant, ids).await
-    }
-
-    async fn bulk_update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
-    ) -> Result<Vec<Result<FieldMap>>> {
-        let layer = self.get_layer(resource)?;
-        layer.bulk_update_dyn(resource, tenant, rows).await
     }
 }
 

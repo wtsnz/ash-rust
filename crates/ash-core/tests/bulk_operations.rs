@@ -48,8 +48,9 @@ actions {
 
 async fn setup_sqlite() -> Context<Sqlite> {
     let sqlite = Sqlite::memory().await.unwrap();
-    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
-    ctx.install(&[&Product::DEF]).await.unwrap();
+    let schema_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = schema_runtime.bootstrap();
+    schema_runtime.install(&[&Product::DEF]).await.unwrap();
     ctx
 }
 

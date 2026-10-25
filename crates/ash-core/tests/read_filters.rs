@@ -2,6 +2,10 @@
 //! way in memory and SQL: in filters, aggregates, and many_to_many joins, on
 //! calculations, and without recursing when a read filter leads back to its resource.
 
+#[path = "support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use std::collections::HashMap;
 
 use ash_core::{
@@ -175,18 +179,23 @@ fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
 
-async fn insert<D: DataLayer>(data: &D, def: &ResourceDef, n: u128, values: &[(&str, Value)]) {
+async fn insert<D: DataLayer + Clone>(
+    data: &D,
+    def: &ResourceDef,
+    n: u128,
+    values: &[(&str, Value)],
+) {
     let mut fields = FieldMap::new();
     fields.insert("id".into(), Value::Uuid(id(n)));
     for (name, value) in values {
         fields.insert((*name).into(), value.clone());
     }
-    data.create(def, None, ash_core::Value::from(id(n)), fields)
+    data.fixture_create(def, None, ash_core::Value::from(id(n)), fields)
         .await
         .unwrap();
 }
 
-async fn seed<D: DataLayer>(data: &D) {
+async fn seed<D: DataLayer + Clone>(data: &D) {
     // Root has children A ("bad") and B ("ok"); B has child C ("bad").
     insert(data, &CATEGORY_DEF, 1, &[("name", "root".into())]).await;
     insert(
@@ -238,7 +247,7 @@ async fn seed<D: DataLayer>(data: &D) {
 }
 
 /// `(id, aggregate)` for each row the query returns, in id order.
-async fn run<D: DataLayer>(
+async fn run<D: DataLayer + Clone>(
     data: &D,
     def: &ResourceDef,
     filter: Option<Filter>,
@@ -252,7 +261,7 @@ async fn run<D: DataLayer>(
         ..CompiledQuery::default()
     };
     let mut rows: Vec<(u128, Option<Value>)> = data
-        .run_query(def, &query)
+        .fixture_run_query(def, &query)
         .await
         .unwrap()
         .into_iter()
@@ -270,7 +279,7 @@ async fn run<D: DataLayer>(
     rows
 }
 
-async fn scenario<D: DataLayer>(data: D) {
+async fn scenario<D: DataLayer + Clone>(data: D) {
     seed(&data).await;
     let none = HashMap::new;
 

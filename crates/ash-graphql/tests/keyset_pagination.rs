@@ -1,3 +1,7 @@
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use ash_core::{AttrType, AttributeDef, DataLayer, FieldMap, ResourceDef, Value};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -41,7 +45,7 @@ async fn seed_tickets(data: &Memory) {
         map.insert("id".into(), Value::Uuid(id));
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
-        data.create(&TICKET_DEF, None, Value::from(id), map)
+        data.fixture_create(&TICKET_DEF, None, Value::from(id), map)
             .await
             .unwrap();
     }
@@ -114,7 +118,7 @@ async fn a_list_without_first_pages_as_many_as_a_page_may_hold() {
         map.insert("title".into(), Value::String(format!("Ticket #{i}")));
         map.insert("priority".into(), Value::Int(i));
         memory
-            .create(&TICKET_DEF, None, Value::from(id), map)
+            .fixture_create(&TICKET_DEF, None, Value::from(id), map)
             .await
             .unwrap();
     }
@@ -207,49 +211,24 @@ impl Slow {
 }
 
 impl DataLayer for Slow {
-    async fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-    ) -> ash_core::Result<FieldMap> {
-        self.inner.create(resource, tenant, id, fields).await
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> ash_core::Result<FieldMap> {
+        self.inner.create(plan).await
     }
 
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-    ) -> ash_core::Result<FieldMap> {
-        self.inner.update(resource, tenant, id, fields).await
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> ash_core::Result<FieldMap> {
+        self.inner.update(plan).await
     }
 
-    async fn destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: ash_core::Value,
-    ) -> ash_core::Result<()> {
-        self.inner.destroy(resource, tenant, id).await
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> ash_core::Result<()> {
+        self.inner.destroy(plan).await
     }
 
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &ash_core::CompiledQuery,
-    ) -> ash_core::Result<Vec<FieldMap>> {
-        self.read(self.inner.run_query(resource, query)).await
+    async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> ash_core::Result<Vec<FieldMap>> {
+        self.read(self.inner.run_query(plan)).await
     }
 
-    async fn count(
-        &self,
-        resource: &ResourceDef,
-        query: &ash_core::CompiledQuery,
-    ) -> ash_core::Result<usize> {
-        self.read(self.inner.count(resource, query)).await
+    async fn count(&self, plan: &ash_core::CountPlan<'_>) -> ash_core::Result<usize> {
+        self.read(self.inner.count(plan)).await
     }
 }
 

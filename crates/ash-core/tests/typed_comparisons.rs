@@ -1,6 +1,8 @@
-use ash_core::{
-    CompiledQuery, DataLayer, Error, FieldMap, Filter, Resource, Sort, Value, resource,
-};
+#[path = "support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
+use ash_core::{CompiledQuery, Error, FieldMap, Filter, Resource, Sort, Value, resource};
 use ash_memory::Memory;
 use uuid::Uuid;
 
@@ -42,7 +44,7 @@ async fn ids(memory: &Memory, filter: Option<Filter>, sort: Vec<Sort>) -> Vec<u1
         ..Default::default()
     };
     memory
-        .run_query(&Reading::DEF, &query)
+        .fixture_run_query(&Reading::DEF, &query)
         .await
         .unwrap()
         .iter()
@@ -63,7 +65,7 @@ async fn memory_compares_like_the_column_type() {
     ] {
         let (id, fields) = row(n, weight, amount, email);
         memory
-            .create(&Reading::DEF, None, ash_core::Value::from(id), fields)
+            .fixture_create(&Reading::DEF, None, ash_core::Value::from(id), fields)
             .await
             .unwrap();
     }
@@ -109,7 +111,7 @@ async fn memory_compares_like_the_column_type() {
 
     let (id, duplicate) = row(4, "1", "0", "ADA@example.COM");
     let result = memory
-        .create(&Reading::DEF, None, ash_core::Value::from(id), duplicate)
+        .fixture_create(&Reading::DEF, None, ash_core::Value::from(id), duplicate)
         .await;
     assert!(
         matches!(result, Err(Error::IdentityConflict { .. })),
@@ -141,8 +143,7 @@ mod host {
 use host::Host;
 
 #[tokio::test]
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
+
 async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
     use ash_core::Changeset;
 
@@ -161,9 +162,7 @@ async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
         "[1,2.5]"
     );
 
-    let stored = ctx
-        .data
-        .run_query(&Host::DEF, &CompiledQuery::default())
+    let stored = scoped_fixtures::stored(&ctx, &Host::DEF, &CompiledQuery::default())
         .await
         .unwrap();
     assert_eq!(
@@ -183,7 +182,9 @@ async fn untyped_writes_store_canonical_text_and_filters_match_any_spelling() {
             filter: Some(filter.clone()),
             ..Default::default()
         };
-        let found = ctx.data.run_query(&Host::DEF, &query).await.unwrap();
+        let found = scoped_fixtures::stored(&ctx, &Host::DEF, &query)
+            .await
+            .unwrap();
         assert_eq!(found.len(), 1, "{filter:?}");
     }
 }

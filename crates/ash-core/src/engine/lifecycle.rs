@@ -302,7 +302,8 @@ async fn read_visible<D: DataLayer>(
         })
         .transpose()?;
     ctx.raw_data()
-        .run_query(
+        .run_query(&crate::QueryPlan::new(
+            ctx,
             resource,
             &CompiledQuery {
                 filter,
@@ -310,7 +311,7 @@ async fn read_visible<D: DataLayer>(
                 actor: ctx.authorization_actor().cloned(),
                 ..CompiledQuery::default()
             },
-        )
+        ))
         .await?
         .into_iter()
         .next()
@@ -444,16 +445,4 @@ where
     let stored = persist(ctx, record).await?.into_fields();
     let id = crate::value::required_pk(&stored, pk_name(&R::DEF)?)?;
     changeset.finish(ctx, id, stored, true).await?.into_record()
-}
-
-/// Data-layer insert with no action pipeline. Manual persist uses this to also store locally.
-#[deprecated(note = "raw insert bypasses action policies; use a Runtime-bound create action")]
-pub async fn insert<R: Resource, D: DataLayer>(ctx: &Context<D>, record: &R) -> Result<R> {
-    let fields = record.to_fields();
-    let id = crate::pipeline::new_pk(&R::DEF, &fields)?;
-    let stored = ctx
-        .raw_data()
-        .create(&R::DEF, ctx.tenant(), id, fields)
-        .await?;
-    ctx.present(&R::DEF, stored.into(), None)?.into_record()
 }

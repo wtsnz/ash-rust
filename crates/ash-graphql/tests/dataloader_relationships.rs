@@ -1,6 +1,10 @@
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use ash_core::{
-    AttrType, AttributeDef, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind, RelationshipDef,
-    ResourceDef, Value,
+    AttrType, AttributeDef, FieldMap, OnDelete, OnUpdate, RelKind, RelationshipDef, ResourceDef,
+    Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -101,7 +105,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
     let mut a1 = FieldMap::new();
     a1.insert("id".into(), Value::Uuid(author1_id));
     a1.insert("name".into(), Value::String("Alice".into()));
-    data.create(&AUTHOR_DEF, None, Value::from(author1_id), a1)
+    data.fixture_create(&AUTHOR_DEF, None, Value::from(author1_id), a1)
         .await
         .unwrap();
 
@@ -109,7 +113,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
     let mut a2 = FieldMap::new();
     a2.insert("id".into(), Value::Uuid(author2_id));
     a2.insert("name".into(), Value::String("Bob".into()));
-    data.create(&AUTHOR_DEF, None, Value::from(author2_id), a2)
+    data.fixture_create(&AUTHOR_DEF, None, Value::from(author2_id), a2)
         .await
         .unwrap();
 
@@ -120,7 +124,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Alice Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author1_id));
-        data.create(&POST_DEF, None, Value::from(p_id), p)
+        data.fixture_create(&POST_DEF, None, Value::from(p_id), p)
             .await
             .unwrap();
     }
@@ -132,7 +136,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid) {
         p.insert("id".into(), Value::Uuid(p_id));
         p.insert("title".into(), Value::String(format!("Bob Post #{i}")));
         p.insert("author_id".into(), Value::Uuid(author2_id));
-        data.create(&POST_DEF, None, Value::from(p_id), p)
+        data.fixture_create(&POST_DEF, None, Value::from(p_id), p)
             .await
             .unwrap();
     }

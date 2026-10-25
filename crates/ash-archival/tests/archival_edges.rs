@@ -2,6 +2,9 @@
 //! field policies, cycles, hard deletes of archival children, and writes that must not
 //! reach archived records.
 
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+
 use std::sync::{Arc, Mutex};
 
 use ash_archival::archival;
@@ -188,14 +191,11 @@ pub mod card_mod {
 }
 use card_mod::Card;
 
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
 async fn stored<D: DataLayer>(
     ctx: &Context<D>,
     resource: &ash_core::ResourceDef,
 ) -> Vec<ash_core::FieldMap> {
-    ctx.data
-        .run_query(resource, &CompiledQuery::default())
+    scoped_fixtures::stored(ctx, resource, &CompiledQuery::default())
         .await
         .unwrap()
 }
@@ -216,8 +216,6 @@ async fn sqlite() -> Sqlite {
     sqlite
 }
 
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
 async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>) {
     let ledger = Ledger::create(&ctx).name("Main").await.unwrap();
     // Timestamps have one-second resolution, so start from an old one.
@@ -226,8 +224,7 @@ async fn soft_destroy_bumps_version_and_updated_at<D: DataLayer>(ctx: Context<D>
         "updated_at".into(),
         Value::String("2000-01-01T00:00:00Z".into()),
     );
-    ctx.data
-        .update(&Ledger::DEF, None, Value::from(ledger.id), old)
+    scoped_fixtures::update(&ctx, &Ledger::DEF, Value::from(ledger.id), old)
         .await
         .unwrap();
 

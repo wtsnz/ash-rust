@@ -140,7 +140,7 @@ async fn domain_install_with_schema_support() {
     let desk = Helpdesk::from_context(desk_runtime.bootstrap());
 
     // Installs all domain resources at once via SchemaSupport
-    desk.install().await.unwrap();
+    Helpdesk::install(&desk_runtime).await.unwrap();
 
     let rep = desk.create_representative("Dave").await.unwrap();
     assert_eq!(rep.name, "Dave");

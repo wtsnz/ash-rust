@@ -1,6 +1,3 @@
-// Raw writes and engine queries migrate to executable plans in later steps.
-#![allow(deprecated)]
-
 use std::sync::Arc;
 
 use ash_core::Result as CoreResult;
@@ -25,6 +22,7 @@ use crate::token_store::DatabaseTokenStore;
 pub struct AuthStrategy<R: Resource> {
     resource_def: &'static ResourceDef,
     credential_read: CredentialReadPermit,
+    credential_write: ash_core::CredentialWritePermit,
     password_service: PasswordService,
     api_key_service: ApiKeyService,
     jwt_service: Option<JwtService>,
@@ -37,9 +35,17 @@ impl<R: Resource> AuthStrategy<R> {
     pub fn new<D>(runtime: &ash_core::Runtime<D>) -> Self {
         let resource_def = &R::DEF;
         let credential_read = runtime.credential_reads::<R>();
+        let fields = R::DEF
+            .extensions
+            .iter()
+            .find_map(|extension| extension.as_any().downcast_ref::<AuthenticationDef>())
+            .and_then(|auth| auth.password.as_ref())
+            .map(|password| password.hashed_password_field);
+        let credential_write = runtime.credential_writes::<R>(fields);
         Self {
             resource_def,
             credential_read,
+            credential_write,
             password_service: PasswordService::new(),
             api_key_service: ApiKeyService::default(),
             jwt_service: None,
@@ -381,17 +387,12 @@ impl<R: Resource> AuthStrategy<R> {
         );
 
         let updated_raw = ctx
-            .data
-            .update(
-                self.resource_def,
-                ctx.tenant(),
-                user_id.into(),
-                update_fields,
-            )
+            .access()
+            .update_credentials(&self.credential_write, user_id.into(), update_fields)
             .await
             .map_err(AuthError::Core)?;
 
-        let updated_user = R::from_fields(&updated_raw).map_err(AuthError::Core)?;
+        let updated_user = R::from_fields(updated_raw.fields()).map_err(AuthError::Core)?;
 
         // 6. Revoke active refresh tokens for this subject
         let token_store = DatabaseTokenStore::new(ctx.clone());
@@ -502,17 +503,12 @@ impl<R: Resource> AuthStrategy<R> {
         );
 
         let updated_raw = ctx
-            .data
-            .update(
-                self.resource_def,
-                ctx.tenant(),
-                claims.sub.into(),
-                update_fields,
-            )
+            .access()
+            .update_credentials(&self.credential_write, claims.sub.into(), update_fields)
             .await
             .map_err(AuthError::Core)?;
 
-        let updated_user = R::from_fields(&updated_raw).map_err(AuthError::Core)?;
+        let updated_user = R::from_fields(updated_raw.fields()).map_err(AuthError::Core)?;
 
         // 6. Invalidate the single-use reset token
         valid_token.revoke_on(ctx).await.map_err(AuthError::Core)?;

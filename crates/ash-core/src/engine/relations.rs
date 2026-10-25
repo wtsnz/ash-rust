@@ -349,7 +349,12 @@ pub async fn count_related_query<D: DataLayer>(
                 let mut read = base.clone();
                 let link = rel.destination_filter(source).expect("a present key links");
                 read.filter = Some(Filter::and(read.filter.take().into_iter().chain([link])));
-                counts.insert(key, ctx.raw_data().count(dest, &read).await?);
+                counts.insert(
+                    key,
+                    ctx.raw_data()
+                        .count(&crate::CountPlan::new(ctx, dest, &read))
+                        .await?,
+                );
             }
             Ok(keys
                 .into_iter()
@@ -421,7 +426,12 @@ pub async fn count_related_query<D: DataLayer>(
                     ids.iter().cloned().collect(),
                 );
                 read.filter = Some(Filter::and(read.filter.take().into_iter().chain([among])));
-                counts.insert(source_id.clone(), ctx.raw_data().count(dest, &read).await?);
+                counts.insert(
+                    source_id.clone(),
+                    ctx.raw_data()
+                        .count(&crate::CountPlan::new(ctx, dest, &read))
+                        .await?,
+                );
             }
             Ok(keys
                 .into_iter()
@@ -484,7 +494,7 @@ async fn read_per_key<D: DataLayer>(
     }
     let per_key = ctx
         .raw_data()
-        .run_query_per_key(dest, read, by, keys)
+        .run_query_per_key(&crate::PerKeyPlan::new(ctx, dest, read, *by, keys))
         .await?;
     Ok(per_key)
 }
@@ -581,6 +591,9 @@ async fn read_batch<D: DataLayer>(
         Some(filter) => Filter::and([by_key, filter]),
         None => by_key,
     });
-    related.rows = ctx.raw_data().run_query(dest, &read).await?;
+    related.rows = ctx
+        .raw_data()
+        .run_query(&crate::QueryPlan::new(ctx, dest, &read))
+        .await?;
     Ok(related)
 }

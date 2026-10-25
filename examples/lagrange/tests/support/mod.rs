@@ -64,8 +64,7 @@ impl<D: FleetDb> Harness<D> {
 /// A telemetry database, created in memory.
 pub async fn telemetry() -> Sqlite {
     let telemetry = Sqlite::memory().await.unwrap();
-    lagrange::Telemetry::new(telemetry.clone())
-        .install()
+    lagrange::Telemetry::install(&ash_core::Runtime::new(telemetry.clone()))
         .await
         .unwrap();
     telemetry
