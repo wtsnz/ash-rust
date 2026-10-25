@@ -1,5 +1,5 @@
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, Context, DataLayer, FieldMap, OnDelete, OnUpdate, RelKind,
+    ActionDef, AttrType, AttributeDef, Context, FieldMap, OnDelete, OnUpdate, RelKind,
     RelationshipDef, ResourceDef, Value,
 };
 use ash_graphql::AshGraphQL;
@@ -35,7 +35,7 @@ static USER_ACTIONS: &[ActionDef] = &[
     ActionDef::read("read").primary(),
     ActionDef::create("create")
         .primary()
-        .accept(&["name", "email"]),
+        .accept(&["id", "name", "email"]),
 ];
 
 static USER_DEF: ResourceDef = ResourceDef {
@@ -95,7 +95,7 @@ static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::read("read").primary(),
     ActionDef::create("open")
         .primary()
-        .accept(&["title", "status", "priority", "author_id"]),
+        .accept(&["id", "title", "status", "priority", "author_id"]),
 ];
 
 static TICKET_DEF: ResourceDef = ResourceDef {
@@ -178,7 +178,7 @@ async fn setup_memory_benchmark_data(
     Vec<Uuid>,
     async_graphql::dynamic::Schema,
 ) {
-    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
+    let ctx = ash_core::Runtime::new(mem.clone()).system().bootstrap();
     let mut author_ids = Vec::new();
 
     // Create 5 authors
@@ -191,7 +191,7 @@ async fn setup_memory_benchmark_data(
             "email".into(),
             Value::String(format!("engineer{i}@example.com")),
         );
-        mem.create(&USER_DEF, None, Value::from(author_id), u)
+        ash_core::create_dynamic(&ctx, &USER_DEF, USER_DEF.action("create").unwrap(), u)
             .await
             .unwrap();
         author_ids.push(author_id);
@@ -219,7 +219,7 @@ async fn setup_memory_benchmark_data(
         t.insert("priority".into(), Value::Int(priority));
         t.insert("author_id".into(), Value::Uuid(author_id));
 
-        mem.create(&TICKET_DEF, None, Value::from(t_id), t)
+        ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), t)
             .await
             .unwrap();
     }
@@ -433,6 +433,7 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
     // Setup SQLite
     let (_sqlite_ctx, sqlite_schema) = rt.block_on(async {
         let db = Sqlite::memory().await.unwrap();
+        let sqlite_seed = ash_core::Runtime::new(db.clone()).system().bootstrap();
         db.install(&[&SQLITE_USER_DEF, &SQLITE_TICKET_DEF])
             .await
             .unwrap();
@@ -442,9 +443,14 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
         u.insert("id".into(), Value::Uuid(author_id));
         u.insert("name".into(), Value::String("SQLite Engineer".into()));
         u.insert("email".into(), Value::String("sqlite@example.com".into()));
-        db.create(&SQLITE_USER_DEF, None, Value::from(author_id), u)
-            .await
-            .unwrap();
+        ash_core::create_dynamic(
+            &sqlite_seed,
+            &SQLITE_USER_DEF,
+            SQLITE_USER_DEF.action("create").unwrap(),
+            u,
+        )
+        .await
+        .unwrap();
 
         for i in 1..=100 {
             let t_id = Uuid::new_v4();
@@ -454,9 +460,14 @@ fn bench_sqlite_vs_memory(c: &mut Criterion) {
             t.insert("status".into(), Value::String("OPEN".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("author_id".into(), Value::Uuid(author_id));
-            db.create(&SQLITE_TICKET_DEF, None, Value::from(t_id), t)
-                .await
-                .unwrap();
+            ash_core::create_dynamic(
+                &sqlite_seed,
+                &SQLITE_TICKET_DEF,
+                SQLITE_TICKET_DEF.action("open").unwrap(),
+                t,
+            )
+            .await
+            .unwrap();
         }
 
         let ctx = ash_core::Runtime::new(db).bootstrap();

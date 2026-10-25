@@ -3,9 +3,12 @@
 //! orders records by values the actor can't see; and keyset pages walk nullable sorts,
 //! nulls last ascending and first descending unless a sort places them otherwise.
 
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+
 use ash_core::{
     Actor, CompiledQuery, DataLayer, FieldMap, Filter, Resource, Sort, Value, build_keyset_filter,
-    guard_input_filter, guard_input_sort, keyset_sort, redact_fields,
+    guard_input_filter, guard_input_sort, keyset_sort,
 };
 use ash_memory::Memory;
 use ash_postgres::Postgres;
@@ -61,17 +64,34 @@ fn sort(field: &str, descending: bool) -> Sort {
 }
 
 /// The notes `query` reads, as `actor` may see them.
-async fn read<D: DataLayer>(data: &D, actor: &Actor, query: CompiledQuery) -> Vec<FieldMap> {
-    let mut rows = data.run_query(&Note::DEF, &query).await.unwrap();
-    for row in &mut rows {
-        redact_fields(&Note::DEF, Some(actor), row).unwrap();
-    }
-    rows
+async fn read<D: DataLayer + Clone>(
+    data: &D,
+    actor: &Actor,
+    query: CompiledQuery,
+) -> Vec<FieldMap> {
+    let ctx = ash_core::Runtime::new(data.clone()).bind(Some(actor.clone()), None);
+    ctx.access()
+        .read(
+            &Note::DEF,
+            "read",
+            &FieldMap::new(),
+            scoped_fixtures::request(&query),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(ash_core::View::into_fields)
+        .collect()
 }
 
 /// The ids `filter`, from a client, finds as `actor` sees it among the notes `scope`
 /// holds (this run's: Postgres keeps earlier runs' rows), by id.
-async fn found<D: DataLayer>(data: &D, actor: &Actor, scope: &Filter, filter: Filter) -> Vec<Uuid> {
+async fn found<D: DataLayer + Clone>(
+    data: &D,
+    actor: &Actor,
+    scope: &Filter,
+    filter: Filter,
+) -> Vec<Uuid> {
     let filter = guard_input_filter(&Note::DEF, Some(actor), filter).unwrap();
     let filter = Filter::and([scope.clone(), filter]);
     let query = CompiledQuery {
@@ -88,7 +108,7 @@ async fn found<D: DataLayer>(data: &D, actor: &Actor, scope: &Filter, filter: Fi
 
 /// Every note `scope` holds, page by page of two, after (or before) the last page's last
 /// (or first) record, in `sorts` from a client, as `actor` reads them.
-async fn walk<D: DataLayer>(
+async fn walk<D: DataLayer + Clone>(
     data: &D,
     actor: &Actor,
     scope: &Filter,

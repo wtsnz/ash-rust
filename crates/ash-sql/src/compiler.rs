@@ -2316,23 +2316,6 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         )
     }
 
-    /// Legacy SQL construction without action authorization. Removed in step 8.
-    #[deprecated(note = "compile a core UpsertPlan instead")]
-    pub fn compile_upsert_raw(
-        &mut self,
-        resource: &ResourceDef,
-        fields: &FieldMap,
-        identity: &IdentityDef,
-        update_fields: &[String],
-    ) -> Result<CompiledSql> {
-        let updates = update_fields
-            .iter()
-            .filter_map(|name| fields.get(name).map(|value| (name.clone(), value.clone())))
-            .collect();
-        let scope = resource.tenant_filter(self.tenant.as_deref());
-        self.compile_upsert_parts(resource, fields, identity, &updates, scope.as_ref())
-    }
-
     fn compile_upsert_parts(
         &mut self,
         resource: &ResourceDef,

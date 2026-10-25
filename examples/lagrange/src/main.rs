@@ -107,9 +107,7 @@ async fn telemetry(next_to: Option<&Path>) -> Result<Sqlite, Failure> {
         Some(fleet) => Sqlite::file(fleet.with_file_name("telemetry.db")).await?,
         None => Sqlite::memory().await?,
     };
-    lagrange::Telemetry::new(telemetry.clone())
-        .install()
-        .await?;
+    lagrange::Telemetry::install(&ash_core::Runtime::new(telemetry.clone())).await?;
     Ok(telemetry)
 }
 

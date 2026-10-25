@@ -248,8 +248,8 @@ pub async fn open_sqlite_app(
     let kanban_runtime = ash_core::Runtime::new(db);
     let kanban = Kanban::from_context(kanban_runtime.bootstrap());
 
-    workspaces.install().await?;
-    kanban.install().await?;
+    Workspaces::install(&workspaces_runtime).await?;
+    Kanban::install(&kanban_runtime).await?;
 
     Ok((workspaces_runtime, workspaces, kanban))
 }

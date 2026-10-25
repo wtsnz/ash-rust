@@ -24,7 +24,7 @@ It eliminates repetitive boilerplate by generating strongly-typed structs, stati
 - **`domain!` Macro**:
   - Groups related resources into a bounded context.
   - Generates typed code interfaces (`helpdesk.open_ticket(...)`).
-  - Provides domain-level transactions and cross-resource schema initialization (`domain.install()`).
+  - Provides domain-level transactions and cross-resource schema initialization (`MyDomain::install(&runtime)`).
 - **`#[derive(Resource)]`**:
   - Derive macro for annotated struct-based resource declarations.
 - **Generated Ergonomic APIs**:

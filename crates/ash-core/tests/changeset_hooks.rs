@@ -232,8 +232,9 @@ async fn test_multiple_hooks_execution_order() -> Result<()> {
 #[tokio::test]
 async fn test_hooks_with_sqlite_backend() -> Result<()> {
     let sqlite = Sqlite::memory().await?;
-    let ctx = ash_core::Runtime::new(sqlite).bootstrap();
-    ctx.install(&[&Article::DEF]).await?;
+    let schema_runtime = ash_core::Runtime::new(sqlite);
+    let ctx = schema_runtime.bootstrap();
+    schema_runtime.install(&[&Article::DEF]).await?;
 
     let tx_count = Arc::new(AtomicUsize::new(0));
     let tx_count_clone = Arc::clone(&tx_count);

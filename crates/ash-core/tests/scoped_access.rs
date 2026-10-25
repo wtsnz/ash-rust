@@ -178,3 +178,179 @@ fn signed_tenants_must_match_exactly() {
     assert!(a.access().require_tenant_match(Some("b")).is_err());
     assert!(a.access().require_tenant_match(None).is_err());
 }
+
+#[tokio::test]
+async fn credential_grants_are_bound_to_the_issuing_runtime() {
+    let runtime = ash_core::Runtime::new(Memory::new());
+    let admin = runtime.system().bind(None, Some("a".into()));
+    let account = Account::create(&admin).hash("unchanged").await.unwrap();
+    let guest = runtime.bind(None, Some("a".into()));
+    let unrelated = ash_core::Runtime::new(());
+    assert!(matches!(
+        guest
+            .access()
+            .credentials(&unrelated.credential_reads::<Account>(), Filter::True, 1)
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert!(matches!(
+        guest
+            .access()
+            .update_credentials(
+                &unrelated.credential_writes::<Account>(["hash"]),
+                account.id.into(),
+                ash_core::fields! { "hash" => "foreign-grant" }
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert_eq!(
+        Account::get(&admin, account.id).await.unwrap().hash,
+        "unchanged"
+    );
+
+    let read = runtime.clone().credential_reads::<Account>();
+    let write = runtime.clone().credential_writes::<Account>(["hash"]);
+    runtime
+        .transaction(|tx| async move {
+            let ctx = tx.bind(None, Some("a".into()));
+            let rows = ctx.access().credentials(&read, Filter::True, 1).await?;
+            assert_eq!(rows[0].get("hash"), Some(&"unchanged".into()));
+            ctx.access()
+                .update_credentials(
+                    &write,
+                    account.id.into(),
+                    ash_core::fields! { "hash" => "same-runtime" },
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        Account::get(&admin, account.id).await.unwrap().hash,
+        "same-runtime"
+    );
+}
+
+async fn credential_mutations<D: ash_core::DataLayer>(runtime: ash_core::Runtime<D>) {
+    let permit = runtime.credential_writes::<Account>(["hash", "id", "org"]);
+    let a = runtime.system().bind(None, Some("a".into()));
+    let b = runtime.system().bind(None, Some("b".into()));
+    let own = Account::create(&a).hash("old").await.unwrap();
+    let other = Account::create(&b).hash("other").await.unwrap();
+    let guest = runtime.bind(None, Some("a".into()));
+    let updated = guest
+        .access()
+        .update_credentials(
+            &permit,
+            own.id.into(),
+            ash_core::fields! { "hash" => "new" },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.get("hash"), Some(&"new".into()));
+    assert!(matches!(
+        guest
+            .access()
+            .update_credentials(
+                &permit,
+                other.id.into(),
+                ash_core::fields! { "hash" => "stolen" }
+            )
+            .await,
+        Err(Error::NotFound)
+    ));
+    for fields in [
+        ash_core::fields! { "id" => other.id },
+        ash_core::fields! { "org" => "b" },
+        ash_core::fields! { "hash" => 42 },
+    ] {
+        assert!(
+            guest
+                .access()
+                .update_credentials(&permit, own.id.into(), fields)
+                .await
+                .is_err()
+        );
+    }
+    assert!(matches!(
+        runtime
+            .bootstrap()
+            .access()
+            .update_credentials(
+                &permit,
+                own.id.into(),
+                ash_core::fields! { "hash" => "missing-tenant" }
+            )
+            .await,
+        Err(Error::TenantRequired { .. })
+    ));
+    assert_eq!(Account::get(&a, own.id).await.unwrap().hash, "new");
+    assert_eq!(Account::get(&b, other.id).await.unwrap().hash, "other");
+}
+
+#[tokio::test]
+async fn credential_write_grants_restrict_fields_and_tenants_on_memory() {
+    credential_mutations(ash_core::Runtime::new(Memory::new())).await;
+}
+
+#[tokio::test]
+async fn credential_write_grants_restrict_fields_and_tenants_on_sqlite() {
+    let data = ash_sqlite::Sqlite::memory().await.unwrap();
+    data.install(&[&Account::DEF]).await.unwrap();
+    credential_mutations(ash_core::Runtime::new(data)).await;
+}
+
+#[tokio::test]
+async fn prepared_reads_keep_their_scope_and_candidate_predicate() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static PREPARATIONS: AtomicUsize = AtomicUsize::new(0);
+    fn prepared_filter() -> ash_core::TrustedExpr {
+        PREPARATIONS.fetch_add(1, Ordering::SeqCst);
+        ash_core::TrustedExpr::Filter(Filter::eq("hash", "visible"))
+    }
+    static ACTIONS: &[ash_core::ActionDef] = &[ash_core::ActionDef::read("once")
+        .preparations(&[ash_core::PreparationDef::Filter(prepared_filter)])];
+    let runtime = ash_core::Runtime::new(Memory::new());
+    let a = runtime.system().bind(None, Some("a".into()));
+    let b = runtime.system().bind(None, Some("b".into()));
+    Account::create(&a).hash("visible").await.unwrap();
+    Account::create(&a).hash("hidden").await.unwrap();
+    Account::create(&b).hash("visible").await.unwrap();
+    let resource = ash_core::ResourceDef {
+        actions: ACTIONS,
+        ..Account::DEF
+    };
+    let read = a
+        .access()
+        .prepare_read(&resource, "once", &FieldMap::new(), ReadRequest::default())
+        .unwrap();
+    let shape = || ReadRequest {
+        filter: Some(Filter::True),
+        ..Default::default()
+    };
+    let (rows, count) = a
+        .access()
+        .read_prepared_with_count(&read, shape(), shape())
+        .await
+        .unwrap();
+    assert_eq!((rows.len(), count), (1, 1));
+    assert_eq!(rows[0].get("hash"), Some(&"visible".into()));
+    assert_eq!(PREPARATIONS.load(Ordering::SeqCst), 1);
+    assert!(b.access().read_prepared(&read, shape()).await.is_err());
+    let rebound = runtime.system().bind(None, Some("a".into()));
+    assert!(
+        rebound
+            .access()
+            .count_prepared(&read, shape())
+            .await
+            .is_err()
+    );
+    a.transaction(|tx| async move {
+        assert_eq!(tx.access().read_prepared(&read, shape()).await?.len(), 1);
+        Ok(())
+    })
+    .await
+    .unwrap();
+}

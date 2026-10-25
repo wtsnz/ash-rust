@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use ash_core::{
-    CompiledQuery, DataLayer, Error, FieldMap, HasStore, Resource, ResourceDef, SchemaSupport,
-    StoreRegistry, StoreTag, resource,
+    DataLayer, Error, FieldMap, HasStore, Resource, SchemaSupport, StoreRegistry, StoreTag,
+    resource,
 };
 use ash_memory::Memory;
 use ash_sqlite::Sqlite;
@@ -290,25 +290,17 @@ struct MockKeyValueLayer {
 }
 
 impl DataLayer for MockKeyValueLayer {
-    async fn create(
-        &self,
-        _res: &ResourceDef,
-        _tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-    ) -> ash_core::Result<FieldMap> {
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> ash_core::Result<FieldMap> {
+        let id = plan.id().clone();
+        let fields = plan.fields().clone();
         let mut map = self.storage.lock().unwrap();
         map.insert(id, fields.clone());
         Ok(fields)
     }
 
-    async fn update(
-        &self,
-        _res: &ResourceDef,
-        _tenant: Option<&str>,
-        id: ash_core::Value,
-        fields: FieldMap,
-    ) -> ash_core::Result<FieldMap> {
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> ash_core::Result<FieldMap> {
+        let id = plan.id().clone();
+        let fields = plan.fields().clone();
         let mut map = self.storage.lock().unwrap();
         if let Some(existing) = map.get_mut(&id) {
             for (k, v) in fields.clone() {
@@ -320,34 +312,25 @@ impl DataLayer for MockKeyValueLayer {
         }
     }
 
-    async fn destroy(
-        &self,
-        _res: &ResourceDef,
-        _tenant: Option<&str>,
-        id: ash_core::Value,
-    ) -> ash_core::Result<()> {
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> ash_core::Result<()> {
+        let id = plan.id().clone();
         let mut map = self.storage.lock().unwrap();
         map.remove(&id);
         Ok(())
     }
 
-    async fn run_query(
-        &self,
-        _res: &ResourceDef,
-        _query: &CompiledQuery,
-    ) -> ash_core::Result<Vec<FieldMap>> {
+    async fn run_query(&self, _plan: &ash_core::QueryPlan<'_>) -> ash_core::Result<Vec<FieldMap>> {
         let map = self.storage.lock().unwrap();
         Ok(map.values().cloned().collect())
     }
 
     async fn upsert(&self, plan: &ash_core::UpsertPlan<'_>) -> ash_core::Result<FieldMap> {
-        self.create(
-            plan.resource(),
-            plan.tenant(),
-            plan.id().clone(),
-            plan.fields().clone(),
-        )
-        .await
+        let fields = plan.fields().clone();
+        self.storage
+            .lock()
+            .unwrap()
+            .insert(plan.id().clone(), fields.clone());
+        Ok(fields)
     }
 }
 
@@ -515,9 +498,11 @@ async fn test_has_store_trait_retrieval() {
 
     // Using HasStore<PersistentStore>
     let dyn_store: &dyn ash_core::DynDataLayer = HasStore::<PersistentStore>::get_store(&registry);
-    let fields = dyn_store
-        .run_query_dyn(&Account::DEF, &CompiledQuery::default())
-        .await
-        .unwrap();
+    assert!(std::ptr::addr_eq(
+        dyn_store,
+        registry.get_layer(&Account::DEF).unwrap()
+    ));
+    let ctx = ash_core::Runtime::new(registry).bootstrap();
+    let fields = Account::query(&ctx).all().await.unwrap();
     assert_eq!(fields.len(), 0);
 }

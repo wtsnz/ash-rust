@@ -188,7 +188,7 @@ async fn sqlite_aggregates_loading_and_filtering() {
     let db = ash_sqlite::Sqlite::memory().await.unwrap();
     let desk_runtime = ash_core::Runtime::new(db);
     let desk = Helpdesk::from_context(desk_runtime.bootstrap());
-    desk.install().await.unwrap();
+    Helpdesk::install(&desk_runtime).await.unwrap();
 
     let alice = desk.create_representative("Alice").await.unwrap();
     let bob = desk.create_representative("Bob").await.unwrap();

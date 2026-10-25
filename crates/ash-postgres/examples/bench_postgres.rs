@@ -1,6 +1,6 @@
 use ash_core::{
     ActionDef, AggregateDef, AggregateFilter, AttrType, AttributeDef, CompiledQuery, ConstValue,
-    DataLayer, FieldMap, Filter, RelationshipDef, ResourceDef, Sort, TransactionSupport, Value,
+    FieldMap, Filter, RelationshipDef, ResourceDef, Sort, Value,
 };
 use ash_postgres::Postgres;
 use std::time::{Duration, Instant};
@@ -29,7 +29,7 @@ static USER_AGGS: &[AggregateDef] = &[
 
 static USER_ACTIONS: &[ActionDef] = &[
     ActionDef::create("create")
-        .accept(&["name", "email"])
+        .accept(&["id", "name", "email"])
         .primary(),
     ActionDef::read("read").primary(),
 ];
@@ -71,7 +71,7 @@ static TICKET_RELS: &[RelationshipDef] =
 
 static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open")
-        .accept(&["title", "status", "priority", "user_id"])
+        .accept(&["id", "title", "status", "priority", "user_id"])
         .primary(),
     ActionDef::read("read").primary(),
 ];
@@ -199,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
+    let ctx = ash_core::Runtime::new(pg.clone()).system().bootstrap();
     // Seed 5 users
     let mut user_ids = Vec::new();
     for i in 1..=5 {
@@ -210,7 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "email".into(),
             Value::String(format!("staff{i}@company.com")),
         );
-        pg.create(&USER_DEF, None, Value::from(u_id), u).await?;
+        ash_core::create_dynamic(&ctx, &USER_DEF, USER_DEF.action("create").unwrap(), u).await?;
         user_ids.push(u_id);
     }
     let first_user_id = user_ids[0];
@@ -235,7 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("user_id".into(), Value::Uuid(user_id));
-        pg.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
+        ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), t).await?;
     }
 
     let warmup = Duration::from_millis(500);
@@ -257,10 +258,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             t.insert("status".into(), Value::String("open".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("user_id".into(), Value::Uuid(first_user_id));
-            let res = pg
-                .create(&TICKET_DEF, None, Value::from(t_id), t)
-                .await
-                .unwrap();
+            let res =
+                ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), t)
+                    .await
+                    .unwrap();
             assert_eq!(res.get("id"), Some(&Value::Uuid(t_id)));
         },
     )
@@ -277,7 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warmup,
         bench_dur,
         || async {
-            let rows = pg.run_query(&TICKET_DEF, &get_query).await.unwrap();
+            let rows = read(&ctx, &TICKET_DEF, &get_query).await.unwrap();
             assert_eq!(rows.len(), 1);
         },
     )
@@ -299,7 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warmup,
         bench_dur,
         || async {
-            let rows = pg.run_query(&TICKET_DEF, &filter_query).await.unwrap();
+            let rows = read(&ctx, &TICKET_DEF, &filter_query).await.unwrap();
             assert!(!rows.is_empty());
         },
     )
@@ -317,17 +318,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warmup,
         bench_dur,
         || async {
-            let rows = pg.run_query(&USER_DEF, &agg_query).await.unwrap();
+            let rows = read(&ctx, &USER_DEF, &agg_query).await.unwrap();
             assert_eq!(rows.len(), 1);
-            assert!(rows[0].contains_key("ticket_count"));
-            assert!(rows[0].contains_key("open_ticket_count"));
+            assert!(rows[0].get("ticket_count").is_some());
+            assert!(rows[0].get("open_ticket_count").is_some());
         },
     )
     .await;
 
-    // 5. Bulk Ingestion: 100 Tickets (Transactional Batch Insert)
+    // 5. Scoped action ingestion: 100 tickets in one transaction
     run_bench(
-        "5. Bulk Ingestion: 100 Tickets Batch",
+        "5. Scoped action ingestion: 100 tickets in one transaction",
         warmup,
         bench_dur,
         || async {
@@ -342,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 f.insert("user_id".into(), Value::Uuid(first_user_id));
                 batch.push((Value::Uuid(id), f));
             }
-            let res = pg.bulk_create(&TICKET_DEF, None, batch).await.unwrap();
+            let res = create_batch(&ctx, &TICKET_DEF, batch).await.unwrap();
             assert_eq!(res.len(), 100);
         },
     )
@@ -354,7 +355,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warmup,
         bench_dur,
         || async {
-            let res = pg
+            let res = ctx
                 .transaction(|tx| {
                     let tx = tx.clone();
                     async move {
@@ -363,7 +364,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         u.insert("id".into(), Value::Uuid(u_id));
                         u.insert("name".into(), Value::String("Tx User".into()));
                         u.insert("email".into(), Value::String("tx@company.com".into()));
-                        tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
+                        ash_core::create_dynamic(
+                            &tx,
+                            &USER_DEF,
+                            USER_DEF.action("create").unwrap(),
+                            u,
+                        )
+                        .await?;
 
                         let t_id = Uuid::new_v4();
                         let mut t = FieldMap::new();
@@ -372,7 +379,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         t.insert("status".into(), Value::String("open".into()));
                         t.insert("priority".into(), Value::Int(1));
                         t.insert("user_id".into(), Value::Uuid(u_id));
-                        tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
+                        ash_core::create_dynamic(
+                            &tx,
+                            &TICKET_DEF,
+                            TICKET_DEF.action("open").unwrap(),
+                            t,
+                        )
+                        .await?;
 
                         Ok((u_id, t_id))
                     }
@@ -391,4 +404,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("========================================================\n");
 
     Ok(())
+}
+
+async fn read(
+    ctx: &ash_core::Context<Postgres>,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+) -> ash_core::Result<Vec<ash_core::View>> {
+    ctx.access()
+        .read(
+            resource,
+            "read",
+            &FieldMap::new(),
+            ash_core::ReadRequest {
+                filter: query.filter.clone(),
+                sort: query.sort.clone(),
+                limit: query.limit,
+                offset: query.offset,
+                aggregates: query.aggregates.clone(),
+                calculations: query.calculations.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+}
+
+async fn create_batch(
+    ctx: &ash_core::Context<Postgres>,
+    resource: &'static ResourceDef,
+    rows: Vec<(Value, FieldMap)>,
+) -> ash_core::Result<Vec<ash_core::View>> {
+    ctx.transaction(|tx| async move {
+        let mut result = Vec::with_capacity(rows.len());
+        for (_, fields) in rows {
+            result.push(
+                ash_core::create_dynamic(&tx, resource, resource.action("open").unwrap(), fields)
+                    .await?,
+            );
+        }
+        Ok(result)
+    })
+    .await
 }

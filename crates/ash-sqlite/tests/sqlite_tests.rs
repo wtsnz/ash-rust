@@ -1,6 +1,8 @@
-use ash_core::{
-    ActionDef, AttrType, AttributeDef, DataLayer, FieldMap, ResourceDef, Result, Value,
-};
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
+use ash_core::{ActionDef, AttrType, AttributeDef, FieldMap, ResourceDef, Result, Value};
 use ash_sql::MigrationExecutor;
 use ash_sqlite::Sqlite;
 use uuid::Uuid;
@@ -59,7 +61,7 @@ async fn test_sqlite_crud_and_install() -> Result<()> {
     fields.insert("priority".to_string(), Value::Int(1));
 
     let created = db
-        .create(&TICKET, None, ash_core::Value::from(id), fields)
+        .fixture_create(&TICKET, None, ash_core::Value::from(id), fields)
         .await?;
     assert_eq!(
         created.get("subject"),
@@ -67,19 +69,20 @@ async fn test_sqlite_crud_and_install() -> Result<()> {
     );
 
     let query = ash_core::CompiledQuery::default();
-    let rows = db.run_query(&TICKET, &query).await?;
+    let rows = db.fixture_run_query(&TICKET, &query).await?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("id"), Some(&Value::Uuid(id)));
 
     let mut update_fields = FieldMap::new();
     update_fields.insert("status".to_string(), Value::String("closed".into()));
     let updated = db
-        .update(&TICKET, None, ash_core::Value::from(id), update_fields)
+        .fixture_update(&TICKET, None, ash_core::Value::from(id), update_fields)
         .await?;
     assert_eq!(updated.get("status"), Some(&Value::String("closed".into())));
 
-    db.destroy(&TICKET, None, ash_core::Value::from(id)).await?;
-    let rows_after = db.run_query(&TICKET, &query).await?;
+    db.fixture_destroy(&TICKET, None, ash_core::Value::from(id))
+        .await?;
+    let rows_after = db.fixture_run_query(&TICKET, &query).await?;
     assert_eq!(rows_after.len(), 0);
 
     Ok(())
@@ -137,7 +140,7 @@ async fn test_sqlite_in_query_large_batch_exceeds_1000_limit() -> Result<()> {
         fields.insert("subject".to_string(), Value::String(format!("Ticket {i}")));
         fields.insert("status".to_string(), Value::String("open".into()));
         fields.insert("priority".to_string(), Value::Int(i));
-        db.create(&TICKET, None, ash_core::Value::from(id), fields)
+        db.fixture_create(&TICKET, None, ash_core::Value::from(id), fields)
             .await?;
     }
 
@@ -156,12 +159,17 @@ async fn test_sqlite_in_query_large_batch_exceeds_1000_limit() -> Result<()> {
 
     // This query would fail with `too many SQL variables` under traditional IN (?, ?, ...)
     // But succeeds seamlessly with single-parameter `json_each`!
-    let rows = db.run_query(&TICKET, &query).await?;
+    let rows = db.fixture_run_query(&TICKET, &query).await?;
     assert_eq!(rows.len(), 5);
 
     // Also test bulk_destroy with 1,200 IDs
     let destroy_targets: Vec<Value> = (0..1200).map(|_| Value::Uuid(Uuid::new_v4())).collect();
-    db.bulk_destroy(&TICKET, None, &destroy_targets).await?;
+    let delete = ash_sqlite::sql::bulk_delete_query(&TICKET, None, &destroy_targets)?;
+    sqlx::query(&delete.sql)
+        .bind(ash_sql::values_to_json_array(&destroy_targets))
+        .execute(db.pool().unwrap())
+        .await
+        .unwrap();
 
     Ok(())
 }
@@ -218,7 +226,7 @@ async fn test_sqlite_self_referential_aggregate() -> Result<()> {
     root_fields.insert("id".to_string(), Value::Uuid(root_id));
     root_fields.insert("name".to_string(), Value::String("Electronics".into()));
     root_fields.insert("parent_id".to_string(), Value::Null);
-    db.create(
+    db.fixture_create(
         &CATEGORY_DEF,
         None,
         ash_core::Value::from(root_id),
@@ -236,7 +244,7 @@ async fn test_sqlite_self_referential_aggregate() -> Result<()> {
             Value::String(format!("Subcategory {i}")),
         );
         child_fields.insert("parent_id".to_string(), Value::Uuid(root_id));
-        db.create(
+        db.fixture_create(
             &CATEGORY_DEF,
             None,
             ash_core::Value::from(child_id),
@@ -252,7 +260,7 @@ async fn test_sqlite_self_referential_aggregate() -> Result<()> {
         ..ash_core::CompiledQuery::default()
     };
 
-    let rows = db.run_query(&CATEGORY_DEF, &query).await?;
+    let rows = db.fixture_run_query(&CATEGORY_DEF, &query).await?;
     assert_eq!(rows.len(), 1);
     let root_row = &rows[0];
     assert_eq!(
@@ -275,7 +283,7 @@ async fn test_sqlite_empty_in_and_empty_bulk_operations() -> Result<()> {
         filter: Some(ash_core::Filter::in_list("id", Vec::<Value>::new())),
         ..ash_core::CompiledQuery::default()
     };
-    let rows = db.run_query(&TICKET, &query_empty).await?;
+    let rows = db.fixture_run_query(&TICKET, &query_empty).await?;
     assert!(rows.is_empty());
 
     // 2. Query with NOT (Filter::in_list empty) -> matches without error
@@ -283,14 +291,18 @@ async fn test_sqlite_empty_in_and_empty_bulk_operations() -> Result<()> {
         filter: Some(!ash_core::Filter::in_list("id", Vec::<Value>::new())),
         ..ash_core::CompiledQuery::default()
     };
-    let _ = db.run_query(&TICKET, &query_not_empty).await?;
+    let _ = db.fixture_run_query(&TICKET, &query_not_empty).await?;
 
     // 3. bulk_create with empty items -> returns Ok(vec![])
-    let created = db.bulk_create(&TICKET, None, Vec::new()).await?;
+    let created = db.fixture_bulk_create(&TICKET, None, Vec::new()).await?;
     assert!(created.is_empty());
 
     // 4. bulk_destroy with empty IDs -> returns Ok(())
-    db.bulk_destroy(&TICKET, None, &[]).await?;
+    let delete = ash_sqlite::sql::bulk_delete_query(&TICKET, None, &[])?;
+    sqlx::query(&delete.sql)
+        .execute(db.pool().unwrap())
+        .await
+        .unwrap();
 
     Ok(())
 }
@@ -307,7 +319,7 @@ async fn test_sqlite_counts_in_the_database() -> Result<()> {
         fields.insert("subject".to_string(), Value::String(format!("Ticket {i}")));
         fields.insert("status".to_string(), Value::String(status.into()));
         fields.insert("priority".to_string(), Value::Int(i as i64));
-        db.create(&TICKET, None, ash_core::Value::from(id), fields)
+        db.fixture_create(&TICKET, None, ash_core::Value::from(id), fields)
             .await?;
     }
     let open = ash_core::CompiledQuery {
@@ -315,15 +327,15 @@ async fn test_sqlite_counts_in_the_database() -> Result<()> {
         ..Default::default()
     };
     assert_eq!(
-        db.count(&TICKET, &ash_core::CompiledQuery::default())
+        db.fixture_count(&TICKET, &ash_core::CompiledQuery::default())
             .await?,
         3
     );
-    assert_eq!(db.count(&TICKET, &open).await?, 2);
+    assert_eq!(db.fixture_count(&TICKET, &open).await?, 2);
     let page = ash_core::CompiledQuery {
         offset: Some(1),
         ..Default::default()
     };
-    assert_eq!(db.count(&TICKET, &page).await?, 2);
+    assert_eq!(db.fixture_count(&TICKET, &page).await?, 2);
     Ok(())
 }

@@ -1,6 +1,6 @@
 use ash_core::{
     ActionDef, AggregateDef, AggregateFilter, AttrType, AttributeDef, CompiledQuery, ConstValue,
-    DataLayer, FieldMap, Filter, RelationshipDef, ResourceDef, Sort, TransactionSupport, Value,
+    FieldMap, Filter, RelationshipDef, ResourceDef, Sort, Value,
 };
 use ash_postgres::Postgres;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
@@ -29,7 +29,7 @@ static USER_AGGS: &[AggregateDef] = &[
 
 static USER_ACTIONS: &[ActionDef] = &[
     ActionDef::create("create")
-        .accept(&["name", "email"])
+        .accept(&["id", "name", "email"])
         .primary(),
     ActionDef::read("read").primary(),
 ];
@@ -71,7 +71,7 @@ static TICKET_RELS: &[RelationshipDef] =
 
 static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::create("open")
-        .accept(&["title", "status", "priority", "user_id"])
+        .accept(&["id", "title", "status", "priority", "user_id"])
         .primary(),
     ActionDef::read("read").primary(),
 ];
@@ -134,6 +134,7 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
     .await
     .ok()?;
 
+    let ctx = ash_core::Runtime::new(pg.clone()).system().bootstrap();
     // Seed 5 users
     let mut user_ids = Vec::new();
     for i in 1..=5 {
@@ -145,7 +146,8 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
             "email".into(),
             Value::String(format!("staff{i}@company.com")),
         );
-        let _ = pg.create(&USER_DEF, None, Value::from(u_id), u).await;
+        let _ =
+            ash_core::create_dynamic(&ctx, &USER_DEF, USER_DEF.action("create").unwrap(), u).await;
         user_ids.push(u_id);
     }
     let first_user_id = user_ids[0];
@@ -170,7 +172,8 @@ async fn setup_postgres() -> Option<(Postgres, Uuid, Uuid)> {
         t.insert("status".into(), Value::String(status.into()));
         t.insert("priority".into(), Value::Int(priority));
         t.insert("user_id".into(), Value::Uuid(user_id));
-        let _ = pg.create(&TICKET_DEF, None, Value::from(t_id), t).await;
+        let _ = ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), t)
+            .await;
     }
 
     Some((pg, first_user_id, first_ticket_id))
@@ -183,6 +186,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
         return;
     };
 
+    let ctx = ash_core::Runtime::new(pg.clone()).system().bootstrap();
     let mut group = c.benchmark_group("postgres");
 
     // 1. Point Write
@@ -198,10 +202,10 @@ fn bench_postgres_operations(c: &mut Criterion) {
             t.insert("status".into(), Value::String("open".into()));
             t.insert("priority".into(), Value::Int(1));
             t.insert("user_id".into(), Value::Uuid(user_id));
-            let res = pg
-                .create(&TICKET_DEF, None, Value::from(t_id), t)
-                .await
-                .unwrap();
+            let res =
+                ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), t)
+                    .await
+                    .unwrap();
             black_box(res);
         });
     });
@@ -214,7 +218,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
     };
     group.bench_function("point_read_pk", |b| {
         b.to_async(&rt).iter(|| async {
-            let rows = pg.run_query(&TICKET_DEF, &get_query).await.unwrap();
+            let rows = read(&ctx, &TICKET_DEF, &get_query).await.unwrap();
             black_box(rows);
         });
     });
@@ -232,7 +236,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
     };
     group.bench_function("filtered_sorted_50", |b| {
         b.to_async(&rt).iter(|| async {
-            let rows = pg.run_query(&TICKET_DEF, &filter_query).await.unwrap();
+            let rows = read(&ctx, &TICKET_DEF, &filter_query).await.unwrap();
             black_box(rows);
         });
     });
@@ -246,13 +250,13 @@ fn bench_postgres_operations(c: &mut Criterion) {
     };
     group.bench_function("aggregates_subqueries", |b| {
         b.to_async(&rt).iter(|| async {
-            let rows = pg.run_query(&USER_DEF, &agg_query).await.unwrap();
+            let rows = read(&ctx, &USER_DEF, &agg_query).await.unwrap();
             black_box(rows);
         });
     });
 
-    // 5. Bulk Ingestion (100 items)
-    group.bench_function("bulk_ingestion_100", |b| {
+    // 5. Scoped action ingestion in one transaction (100 items)
+    group.bench_function("scoped_action_batch_100", |b| {
         b.to_async(&rt).iter(|| async {
             let mut batch = Vec::with_capacity(100);
             for i in 1..=100 {
@@ -265,7 +269,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
                 f.insert("user_id".into(), Value::Uuid(user_id));
                 batch.push((Value::Uuid(id), f));
             }
-            let res = pg.bulk_create(&TICKET_DEF, None, batch).await.unwrap();
+            let res = create_batch(&ctx, &TICKET_DEF, batch).await.unwrap();
             black_box(res);
         });
     });
@@ -273,7 +277,7 @@ fn bench_postgres_operations(c: &mut Criterion) {
     // 6. Transactional Workflow
     group.bench_function("transaction_multi_step", |b| {
         b.to_async(&rt).iter(|| async {
-            let res = pg
+            let res = ctx
                 .transaction(|tx| {
                     let tx = tx.clone();
                     async move {
@@ -282,7 +286,13 @@ fn bench_postgres_operations(c: &mut Criterion) {
                         u.insert("id".into(), Value::Uuid(u_id));
                         u.insert("name".into(), Value::String("Tx User".into()));
                         u.insert("email".into(), Value::String("tx@company.com".into()));
-                        tx.create(&USER_DEF, None, Value::from(u_id), u).await?;
+                        ash_core::create_dynamic(
+                            &tx,
+                            &USER_DEF,
+                            USER_DEF.action("create").unwrap(),
+                            u,
+                        )
+                        .await?;
 
                         let t_id = Uuid::new_v4();
                         let mut t = FieldMap::new();
@@ -291,7 +301,13 @@ fn bench_postgres_operations(c: &mut Criterion) {
                         t.insert("status".into(), Value::String("open".into()));
                         t.insert("priority".into(), Value::Int(1));
                         t.insert("user_id".into(), Value::Uuid(u_id));
-                        tx.create(&TICKET_DEF, None, Value::from(t_id), t).await?;
+                        ash_core::create_dynamic(
+                            &tx,
+                            &TICKET_DEF,
+                            TICKET_DEF.action("open").unwrap(),
+                            t,
+                        )
+                        .await?;
 
                         Ok((u_id, t_id))
                     }
@@ -307,3 +323,44 @@ fn bench_postgres_operations(c: &mut Criterion) {
 
 criterion_group!(benches, bench_postgres_operations);
 criterion_main!(benches);
+
+async fn read(
+    ctx: &ash_core::Context<Postgres>,
+    resource: &ResourceDef,
+    query: &CompiledQuery,
+) -> ash_core::Result<Vec<ash_core::View>> {
+    ctx.access()
+        .read(
+            resource,
+            "read",
+            &FieldMap::new(),
+            ash_core::ReadRequest {
+                filter: query.filter.clone(),
+                sort: query.sort.clone(),
+                limit: query.limit,
+                offset: query.offset,
+                aggregates: query.aggregates.clone(),
+                calculations: query.calculations.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+}
+
+async fn create_batch(
+    ctx: &ash_core::Context<Postgres>,
+    resource: &'static ResourceDef,
+    rows: Vec<(Value, FieldMap)>,
+) -> ash_core::Result<Vec<ash_core::View>> {
+    ctx.transaction(|tx| async move {
+        let mut result = Vec::with_capacity(rows.len());
+        for (_, fields) in rows {
+            result.push(
+                ash_core::create_dynamic(&tx, resource, resource.action("open").unwrap(), fields)
+                    .await?,
+            );
+        }
+        Ok(result)
+    })
+    .await
+}

@@ -1,3 +1,6 @@
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+
 use ash_archival::{ArchiveDef, archival, archive_def, unarchive};
 use ash_core::{CompiledQuery, Context, DataLayer, Resource, ResourceExt, destroy_existing};
 use ash_memory::Memory;
@@ -99,11 +102,8 @@ pub mod comment_mod {
 use comment_mod::Comment;
 use post_mod::Post;
 
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
 async fn stored_rows<D: DataLayer>(ctx: &Context<D>, resource: &ash_core::ResourceDef) -> usize {
-    ctx.data
-        .run_query(resource, &CompiledQuery::default())
+    scoped_fixtures::stored(ctx, resource, &CompiledQuery::default())
         .await
         .unwrap()
         .len()

@@ -255,7 +255,11 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
                 distinct_on: this.distinct_on.clone(),
             },
         )?;
-        let mut rows = this.ctx.raw_data().run_query(&R::DEF, &query).await?;
+        let mut rows = this
+            .ctx
+            .raw_data()
+            .run_query(&crate::QueryPlan::new(this.ctx, &R::DEF, &query))
+            .await?;
         super::read::after_read(action, &this.arguments, &mut rows)?;
 
         for name in &this.loads {
@@ -347,7 +351,10 @@ impl<'a, R: Resource, D: DataLayer> Query<'a, R, D> {
         query.limit = None;
         query.offset = None;
         query.sort.clear();
-        self.ctx.raw_data().count(&R::DEF, &query).await
+        self.ctx
+            .raw_data()
+            .count(&crate::CountPlan::new(self.ctx, &R::DEF, &query))
+            .await
     }
 
     pub async fn page_offset(

@@ -81,7 +81,11 @@ impl Guards {
             limit: Some(1),
             ..Default::default()
         };
-        let stored = match ctx.raw_data().run_query(resource, &query).await {
+        let stored = match ctx
+            .raw_data()
+            .run_query(&crate::QueryPlan::new(ctx, resource, &query))
+            .await
+        {
             Ok(rows) => rows.into_iter().next(),
             Err(err) => return err,
         };
@@ -116,7 +120,7 @@ pub(crate) async fn run_atomic_update<D: crate::data_layer::DataLayer>(
     query.filter = crate::pipeline::and_filters(query.filter, guards.cloned());
     Ok(ctx
         .raw_data()
-        .update_atomic(resource, &query, update)
+        .update_atomic(&crate::AtomicUpdatePlan::new(ctx, resource, &query, update))
         .await?
         .into_iter()
         .next())
@@ -136,7 +140,9 @@ pub(crate) async fn run_atomic_destroy<D: crate::data_layer::DataLayer>(
     let query = atomic_query(ctx, resource, action, id, scope)?;
     Ok(ctx
         .raw_data()
-        .destroy_atomic(resource, &query, conditions)
+        .destroy_atomic(&crate::AtomicDestroyPlan::new(
+            ctx, resource, &query, conditions,
+        ))
         .await?
         .into_iter()
         .next())

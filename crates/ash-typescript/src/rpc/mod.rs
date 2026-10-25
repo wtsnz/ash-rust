@@ -38,9 +38,6 @@
 //! client's filters and sorts guarded by field policies, and fields the actor may not
 //! read redacted.
 
-// Raw writes and engine queries migrate to executable plans in later steps.
-#![allow(deprecated)]
-
 mod codegen;
 mod error;
 pub mod fields;
@@ -1073,22 +1070,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             .ok_or_else(|| self.failure(Error::NoPrimaryRead(resource.name)))?;
         let query = CompiledQuery {
             filter: Some(ash_core::ClientExpr::new(filter).into_filter()),
-            tenant: ctx.tenant().map(str::to_owned),
+
             limit: Some(1),
             select: Some(vec![pk.to_string()]),
             ..CompiledQuery::default()
         };
-        let scoped = ash_core::scope_read(
-            resource,
-            read,
-            ctx.authorization_actor(),
-            &FieldMap::new(),
-            query,
-        )
-        .map_err(|e| self.failure(e))?;
         let rows = ctx
-            .data
-            .run_query(resource, &scoped)
+            .access()
+            .read(resource, read.name, &FieldMap::new(), read_request(query))
             .await
             .map_err(|e| self.failure(e))?;
         rows.first()
@@ -1114,24 +1103,20 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                 get_by.into_iter().map(ash_core::ClientExpr::into_filter),
             )),
             sort: prepared_sort(rpc.action),
-            tenant: ctx.tenant().map(str::to_owned),
+
             ..CompiledQuery::default()
         };
-        let scoped = ash_core::scope_read(
-            resource,
-            rpc.action,
-            ctx.authorization_actor(),
-            &input,
-            base,
-        )
-        .map_err(|e| self.failure(e))?;
+        let scoped = ctx
+            .access()
+            .prepare_read(resource, rpc.action.name, &input, read_request(base))
+            .map_err(|e| self.failure(e))?;
         let rows = read_rows(
             ctx,
-            resource,
+            &scoped,
             selection,
             CompiledQuery {
                 limit: Some(2),
-                ..scoped
+                ..scoped.query().clone()
             },
         )
         .await
@@ -1184,14 +1169,16 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         let base = CompiledQuery {
             filter: Some(Filter::and(filters)),
             sort,
-            tenant: ctx.tenant().map(str::to_owned),
+
             ..CompiledQuery::default()
         };
-        let scoped = ash_core::scope_read(resource, action, actor, &input, base)
+        let scoped = ctx
+            .access()
+            .prepare_read(resource, action.name, &input, read_request(base))
             .map_err(|e| self.failure(e))?;
 
         let Some(pagination) = action.pagination else {
-            let rows = read_rows(ctx, resource, selection, scoped)
+            let rows = read_rows(ctx, &scoped, selection, scoped.query().clone())
                 .await
                 .map_err(|e| self.failure(e))?;
             return Ok(Json::Array(
@@ -1231,7 +1218,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
                     "Limit is required",
                 ));
             }
-            let rows = read_rows(ctx, resource, selection, scoped)
+            let rows = read_rows(ctx, &scoped, selection, scoped.query().clone())
                 .await
                 .map_err(|e| self.failure(e))?;
             return Ok(Json::Array(
@@ -1241,7 +1228,7 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         };
         // The smallest of the page's size, the read's own limit and its largest page, as
         // Ash takes it.
-        let limit = [Some(limit), scoped.limit, pagination.max_page_size]
+        let limit = [Some(limit), scoped.query().limit, pagination.max_page_size]
             .into_iter()
             .flatten()
             .min()
@@ -1251,11 +1238,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         {
             let counted = CompiledQuery {
                 sort: Vec::new(),
-                ..scoped.clone()
+                ..scoped.query().clone()
             };
             Some(
-                ctx.data
-                    .count(resource, &counted)
+                ctx.access()
+                    .count_prepared(&scoped, read_request(counted))
                     .await
                     .map_err(|e| self.failure(e))?,
             )
@@ -1269,12 +1256,12 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             let offset = page.offset.unwrap_or(0);
             let mut rows = read_rows(
                 ctx,
-                resource,
+                &scoped,
                 selection,
                 CompiledQuery {
                     limit: Some(limit + 1),
                     offset: Some(offset),
-                    ..scoped
+                    ..scoped.query().clone()
                 },
             )
             .await
@@ -1306,16 +1293,16 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         rpc: &RpcAction<D>,
         input: &FieldMap,
         selection: &Selection,
-        scoped: CompiledQuery,
+        scoped: ash_core::PreparedRead<'_>,
         limit: usize,
         page: &PageRequest,
         shown: &[Shown],
     ) -> Result<KeysetPage, Failure> {
         let resource = rpc.resource;
-        let sort = ash_core::keyset_sort(resource, scoped.sort.clone());
+        let sort = ash_core::keyset_sort(resource, scoped.query().sort.clone());
         // Ash reads before a keyset when given both.
         let backward = page.before.is_some();
-        let mut filter = scoped.filter.clone();
+        let mut filter = scoped.query().filter.clone();
         if let Some(cursor) = page.before.as_deref().or(page.after.as_deref()) {
             let direction = if backward { "before" } else { "after" };
             let after = ctx
@@ -1332,13 +1319,14 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
             sort: read_sort,
             limit: Some(limit + 1),
             offset: None,
-            ..scoped
+            ..scoped.query().clone()
         };
-        let mut rows = read_rows(
+        let mut rows = read_rows_with_keyset(
             ctx,
-            resource,
+            &scoped,
             &selection.keeping(sort.iter().map(|s| s.field.as_str())),
             query,
+            Some(sort.clone()),
         )
         .await
         .map_err(|e| self.failure(e))?;
@@ -1347,16 +1335,12 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         if backward {
             rows.reverse();
         }
-        let cursor = |row: Option<&FieldMap>| -> Result<Json, Failure> {
-            row.map(|row| {
-                ctx.seal_keyset(resource, rpc.action.name, &sort, row)
-                    .map(Json::String)
-                    .map_err(|e| self.failure(e))
-            })
-            .transpose()
-            .map(|cursor| cursor.unwrap_or(Json::Null))
+        let cursor = |row: Option<&ash_core::View>| {
+            row.and_then(ash_core::View::keyset)
+                .map(|token| Json::String(token.to_owned()))
+                .unwrap_or(Json::Null)
         };
-        let (previous, next) = (cursor(rows.first())?, cursor(rows.last())?);
+        let (previous, next) = (cursor(rows.first()), cursor(rows.last()));
         let results = self
             .render_read(ctx, rpc, input, rows, selection, shown)
             .await?;
@@ -1385,19 +1369,26 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         };
         let query = CompiledQuery {
             filter: Some(Filter::eq(pk.name, id)),
-            tenant: ctx.tenant().map(str::to_owned),
-            actor: ctx.authorization_actor().cloned(),
+
             calculation_args: selection.calculation_args.clone(),
             ..CompiledQuery::default()
         };
-        let row = read_rows(ctx, resource, selection, query)
+        let scoped = ctx
+            .access()
+            .prepare_read(
+                resource,
+                resource.default_read().name,
+                &FieldMap::new(),
+                read_request(query),
+            )
+            .map_err(|e| self.failure(e))?;
+        let row = read_rows(ctx, &scoped, selection, scoped.query().clone())
             .await
             .map_err(|e| self.failure(e))?
             .into_iter()
             .next()
             .unwrap_or_default();
-        ctx.present(resource, row.into(), Some(&loads))
-            .map_err(|e| self.failure(e))
+        Ok(row)
     }
 
     /// A written record, as the client selected it: its aggregates and calculations read as
@@ -1432,19 +1423,11 @@ impl<D: TransactionSupport + 'static> Rpc<D> {
         &self,
         ctx: &Context<D>,
         rpc: &RpcAction<D>,
-        input: &FieldMap,
-        mut rows: Vec<FieldMap>,
+        _input: &FieldMap,
+        views: Vec<ash_core::View>,
         selection: &Selection,
         shown: &[Shown],
     ) -> Result<Vec<Json>, Failure> {
-        ash_core::after_read(rpc.action, input, &mut rows).map_err(|e| self.failure(e))?;
-        let views = rows
-            .into_iter()
-            .map(|row| {
-                ctx.present(rpc.resource, row.into(), None)
-                    .map_err(|e| self.failure(e))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let metadata = views
             .iter()
             .map(|view| metadata_json(view, shown))
@@ -1870,20 +1853,46 @@ fn prepared_sort(action: &ActionDef) -> Vec<Sort> {
 /// may see them.
 async fn read_rows<D: DataLayer>(
     ctx: &Context<D>,
-    resource: &'static ResourceDef,
+    read: &ash_core::PreparedRead<'_>,
     selection: &Selection,
     query: CompiledQuery,
-) -> ash_core::Result<Vec<FieldMap>> {
-    let query = CompiledQuery {
-        select: Some(selection.attributes(resource)),
-        aggregates: selection.of(|name| resource.aggregate(name).is_some()),
-        calculations: selection.of(|name| resource.calculation(name).is_some()),
-        calculation_args: selection.calculation_args.clone(),
-        ..query
-    };
-    ctx.data.run_query(resource, &query).await
+) -> ash_core::Result<Vec<ash_core::View>> {
+    read_rows_with_keyset(ctx, read, selection, query, None).await
 }
 
+async fn read_rows_with_keyset<D: DataLayer>(
+    ctx: &Context<D>,
+    read: &ash_core::PreparedRead<'_>,
+    selection: &Selection,
+    query: CompiledQuery,
+    keyset: Option<Vec<Sort>>,
+) -> ash_core::Result<Vec<ash_core::View>> {
+    let resource = read.resource();
+    let mut request = read_request(query);
+    request.select = Some(selection.attributes(resource));
+    request.aggregates = selection.of(|name| resource.aggregate(name).is_some());
+    request.calculations = selection.of(|name| resource.calculation(name).is_some());
+    request.calculation_args = selection.calculation_args.clone();
+    request.keyset = keyset;
+    ctx.access().read_prepared(read, request).await
+}
+
+/// Discard compiler identity fields; core supplies identity and plans execution.
+pub(crate) fn read_request(query: CompiledQuery) -> ash_core::ReadRequest {
+    ash_core::ReadRequest {
+        lock: query.lock,
+        distinct_on: query.distinct_on,
+        select: query.select,
+        calculations: query.calculations,
+        calculation_args: query.calculation_args,
+        aggregates: query.aggregates,
+        filter: query.filter,
+        sort: query.sort,
+        limit: query.limit,
+        offset: query.offset,
+        keyset: None,
+    }
+}
 /// A value as JSON, as AshTypescript formats its field's type: a float a number, a
 /// decimal its text.
 fn to_json(ty: Option<AttrType>, value: &Value) -> Json {

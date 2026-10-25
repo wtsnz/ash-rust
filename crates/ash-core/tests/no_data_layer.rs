@@ -2,7 +2,7 @@
 //! no real data layer, and persisting through it fails with a clear message.
 //! `build_records.rs` covers what `build()` itself produces.
 
-use ash_core::{DataLayer, Error, FieldMap, NoDataLayer, Resource, resource};
+use ash_core::{Error, NoDataLayer, Resource, resource};
 use uuid::Uuid;
 
 resource! {
@@ -69,38 +69,44 @@ async fn build_makes_a_record_but_cannot_persist_it() {
 }
 
 #[tokio::test]
-#[allow(deprecated)]
 async fn every_operation_reports_the_missing_data_layer() {
-    let data = NoDataLayer;
-    let def = &Customer::DEF;
-    let identity = def.identity("unique_name").unwrap();
+    let ctx = ash_core::Runtime::new(NoDataLayer).system().bootstrap();
     let id = Uuid::new_v4();
-
+    let fields = ash_core::fields! { "id" => id, "name" => "Ada" };
+    assert_no_data_layer(Customer::register(&ctx).name("Ada").await.unwrap_err());
+    static UPDATE: ash_core::ActionDef = ash_core::ActionDef::update("rename").accept(&["name"]);
+    static DESTROY: ash_core::ActionDef = ash_core::ActionDef::destroy("remove");
     assert_no_data_layer(
-        data.create(def, None, ash_core::Value::from(id), FieldMap::new())
-            .await
-            .unwrap_err(),
-    );
-    assert_no_data_layer(
-        data.update(def, None, ash_core::Value::from(id), FieldMap::new())
-            .await
-            .unwrap_err(),
-    );
-    assert_no_data_layer(
-        data.destroy(def, None, ash_core::Value::from(id))
-            .await
-            .unwrap_err(),
-    );
-    assert_no_data_layer(data.run_query(def, &Default::default()).await.unwrap_err());
-    assert_no_data_layer(
-        data.upsert_raw(
-            def,
-            None,
-            ash_core::Value::from(id),
-            FieldMap::new(),
-            identity,
-            &[],
+        ash_core::DynamicChangeset::for_update(
+            &ctx,
+            &Customer::DEF,
+            &UPDATE,
+            fields.clone(),
+            ash_core::fields! { "name" => "Grace" },
         )
+        .unwrap()
+        .commit(&ctx)
+        .await
+        .unwrap_err(),
+    );
+    assert_no_data_layer(
+        ash_core::DynamicChangeset::for_destroy(&ctx, &Customer::DEF, &DESTROY, fields.clone())
+            .unwrap()
+            .commit(&ctx)
+            .await
+            .unwrap_err(),
+    );
+    assert_no_data_layer(Customer::query(&ctx).all().await.unwrap_err());
+    assert_no_data_layer(
+        ash_core::DynamicChangeset::for_create_named(
+            &ctx,
+            &Customer::DEF,
+            "register",
+            ash_core::fields! { "name" => "Ada" },
+        )
+        .unwrap()
+        .with_upsert("unique_name", &[])
+        .commit(&ctx)
         .await
         .unwrap_err(),
     );

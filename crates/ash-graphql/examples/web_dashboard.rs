@@ -9,7 +9,7 @@
 //! - Web Dashboard & Overview: http://127.0.0.1:4000/
 //! - GraphiQL Interactive IDE: http://127.0.0.1:4000/graphiql
 
-use ash_core::{ActionDef, AttrType, AttributeDef, DataLayer, FieldMap, ResourceDef, Value};
+use ash_core::{ActionDef, AttrType, AttributeDef, FieldMap, ResourceDef, Value};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
 use ash_pubsub::{ContextPubSubExt, PubSub};
@@ -36,10 +36,10 @@ static TICKET_ACTIONS: &[ActionDef] = &[
     ActionDef::read("read").primary(),
     ActionDef::create("open")
         .primary()
-        .accept(&["title", "status", "priority"]),
+        .accept(&["id", "title", "status", "priority"]),
     ActionDef::update("change_status")
         .primary()
-        .accept(&["status"]),
+        .accept(&["id", "status"]),
     ActionDef::destroy("close").primary(),
 ];
 
@@ -77,7 +77,7 @@ static REP_ACTIONS: &[ActionDef] = &[
     ActionDef::read("read").primary(),
     ActionDef::create("create")
         .primary()
-        .accept(&["name", "email"]),
+        .accept(&["id", "name", "email"]),
 ];
 
 static REP_DEF: ResourceDef = ResourceDef {
@@ -236,6 +236,7 @@ query {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mem = Memory::new();
+    let ctx = ash_core::Runtime::new(mem.clone()).system().bootstrap();
     let pubsub = PubSub::new();
 
     // Seed initial tickets
@@ -248,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     f1.insert("status".into(), Value::String("OPEN".into()));
     f1.insert("priority".into(), Value::Int(2));
-    mem.create(&TICKET_DEF, None, Value::from(id1), f1).await?;
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), f1).await?;
 
     let id2 = Uuid::new_v4();
     let mut f2 = FieldMap::new();
@@ -259,15 +260,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     f2.insert("status".into(), Value::String("IN_PROGRESS".into()));
     f2.insert("priority".into(), Value::Int(1));
-    mem.create(&TICKET_DEF, None, Value::from(id2), f2).await?;
+    ash_core::create_dynamic(&ctx, &TICKET_DEF, TICKET_DEF.action("open").unwrap(), f2).await?;
 
     let rep_id = Uuid::new_v4();
     let mut f_rep = HashMap::new();
     f_rep.insert("id".into(), Value::Uuid(rep_id));
     f_rep.insert("name".into(), Value::String("Alex Mercer".into()));
     f_rep.insert("email".into(), Value::String("alex@example.com".into()));
-    mem.create(&REP_DEF, None, Value::from(rep_id), f_rep)
-        .await?;
+    ash_core::create_dynamic(&ctx, &REP_DEF, REP_DEF.action("create").unwrap(), f_rep).await?;
 
     // Writes publish their changes to subscriptions through the context's notifier.
     let ctx = ash_core::Runtime::new(mem)

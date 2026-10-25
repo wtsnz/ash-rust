@@ -941,7 +941,7 @@ impl DynamicChangeset {
                 }
                 None => {
                     ctx.raw_data()
-                        .create(self.resource, ctx.tenant(), id, fields)
+                        .create(&crate::CreatePlan::new(ctx, self.resource, id, fields))
                         .await
                 }
             },

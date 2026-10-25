@@ -632,13 +632,11 @@ impl DataLayer for Postgres {
         TransactionSupport::transaction(self, move |tx| work(Some(tx.clone()))).await
     }
 
-    async fn create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        _id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
+    async fn create(&self, plan: &ash_core::CreatePlan<'_>) -> Result<FieldMap> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let fields = plan.fields().clone();
+
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_insert(resource, &fields)?;
@@ -648,13 +646,12 @@ impl DataLayer for Postgres {
         row_to_fields(&row, resource)
     }
 
-    async fn update(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
-    ) -> Result<FieldMap> {
+    async fn update(&self, plan: &ash_core::UpdatePlan<'_>) -> Result<FieldMap> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+        let fields = plan.fields().clone();
+
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_update(resource, id.clone(), &fields)?;
@@ -667,7 +664,11 @@ impl DataLayer for Postgres {
         }
     }
 
-    async fn destroy(&self, resource: &ResourceDef, tenant: Option<&str>, id: Value) -> Result<()> {
+    async fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> Result<()> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
         let compiled = compiler.compile_delete(resource, id)?;
@@ -678,11 +679,10 @@ impl DataLayer for Postgres {
         Ok(())
     }
 
-    async fn run_query(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-    ) -> Result<Vec<FieldMap>> {
+    async fn run_query(&self, plan: &ash_core::QueryPlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
+
         query.validate_lock(self.in_active_transaction())?;
         // A context-tenant resource's tables are qualified by the tenant's schema, as
         // AshPostgres prefixes them, so the session's `search_path` is never changed.
@@ -705,11 +705,13 @@ impl DataLayer for Postgres {
     /// [`QueryCompiler::compile_select_per_key`]), as AshPostgres loads a relationship.
     async fn run_query_per_key(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        by: &ash_core::PerKey<'_>,
-        keys: &[Value],
+        plan: &ash_core::PerKeyPlan<'_>,
     ) -> Result<Vec<Vec<FieldMap>>> {
+        let resource = plan.resource();
+        let query = plan.query();
+        let by = plan.by();
+        let keys = plan.keys();
+
         query.validate_lock(self.in_active_transaction())?;
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
@@ -733,7 +735,10 @@ impl DataLayer for Postgres {
         Ok(per_key)
     }
 
-    async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+    async fn count(&self, plan: &ash_core::CountPlan<'_>) -> Result<usize> {
+        let resource = plan.resource();
+        let query = plan.query();
+
         query.validate_lock(self.in_active_transaction())?;
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
@@ -752,10 +757,12 @@ impl DataLayer for Postgres {
     /// statements sent at once on a connection, so both go out before either answers.
     async fn run_query_with_count(
         &self,
-        resource: &ResourceDef,
-        page: &CompiledQuery,
-        count: &CompiledQuery,
+        plan: &ash_core::QueryWithCountPlan<'_>,
     ) -> Result<(Vec<FieldMap>, usize)> {
+        let resource = plan.resource();
+        let page = plan.page().query();
+        let count = plan.count().query();
+
         page.validate_lock(self.in_active_transaction())?;
         let dialect = PostgresDialect;
         let page_sql = QueryCompiler::new(&dialect).compile_select(resource, page)?;
@@ -792,12 +799,11 @@ impl DataLayer for Postgres {
     /// The update as one statement (see [`QueryCompiler::compile_atomic_update`]). A
     /// condition that holds raises through `ash_raise_error`, which this turns back into
     /// the condition's error, from the record's values it reports.
-    async fn update_atomic(
-        &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        update: &ash_core::AtomicUpdate,
-    ) -> Result<Vec<FieldMap>> {
+    async fn update_atomic(&self, plan: &ash_core::AtomicUpdatePlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
+        let update = plan.update();
+
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_atomic_update(resource, query, update)?;
@@ -819,10 +825,12 @@ impl DataLayer for Postgres {
     /// conditions raised as an atomic update's are.
     async fn destroy_atomic(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        conditions: &[ash_core::AtomicCondition],
+        plan: &ash_core::AtomicDestroyPlan<'_>,
     ) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let query = plan.query();
+        let conditions = plan.conditions();
+
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_atomic_destroy(resource, query, conditions)?;
@@ -846,12 +854,15 @@ impl DataLayer for Postgres {
         row_to_fields(&row, plan.resource())
     }
 
-    async fn bulk_create(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
-    ) -> Result<Vec<FieldMap>> {
+    async fn bulk_create(&self, plan: &ash_core::BulkCreatePlan<'_>) -> Result<Vec<FieldMap>> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let rows: Vec<_> = plan
+            .rows()
+            .iter()
+            .map(|row| (row.id().clone(), row.fields().clone()))
+            .collect();
+
         if rows.is_empty() {
             return Ok(Vec::new());
         }
@@ -868,10 +879,16 @@ impl DataLayer for Postgres {
     /// version, go one at a time.
     async fn bulk_update(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
+        plan: &ash_core::BulkUpdatePlan<'_>,
     ) -> Result<Vec<Result<FieldMap>>> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let rows: Vec<_> = plan
+            .rows()
+            .iter()
+            .map(|row| (row.id().clone(), row.fields().clone()))
+            .collect();
+
         let mut results: Vec<Option<Result<FieldMap>>> = (0..rows.len()).map(|_| None).collect();
         let pk = resource
             .primary_key()
@@ -884,12 +901,9 @@ impl DataLayer for Postgres {
                 .any(|attr| !attr.primary_key && fields.contains_key(attr.name))
         };
         let mut together = Vec::new();
-        for (i, (id, fields)) in rows.iter().enumerate() {
+        for (i, (_id, fields)) in rows.iter().enumerate() {
             if !writes(fields) {
-                results[i] = Some(
-                    self.update(resource, tenant, id.clone(), fields.clone())
-                        .await,
-                );
+                results[i] = Some(self.update(&plan.rows()[i]).await);
             } else {
                 together.push(i);
             }
@@ -942,18 +956,17 @@ impl DataLayer for Postgres {
             .collect())
     }
 
-    async fn bulk_destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        ids: &[Value],
-    ) -> Result<()> {
+    async fn bulk_destroy(&self, plan: &ash_core::BulkDestroyPlan<'_>) -> Result<()> {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let ids: Vec<_> = plan.rows().iter().map(|row| row.id().clone()).collect();
+
         if ids.is_empty() {
             return Ok(());
         }
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect).with_tenant(tenant);
-        let compiled = compiler.compile_bulk_delete(resource, ids)?;
+        let compiled = compiler.compile_bulk_delete(resource, &ids)?;
         self.execute_compiled_resource(&compiled, resource).await?;
         Ok(())
     }

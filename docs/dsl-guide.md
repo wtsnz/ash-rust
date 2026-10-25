@@ -558,7 +558,7 @@ Options on `define`:
 - `on: record` or `on: id` for update/destroy-style interfaces that take a record or id
 
 ```rust
-use ash_core::domain;
+use ash_core::{Runtime, domain};
 
 domain! {
     Blog {
@@ -574,8 +574,9 @@ domain! {
     }
 }
 
-let blog = Blog::new(Sqlite::connect("sqlite://blog.db").await?);
-blog.install().await?;
+let runtime = Runtime::new(Sqlite::connect("sqlite://blog.db").await?);
+Blog::install(&runtime).await?;
+let blog = Blog::from_context(runtime.bootstrap());
 let posts = blog.query::<Post>().all().await?;
 ```
 

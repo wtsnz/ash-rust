@@ -20,6 +20,7 @@ pub mod default_value;
 pub mod derived;
 mod engine;
 mod error;
+mod execution_plan;
 mod expr;
 mod extension;
 mod filter;
@@ -44,9 +45,16 @@ mod types;
 mod value;
 mod write_plan;
 
+pub use execution_plan::{
+    AtomicDestroyPlan, AtomicUpdatePlan, BulkCreatePlan, BulkDestroyPlan, BulkUpdatePlan,
+    CountPlan, CreatePlan, DestroyPlan, PerKeyPlan, PlanScope, QueryPlan, QueryWithCountPlan,
+    UpdatePlan,
+};
 pub use write_plan::UpsertPlan;
 
-pub use access::{CredentialReadPermit, ReadRequest, ScopedAccess};
+pub use access::{
+    CredentialReadPermit, CredentialWritePermit, PreparedRead, ReadRequest, ScopedAccess,
+};
 pub use action::{
     ActionDef, ActionKind, ActionTarget, AfterActionFn, AfterTransactionFn, ArgumentDef,
     BeforeActionFn, Change, ChangeContext, Countable, CustomChange, CustomValidation,
@@ -70,15 +78,12 @@ pub use context::{Context, Runtime};
 pub use data_layer::{
     CompiledQuery, DataLayer, NoDataLayer, PerKey, SchemaSupport, Sort, TransactionSupport,
 };
-pub use policy::field_read_condition;
-// Re-export the deprecated compatibility insert until the write-plan migration.
-#[allow(deprecated)]
 pub use engine::{
     KeysetCursor, Page, Query, RelatedQuery, after_read, build_keyset_filter, count_related_query,
     create, create_dynamic, destroy, destroy_dynamic, destroy_dynamic_by_id, destroy_dynamic_via,
-    destroy_existing, get, handle_managed_relationships, insert, keyset_sort, keyset_values,
-    load_related, load_related_query, manual_create, query, record_visible, run, scope_read,
-    update, update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
+    destroy_existing, get, handle_managed_relationships, keyset_sort, keyset_values, load_related,
+    load_related_query, manual_create, query, record_visible, run, scope_read, update,
+    update_dynamic, update_dynamic_via, update_existing, update_existing_dynamic,
 };
 pub use error::{Error, Result};
 pub use expr::{CalculationDef, Expr, apply_named, apply_named_with_args, eval};
@@ -91,6 +96,7 @@ pub use keys::{
 pub use multi::{BoundMulti, IntoChangeset, Multi, MultiResult};
 pub use notifier::{Notification, Notifier, SyncFnNotifier};
 pub use pipeline::visible_scope;
+pub use policy::field_read_condition;
 pub use policy::{
     Check, FieldPolicyDef, PolicyDef, PolicyEffect, PolicyWhen, authorize_write, check_to_filter,
     compile_read_filter, field_policy_fields, guard_input_filter, guard_input_sort, hidden_fields,

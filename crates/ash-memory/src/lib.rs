@@ -162,11 +162,13 @@ impl DataLayer for Memory {
 
     fn create(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
+        plan: &ash_core::CreatePlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+        let fields = plan.fields().clone();
+
         ready((|| {
             let mut fields = fields;
             let mut tables = self.write()?;
@@ -186,11 +188,13 @@ impl DataLayer for Memory {
 
     fn update(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-        fields: FieldMap,
+        plan: &ash_core::UpdatePlan<'_>,
     ) -> impl Future<Output = Result<FieldMap>> + Send {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+        let fields = plan.fields().clone();
+
         ready((|| {
             let mut tables = self.write()?;
             let table = tables
@@ -267,12 +271,11 @@ impl DataLayer for Memory {
         })())
     }
 
-    fn destroy(
-        &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        id: Value,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn destroy(&self, plan: &ash_core::DestroyPlan<'_>) -> impl Future<Output = Result<()>> + Send {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let id = plan.id().clone();
+
         ready((|| {
             let mut tables = self.write()?;
             let table = tables
@@ -291,10 +294,16 @@ impl DataLayer for Memory {
 
     fn bulk_create(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        rows: Vec<(Value, FieldMap)>,
+        plan: &ash_core::BulkCreatePlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let rows: Vec<_> = plan
+            .rows()
+            .iter()
+            .map(|row| (row.id().clone(), row.fields().clone()))
+            .collect();
+
         ready((|| {
             let mut tables = self.write()?;
             let table = tables.entry(table_key(resource, tenant)).or_default();
@@ -317,16 +326,18 @@ impl DataLayer for Memory {
 
     fn bulk_destroy(
         &self,
-        resource: &ResourceDef,
-        tenant: Option<&str>,
-        ids: &[Value],
+        plan: &ash_core::BulkDestroyPlan<'_>,
     ) -> impl Future<Output = Result<()>> + Send {
+        let resource = plan.resource();
+        let tenant = plan.tenant();
+        let ids: Vec<_> = plan.rows().iter().map(|row| row.id().clone()).collect();
+
         ready((|| {
             let mut tables = self.write()?;
             let table = tables
                 .get_mut(&table_key(resource, tenant))
                 .ok_or(Error::NotFound)?;
-            for id in ids {
+            for id in &ids {
                 if table
                     .get(id)
                     .is_some_and(|row| in_tenant(resource, tenant, row))
@@ -347,10 +358,12 @@ impl DataLayer for Memory {
     /// set from its values as they were.
     fn update_atomic(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        update: &ash_core::AtomicUpdate,
+        plan: &ash_core::AtomicUpdatePlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        let resource = plan.resource();
+        let query = plan.query();
+        let update = plan.update();
+
         ready((|| {
             query.validate_lock(self.in_transaction)?;
             query.validate_data_layer(resource, ash_core::DataLayerKind::Memory)?;
@@ -424,10 +437,12 @@ impl DataLayer for Memory {
     /// removed.
     fn destroy_atomic(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
-        conditions: &[ash_core::AtomicCondition],
+        plan: &ash_core::AtomicDestroyPlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        let resource = plan.resource();
+        let query = plan.query();
+        let conditions = plan.conditions();
+
         ready((|| {
             query.validate_lock(self.in_transaction)?;
             query.validate_data_layer(resource, ash_core::DataLayerKind::Memory)?;
@@ -491,9 +506,11 @@ impl DataLayer for Memory {
 
     fn run_query(
         &self,
-        resource: &ResourceDef,
-        query: &CompiledQuery,
+        plan: &ash_core::QueryPlan<'_>,
     ) -> impl Future<Output = Result<Vec<FieldMap>>> + Send {
+        let resource = plan.resource();
+        let query = plan.query();
+
         ready((|| {
             query.validate_lock(self.in_transaction)?;
             query.validate_data_layer(resource, ash_core::DataLayerKind::Memory)?;

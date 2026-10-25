@@ -579,7 +579,7 @@ where
                         .collect();
                     let stored = ctx
                         .raw_data()
-                        .bulk_create(&R::DEF, ctx.tenant(), tuples)
+                        .bulk_create(&crate::BulkCreatePlan::new(&ctx, &R::DEF, tuples))
                         .await?;
                     stored.into_iter().map(Ok).collect()
                 };
@@ -620,14 +620,15 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
             visible_scope(&R::DEF, Some(id_filter), ctx.tenant().map(str::to_owned))?;
         let rows = ctx
             .raw_data()
-            .run_query(
+            .run_query(&crate::QueryPlan::new(
+                &ctx,
                 &R::DEF,
                 &CompiledQuery {
                     filter,
                     tenant,
                     ..CompiledQuery::default()
                 },
-            )
+            ))
             .await?;
         let chunk_size = opts.batch_size.unwrap_or(rows.len()).max(1);
         let notify = opts.notify;
@@ -771,7 +772,7 @@ pub async fn bulk_destroy<R: Resource, D: TransactionSupport + 'static, I: Clone
                     }
                 } else {
                     ctx.raw_data()
-                        .bulk_destroy(&R::DEF, ctx.tenant(), &ids)
+                        .bulk_destroy(&crate::BulkDestroyPlan::new(&ctx, &R::DEF, &ids))
                         .await?;
                 }
                 finish_rows(&ctx, batch, existing, notify, scope.transactional()).await
@@ -890,7 +891,7 @@ where
                     stored
                 } else {
                     ctx.raw_data()
-                        .bulk_update(&R::DEF, ctx.tenant(), writes)
+                        .bulk_update(&crate::BulkUpdatePlan::new(&ctx, &R::DEF, writes))
                         .await?
                 };
                 finish_rows(&ctx, batch, stored, notify, scope.transactional()).await

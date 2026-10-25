@@ -3,7 +3,7 @@
 
 mod support;
 
-use ash_core::{Context, Error, Resource, UtcDateTime};
+use ash_core::{Context, UtcDateTime};
 use lagrange::ops;
 use lagrange::types::ReservationStatus;
 use lagrange::{Berth, BerthReservation};
@@ -245,12 +245,31 @@ async fn recoding_a_berth_moves_its_holds<D: FleetDb>(h: Harness<D>) {
     assert_eq!(moved.berth_code, "A2-WEST");
 
     // A berth with holds can't be torn down.
-    let err = h
-        .app
-        .fleet()
-        .destroy(&Berth::DEF, None, berth.id.into())
-        .await
-        .unwrap_err();
-    assert!(!matches!(err, Error::NotFound), "{err:?}");
+    let storage = h.app.fleet() as &dyn std::any::Any;
+    if let Some(sqlite) = storage.downcast_ref::<ash_sqlite::Sqlite>() {
+        let error = sqlx::query("DELETE FROM berths WHERE id = ?")
+            .bind(berth.id.to_string())
+            .execute(sqlite.pool().unwrap())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .as_database_error()
+                .is_some_and(|error| matches!(error.code().as_deref(), Some("787" | "1811"))),
+            "{error}"
+        );
+    } else {
+        let postgres = storage.downcast_ref::<ash_postgres::Postgres>().unwrap();
+        let error = postgres
+            .pool()
+            .unwrap()
+            .get()
+            .await
+            .unwrap()
+            .execute("DELETE FROM berths WHERE id = $1", &[&berth.id])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code().map(|code| code.code()), Some("23503"));
+    }
 }
 on_every_backend!(recoding_a_berth_moves_its_holds);

@@ -3,9 +3,13 @@
 //! AshPostgres loads a relationship; SQLite and memory all at once, paging each source's
 //! rows after, as Ash does without lateral joins. One scenario, the same answers.
 
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, CompiledQuery, DataLayer, FieldMap, Filter, PerKey,
-    PreparationDef, RelatedQuery, RelationshipDef, ResourceDef, Sort, Value, load_related_query,
+    ActionDef, AttrType, AttributeDef, DataLayer, FieldMap, Filter, PerKey, PreparationDef,
+    RelatedQuery, RelationshipDef, ResourceDef, Sort, Value, load_related_query,
 };
 use ash_memory::Memory;
 use ash_postgres::Postgres;
@@ -125,7 +129,7 @@ static CHUNK: ResourceDef = ResourceDef {
     ..BASE
 };
 
-async fn insert<D: DataLayer>(
+async fn insert<D: DataLayer + Clone>(
     data: &D,
     resource: &ResourceDef,
     fields: &[(&str, Value)],
@@ -136,7 +140,7 @@ async fn insert<D: DataLayer>(
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
     map.insert("id".into(), Value::Uuid(id));
-    data.create(resource, None, Value::from(id), map)
+    data.fixture_create(resource, None, Value::from(id), map)
         .await
         .unwrap()
 }
@@ -151,8 +155,6 @@ fn texts<'a>(rows: impl Iterator<Item = &'a FieldMap>, field: &str) -> Vec<Strin
     .collect()
 }
 
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
 async fn scenario<D: DataLayer + Clone>(data: D) {
     let a = insert(&data, &SHELF, &[("name", Value::from("a"))]).await;
     let b = insert(&data, &SHELF, &[("name", Value::from("b"))]).await;
@@ -183,7 +185,7 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         )
         .await;
     }
-    let ctx = ash_core::Runtime::new(data).bootstrap();
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
     let shelves: Vec<ash_core::RelationshipSource> = [a.clone(), b.clone(), empty, a.clone()]
         .into_iter()
         .map(Into::into)
@@ -306,10 +308,10 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
         .collect();
     let mut blobs = Vec::new();
     for digest in digests.iter().map(String::as_str) {
-        blobs.push(insert(&*ctx.data, &BLOB, &[("digest", Value::from(digest))]).await);
+        blobs.push(insert(&data, &BLOB, &[("digest", Value::from(digest))]).await);
         for n in [3, 1, 2] {
             insert(
-                &*ctx.data,
+                &data,
                 &CHUNK,
                 &[("digest", Value::from(digest)), ("n", Value::Int(n))],
             )
@@ -344,7 +346,7 @@ async fn scenario<D: DataLayer + Clone>(data: D) {
 }
 
 /// A key given twice gets its rows twice, each time paged.
-async fn per_key_twice<D: DataLayer>(data: &D) {
+async fn per_key_twice<D: DataLayer + Clone>(data: &D) {
     let shelf = insert(data, &SHELF, &[("name", Value::from("twice"))]).await;
     let id = shelf.get("id").cloned().unwrap();
     for title in ["T1", "T2"] {
@@ -356,27 +358,22 @@ async fn per_key_twice<D: DataLayer>(data: &D) {
         ];
         insert(data, &BOOK, &fields).await;
     }
-    let query = CompiledQuery {
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
+    let query = RelatedQuery {
         sort: vec![Sort {
             field: "title".into(),
-            descending: false,
             ..Default::default()
         }],
         limit: Some(1),
-        ..CompiledQuery::default()
+        ..Default::default()
     };
-    let per_key = data
-        .run_query_per_key(
-            &BOOK,
-            &query,
-            &PerKey::Attribute("shelf_id"),
-            &[id.clone(), id],
-        )
+    let source: ash_core::RelationshipSource = ash_core::fields! { "id" => id }.into();
+    let per_key = load_related_query(&ctx, &SHELF, "books", &[source.clone(), source], &query)
         .await
         .unwrap();
     let titles: Vec<Vec<String>> = per_key
         .iter()
-        .map(|rows| texts(rows.iter(), "title"))
+        .map(|rows| texts(rows.iter().map(ash_core::View::fields), "title"))
         .collect();
     assert_eq!(titles, [vec!["T1"], vec!["T1"]]);
 }

@@ -16,6 +16,9 @@ pub fn action_named<'a>(def: &'a ResourceDef, name: &str) -> Result<&'a ActionDe
 
 pub fn read_action<'a>(def: &'a ResourceDef, name: Option<&str>) -> Result<&'a ActionDef> {
     let action = match name {
+        Some(name) if def.action(name).is_none() && name == def.default_read().name => {
+            def.default_read()
+        }
         Some(name) => action_named(def, name)?,
         None => def.default_read(),
     };

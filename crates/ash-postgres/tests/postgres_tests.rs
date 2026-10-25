@@ -1,6 +1,10 @@
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use ash_core::{
-    ActionDef, AttrType, AttributeDef, CompiledQuery, DataLayer, Error, FieldMap, Filter,
-    IdentityDef, ResourceDef, TransactionSupport, Value,
+    ActionDef, AttrType, AttributeDef, CompiledQuery, Error, FieldMap, Filter, IdentityDef,
+    ResourceDef, TransactionSupport, Value,
 };
 use ash_postgres::Postgres;
 use ash_sql::{PostgresDialect, TableSnapshot, generate_migration_with_version};
@@ -55,7 +59,7 @@ async fn get_test_postgres() -> Option<Postgres> {
 }
 
 #[tokio::test]
-#[allow(deprecated)]
+
 async fn test_postgres_crud_and_returning_and_upsert() {
     let Some(pg) = get_test_postgres().await else {
         eprintln!("PostgreSQL not reachable; skipping test");
@@ -77,7 +81,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     fields.insert("is_active".into(), Value::Bool(true));
 
     let created = pg
-        .create(&CUSTOMER_DEF, None, Value::from(id), fields)
+        .fixture_create(&CUSTOMER_DEF, None, Value::from(id), fields)
         .await
         .expect("Create failed");
     assert_eq!(created.get("id"), Some(&Value::Uuid(id)));
@@ -92,7 +96,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
         ..CompiledQuery::default()
     };
     let rows = pg
-        .run_query(&CUSTOMER_DEF, &query)
+        .fixture_run_query(&CUSTOMER_DEF, &query)
         .await
         .expect("Query failed");
     assert_eq!(rows.len(), 1);
@@ -104,7 +108,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     update_fields.insert("score".into(), Value::Int(250));
 
     let updated = pg
-        .update(&CUSTOMER_DEF, None, Value::from(id), update_fields)
+        .fixture_update(&CUSTOMER_DEF, None, Value::from(id), update_fields)
         .await
         .expect("Update failed");
     assert_eq!(
@@ -121,7 +125,7 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     upsert_fields.insert("score".into(), Value::Int(300));
 
     let upserted = pg
-        .upsert_raw(
+        .fixture_upsert(
             &CUSTOMER_DEF,
             None,
             Value::from(id),
@@ -138,13 +142,13 @@ async fn test_postgres_crud_and_returning_and_upsert() {
     assert_eq!(upserted.get("score"), Some(&Value::Int(300)));
 
     // 5. DESTROY
-    pg.destroy(&CUSTOMER_DEF, None, Value::from(id))
+    pg.fixture_destroy(&CUSTOMER_DEF, None, Value::from(id))
         .await
         .expect("Destroy failed");
 
     // Verify row is gone
     let rows_after = pg
-        .run_query(&CUSTOMER_DEF, &query)
+        .fixture_run_query(&CUSTOMER_DEF, &query)
         .await
         .expect("Query failed");
     assert!(rows_after.is_empty());
@@ -163,7 +167,7 @@ async fn test_postgres_unique_violation_error_mapping() {
     let id1 = Uuid::new_v4();
     fields1.insert("id".into(), Value::Uuid(id1));
     fields1.insert("email".into(), Value::String(email.clone()));
-    pg.create(&CUSTOMER_DEF, None, Value::from(id1), fields1)
+    pg.fixture_create(&CUSTOMER_DEF, None, Value::from(id1), fields1)
         .await
         .unwrap();
 
@@ -173,7 +177,7 @@ async fn test_postgres_unique_violation_error_mapping() {
     fields2.insert("email".into(), Value::String(email.clone()));
 
     let err = pg
-        .create(&CUSTOMER_DEF, None, Value::from(id2), fields2)
+        .fixture_create(&CUSTOMER_DEF, None, Value::from(id2), fields2)
         .await
         .unwrap_err();
     match err {
@@ -184,7 +188,9 @@ async fn test_postgres_unique_violation_error_mapping() {
     }
 
     // Cleanup
-    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id1)).await;
+    let _ = pg
+        .fixture_destroy(&CUSTOMER_DEF, None, Value::from(id1))
+        .await;
 }
 
 #[tokio::test]
@@ -206,7 +212,7 @@ async fn test_postgres_transaction_commit_and_rollback() {
                 let mut fields = FieldMap::new();
                 fields.insert("id".into(), Value::Uuid(id_rollback));
                 fields.insert("email".into(), Value::String(email));
-                tx.create(&CUSTOMER_DEF, None, Value::from(id_rollback), fields)
+                tx.fixture_create(&CUSTOMER_DEF, None, Value::from(id_rollback), fields)
                     .await?;
                 // Force error to trigger rollback
                 Err(Error::Invalid("abort transaction".into()))
@@ -221,7 +227,7 @@ async fn test_postgres_transaction_commit_and_rollback() {
         filter: Some(Filter::eq("id", Value::Uuid(id_rollback))),
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&CUSTOMER_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&CUSTOMER_DEF, &query).await.unwrap();
     assert!(rows.is_empty(), "Record should not exist after rollback");
 
     // 2. Transaction that succeeds and commits
@@ -235,7 +241,7 @@ async fn test_postgres_transaction_commit_and_rollback() {
             let mut fields = FieldMap::new();
             fields.insert("id".into(), Value::Uuid(id_commit));
             fields.insert("email".into(), Value::String(email));
-            tx.create(&CUSTOMER_DEF, None, Value::from(id_commit), fields)
+            tx.fixture_create(&CUSTOMER_DEF, None, Value::from(id_commit), fields)
                 .await?;
             Ok(())
         }
@@ -247,12 +253,15 @@ async fn test_postgres_transaction_commit_and_rollback() {
         filter: Some(Filter::eq("id", Value::Uuid(id_commit))),
         ..CompiledQuery::default()
     };
-    let rows_commit = pg.run_query(&CUSTOMER_DEF, &query_commit).await.unwrap();
+    let rows_commit = pg
+        .fixture_run_query(&CUSTOMER_DEF, &query_commit)
+        .await
+        .unwrap();
     assert_eq!(rows_commit.len(), 1);
 
     // Cleanup
     let _ = pg
-        .destroy(&CUSTOMER_DEF, None, Value::from(id_commit))
+        .fixture_destroy(&CUSTOMER_DEF, None, Value::from(id_commit))
         .await;
 }
 
@@ -327,10 +336,7 @@ async fn test_postgres_in_query_large_batch_any_array() {
         Value::String(format!("user1_{}@example.com", Uuid::new_v4().simple())),
     );
     f1.insert("name".into(), Value::String("User 1".into()));
-    f1.insert("role".into(), Value::String("customer".into()));
-    f1.insert("active".into(), Value::Bool(true));
-    f1.insert("points".into(), Value::Int(10));
-    pg.create(&CUSTOMER_DEF, None, Value::from(id1), f1)
+    pg.fixture_create(&CUSTOMER_DEF, None, Value::from(id1), f1)
         .await
         .unwrap();
 
@@ -341,10 +347,7 @@ async fn test_postgres_in_query_large_batch_any_array() {
         Value::String(format!("user2_{}@example.com", Uuid::new_v4().simple())),
     );
     f2.insert("name".into(), Value::String("User 2".into()));
-    f2.insert("role".into(), Value::String("customer".into()));
-    f2.insert("active".into(), Value::Bool(true));
-    f2.insert("points".into(), Value::Int(20));
-    pg.create(&CUSTOMER_DEF, None, Value::from(id2), f2)
+    pg.fixture_create(&CUSTOMER_DEF, None, Value::from(id2), f2)
         .await
         .unwrap();
 
@@ -360,11 +363,15 @@ async fn test_postgres_in_query_large_batch_any_array() {
         ..ash_core::CompiledQuery::default()
     };
 
-    let rows = pg.run_query(&CUSTOMER_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&CUSTOMER_DEF, &query).await.unwrap();
     assert_eq!(rows.len(), 2);
 
-    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id1)).await;
-    let _ = pg.destroy(&CUSTOMER_DEF, None, Value::from(id2)).await;
+    let _ = pg
+        .fixture_destroy(&CUSTOMER_DEF, None, Value::from(id1))
+        .await;
+    let _ = pg
+        .fixture_destroy(&CUSTOMER_DEF, None, Value::from(id2))
+        .await;
 }
 
 static NODE_ATTRS: &[AttributeDef] = &[
@@ -421,7 +428,7 @@ async fn test_postgres_self_referential_aggregate() {
     let mut root_fields = ash_core::FieldMap::new();
     root_fields.insert("id".into(), Value::Uuid(root_id));
     root_fields.insert("name".into(), Value::String("Root Node".into()));
-    pg.create(&NODE_DEF, None, Value::from(root_id), root_fields)
+    pg.fixture_create(&NODE_DEF, None, Value::from(root_id), root_fields)
         .await
         .unwrap();
 
@@ -431,7 +438,7 @@ async fn test_postgres_self_referential_aggregate() {
         child_fields.insert("id".into(), Value::Uuid(child_id));
         child_fields.insert("name".into(), Value::String(format!("Child Node {i}")));
         child_fields.insert("parent_id".into(), Value::Uuid(root_id));
-        pg.create(&NODE_DEF, None, Value::from(child_id), child_fields)
+        pg.fixture_create(&NODE_DEF, None, Value::from(child_id), child_fields)
             .await
             .unwrap();
     }
@@ -442,7 +449,7 @@ async fn test_postgres_self_referential_aggregate() {
         ..ash_core::CompiledQuery::default()
     };
 
-    let rows = pg.run_query(&NODE_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&NODE_DEF, &query).await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("children_count"), Some(&Value::Int(3)));
 
@@ -576,7 +583,10 @@ async fn test_postgres_empty_in_and_empty_bulk_operations() {
         filter: Some(Filter::in_list("id", Vec::<Value>::new())),
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&CUSTOMER_DEF, &query_empty).await.unwrap();
+    let rows = pg
+        .fixture_run_query(&CUSTOMER_DEF, &query_empty)
+        .await
+        .unwrap();
     assert!(rows.is_empty());
 
     // 2. Query with NOT (Filter::in_list empty) -> matches without error
@@ -584,17 +594,30 @@ async fn test_postgres_empty_in_and_empty_bulk_operations() {
         filter: Some(!Filter::in_list("id", Vec::<Value>::new())),
         ..CompiledQuery::default()
     };
-    let _ = pg.run_query(&CUSTOMER_DEF, &query_not_empty).await.unwrap();
+    let _ = pg
+        .fixture_run_query(&CUSTOMER_DEF, &query_not_empty)
+        .await
+        .unwrap();
 
     // 3. bulk_create with empty items -> returns Ok(vec![])
     let created = pg
-        .bulk_create(&CUSTOMER_DEF, None, Vec::new())
+        .fixture_bulk_create(&CUSTOMER_DEF, None, Vec::new())
         .await
         .unwrap();
     assert!(created.is_empty());
 
     // 4. bulk_destroy with empty IDs -> returns Ok(())
-    pg.bulk_destroy(&CUSTOMER_DEF, None, &[]).await.unwrap();
+    let delete = ash_sql::QueryCompiler::new(&PostgresDialect)
+        .compile_bulk_delete(&CUSTOMER_DEF, &[])
+        .unwrap();
+    pg.pool()
+        .unwrap()
+        .get()
+        .await
+        .unwrap()
+        .execute(&delete.sql, &[])
+        .await
+        .unwrap();
 }
 
 static NULLABLE_ATTRS: &[AttributeDef] = &[
@@ -644,7 +667,7 @@ async fn test_postgres_stores_null_in_typed_columns() {
         fields.insert(name.into(), Value::Null);
     }
     let created = pg
-        .create(&NULLABLE_DEF, None, Value::from(id), fields)
+        .fixture_create(&NULLABLE_DEF, None, Value::from(id), fields)
         .await
         .unwrap();
     for name in ["owner_id", "score", "active", "settings"] {
@@ -652,7 +675,7 @@ async fn test_postgres_stores_null_in_typed_columns() {
     }
 
     let rows = pg
-        .run_query(
+        .fixture_run_query(
             &NULLABLE_DEF,
             &CompiledQuery {
                 filter: Some(Filter::and([
@@ -696,7 +719,7 @@ async fn test_postgres_binds_missing_calculation_arguments_with_their_type() {
     let mut fields = FieldMap::new();
     fields.insert("id".into(), Value::Uuid(id));
     fields.insert("score".into(), Value::Int(5));
-    pg.create(&BONUS_DEF, None, Value::from(id), fields)
+    pg.fixture_create(&BONUS_DEF, None, Value::from(id), fields)
         .await
         .unwrap();
 
@@ -706,7 +729,7 @@ async fn test_postgres_binds_missing_calculation_arguments_with_their_type() {
         calculations: vec!["bonus".into()],
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&BONUS_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&BONUS_DEF, &query).await.unwrap();
     assert_eq!(rows[0].get("bonus"), Some(&Value::Int(5)));
 }
 
@@ -751,7 +774,7 @@ async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions()
     fields.insert("id".into(), Value::Uuid(id));
     fields.insert("org".into(), Value::String("acme".into()));
     fields.insert("body".into(), Value::String("hello".into()));
-    pg.create(&TENANT_NOTE_DEF, None, Value::from(id), fields)
+    pg.fixture_create(&TENANT_NOTE_DEF, Some("acme"), Value::from(id), fields)
         .await
         .unwrap();
 
@@ -765,8 +788,8 @@ async fn test_postgres_attribute_tenancy_keeps_the_search_path_in_transactions()
         .transaction(|tx| {
             let tx = tx.clone();
             async move {
-                let first = tx.run_query(&TENANT_NOTE_DEF, &query).await?;
-                let second = tx.run_query(&TENANT_NOTE_DEF, &query).await?;
+                let first = tx.fixture_run_query(&TENANT_NOTE_DEF, &query).await?;
+                let second = tx.fixture_run_query(&TENANT_NOTE_DEF, &query).await?;
                 Ok((first.len(), second.len()))
             }
         })
@@ -816,7 +839,7 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
     let order = Uuid::new_v4();
     let mut fields = FieldMap::new();
     fields.insert("id".into(), Value::Uuid(order));
-    pg.create(&SUM_ORDER_DEF, None, Value::from(order), fields)
+    pg.fixture_create(&SUM_ORDER_DEF, None, Value::from(order), fields)
         .await
         .unwrap();
     for amount in [12, 30] {
@@ -825,7 +848,7 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
         fields.insert("id".into(), Value::Uuid(id));
         fields.insert("order_id".into(), Value::Uuid(order));
         fields.insert("amount".into(), Value::Int(amount));
-        pg.create(&SUM_LINE_DEF, None, Value::from(id), fields)
+        pg.fixture_create(&SUM_LINE_DEF, None, Value::from(id), fields)
             .await
             .unwrap();
     }
@@ -836,7 +859,7 @@ async fn test_postgres_sum_aggregates_read_as_integers() {
         aggregates: vec!["total".into()],
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&SUM_ORDER_DEF, &query).await.unwrap();
     assert_eq!(rows[0].get("total"), Some(&Value::Int(42)));
 }
 
@@ -853,7 +876,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
     for amounts in [&[12, 30][..], &[5][..]] {
         let order = Uuid::new_v4();
         orders.push(order);
-        pg.create(
+        pg.fixture_create(
             &SUM_ORDER_DEF,
             None,
             Value::from(order),
@@ -868,7 +891,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
                 ("order_id".into(), Value::Uuid(order)),
                 ("amount".into(), Value::Int(*amount)),
             ]);
-            pg.create(&SUM_LINE_DEF, None, Value::from(id), fields)
+            pg.fixture_create(&SUM_LINE_DEF, None, Value::from(id), fields)
                 .await
                 .unwrap();
         }
@@ -882,7 +905,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
         ])),
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&SUM_ORDER_DEF, &query).await.unwrap();
     assert_eq!(
         rows.iter().map(|row| row.get("id")).collect::<Vec<_>>(),
         [Some(&Value::Uuid(orders[0]))]
@@ -898,7 +921,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
         aggregates: vec!["total".into()],
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&SUM_ORDER_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&SUM_ORDER_DEF, &query).await.unwrap();
     let totals: Vec<_> = rows.iter().map(|row| row.get("total").cloned()).collect();
     assert_eq!(totals, [Some(Value::Int(5)), Some(Value::Int(42))]);
 
@@ -908,7 +931,7 @@ async fn test_postgres_filters_and_sorts_by_aggregates_and_selects_attributes() 
         select: Some(vec!["amount".into()]),
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&SUM_LINE_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&SUM_LINE_DEF, &query).await.unwrap();
     assert_eq!(rows.len(), 2);
     for row in rows {
         let mut keys: Vec<_> = row.keys().map(String::as_str).collect();
@@ -966,7 +989,7 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
         .await
         .unwrap();
     let order = Uuid::new_v4();
-    pg.create(
+    pg.fixture_create(
         &OWNED_ORDER_DEF,
         None,
         Value::from(order),
@@ -983,7 +1006,7 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
             ("owner_id".into(), Value::Uuid(owner)),
             ("at".into(), Value::from("2026-01-02T03:04:05.000000Z")),
         ]);
-        pg.create(&OWNED_LINE_DEF, None, Value::from(id), fields)
+        pg.fixture_create(&OWNED_LINE_DEF, None, Value::from(id), fields)
             .await
             .unwrap();
     }
@@ -994,7 +1017,7 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
         ..CompiledQuery::default()
     };
     let rows = pg
-        .run_query(
+        .fixture_run_query(
             &OWNED_ORDER_DEF,
             &count_as(Some(ash_core::Actor::new(mine))),
         )
@@ -1002,7 +1025,7 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
         .unwrap();
     assert_eq!(rows[0].get("line_count"), Some(&Value::Int(2)));
     let rows = pg
-        .run_query(&OWNED_ORDER_DEF, &count_as(None))
+        .fixture_run_query(&OWNED_ORDER_DEF, &count_as(None))
         .await
         .unwrap();
     assert_eq!(rows[0].get("line_count"), Some(&Value::Int(0)));
@@ -1016,7 +1039,10 @@ async fn test_postgres_aggregates_count_what_the_actor_reads() {
         ..CompiledQuery::default()
     };
     assert_eq!(
-        pg.run_query(&OWNED_ORDER_DEF, &query).await.unwrap().len(),
+        pg.fixture_run_query(&OWNED_ORDER_DEF, &query)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -1059,7 +1085,7 @@ async fn test_postgres_computes_rust_only_calculations() {
         ("id".into(), Value::Uuid(id)),
         ("label".into(), Value::from("quiet")),
     ]);
-    pg.create(&SHOUTING_DEF, None, Value::from(id), fields)
+    pg.fixture_create(&SHOUTING_DEF, None, Value::from(id), fields)
         .await
         .unwrap();
     let query = CompiledQuery {
@@ -1068,7 +1094,7 @@ async fn test_postgres_computes_rust_only_calculations() {
         calculations: vec!["shout".into()],
         ..CompiledQuery::default()
     };
-    let rows = pg.run_query(&SHOUTING_DEF, &query).await.unwrap();
+    let rows = pg.fixture_run_query(&SHOUTING_DEF, &query).await.unwrap();
     assert_eq!(rows[0].get("shout"), Some(&Value::from("QUIET")));
 }
 
@@ -1568,8 +1594,7 @@ async fn stored_fleet(
 /// a column a row doesn't change keeps what's stored, even a change made since the batch
 /// read it.
 #[tokio::test]
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
+
 async fn test_postgres_bulk_update_writes_each_rows_changes() {
     use ash_core::{BulkUpdateOptions, FieldMap, Resource};
     use pg_fleet::PgVehicle;
@@ -1585,8 +1610,7 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
     // An operator recalls one after the batch has read it.
     let mut recall = FieldMap::new();
     recall.insert("status".into(), Value::from("returning"));
-    ctx.data
-        .update(&PgVehicle::DEF, None, Value::from(fleet[2].id), recall)
+    scoped_fixtures::update(&ctx, &PgVehicle::DEF, Value::from(fleet[2].id), recall)
         .await
         .unwrap();
 
@@ -1632,8 +1656,7 @@ async fn test_postgres_bulk_update_writes_each_rows_changes() {
 /// that fails rolls back the rest, and no notification goes out for any of them. Without
 /// a transaction, the row fails alone.
 #[tokio::test]
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
+
 async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
     use ash_core::{BulkTransaction, BulkUpdateOptions, Resource};
     use pg_fleet::PgVehicle;
@@ -1650,8 +1673,7 @@ async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
     // One is gone before the batch lands.
-    ctx.data
-        .destroy(&PgVehicle::DEF, None, Value::from(fleet[4].id))
+    scoped_fixtures::destroy(&ctx, &PgVehicle::DEF, Value::from(fleet[4].id))
         .await
         .unwrap();
     let parked: Vec<(String, f64, i64, String)> = (0..4)
@@ -1711,8 +1733,7 @@ async fn test_postgres_bulk_update_rolls_back_a_batch_with_a_failed_row() {
 /// `transaction: :batch` rolls back only the batch a failed row is in; `:all` rolls back
 /// the whole action.
 #[tokio::test]
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
+
 async fn test_postgres_bulk_update_transaction_scopes() {
     use ash_core::{BulkTransaction, BulkUpdateOptions, Resource};
     use pg_fleet::PgVehicle;
@@ -1737,8 +1758,7 @@ async fn test_postgres_bulk_update_transaction_scopes() {
 
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
-    ctx.data
-        .destroy(&PgVehicle::DEF, None, Value::from(fleet[3].id))
+    scoped_fixtures::destroy(&ctx, &PgVehicle::DEF, Value::from(fleet[3].id))
         .await
         .unwrap();
     let result = PgVehicle::bulk_update_with_opts(&ctx, "report", reports(&fleet), opts.clone())
@@ -1762,8 +1782,7 @@ async fn test_postgres_bulk_update_transaction_scopes() {
 
     let run = Uuid::new_v4().simple().to_string();
     let fleet = park(&ctx, &run, 5).await;
-    ctx.data
-        .destroy(&PgVehicle::DEF, None, Value::from(fleet[3].id))
+    scoped_fixtures::destroy(&ctx, &PgVehicle::DEF, Value::from(fleet[3].id))
         .await
         .unwrap();
     let result = PgVehicle::bulk_update_with_opts(
@@ -1866,10 +1885,21 @@ async fn test_postgres_reads_a_page_and_its_count_together() {
     let read = |pg: Postgres| {
         let (page, count) = (page.clone(), count.clone());
         async move {
-            let (records, counted) = pg
-                .run_query_with_count(&PgVehicle::DEF, &page, &count)
+            let ctx = ash_core::Runtime::new(pg).bootstrap();
+            let (records, counted) = ctx
+                .access()
+                .read_with_count(
+                    &PgVehicle::DEF,
+                    "read",
+                    &FieldMap::new(),
+                    scoped_fixtures::request(&page),
+                    scoped_fixtures::request(&count),
+                )
                 .await?;
-            let speeds: Vec<Value> = records.iter().map(|r| r["speed_kph"].clone()).collect();
+            let speeds: Vec<Value> = records
+                .iter()
+                .map(|r| r.get("speed_kph").unwrap().clone())
+                .collect();
             Ok::<_, ash_core::Error>((speeds, counted))
         }
     };
@@ -1941,7 +1971,7 @@ async fn test_postgres_like_and_ilike() {
 /// Counts run in the database, as `COUNT(*)`: of a filter, and of a page.
 #[tokio::test]
 async fn test_postgres_counts_in_the_database() {
-    use ash_core::{CompiledQuery, DataLayer, Filter, Resource};
+    use ash_core::{CompiledQuery, Filter, Resource};
     use pg_fleet::PgVehicle;
 
     let Some(pg) = get_test_postgres().await else {
@@ -1981,5 +2011,5 @@ async fn test_postgres_counts_in_the_database() {
         offset: Some(2),
         ..CompiledQuery::default()
     };
-    assert_eq!(pg.count(&PgVehicle::DEF, &page).await.unwrap(), 1);
+    assert_eq!(pg.fixture_count(&PgVehicle::DEF, &page).await.unwrap(), 1);
 }

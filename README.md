@@ -6,6 +6,13 @@ A declarative, resource-oriented framework for Rust inspired by [Elixir's Ash Fr
 
 ---
 
+Core execution is scope-bound. Pass a Context created by `Runtime::bind` to resource
+actions and queries. Data layers accept only core-built opaque plans; Context has
+no public backend accessor or raw insert method. Seeds and jobs use
+`runtime.system().bind(...)`. Application-owned database pools for reporting and
+migrations remain outside the framework's guarantees. Custom data layers must
+migrate to the [plan interface](docs/scoped-access.md#implementing-a-data-layer).
+
 ## Highlights
 
 - **Declarative DSL (`resource!`)**: Define attributes, actions, relationships, aggregates, calculations, identities, indexes, checks, and policies in a unified, readable specification.

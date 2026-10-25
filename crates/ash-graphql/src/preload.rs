@@ -1,6 +1,3 @@
-// Raw engine queries migrate to executable plans in the next step.
-#![allow(deprecated)]
-
 //! Relationships loaded ahead, as AshGraphql loads them: before the fields of a query's
 //! records resolve, its selection is read, and each relationship it selects is loaded for
 //! every record at once, one read per relationship, nested selections in turn. The
@@ -233,22 +230,17 @@ pub(crate) async fn load_selected<D: DataLayer>(
         select: Some(load.select),
         aggregates: load.aggregates,
         calculations: load.calculations,
-        tenant: ash.tenant().map(str::to_owned),
-        actor: ash.authorization_actor().cloned(),
+
         ..CompiledQuery::default()
     };
-    let loaded = ash
-        .data
-        .run_query(resource, &query)
-        .await
-        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
-    let loaded = loaded
-        .into_iter()
-        .map(|row| {
-            ash.present(resource, row.into(), None)
-                .map_err(|e| async_graphql::Error::new(e.to_string()))
-        })
-        .collect::<async_graphql::Result<Vec<_>>>()?;
+    let loaded = crate::query::run_read(
+        ash,
+        resource,
+        resource.default_read(),
+        &ash_core::FieldMap::new(),
+        query,
+    )
+    .await?;
     for record in records.iter_mut() {
         if let Some(row) = loaded.iter().find(|row| row.get(pk) == record.get(pk)) {
             record.merge_selected(row, &loaded_names);

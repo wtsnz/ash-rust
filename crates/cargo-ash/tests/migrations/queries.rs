@@ -1,4 +1,6 @@
-use ash_core::{CompiledQuery, DataLayer, Filter, Resource, Result, Value};
+use crate::scoped_fixtures::Fixtures;
+
+use ash_core::{CompiledQuery, Filter, Resource, Result, Value};
 
 use crate::fixtures::searchable_notes::SearchableNote;
 use crate::support::{Db, TestDb, on_every_backend};
@@ -44,8 +46,12 @@ async fn run(db: &TestDb, filter: Filter) -> Result<Vec<String>> {
         ..Default::default()
     };
     let rows = match &db.db {
-        Db::Sqlite(sqlite) => sqlite.run_query(&SearchableNote::DEF, &query).await?,
-        Db::Postgres(pg) => pg.run_query(&SearchableNote::DEF, &query).await?,
+        Db::Sqlite(sqlite) => {
+            sqlite
+                .fixture_run_query(&SearchableNote::DEF, &query)
+                .await?
+        }
+        Db::Postgres(pg) => pg.fixture_run_query(&SearchableNote::DEF, &query).await?,
     };
     let mut titles: Vec<String> = rows
         .iter()

@@ -46,8 +46,7 @@ pub async fn open_sqlite_runtime(
     }
     let db = Sqlite::file(path).await?;
     let desk_runtime = ash_core::Runtime::new(db);
-    let desk = Helpdesk::from_context(desk_runtime.bootstrap());
-    desk.install().await?;
+    Helpdesk::install(&desk_runtime).await?;
     Ok(desk_runtime)
 }
 

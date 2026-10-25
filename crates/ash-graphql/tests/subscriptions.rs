@@ -1,3 +1,6 @@
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+
 use ash_core::{ActionDef, AttrType, AttributeDef, ResourceDef};
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -824,8 +827,7 @@ async fn the_older_graphql_ws_protocol_still_works() {
 /// A mutation sent over the socket runs for each sender: only subscriptions are shared.
 #[cfg(feature = "axum")]
 #[tokio::test(flavor = "multi_thread")]
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
+
 async fn mutations_over_the_socket_are_not_shared() {
     let pubsub = PubSub::new();
     let ctx_runtime = ash_core::Runtime::new(Memory::new());
@@ -853,10 +855,7 @@ async fn mutations_over_the_socket_are_not_shared() {
         );
         assert_eq!(read_message(&mut socket).await["type"], "complete");
     }
-    use ash_core::DataLayer;
-    let stored = ctx
-        .data
-        .run_query(&TICKET_DEF, &ash_core::CompiledQuery::default())
+    let stored = scoped_fixtures::stored(&ctx, &TICKET_DEF, &ash_core::CompiledQuery::default())
         .await
         .unwrap();
     assert_eq!(stored.len(), 2);

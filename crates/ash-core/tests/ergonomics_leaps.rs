@@ -209,8 +209,12 @@ async fn test_leap5_fluid_multi_in_memory() {
 #[tokio::test]
 async fn test_leap5_fluid_multi_in_sqlite_transaction() {
     let data = Sqlite::memory().await.expect("sqlite init");
-    let ctx = ash_core::Runtime::new(data).bootstrap();
-    ctx.install(&[&Article::DEF]).await.expect("install schema");
+    let schema_runtime = ash_core::Runtime::new(data);
+    let ctx = schema_runtime.bootstrap();
+    schema_runtime
+        .install(&[&Article::DEF])
+        .await
+        .expect("install schema");
 
     // Leap 5: ctx.multi().commit() executes inside an atomic SQLite transaction!
     let results = ctx

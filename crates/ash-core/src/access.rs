@@ -19,35 +19,78 @@ use crate::value::FieldMap;
 pub struct ReadRequest {
     pub lock: Option<crate::ReadLock>,
     pub distinct_on: Option<crate::DistinctOn>,
+    pub select: Option<Vec<String>>,
+    pub calculations: Vec<String>,
+    pub calculation_args: std::collections::HashMap<String, FieldMap>,
+    pub aggregates: Vec<String>,
+    /// Seal cursor values before read hooks and projection, in this effective ordering.
+    pub keyset: Option<Vec<Sort>>,
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
 
+/// A named read prepared by core for one exact request scope. Extensions may use
+/// its query shape to paginate, but cannot replace its candidate predicate or identity.
+///
+/// ```compile_fail,E0616
+/// fn forge(read: &mut ash_core::PreparedRead<'_>) {
+///     read.query = ash_core::CompiledQuery::default();
+/// }
+/// ```
+#[derive(Clone)]
+pub struct PreparedRead<'a> {
+    scope: std::sync::Arc<crate::context::Scope>,
+    resource: &'a ResourceDef,
+    action: &'a crate::ActionDef,
+    arguments: FieldMap,
+    query: CompiledQuery,
+}
+impl PreparedRead<'_> {
+    pub fn query(&self) -> &CompiledQuery {
+        &self.query
+    }
+    pub fn resource(&self) -> &ResourceDef {
+        self.resource
+    }
+}
+
 /// Server configuration allowing credential reads of one resource without its read
 /// policies or redaction. Authentication must inspect hashes before an actor exists.
-/// Runtime issues this permit at server bootstrap. It never bypasses tenancy.
+/// Runtime issues this permit at server bootstrap for its own contexts. It never
+/// bypasses tenancy, and an unrelated Runtime cannot grant access to this context.
 ///
 /// ```compile_fail
 /// fn forge(resource: &'static ash_core::ResourceDef) {
-///     let _ = ash_core::CredentialReadPermit::new(resource);
+///     let _ = ash_core::CredentialReadPermit { resource };
 /// }
 /// ```
 #[derive(Clone)]
 pub struct CredentialReadPermit {
-    resource: &'static ResourceDef,
+    pub(crate) resource: &'static ResourceDef,
+    pub(crate) authority: std::sync::Arc<crate::context::RuntimeAuthority>,
 }
 
-impl CredentialReadPermit {
-    pub(crate) fn new(resource: &'static ResourceDef) -> Self {
-        Self { resource }
-    }
+/// Bootstrap grant to mutate named credential attributes on one resource.
+/// It applies only to the issuing Runtime's contexts, cannot be issued from a request
+/// Context and never bypasses tenancy.
+///
+/// ```compile_fail
+/// fn forge(resource: &'static ash_core::ResourceDef) {
+///     let _ = ash_core::CredentialWritePermit { resource, fields: Vec::new() };
+/// }
+/// ```
+#[derive(Clone)]
+pub struct CredentialWritePermit {
+    pub(crate) resource: &'static ResourceDef,
+    pub(crate) fields: Vec<&'static str>,
+    pub(crate) authority: std::sync::Arc<crate::context::RuntimeAuthority>,
 }
 
 /// Borrowing the context holds its actor and tenant fixed for this execution.
 /// Ordinary reads return reader-specific Views. Credential reads remain privileged
-/// engine data. The deprecated `Context::data` interface can still bypass this handle.
+/// engine data available only through an explicit credential grant.
 pub struct ScopedAccess<'a, D> {
     ctx: &'a Context<D>,
 }
@@ -71,6 +114,108 @@ impl<D> ScopedAccess<'_, D> {
 }
 
 impl<D: DataLayer> ScopedAccess<'_, D> {
+    /// Resolve preparations, policy predicates and tenancy once before pagination.
+    pub fn prepare_read<'a>(
+        &self,
+        resource: &'a ResourceDef,
+        action: &str,
+        arguments: &FieldMap,
+        request: ReadRequest,
+    ) -> Result<PreparedRead<'a>> {
+        let action = crate::pipeline::read_action(resource, Some(action))?;
+        let query = self.plan_read(resource, action, arguments, &request)?;
+        Ok(PreparedRead {
+            scope: std::sync::Arc::clone(&self.ctx.scope),
+            resource,
+            action,
+            arguments: arguments.clone(),
+            query,
+        })
+    }
+
+    fn prepared_query(
+        &self,
+        read: &PreparedRead<'_>,
+        request: &ReadRequest,
+    ) -> Result<CompiledQuery> {
+        if !std::sync::Arc::ptr_eq(&read.scope, &self.ctx.scope) {
+            return Err(Error::Invalid(
+                "read belongs to a different request scope".into(),
+            ));
+        }
+        let filter = crate::plan_filter(
+            read.resource,
+            self.ctx.authorization_actor(),
+            self.ctx.tenant(),
+            crate::TrustedExpr::Filter(request.filter.clone().unwrap_or(Filter::True)),
+        )?;
+        Ok(CompiledQuery {
+            filter: crate::pipeline::and_filters(read.query.filter.clone(), Some(filter)),
+            lock: request.lock,
+            distinct_on: request.distinct_on.clone(),
+            sort: request.sort.clone(),
+            select: request.select.clone(),
+            calculations: request.calculations.clone(),
+            calculation_args: request.calculation_args.clone(),
+            aggregates: request.aggregates.clone(),
+            limit: request.limit,
+            offset: request.offset,
+            actor: read.query.actor.clone(),
+            tenant: read.query.tenant.clone(),
+        })
+    }
+
+    /// Apply page shape without dropping the prepared read's mandatory predicates.
+    pub async fn read_prepared(
+        &self,
+        read: &PreparedRead<'_>,
+        request: ReadRequest,
+    ) -> Result<Vec<crate::View>> {
+        let query = self.prepared_query(read, &request)?;
+        let rows = self
+            .ctx
+            .raw_data()
+            .run_query(&crate::QueryPlan::new(self.ctx, read.resource, &query))
+            .await?;
+        self.finish_read(read.resource, read.action, &read.arguments, &request, rows)
+    }
+
+    pub async fn count_prepared(
+        &self,
+        read: &PreparedRead<'_>,
+        request: ReadRequest,
+    ) -> Result<usize> {
+        let query = self.prepared_query(read, &request)?;
+        self.ctx
+            .raw_data()
+            .count(&crate::CountPlan::new(self.ctx, read.resource, &query))
+            .await
+    }
+
+    pub async fn read_prepared_with_count(
+        &self,
+        read: &PreparedRead<'_>,
+        page: ReadRequest,
+        count: ReadRequest,
+    ) -> Result<(Vec<crate::View>, usize)> {
+        let query = self.prepared_query(read, &page)?;
+        let count_query = self.prepared_query(read, &count)?;
+        let (rows, count) = self
+            .ctx
+            .raw_data()
+            .run_query_with_count(&crate::QueryWithCountPlan::new(
+                self.ctx,
+                read.resource,
+                &query,
+                &count_query,
+            ))
+            .await?;
+        Ok((
+            self.finish_read(read.resource, read.action, &read.arguments, &page, rows)?,
+            count,
+        ))
+    }
+
     /// Read through action preparations, row policies and tenant scoping, then
     /// present every record for this context's reader.
     pub async fn read(
@@ -81,26 +226,122 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         request: ReadRequest,
     ) -> Result<Vec<crate::View>> {
         let action = crate::pipeline::read_action(resource, Some(action))?;
-        let query = crate::scope_read(
+        let query = self.plan_read(resource, action, arguments, &request)?;
+        let rows = self
+            .ctx
+            .raw_data()
+            .run_query(&crate::QueryPlan::new(self.ctx, resource, &query))
+            .await?;
+        self.finish_read(resource, action, arguments, &request, rows)
+    }
+
+    /// Count through the same read planner as ordinary reads.
+    pub async fn count(
+        &self,
+        resource: &ResourceDef,
+        action: &str,
+        arguments: &FieldMap,
+        request: ReadRequest,
+    ) -> Result<usize> {
+        let action = crate::pipeline::read_action(resource, Some(action))?;
+        let query = self.plan_read(resource, action, arguments, &request)?;
+        self.ctx
+            .raw_data()
+            .count(&crate::CountPlan::new(self.ctx, resource, &query))
+            .await
+    }
+
+    /// Read a page and its count together, then present the page inside core.
+    pub async fn read_with_count(
+        &self,
+        resource: &ResourceDef,
+        action: &str,
+        arguments: &FieldMap,
+        page: ReadRequest,
+        count: ReadRequest,
+    ) -> Result<(Vec<crate::View>, usize)> {
+        let action = crate::pipeline::read_action(resource, Some(action))?;
+        let page_query = self.plan_read(resource, action, arguments, &page)?;
+        let count_query = self.plan_read(resource, action, arguments, &count)?;
+        let (rows, count) = self
+            .ctx
+            .raw_data()
+            .run_query_with_count(&crate::QueryWithCountPlan::new(
+                self.ctx,
+                resource,
+                &page_query,
+                &count_query,
+            ))
+            .await?;
+        Ok((
+            self.finish_read(resource, action, arguments, &page, rows)?,
+            count,
+        ))
+    }
+
+    fn plan_read(
+        &self,
+        resource: &ResourceDef,
+        action: &crate::ActionDef,
+        arguments: &FieldMap,
+        request: &ReadRequest,
+    ) -> Result<CompiledQuery> {
+        crate::scope_read(
             resource,
             action,
             self.ctx.authorization_actor(),
             arguments,
             CompiledQuery {
                 lock: request.lock,
-                distinct_on: request.distinct_on,
-                filter: request.filter,
-                sort: request.sort,
+                distinct_on: request.distinct_on.clone(),
+                select: request.select.clone(),
+                calculations: request.calculations.clone(),
+                calculation_args: request.calculation_args.clone(),
+                aggregates: request.aggregates.clone(),
+                filter: request.filter.clone(),
+                sort: request.sort.clone(),
                 limit: request.limit,
                 offset: request.offset,
                 tenant: self.ctx.tenant().map(str::to_owned),
                 ..Default::default()
             },
-        )?;
-        let mut rows = self.ctx.raw_data().run_query(resource, &query).await?;
+        )
+    }
+
+    fn finish_read(
+        &self,
+        resource: &ResourceDef,
+        action: &crate::ActionDef,
+        arguments: &FieldMap,
+        request: &ReadRequest,
+        mut rows: Vec<FieldMap>,
+    ) -> Result<Vec<crate::View>> {
+        let cursors = rows
+            .iter()
+            .map(|row| {
+                request
+                    .keyset
+                    .as_ref()
+                    .map(|sort| {
+                        self.ctx.seal_keyset_with_distinct(
+                            resource,
+                            action.name,
+                            sort,
+                            request.distinct_on.as_ref(),
+                            row,
+                        )
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?;
         crate::after_read(action, arguments, &mut rows)?;
         rows.into_iter()
-            .map(|row| self.ctx.present(resource, row.into(), None))
+            .zip(cursors)
+            .map(|(row, cursor)| {
+                let mut view = self.ctx.present(resource, row.into(), None)?;
+                view.set_keyset(cursor);
+                Ok(view)
+            })
             .collect()
     }
 
@@ -125,7 +366,11 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
             },
             hard,
         )?;
-        let mut rows = self.ctx.raw_data().run_query(resource, &query).await?;
+        let mut rows = self
+            .ctx
+            .raw_data()
+            .run_query(&crate::QueryPlan::new(self.ctx, resource, &query))
+            .await?;
         crate::after_read(action, &FieldMap::new(), &mut rows)?;
         Ok(rows)
     }
@@ -155,6 +400,44 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         .ok_or(Error::NotFound)
     }
 
+    /// Update only the credential fields named by a bootstrap-issued grant.
+    /// Authentication validates the credential before calling this operation.
+    pub async fn update_credentials(
+        &self,
+        permit: &CredentialWritePermit,
+        id: crate::Value,
+        mut fields: FieldMap,
+    ) -> Result<crate::RawRecord> {
+        if !std::sync::Arc::ptr_eq(&permit.authority, &self.ctx.scope.authority) {
+            return Err(Error::Forbidden);
+        }
+        for name in fields.keys() {
+            let attr = permit
+                .resource
+                .attribute(name)
+                .ok_or_else(|| Error::Invalid(format!("unknown credential field `{name}`")))?;
+            if !permit.fields.contains(&name.as_str())
+                || attr.primary_key
+                || matches!(permit.resource.multitenancy.map(|mt| mt.strategy), Some(crate::MultitenancyStrategy::Attribute(tenant)) if tenant == name)
+            {
+                return Err(Error::Forbidden);
+            }
+            crate::pipeline::check_type(attr, &fields[name])?;
+        }
+        crate::pipeline::apply_tenant_to_fields(
+            permit.resource,
+            &mut fields,
+            self.ctx.tenant(),
+            false,
+        )?;
+        let plan = crate::UpdatePlan::new(self.ctx, permit.resource, id, fields);
+        self.ctx
+            .raw_data()
+            .update(&plan)
+            .await
+            .map(crate::RawRecord::from)
+    }
+
     /// Look up credentials using an explicit resource-bound server permit. There is
     /// no caller-supplied `CompiledQuery` that could forget the attribute tenant
     /// predicate or replace the schema tenant.
@@ -164,6 +447,9 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         filter: Filter,
         limit: usize,
     ) -> Result<Vec<FieldMap>> {
+        if !std::sync::Arc::ptr_eq(&permit.authority, &self.ctx.scope.authority) {
+            return Err(Error::Forbidden);
+        }
         let (filter, tenant) = crate::pipeline::apply_tenant_scope(
             permit.resource,
             Some(filter),
@@ -171,7 +457,8 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
         )?;
         self.ctx
             .raw_data()
-            .run_query(
+            .run_query(&crate::QueryPlan::new(
+                self.ctx,
                 permit.resource,
                 &CompiledQuery {
                     filter,
@@ -179,7 +466,7 @@ impl<D: DataLayer> ScopedAccess<'_, D> {
                     limit: Some(limit),
                     ..Default::default()
                 },
-            )
+            ))
             .await
     }
 }

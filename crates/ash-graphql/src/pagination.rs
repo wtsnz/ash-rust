@@ -1,14 +1,12 @@
-// Raw engine queries migrate to executable plans in the next step.
-#![allow(deprecated)]
-
 //! Pages, as AshGraphql returns a paginated read: a keyset page, `KeysetPageOf<Resource> {
 //! count, results, startKeyset, endKeyset }`, paged with `first` / `after` and `last` /
 //! `before`, or an offset page, `PageOf<Resource> { count, results, hasNextPage, ... }`,
 //! paged with `limit` and `offset`. Which a read gives follows its action's `pagination`.
 
+use crate::query::read_request;
 use ash_core::{
     ActionDef, ActionKind, CompiledQuery, Countable, DataLayer, FieldMap, Filter, Pagination,
-    ResourceDef, keyset_sort, scope_read,
+    ResourceDef, keyset_sort,
 };
 use async_graphql::Value as GqlValue;
 use async_graphql::dynamic::*;
@@ -61,6 +59,15 @@ fn countable(resource: &ResourceDef) -> bool {
 
 /// A page of records and the keysets at its ends.
 #[derive(Clone)]
+/// A response adapter accepts only records already projected for its reader.
+///
+/// ```compile_fail,E0308
+/// fn raw_response(raw: ash_core::RawRecord) -> ash_graphql::KeysetPage {
+///     ash_graphql::KeysetPage {
+///         results: vec![raw], count: None, start_keyset: None, end_keyset: None,
+///     }
+/// }
+/// ```
 pub struct KeysetPage {
     pub results: Vec<ash_core::View>,
     pub start_keyset: Option<String>,
@@ -313,7 +320,7 @@ pub(crate) fn scoped_read<D: DataLayer>(
     ash: &ash_core::Context<D>,
     resource: &'static ResourceDef,
     action: &'static ActionDef,
-) -> async_graphql::Result<(FieldMap, CompiledQuery)> {
+) -> async_graphql::Result<(FieldMap, ash_core::PreparedRead<'static>)> {
     let arguments = read_arguments(ctx, action)?;
     let filter = match ctx.args.get("filter").filter(|value| !value.is_null()) {
         Some(filter) => Some(parse_resource_filter(resource, filter.as_value())?.into_filter()),
@@ -328,31 +335,21 @@ pub(crate) fn scoped_read<D: DataLayer>(
         .map_err(|e| async_graphql::Error::new(e.to_string()))?,
         None => Vec::new(),
     };
-    let query = scope_read(
-        resource,
-        action,
-        ash.authorization_actor(),
-        &arguments,
-        CompiledQuery {
-            filter,
-            sort,
-            calculation_args: calculation_arguments(resource, &arguments),
-            tenant: ash.tenant().map(str::to_owned),
-            ..CompiledQuery::default()
-        },
-    )
-    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+    let query = ash
+        .access()
+        .prepare_read(
+            resource,
+            action.name,
+            &arguments,
+            ash_core::ReadRequest {
+                filter,
+                sort,
+                calculation_args: calculation_arguments(resource, &arguments),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     Ok((arguments, query))
-}
-
-/// The records a read through `action` found, after its `after_action` preparations.
-pub(crate) fn after_read(
-    action: &ActionDef,
-    arguments: &FieldMap,
-    records: &mut [FieldMap],
-) -> async_graphql::Result<()> {
-    ash_core::after_read(action, arguments, records)
-        .map_err(|e| async_graphql::Error::new(e.to_string()))
 }
 
 /// The number a page argument gives, if any.
@@ -373,17 +370,16 @@ fn pagination_of(action: &ActionDef) -> Pagination {
 /// Counts the records `scoped` finds, for a page's `count`.
 async fn count_records<D: DataLayer>(
     ash: &ash_core::Context<D>,
-    resource: &ResourceDef,
-    scoped: &CompiledQuery,
+    scoped: &ash_core::PreparedRead<'_>,
 ) -> async_graphql::Result<usize> {
     let query = CompiledQuery {
         sort: Vec::new(),
         limit: None,
         offset: None,
-        ..scoped.clone()
+        ..scoped.query().clone()
     };
-    ash.data
-        .count(resource, &query)
+    ash.access()
+        .count_prepared(scoped, read_request(query))
         .await
         .map_err(|e| async_graphql::Error::new(e.to_string()))
 }
@@ -415,19 +411,19 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     page_limit(first, last, after.is_some(), before.is_some(), &pagination)?;
                 let backward = last.is_some() || (before.is_some() && after.is_none());
 
-                let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
+                let (_arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
 
                 // A page sorts stably, so every record has its own keyset.
-                let sort = keyset_sort(resource, scoped.sort.clone());
+                let sort = keyset_sort(resource, scoped.query().sort.clone());
 
                 // Counted alongside the page, as Ash reads a page's count.
                 let count_scope = ctx
                     .look_ahead()
                     .field("count")
                     .exists()
-                    .then(|| scoped.clone());
+                    .then(|| scoped.query().clone());
 
-                let mut page_filter = scoped.filter.clone();
+                let mut page_filter = scoped.query().filter.clone();
                 let cursor = if backward {
                     before.as_deref()
                 } else {
@@ -458,7 +454,7 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     sort: query_sort,
                     limit,
                     offset: None,
-                    ..scoped
+                    ..scoped.query().clone()
                 });
                 // The count is read alongside the page, as Ash reads a page's count: the data
                 // layer reads them at once (Postgres down one connection, pipelined).
@@ -469,39 +465,34 @@ pub fn build_keyset_query<D: DataLayer + Clone + 'static>(
                     offset: None,
                     ..scoped
                 });
-                let (mut records, count) = match &count_query {
+                let mut request = read_request(query);
+                request.keyset = Some(sort.clone());
+                let (mut records, count) = match count_query {
                     Some(count_query) => {
                         let (records, count) = ash
-                            .data
-                            .run_query_with_count(resource, &query, count_query)
+                            .access()
+                            .read_prepared_with_count(&scoped, request, read_request(count_query))
                             .await
                             .map_err(error)?;
                         (records, Some(count))
                     }
                     None => (
-                        ash.data.run_query(resource, &query).await.map_err(error)?,
+                        ash.access()
+                            .read_prepared(&scoped, request)
+                            .await
+                            .map_err(error)?,
                         None,
                     ),
                 };
                 if backward {
                     records.reverse();
                 }
-                let keyset = |record: Option<&FieldMap>| {
-                    record
-                        .map(|row| ash.seal_keyset(resource, action.name, &sort, row))
-                        .transpose()
-                        .map_err(|e| async_graphql::Error::new(e.to_string()))
-                };
-                let start_keyset = keyset(records.first())?;
-                let end_keyset = keyset(records.last())?;
-                after_read(action, &arguments, &mut records)?;
-                let mut records = records
-                    .into_iter()
-                    .map(|row| {
-                        ash.present(resource, row.into(), None)
-                            .map_err(|e| async_graphql::Error::new(e.to_string()))
-                    })
-                    .collect::<async_graphql::Result<Vec<_>>>()?;
+                let start_keyset = records
+                    .first()
+                    .and_then(|view| view.keyset().map(str::to_owned));
+                let end_keyset = records
+                    .last()
+                    .and_then(|view| view.keyset().map(str::to_owned));
                 preload(
                     &ash,
                     resource,
@@ -583,9 +574,9 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
                     None => pagination.default_limit.or(pagination.max_page_size),
                 };
                 let offset = number_arg(&ctx, "offset")?.unwrap_or(0).max(0) as usize;
-                let (arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
+                let (_arguments, scoped) = scoped_read(&ctx, &ash, resource, action)?;
                 let count = if ctx.look_ahead().field("count").exists() {
-                    Some(count_records(&ash, resource, &scoped).await?)
+                    Some(count_records(&ash, &scoped).await?)
                 } else {
                     None
                 };
@@ -593,31 +584,23 @@ pub fn build_offset_query<D: DataLayer + Clone + 'static>(
                 let load = Load::of(
                     resource,
                     &fields,
-                    scoped.sort.iter().map(|s| s.field.as_str()),
+                    scoped.query().sort.iter().map(|s| s.field.as_str()),
                 );
                 // One more than the page, to know whether more follow.
                 let query = load.onto(CompiledQuery {
                     limit: limit.map(|l| l + 1),
                     offset: Some(offset),
-                    ..scoped
+                    ..scoped.query().clone()
                 });
                 let mut records = ash
-                    .data
-                    .run_query(resource, &query)
+                    .access()
+                    .read_prepared(&scoped, read_request(query))
                     .await
                     .map_err(|e| async_graphql::Error::new(e.to_string()))?;
                 let more = limit.is_some_and(|l| records.len() > l);
                 if let Some(limit) = limit {
                     records.truncate(limit);
                 }
-                after_read(action, &arguments, &mut records)?;
-                let mut records = records
-                    .into_iter()
-                    .map(|row| {
-                        ash.present(resource, row.into(), None)
-                            .map_err(|e| async_graphql::Error::new(e.to_string()))
-                    })
-                    .collect::<async_graphql::Result<Vec<_>>>()?;
                 preload(&ash, resource, fields, &mut records).await?;
                 Ok(Some(FieldValue::owned_any(OffsetPage {
                     limit: limit.unwrap_or(records.len()).max(1),

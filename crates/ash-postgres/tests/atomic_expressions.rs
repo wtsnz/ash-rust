@@ -43,10 +43,8 @@ resource! {
     }
 }
 
-// This regression deliberately inspects or mutates raw backend state.
-#[allow(deprecated)]
 async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
-    let ctx = ash_core::Runtime::new(data).bootstrap();
+    let ctx = ash_core::Runtime::new(data.clone()).bootstrap();
     let tally = Tally::create(&ctx).name("quiet").views(2).await.unwrap();
     let viewed = tally.view(&ctx).await.unwrap();
     assert_eq!(viewed.views, 3);
@@ -59,7 +57,7 @@ async fn scenario<D: DataLayer + Clone + 'static>(data: D) {
 
     // From the record as stored, so concurrent updates each count, where the data layer
     // runs the update as one statement (one that reads the record first can't promise it).
-    if !ctx.data.can_update_atomically(&Tally::DEF) {
+    if !data.can_update_atomically(&Tally::DEF) {
         return;
     }
     let fresh = Tally::create(&ctx).name("busy").await.unwrap();

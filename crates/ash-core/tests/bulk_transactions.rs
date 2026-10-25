@@ -57,7 +57,8 @@ async fn sensors<D: TransactionSupport + SchemaSupport + 'static>(
 ) -> (Context<D>, Vec<Reading>, Arc<AtomicUsize>) {
     let notified = Arc::new(AtomicUsize::new(0));
     let heard = notified.clone();
-    let ctx = ash_core::Runtime::new(data)
+    let schema_runtime = ash_core::Runtime::new(data);
+    let ctx = schema_runtime
         .bootstrap()
         .with_notifier(Arc::new(SyncFnNotifier::new(
             "updates",
@@ -68,7 +69,7 @@ async fn sensors<D: TransactionSupport + SchemaSupport + 'static>(
                 Ok(())
             },
         )));
-    ctx.install(&[&Reading::DEF]).await.unwrap();
+    schema_runtime.install(&[&Reading::DEF]).await.unwrap();
     let mut readings = Vec::new();
     for sensor in ["a", "b", "c"] {
         readings.push(

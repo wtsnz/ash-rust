@@ -1,6 +1,10 @@
+#[path = "../../ash-core/tests/support/fixtures.rs"]
+mod scoped_fixtures;
+use scoped_fixtures::Fixtures;
+
 use ash_core::{
-    ActionDef, ArgumentDef, AttrType, AttributeDef, DataLayer, FieldMap, Filter, PreparationDef,
-    ResourceDef, Value,
+    ActionDef, ArgumentDef, AttrType, AttributeDef, FieldMap, Filter, PreparationDef, ResourceDef,
+    Value,
 };
 use ash_graphql::AshGraphQL;
 use ash_memory::Memory;
@@ -74,7 +78,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f1.insert("priority".into(), Value::Int(1));
     f1.insert("status".into(), Value::String("open".into()));
     f1.insert("is_published".into(), Value::Bool(true));
-    data.create(&TICKET_DEF, None, Value::from(id1), f1)
+    data.fixture_create(&TICKET_DEF, None, Value::from(id1), f1)
         .await
         .unwrap();
 
@@ -85,7 +89,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f2.insert("priority".into(), Value::Int(5));
     f2.insert("status".into(), Value::String("in_progress".into()));
     f2.insert("is_published".into(), Value::Bool(false));
-    data.create(&TICKET_DEF, None, Value::from(id2), f2)
+    data.fixture_create(&TICKET_DEF, None, Value::from(id2), f2)
         .await
         .unwrap();
 
@@ -96,7 +100,7 @@ async fn seed_data(data: &Memory) -> (Uuid, Uuid, Uuid) {
     f3.insert("priority".into(), Value::Int(10));
     f3.insert("status".into(), Value::String("closed".into()));
     f3.insert("is_published".into(), Value::Bool(true));
-    data.create(&TICKET_DEF, None, Value::from(id3), f3)
+    data.fixture_create(&TICKET_DEF, None, Value::from(id3), f3)
         .await
         .unwrap();
 
