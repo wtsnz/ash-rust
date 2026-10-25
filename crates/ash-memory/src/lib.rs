@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::future::ready;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use ash_core::{
@@ -17,6 +18,8 @@ use ash_core::{
 pub struct Memory {
     tables: Arc<RwLock<Tables>>,
     in_transaction: bool,
+    /// Set when the write lock is taken, so a transaction that only read can skip commit.
+    written: Arc<AtomicBool>,
 }
 
 impl Memory {
@@ -24,6 +27,7 @@ impl Memory {
         Self {
             tables: Arc::new(RwLock::new(HashMap::new())),
             in_transaction: false,
+            written: Arc::default(),
         }
     }
 
@@ -31,6 +35,7 @@ impl Memory {
         Self {
             tables: Arc::new(RwLock::new(tables)),
             in_transaction: false,
+            written: Arc::default(),
         }
     }
 
@@ -41,9 +46,12 @@ impl Memory {
     }
 
     fn write(&self) -> Result<RwLockWriteGuard<'_, Tables>> {
-        self.tables
+        let guard = self
+            .tables
             .write()
-            .map_err(|_| Error::DataLayer("memory store lock poisoned".into()))
+            .map_err(|_| Error::DataLayer("memory store lock poisoned".into()))?;
+        self.written.store(true, AtomicOrdering::Release);
+        Ok(guard)
     }
 }
 
@@ -1289,6 +1297,11 @@ impl TransactionSupport for Memory {
         let mut tx_mem = Memory::from_tables(snapshot.clone());
         tx_mem.in_transaction = true;
         let value = f(&tx_mem).await?;
+        // A transaction that never wrote saw one consistent snapshot and has nothing
+        // to publish, so concurrent writes don't conflict with it.
+        if !tx_mem.written.load(AtomicOrdering::Acquire) {
+            return Ok(value);
+        }
         let committed = tx_mem.read()?.clone();
         let mut live = self.write()?;
         // Validate the whole snapshot, including discovery reads and absent rows.

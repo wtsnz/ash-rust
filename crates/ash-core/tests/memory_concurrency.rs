@@ -154,3 +154,49 @@ async fn test_memory_transaction_detects_concurrent_write_conflict_on_same_recor
         .unwrap();
     assert_eq!(dave_live.name, "Dave Concurrent");
 }
+
+#[tokio::test]
+async fn test_memory_read_only_transaction_ignores_concurrent_writes() {
+    let mem = Memory::new();
+    let ctx = ash_core::Runtime::new(mem.clone()).bootstrap();
+
+    ConcurrentUser::create(&ctx)
+        .name("Erin")
+        .email("erin@example.com")
+        .await
+        .unwrap();
+
+    let (read_done_tx, read_done_rx) = tokio::sync::oneshot::channel();
+    let (write_done_tx, write_done_rx) = tokio::sync::oneshot::channel();
+
+    let mem_clone = mem.clone();
+    let tx_handle = tokio::spawn(async move {
+        mem_clone
+            .transaction(|tx_mem| {
+                let tx_mem = tx_mem.clone();
+                async move {
+                    let tx_ctx = ash_core::Runtime::new(tx_mem).bootstrap();
+                    let seen = ConcurrentUser::query(&tx_ctx).all().await.unwrap();
+                    read_done_tx.send(()).unwrap();
+                    write_done_rx.await.unwrap();
+                    Ok(seen.len())
+                }
+            })
+            .await
+    });
+
+    read_done_rx.await.unwrap();
+
+    // A write outside the transaction while it is still open.
+    ConcurrentUser::create(&ctx)
+        .name("Frank")
+        .email("frank@example.com")
+        .await
+        .unwrap();
+
+    write_done_tx.send(()).unwrap();
+
+    // The transaction only read, so it keeps its snapshot and doesn't conflict.
+    assert_eq!(tx_handle.await.unwrap().unwrap(), 1);
+    assert_eq!(ConcurrentUser::query(&ctx).all().await.unwrap().len(), 2);
+}
