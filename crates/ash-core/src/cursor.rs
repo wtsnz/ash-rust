@@ -36,6 +36,7 @@ impl<D> Context<D> {
         resource: &ResourceDef,
         action: &str,
         sorts: &[Sort],
+        distinct: Option<&crate::DistinctOn>,
     ) -> Result<Vec<u8>> {
         let shape: Vec<_> = sorts
             .iter()
@@ -61,6 +62,14 @@ impl<D> Context<D> {
             shape,
         ))
         .map_err(|_| invalid())?;
+        if let Some(distinct) = distinct {
+            binding = serde_json::json!([
+                "ash-distinct-keyset-v1",
+                binding,
+                distinct.fields,
+                format!("{:?}", distinct.sort)
+            ]);
+        }
         binding.sort_all_objects();
         serde_json::to_vec(&binding).map_err(|_| invalid())
     }
@@ -71,6 +80,18 @@ impl<D> Context<D> {
         resource: &ResourceDef,
         action: &str,
         sorts: &[Sort],
+        fields: &FieldMap,
+    ) -> Result<String> {
+        self.seal_keyset_with_distinct(resource, action, sorts, None, fields)
+    }
+
+    /// Seal a page cursor bound to its distinct groups and winner ordering too.
+    pub fn seal_keyset_with_distinct(
+        &self,
+        resource: &ResourceDef,
+        action: &str,
+        sorts: &[Sort],
+        distinct: Option<&crate::DistinctOn>,
         fields: &FieldMap,
     ) -> Result<String> {
         let cursor = KeysetCursor {
@@ -99,7 +120,7 @@ impl<D> Context<D> {
         };
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
         let plaintext = serde_json::to_vec(&cursor).map_err(|_| invalid())?;
-        let aad = self.cursor_binding(resource, action, sorts)?;
+        let aad = self.cursor_binding(resource, action, sorts, distinct)?;
         let ciphertext = self
             .scope
             .cursor_key
@@ -125,6 +146,7 @@ impl<D> Context<D> {
         action: &str,
         sorts: &[Sort],
         token: &str,
+        distinct: Option<&crate::DistinctOn>,
     ) -> Result<KeysetCursor> {
         let bytes = BASE64_URL_SAFE_NO_PAD
             .decode(token.strip_prefix("v1.").ok_or_else(invalid)?)
@@ -132,7 +154,7 @@ impl<D> Context<D> {
         if bytes.len() < 40 {
             return Err(invalid());
         }
-        let aad = self.cursor_binding(resource, action, sorts)?;
+        let aad = self.cursor_binding(resource, action, sorts, distinct)?;
         let plaintext = self
             .scope
             .cursor_key
@@ -166,7 +188,20 @@ impl<D> Context<D> {
         token: &str,
         after: bool,
     ) -> Result<crate::Filter> {
-        let cursor = self.open_keyset(resource, action, sorts, token)?;
+        self.keyset_filter_with_distinct(resource, action, sorts, None, token, after)
+    }
+
+    /// Decode a page boundary using the same distinct plan that selected its winner.
+    pub fn keyset_filter_with_distinct(
+        &self,
+        resource: &ResourceDef,
+        action: &str,
+        sorts: &[Sort],
+        distinct: Option<&crate::DistinctOn>,
+        token: &str,
+        after: bool,
+    ) -> Result<crate::Filter> {
+        let cursor = self.open_keyset(resource, action, sorts, token, distinct)?;
         let filter = crate::build_keyset_filter(
             resource,
             sorts,
@@ -180,5 +215,6 @@ impl<D> Context<D> {
             self.tenant(),
             crate::TrustedExpr::Filter(filter),
         )
+        .map(|filter| crate::Filter::Keyset(Box::new(filter)))
     }
 }

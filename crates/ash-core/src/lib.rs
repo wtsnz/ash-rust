@@ -39,6 +39,7 @@ mod resource;
 pub mod returned;
 mod snapshot;
 pub mod store;
+mod trusted_nodes;
 mod types;
 mod value;
 mod write_plan;
@@ -112,6 +113,7 @@ pub use store::{
     DefaultStore, HasStore, MemoryStore, PostgresStore, SqliteStore, StoreTag,
     default_store_type_id,
 };
+pub use trusted_nodes::{BoundFragment, DistinctOn, FragmentPart, ReadLock, SqlFragment};
 pub use types::{
     AshEnum, AshType, Binary, CiString, Date, Decimal, Float, Inet, TimePrecision, UtcDateTime,
     UtcDateTimeUsec, Vector, canonical_text, check_vector, compare_decimal, compare_typed,

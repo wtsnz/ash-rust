@@ -3,6 +3,11 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     Forbidden,
+    UnsupportedPlanNode {
+        node: &'static str,
+        data_layer: crate::DataLayerKind,
+    },
+    LockRequiresTransaction,
     NotFound,
     /// The backend cannot guarantee rollback for a multi-record action.
     AtomicityUnsupported,
@@ -169,6 +174,10 @@ impl fmt::Display for Error {
                 f,
                 "multi-record atomicity is unsupported by this data layer"
             ),
+            Self::UnsupportedPlanNode { node, data_layer } => {
+                write!(f, "plan node `{node}` is unsupported by {data_layer:?}")
+            }
+            Self::LockRequiresTransaction => write!(f, "row locks require an active transaction"),
             Self::TooMany(n) => write!(f, "expected one record, found {n}"),
             Self::UnknownAction { resource, name } => {
                 write!(f, "unknown action `{name}` on {resource}")

@@ -37,6 +37,8 @@ impl Sort {
 
 #[derive(Clone, Debug, Default)]
 pub struct CompiledQuery {
+    pub lock: Option<crate::ReadLock>,
+    pub distinct_on: Option<crate::DistinctOn>,
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     /// The attributes to read, as Ash's `select`: `None` reads every one. The primary key

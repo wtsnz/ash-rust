@@ -98,3 +98,15 @@ policies. Client comparisons and sorts use these projected values; trusted
 preparations retain stored-value semantics. See [Derived values](scoped-access.md#derived-values).
 Private event payloads, grouped subscription actors and per-event relational
 revalidation remain separate migration steps.
+
+## Data-layer-specific expressions
+
+`TrustedExpr::DataLayer` binds a `SqlFragment` defined in developer code. Client
+parsers cannot construct one, and client-field planning rejects one smuggled inside
+a `ClientExpr<Filter>`. Preparations, calculation dependencies and SQL field aliases
+follow the same planning rules as other trusted expressions. See
+[Trusted data-layer nodes](trusted-data-layer-nodes.md).
+
+Distinct reads apply authenticated cursor predicates after selecting group winners.
+Their sealed cursor binding includes the group fields and fixed winner ordering.
+Existing cursor bindings for reads without distinct groups are preserved.

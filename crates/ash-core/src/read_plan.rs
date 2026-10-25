@@ -19,12 +19,13 @@ impl ClientExpr<Filter> {
     }
 }
 
-/// Server expressions may use hidden values. Future backend-tagged expressions belong
-/// here, so client parsers never acquire a backend expression constructor.
+/// Server expressions may use hidden values and explicitly tagged SQL nodes.
+/// Client parsers never acquire a backend expression constructor.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum TrustedExpr {
     Filter(Filter),
+    DataLayer(crate::BoundFragment),
 }
 
 /// A resolved relationship hop. Its destination and optional join conditions already
@@ -62,7 +63,7 @@ pub fn plan_filter(
     tenant: Option<&str>,
     expression: TrustedExpr,
 ) -> Result<Filter> {
-    let TrustedExpr::Filter(filter) = expression;
+    let filter = expression.into_filter();
     Planner {
         actor,
         tenant,

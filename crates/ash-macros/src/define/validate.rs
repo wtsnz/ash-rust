@@ -383,6 +383,7 @@ fn validate_calc_fields(
         | CalculationExprSpec::LitString(_)
         | CalculationExprSpec::LitBool(_)
         | CalculationExprSpec::Null
+        | CalculationExprSpec::Fragment(_)
         | CalculationExprSpec::Custom(_) => {}
     }
 }
@@ -779,7 +780,8 @@ fn validate_actions(def: &mut ResourceDefinition, errors: &mut Vec<Error>) {
                         }
                     }
                 }
-                crate::define::ast::PreparationSpec::Limit(_)
+                crate::define::ast::PreparationSpec::TrustedFilter(_)
+                | crate::define::ast::PreparationSpec::Limit(_)
                 | crate::define::ast::PreparationSpec::Offset(_)
                 | crate::define::ast::PreparationSpec::AfterAction(_) => {}
             }
@@ -946,10 +948,13 @@ fn lint_semantic(def: &ResourceDefinition) -> Vec<proc_macro2::TokenStream> {
                 .validations
                 .iter()
                 .any(|val| matches!(val, ValidationSpec::Custom(_) | ValidationSpec::Func(_)))
-            || action
-                .preparations
-                .iter()
-                .any(|prep| matches!(prep, crate::define::ast::PreparationSpec::AfterAction(_)));
+            || action.preparations.iter().any(|prep| {
+                matches!(
+                    prep,
+                    crate::define::ast::PreparationSpec::AfterAction(_)
+                        | crate::define::ast::PreparationSpec::TrustedFilter(_)
+                )
+            });
         if action.run_expr.is_some() || has_opaque_consumer {
             continue;
         }
@@ -998,6 +1003,7 @@ fn calc_mentions_arg(expr: &CalculationExprSpec, name: &Ident) -> bool {
     use CalculationExprSpec as E;
     match expr {
         E::Arg(arg) => arg == name,
+        E::Fragment(_) => true,
         E::Add(a, b)
         | E::Sub(a, b)
         | E::Mul(a, b)

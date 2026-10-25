@@ -692,6 +692,6 @@ pub(crate) fn atomic_from_expr(
             then: Box::new(of(then_expr)?),
             otherwise: Box::new(of(else_expr)?),
         },
-        Expr::Custom(_) => return None,
+        Expr::Fragment(_) | Expr::Custom(_) => return None,
     })
 }

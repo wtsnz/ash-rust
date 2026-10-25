@@ -1,6 +1,6 @@
 # RFC 0005: Scoped execution, and where ash-rust departs from Elixir Ash
 
-- **Status**: Proposed. Steps 1 through 7 implemented, pending review; the rest planned. See §5.
+- **Status**: Proposed. Steps 1 through 7 in review; step 7b implemented, pending review; the rest planned. See §5.
 - **Date**: 2026-10-24
 - **Authors**: Will
 - **Target crates**: `ash-core`, every data layer, `ash-graphql`, `ash-typescript`, `ash-authentication`, `ash-pubsub`
@@ -61,7 +61,7 @@ This table describes the target design. §5 says which parts are implemented.
 | Actor and tenant | Options on each call; `Ash.Scope` groups them; preparations can call `set_tenant` | Bound once into a sealed `Scope` at the entry point. A `Context` can't change it | Callers can't forget or override it | A request handler can't switch tenant; jobs bind a new `Context` per tenant |
 | Skipping authorization | `authorize?: false` on any call | `runtime.system()`, available only from the `Runtime` | Privileged code is visible and greppable | Hooks need a declared system capability |
 | Cross-tenant reads | `multitenancy :bypass` / `:bypass_all` read actions, `global?` | A cross-tenant lookup grant per resource and action, returning only an id and tenant; resource-level `global` kept | Covers login-by-email without a general bypass | Bypass-style listing across tenants needs a system scope per tenant |
-| Reaching the data layer | `Ash.DataLayer` callbacks are public; extensions and manual actions can build and run queries | Data layers accept only executable plans built by core. Apps keep direct access to their own database pool, outside the framework's guarantees | Tenancy and policies can't be skipped by building a query by hand | Data-layer-specific features need trusted plan nodes (`fragment`, full-text search, `for_update`) |
+| Reaching the data layer | `Ash.DataLayer` callbacks are public; extensions and manual actions can build and run queries | Data layers accept only executable plans built by core. Apps keep direct access to their own database pool, outside the framework's guarantees | Tenancy and policies can't be skipped by building a query by hand | Data-layer-specific features use [trusted plan nodes](../trusted-data-layer-nodes.md), including fragments, full-text search, row locks and distinct reads |
 | Client input vs trusted expressions | `filter_input`/`sort_input` mark refs as input; `filter`/`sort` are trusted; the caller chooses | Separate `ClientExpr` and `TrustedExpr` types. Every extension parser produces `ClientExpr` | The compiler enforces the choice | An explicit conversion is needed to trust client input deliberately |
 | Field-policy output | Read cleanup replaces hidden values with `%Ash.ForbiddenField{}` | Every output, including write results, bulk, manual persist and embedded resources, goes through one `View` builder | One code path instead of one per output | Raw records are internal types; manual persist returns them to core for presentation |
 | Calculation inputs | Not authorized, by design (documented) | A calculation using a hidden field returns null unless it declares `declassify` | Derived values can't leak hidden inputs by accident | Patterns like `ssn_last_4` need an explicit declaration |
@@ -89,8 +89,8 @@ Resources, actions, changes, validations, preparations, policies and field polic
 | Recursive `View` presentation for reads, single/atomic/bulk/manual writes and resource-valued actions; non-serializable hook records; GraphQL masks and RPC selections | 4 | In review (#88). Typed APIs return projected resource structs; raw data-layer transport remains until step 8 |
 | Derived-value visibility and `declassify` | 5 | In review (#90). Calculation dependencies and explicit policies; projected first/sum operands and client comparisons; declared custom inputs. See [Derived values](../scoped-access.md#derived-values) |
 | Core-owned upsert plans; tenant, write-policy and version guards on single/bulk conflicts; scoped returns; memory no-change semantics | 6 | In review (#91). See [Guarded upsert conflicts](../scoped-access.md#guarded-upsert-conflicts) |
-| Data-layer-specific trusted plan nodes | — | Deferred; trusted expression extension point retained |
-| Managed relationships through scoped destination and join actions; scoped cascade discovery; required transactions and memory snapshot commits | 7 | Implemented, pending review. See [Managed relationships and cascades](../scoped-access.md#managed-relationships-and-cascades) |
+| Data-layer-specific trusted plan nodes | 7b | Implemented, pending review. Typed SQL fragments, transactional Postgres row locks and distinct reads. See [Trusted data-layer nodes](../trusted-data-layer-nodes.md) |
+| Managed relationships through scoped destination and join actions; scoped cascade discovery; required transactions and memory snapshot commits | 7 | In review (#92). See [Managed relationships and cascades](../scoped-access.md#managed-relationships-and-cascades) |
 | Delete raw data-layer access (bypasses become compile errors) | 8 | Planned |
 | Private events; scoped subscriptions, with deduplicated groups keyed on a bound `Scope` | 9 | Planned |
 | Durable, atomic session state | 10 | Planned |

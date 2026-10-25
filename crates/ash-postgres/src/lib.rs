@@ -8,6 +8,7 @@ use std::future::Future;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ash_core::{
     AttrType, CompiledQuery, DataLayer, Error, FieldMap, ResourceDef, Result, SchemaSupport,
@@ -57,7 +58,7 @@ enum PostgresSource {
     /// The pool, and the settings it connects with, for pools of its own (a tenant's
     /// migrations) to start from.
     Pool(Pool, Option<Arc<tokio_postgres::Config>>),
-    Tx(Arc<Mutex<Object>>),
+    Tx(Arc<Mutex<Object>>, Arc<AtomicBool>),
 }
 
 /// PostgreSQL data layer for Ash.
@@ -70,16 +71,26 @@ impl std::fmt::Debug for Postgres {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let source = match &self.source {
             PostgresSource::Pool(pool, _) => format!("{:?}", pool.status()),
-            PostgresSource::Tx(_) => "transaction".to_string(),
+            PostgresSource::Tx(..) => "transaction".to_string(),
         };
         f.debug_struct("Postgres").field("source", &source).finish()
     }
 }
 
-/// Why a statement failed: no connection to run it on, or the database refused it.
+/// Invalidate cloned handles when their owning transaction ends or is cancelled.
+struct TransactionLifetime(Arc<AtomicBool>);
+
+impl Drop for TransactionLifetime {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Why a statement failed: the connection, transaction state or database refused it.
 enum Failure {
     Pool(String),
     Db(tokio_postgres::Error),
+    LockRequiresTransaction,
 }
 
 /// A connection one statement runs on: one checked out of the pool for it, or the
@@ -227,7 +238,7 @@ impl Postgres {
     pub fn pool(&self) -> Option<&Pool> {
         match &self.source {
             PostgresSource::Pool(pool, _) => Some(pool),
-            PostgresSource::Tx(_) => None,
+            PostgresSource::Tx(..) => None,
         }
     }
 
@@ -238,6 +249,10 @@ impl Postgres {
         conn.batch_execute(sql).await.map_err(map_pg)
     }
 
+    fn in_active_transaction(&self) -> bool {
+        matches!(&self.source, PostgresSource::Tx(_, active) if active.load(Ordering::Acquire))
+    }
+
     async fn conn(&self) -> std::result::Result<Conn<'_>, Failure> {
         match &self.source {
             PostgresSource::Pool(pool, _) => pool
@@ -245,14 +260,22 @@ impl Postgres {
                 .await
                 .map(Conn::Pooled)
                 .map_err(|e| Failure::Pool(pool_error(&e))),
-            PostgresSource::Tx(conn) => Ok(Conn::Tx(conn.lock().await)),
+            PostgresSource::Tx(conn, _) => Ok(Conn::Tx(conn.lock().await)),
         }
     }
 
     /// The rows `compiled` returns, from its statement prepared once per connection.
-    async fn rows(&self, compiled: &CompiledSql) -> std::result::Result<Vec<Row>, Failure> {
+    async fn rows(
+        &self,
+        compiled: &CompiledSql,
+        lock: bool,
+    ) -> std::result::Result<Vec<Row>, Failure> {
         let params = Params::of(&compiled.params);
         let conn = self.conn().await?;
+        // The connection lock also serializes COMMIT/ROLLBACK. Recheck after waiting.
+        if lock && !self.in_active_transaction() {
+            return Err(Failure::LockRequiresTransaction);
+        }
         let statement = conn
             .prepare_typed_cached(&compiled.sql, &params.types)
             .await
@@ -308,7 +331,7 @@ impl Postgres {
         compiled: &CompiledSql,
         resource: &ResourceDef,
     ) -> Result<Vec<Row>> {
-        self.rows(compiled)
+        self.rows(compiled, false)
             .await
             .map_err(|e| map_failure_resource(e, resource))
     }
@@ -326,7 +349,7 @@ impl Postgres {
     }
 
     async fn fetch_all(&self, compiled: &CompiledSql) -> Result<Vec<Row>> {
-        self.rows(compiled).await.map_err(map_failure)
+        self.rows(compiled, false).await.map_err(map_failure)
     }
 
     /// [`fetch_all`](Self::fetch_all), keeping the database's error for the caller to read.
@@ -334,7 +357,7 @@ impl Postgres {
         &self,
         compiled: &CompiledSql,
     ) -> std::result::Result<Vec<Row>, Failure> {
-        self.rows(compiled).await
+        self.rows(compiled, false).await
     }
 
     /// Runs one statement with no parameters, returning the rows it changed.
@@ -660,12 +683,16 @@ impl DataLayer for Postgres {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<Vec<FieldMap>> {
+        query.validate_lock(self.in_active_transaction())?;
         // A context-tenant resource's tables are qualified by the tenant's schema, as
         // AshPostgres prefixes them, so the session's `search_path` is never changed.
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_select(resource, query)?;
-        let rows = self.fetch_all(&compiled).await?;
+        let rows = self
+            .rows(&compiled, query.lock.is_some())
+            .await
+            .map_err(map_failure)?;
         let plan = RowPlan::new(&rows, resource, query);
         rows.iter().map(|row| plan.read(row)).collect()
     }
@@ -683,10 +710,14 @@ impl DataLayer for Postgres {
         by: &ash_core::PerKey<'_>,
         keys: &[Value],
     ) -> Result<Vec<Vec<FieldMap>>> {
+        query.validate_lock(self.in_active_transaction())?;
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let compiled = compiler.compile_select_per_key(resource, query, by, keys.to_vec())?;
-        let rows = self.fetch_all(&compiled).await?;
+        let rows = self
+            .rows(&compiled, query.lock.is_some())
+            .await
+            .map_err(map_failure)?;
         // Each row's key, by its place in `keys`, so a key given twice gets its rows twice.
         let mut per_key = vec![Vec::new(); keys.len()];
         let plan = RowPlan::new(&rows, resource, query);
@@ -703,6 +734,7 @@ impl DataLayer for Postgres {
     }
 
     async fn count(&self, resource: &ResourceDef, query: &CompiledQuery) -> Result<usize> {
+        query.validate_lock(self.in_active_transaction())?;
         let dialect = PostgresDialect;
         let mut compiler = QueryCompiler::new(&dialect);
         let rows = self
@@ -724,12 +756,14 @@ impl DataLayer for Postgres {
         page: &CompiledQuery,
         count: &CompiledQuery,
     ) -> Result<(Vec<FieldMap>, usize)> {
+        page.validate_lock(self.in_active_transaction())?;
         let dialect = PostgresDialect;
         let page_sql = QueryCompiler::new(&dialect).compile_select(resource, page)?;
         let count_sql = QueryCompiler::new(&dialect).compile_count(resource, count)?;
         let (page_params, count_params) =
             (Params::of(&page_sql.params), Params::of(&count_sql.params));
         let conn = self.conn().await.map_err(map_failure)?;
+        page.validate_lock(self.in_active_transaction())?;
         let (page_statement, count_statement) = futures_util::future::try_join(
             conn.prepare_typed_cached(&page_sql.sql, &page_params.types),
             conn.prepare_typed_cached(&count_sql.sql, &count_params.types),
@@ -940,25 +974,27 @@ impl TransactionSupport for Postgres {
                     .map_err(|e| Error::DataLayer(e.to_string()))?;
                 conn.batch_execute("BEGIN").await.map_err(map_pg)?;
                 let conn = Arc::new(Mutex::new(conn));
+                let active = Arc::new(AtomicBool::new(true));
+                let _lifetime = TransactionLifetime(Arc::clone(&active));
                 let tx_pg = Postgres {
-                    source: PostgresSource::Tx(Arc::clone(&conn)),
+                    source: PostgresSource::Tx(Arc::clone(&conn), Arc::clone(&active)),
                 };
                 match f(&tx_pg).await {
                     Ok(val) => {
-                        conn.lock()
-                            .await
-                            .batch_execute("COMMIT")
-                            .await
-                            .map_err(map_pg)?;
+                        let connection = conn.lock().await;
+                        active.store(false, Ordering::Release);
+                        connection.batch_execute("COMMIT").await.map_err(map_pg)?;
                         Ok(val)
                     }
                     Err(err) => {
-                        let _ = conn.lock().await.batch_execute("ROLLBACK").await;
+                        let connection = conn.lock().await;
+                        active.store(false, Ordering::Release);
+                        let _ = connection.batch_execute("ROLLBACK").await;
                         Err(err)
                     }
                 }
             }
-            PostgresSource::Tx(conn) => {
+            PostgresSource::Tx(conn, _) => {
                 let sp_name = format!("sp_{}", Uuid::new_v4().simple());
                 conn.lock()
                     .await
@@ -1472,6 +1508,7 @@ fn map_pg(err: tokio_postgres::Error) -> Error {
 
 fn map_failure(failure: Failure) -> Error {
     match failure {
+        Failure::LockRequiresTransaction => Error::LockRequiresTransaction,
         Failure::Pool(message) => Error::DataLayer(message),
         Failure::Db(err) => map_pg(err),
     }

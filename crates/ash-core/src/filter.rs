@@ -5,6 +5,9 @@ use crate::value::{FieldMap, Value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Filter {
+    DataLayer(Box<crate::BoundFragment>),
+    /// An authenticated page boundary, applied after selecting distinct winners.
+    Keyset(Box<Filter>),
     Client(Box<crate::ClientExpr<Filter>>),
     Traversal(Box<crate::Traversal>),
     /// A planned reference to per-reader derived values. Trusted predicates outside
@@ -118,13 +121,19 @@ impl Filter {
                     part.collect_trusted_fields(out);
                 }
             }
-            Self::Not(inner) => inner.collect_trusted_fields(out),
+            Self::Not(inner) | Self::Keyset(inner) => inner.collect_trusted_fields(out),
             leaf => leaf.collect_fields(out),
         }
     }
 
     pub fn collect_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
+            Self::DataLayer(node) => {
+                let mut fields = Vec::new();
+                node.fragment().fields(&mut fields);
+                out.extend(fields);
+            }
+            Self::Keyset(inner) => inner.collect_fields(out),
             Self::Client(input) => input.0.collect_fields(out),
             Self::Projected(inner) => inner.collect_fields(out),
             Self::Traversal(_) => {}
@@ -215,6 +224,8 @@ impl Filter {
             present(field).map(|got| text_matches(Some(got), needle, ci, test))
         };
         match self {
+            Self::DataLayer(_) => None,
+            Self::Keyset(inner) => inner.eval(resource, fields),
             Self::Client(_) => None,
             Self::Projected(inner) => {
                 inner.eval(resource, &crate::derived::projected_fields(fields))

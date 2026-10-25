@@ -1,3 +1,5 @@
+mod trusted;
+
 use ash_core::{
     AggregateDef, AggregateFilter, AggregateKind, AtomicCondition, AtomicExpr, AtomicUpdate,
     AttrType, CalculationDef, CompiledQuery, Error, Expr, FieldMap, Filter, IdentityDef,
@@ -105,6 +107,7 @@ pub struct QueryCompiler<'a, D: SqlDialect> {
     /// [`compile_select_per_key`](Self::compile_select_per_key)).
     per_key: Option<String>,
     project_values: bool,
+    force_inline_aggregates: bool,
 }
 
 impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
@@ -123,6 +126,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             expr_scope: None,
             per_key: None,
             project_values: false,
+            force_inline_aggregates: false,
         }
     }
 
@@ -299,6 +303,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
 
     pub fn compile_expr(&mut self, resource: &ResourceDef, expr: &Expr) -> Result<String> {
         match expr {
+            Expr::Fragment(fragment) => {
+                let args = self.current_calc_args.clone().unwrap_or_default();
+                let scope = self.expr_scope.clone();
+                self.compile_fragment(resource, fragment, &args, scope.as_deref())
+            }
             Expr::Field(name) => self.scoped_column(resource, name),
             Expr::Arg(name) => {
                 let val = self
@@ -487,6 +496,10 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         scope_alias: Option<&str>,
     ) -> Result<String> {
         match filter {
+            Filter::DataLayer(node) => {
+                self.compile_fragment(resource, node.fragment(), node.parameters(), scope_alias)
+            }
+            Filter::Keyset(inner) => self.compile_filter_node(resource, inner, scope_alias),
             Filter::True => Ok("1=1".to_string()),
             Filter::False => Ok("0=1".to_string()),
             Filter::Eq(field, val) if val.is_null() => {
@@ -1034,7 +1047,11 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<CompiledSql> {
-        self.compile_select_internal(resource, query, None)
+        if query.distinct_on.is_some() {
+            self.compile_distinct(resource, query)
+        } else {
+            self.compile_select_internal(resource, query, None)
+        }
     }
 
     pub fn compile_select_with_cursor(
@@ -1054,6 +1071,14 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
                 )?,
             );
         }
+        if query.distinct_on.is_some() && cursor.is_some() {
+            return Err(Error::Invalid(
+                "distinct_on requires Runtime-sealed cursors".into(),
+            ));
+        }
+        if query.distinct_on.is_some() {
+            return self.compile_distinct(resource, &query);
+        }
         self.compile_select_internal(resource, &query, cursor)
     }
 
@@ -1063,6 +1088,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         query: &CompiledQuery,
         cursor: Option<&KeysetCursor>,
     ) -> Result<CompiledSql> {
+        query.validate_data_layer(resource, self.data_layer_kind())?;
         query.validate_calculations(resource)?;
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
@@ -1081,7 +1107,8 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             let rel = resource.relationship(agg.relationship).ok_or_else(|| {
                 Error::Invalid(format!("unknown relationship `{}`", agg.relationship))
             })?;
-            if matches!(agg.kind, AggregateKind::First { .. })
+            if self.force_inline_aggregates
+                || matches!(agg.kind, AggregateKind::First { .. })
                 || ash_core::field_read_condition(resource, agg.name, self.actor.as_ref())?
                     .is_some()
             {
@@ -1152,7 +1179,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
         }
 
-        if self.per_key.is_some() {
+        if self.per_key.is_some() && !self.force_inline_aggregates {
             // Each key's rows in the read's order, through the lateral join.
             let order = self.compile_sort(resource, &query.sort)?;
             select_items.push(format!(
@@ -1199,6 +1226,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             sql.push_str(&p);
         }
 
+        self.append_lock(query, &mut sql)?;
         Ok(CompiledSql::new(sql, self.params.clone()))
     }
 
@@ -1330,6 +1358,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             columns.extend(values);
         }
 
+        self.append_lock(query, &mut inner)?;
         let mut sql = format!(
             "SELECT {} FROM ({inner}) AS {source} {}",
             columns.join(", "),
@@ -1590,7 +1619,7 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
             }
         };
         self.per_key = Some(condition);
-        let inner = self.compile_select_internal(resource, query, None);
+        let inner = self.compile_select(resource, query);
         self.per_key = None;
         let inner = inner?.sql;
         let sql = format!(
@@ -1610,10 +1639,25 @@ impl<'a, D: SqlDialect> QueryCompiler<'a, D> {
         resource: &ResourceDef,
         query: &CompiledQuery,
     ) -> Result<CompiledSql> {
+        if query.lock.is_some() {
+            return Err(Error::Invalid(
+                "row locks require a record read, not a count".into(),
+            ));
+        }
+        query.validate_data_layer(resource, self.data_layer_kind())?;
         query.validate_calculations(resource)?;
         self.calc_args = query.calculation_args.clone();
         self.tenant = query.tenant.clone();
         self.actor = query.actor.clone();
+        if query.distinct_on.is_some() {
+            let mut counted = query.clone();
+            counted.lock = None;
+            let compiled = self.compile_distinct(resource, &counted)?;
+            return Ok(CompiledSql::new(
+                format!("SELECT COUNT(*) FROM ({}) AS counted", compiled.sql),
+                compiled.params,
+            ));
+        }
         let mut from = self.table(resource)?;
         if let Some(filter) = &query.filter {
             from.push_str(" WHERE ");

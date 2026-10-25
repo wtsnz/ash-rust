@@ -208,6 +208,7 @@ pub enum CalculationExprSpec {
         then_expr: Box<CalculationExprSpec>,
         else_expr: Box<CalculationExprSpec>,
     },
+    Fragment(syn::Path),
     Custom(syn::Path),
 }
 
@@ -262,6 +263,7 @@ pub enum AggregateFilterSpec {
 
 #[derive(Clone)]
 pub enum PreparationSpec {
+    TrustedFilter(syn::Path),
     Filter {
         expr: Expr,
     },

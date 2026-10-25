@@ -460,6 +460,11 @@ pub(crate) fn guard_client_fields(
             .collect()
     };
     Ok(match filter {
+        Filter::DataLayer(_) | Filter::Keyset(_) => {
+            return Err(Error::Invalid(
+                "client expressions cannot contain trusted data-layer or keyset nodes".into(),
+            ));
+        }
         Filter::True | Filter::False | Filter::Traversal(_) => filter,
         Filter::In(_, values) if values.is_empty() => Filter::False,
         Filter::Client(input) => guard_client_fields(resource, actor, input.0, positive)?,
